@@ -111,12 +111,12 @@ export class DbPathService {
         // macOS 旧路径兜底
         possiblePaths.push(join(home, 'Library', 'Containers', 'com.tencent.xinWeChat', 'Data', 'Documents', 'xwechat_files'))
       } else {
-        // Windows 微信4.x 数据目录
+        // Windows: 优先检测 NT 格式 (xwechat_files)
+        possiblePaths.push(join(home, 'xwechat_files'))
+        // Windows 微信4.x 数据目录 (Documents)
         possiblePaths.push(join(home, 'Documents', 'xwechat_files'))
         // Windows 微信3.x 数据目录
         possiblePaths.push(join(home, 'Documents', 'WeChat Files'))
-        // Windows 微信4.x 备用路径（部分安装将数据放在用户目录下）
-        possiblePaths.push(join(home, 'xwechat_files'))
       }
 
       for (const path of possiblePaths) {

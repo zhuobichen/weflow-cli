@@ -151,6 +151,172 @@ export class SqlcipherCore {
   }
 
   /**
+   * 尝试直接解密 4.x MSG0.db
+   *
+   * 4.x 使用 WCDB/SQLCipher 4 加密:
+   * - AES-256-CBC
+   * - PBKDF2-HMAC-SHA512, 256000 次迭代
+   * - 页大小: 4096 字节
+   * - 保留区: 80 字节 (IV 16 + HMAC 64) 或 48 字节 (兼容旧版)
+   *
+   * 注意: 密钥必须是微信登录时通过 wx_key.dll Hook 提取的正确密钥。
+   * 已登录后提取的密钥可能不正确。
+   */
+  async open4x(dbPath: string, keyHex: string, wxid: string): Promise<SqlcipherResult> {
+    if (this.opened) this.close()
+
+    if (!existsSync(dbPath)) {
+      return { success: false, error: `数据库不存在: ${dbPath}` }
+    }
+
+    if (!keyHex || keyHex.length !== 64) {
+      return { success: false, error: '4.x 密钥格式错误，需要 64 位十六进制字符串' }
+    }
+
+    this.wxid = wxid || ''
+    try {
+      this.wxDirRoot = dirname(dirname(dirname(dirname(dbPath))))
+    } catch {
+      this.wxDirRoot = ''
+    }
+
+    const password = Buffer.from(keyHex, 'hex')
+    const blist = readFileSync(dbPath)
+    const salt = blist.subarray(0, 16)
+
+    // 4.x 参数组合 (按优先级尝试)
+    const configs: Array<{ sha: string; iters: number; reserve: number }> = [
+      { sha: 'sha512', iters: 256000, reserve: 80 },  // WCDB/SQLCipher 4 标准
+      { sha: 'sha512', iters: 256000, reserve: 48 },  // SQLCipher 4 + 48 字节保留区
+      { sha: 'sha1', iters: 64000, reserve: 48 },     // SQLCipher 3 兼容
+      { sha: 'sha512', iters: 64000, reserve: 80 },
+      { sha: 'sha256', iters: 256000, reserve: 80 },
+    ]
+
+    // 创建临时目录
+    if (!this.tempDir) {
+      this.tempDir = join(os.tmpdir(), 'weflow_4x_decrypt')
+      if (!existsSync(this.tempDir)) {
+        mkdirSync(this.tempDir, { recursive: true })
+      }
+    }
+
+    for (const cfg of configs) {
+      try {
+        const pageKey = crypto.pbkdf2Sync(
+          password, salt, cfg.iters, KEY_SIZE, cfg.sha
+        )
+        const tempPath = join(this.tempDir, basename(dbPath) + '.4x_decrypted.db')
+        this.decryptPages(blist, pageKey, salt, cfg.reserve, tempPath)
+
+        // 验证解密结果
+        const db = new DatabaseSync(tempPath)
+        this.db = db
+        this.opened = true
+        this.tempFiles.set(dbPath, tempPath)
+        return { success: true }
+      } catch {
+        // 尝试下一组参数
+      }
+    }
+
+    // 如果 PBKDF2 派生失败，尝试原始密钥直接使用
+    for (const reserve of [80, 48]) {
+      try {
+        const tempPath = join(this.tempDir, basename(dbPath) + '.4x_raw.decrypted.db')
+        this.decryptPages(blist, password, salt, reserve, tempPath)
+
+        const db = new DatabaseSync(tempPath)
+        this.db = db
+        this.opened = true
+        this.tempFiles.set(dbPath, tempPath)
+        return { success: true }
+      } catch {
+        // 尝试下一组参数
+      }
+    }
+
+    return {
+      success: false,
+      error: [
+        '4.x 数据库直接解密失败，可能原因:',
+        '  1. 密钥不是微信登录时提取的 (wx_key.dll 仅在登录时捕获密钥)',
+        '  2. 密钥与数据库版本不匹配',
+        '  3. 数据库使用了非标准加密参数',
+        '',
+        '解决方案:',
+        '  - 使用 python scripts/scan_decrypt_4x.py 自动扫描解密',
+        '  - 或重启微信并在登录时运行: weflow-cli dbkey --timeout 120000',
+      ].join('\n'),
+    }
+  }
+
+  /**
+   * 按页面解密 4.x 数据库
+   */
+  private decryptPages(
+    blist: Buffer,
+    pageKey: Buffer,
+    salt: Buffer,
+    reserveLen: number,
+    outputPath: string
+  ): void {
+    const output: Buffer[] = []
+
+    // 写入 SQLite 文件头
+    output.push(Buffer.from(SQLITE_HEADER))
+
+    for (let i = 0; i < blist.length; i += PAGE_SIZE) {
+      const pageData = blist.subarray(i, Math.min(i + PAGE_SIZE, blist.length))
+      if (pageData.length === 0) continue
+
+      if (i === 0) {
+        // 第一页: 跳过 salt(16), 解密数据区
+        const encryptedLen = pageData.length - 16 - reserveLen
+        if (encryptedLen <= 0) {
+          output.push(pageData.subarray(16))
+          continue
+        }
+        const encryptedData = pageData.subarray(16, 16 + encryptedLen)
+        const reserved = pageData.subarray(16 + encryptedLen)
+        const iv = reserved.subarray(0, 16)
+
+        try {
+          const decipher = crypto.createDecipheriv('aes-256-cbc', pageKey, iv)
+          decipher.setAutoPadding(false)
+          const decrypted = Buffer.concat([decipher.update(encryptedData), decipher.final()])
+          output.push(decrypted)
+          output.push(reserved)
+        } catch {
+          throw new Error('解密失败')
+        }
+      } else {
+        // 后续页: 全页加密数据区 + 保留区
+        const encryptedLen = pageData.length - reserveLen
+        if (encryptedLen <= 0) {
+          output.push(pageData)
+          continue
+        }
+        const encryptedData = pageData.subarray(0, encryptedLen)
+        const reserved = pageData.subarray(encryptedLen)
+        const iv = reserved.subarray(0, 16)
+
+        try {
+          const decipher = crypto.createDecipheriv('aes-256-cbc', pageKey, iv)
+          decipher.setAutoPadding(false)
+          const decrypted = Buffer.concat([decipher.update(encryptedData), decipher.final()])
+          output.push(decrypted)
+          output.push(reserved)
+        } catch {
+          throw new Error('解密失败')
+        }
+      }
+    }
+
+    writeFileSync(outputPath, Buffer.concat(output))
+  }
+
+  /**
    * 打开 3.x 数据库
    */
   async open(dbPath: string, keyHex: string, wxid: string): Promise<SqlcipherResult> {

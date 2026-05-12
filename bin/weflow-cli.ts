@@ -6,6 +6,7 @@ import { existsSync, readFileSync } from 'fs'
 import { homedir } from 'os'
 import { dbPathService } from '../src/core/dbPathService.js'
 import { keyService } from '../src/core/keyService.js'
+import { NtCore } from '../src/core/ntCore.js'
 import { configService } from '../src/services/configService.js'
 import { chatService } from '../src/services/chatService.js'
 import { exportService } from '../src/services/exportService.js'
@@ -196,12 +197,55 @@ program
       configService.set('decryptKey', extractedKey)
       console.log(chalk.green('\n✓ 密钥获取成功!'))
 
+      // Step 4: 尝试扫描 NT 格式数据库 (xwechat_files)
+      // 即使检测到传统路径，也可能存在 NT 格式数据库
+      if (version) {
+        console.log(chalk.yellow('\n步骤 4/4: 扫描 NT 格式数据库...'))
+        console.log(chalk.gray('  正在从微信内存中匹配数据库密钥...'))
+
+        const ntResult = await NtCore.scan()
+        if (ntResult.success && ntResult.matched && ntResult.matched.length > 0) {
+          console.log(chalk.green(`  ✓ 找到 ${ntResult.matched.length} 个 NT 数据库`))
+
+          // 优先选择 message_0.db (主聊天数据库)
+          let primaryDb = ntResult.matched.find((db: any) => db.name === 'message_0.db')
+          if (!primaryDb) {
+            // 按大小降序排序，选择最大的数据库
+            primaryDb = ntResult.matched.sort((a: any, b: any) => b.size - a.size)[0]
+          }
+
+          if (primaryDb) {
+            configService.set('ntDbPath', primaryDb.path)
+            configService.set('ntKey', primaryDb.key)
+            configService.set('ntSalt', primaryDb.salt)
+            console.log(chalk.green(`  ✓ 主数据库: ${primaryDb.name} (${(primaryDb.size / 1024 / 1024).toFixed(1)}MB)`))
+
+            // 显示所有匹配的数据库
+            for (const db of ntResult.matched) {
+              const marker = db === primaryDb ? chalk.green('  → ') : '     '
+              console.log(chalk.gray(`${marker}${db.name} (${(db.size / 1024 / 1024).toFixed(1)}MB)`))
+            }
+          }
+        } else {
+          console.log(chalk.gray(`  NT 数据库扫描: ${ntResult.error || '未找到匹配的数据库'}`))
+          console.log(chalk.gray('  提示: 可以稍后运行 weflow-cli init 重新扫描'))
+        }
+      } else if (detected.path.toLowerCase().includes('xwechat_files')) {
+        console.log(chalk.yellow('\n步骤 4/4: NT 格式数据库'))
+        console.log(chalk.gray('  微信未运行，无法从内存中提取 NT 密钥'))
+        console.log(chalk.gray('  请启动微信后运行: weflow-cli init'))
+      }
+
       console.log(chalk.cyan('\n=============================='))
       console.log(chalk.cyan('初始化完成! (4.x 模式)'))
       console.log(chalk.cyan('=============================='))
       console.log(chalk.white(`数据目录: ${detected.path}`))
       console.log(chalk.white(`账号: ${selectedWxid.wxid}${selectedWxid.nickname ? ` (${selectedWxid.nickname})` : ''}`))
       console.log(chalk.white(`密钥: ${extractedKey.slice(0, 8)}...${extractedKey.slice(-8)}`))
+      const ntDbPath = configService.get('ntDbPath')
+      if (ntDbPath) {
+        console.log(chalk.white(`NT 数据库: ${ntDbPath}`))
+      }
     }
 
     console.log(chalk.gray('\n现在可以使用以下命令:'))
@@ -227,6 +271,8 @@ configCmd
     console.log(`4.x 密钥: ${config.decryptKey ? '已设置' : chalk.gray('(未设置)')}`)
     console.log(`3.x 数据库: ${config.dbPath3x || chalk.gray('(未设置)')}`)
     console.log(`3.x 密钥: ${config.decryptKey3x ? '已设置' : chalk.gray('(未设置)')}`)
+    console.log(`NT 数据库: ${config.ntDbPath || chalk.gray('(未设置)')}`)
+    console.log(`NT 密钥: ${config.ntKey ? '已设置' : chalk.gray('(未设置)')}`)
     console.log(`微信账号: ${config.wxid || chalk.gray('(未设置)')}`)
   })
 
@@ -234,7 +280,7 @@ configCmd
   .command('set <key> <value>')
   .description('设置配置项 (dbPath, decryptKey, dbPath3x, decryptKey3x, dataVersion, wxid)')
   .action((key: string, value: string) => {
-    const validKeys = ['dbPath', 'decryptKey', 'dbPath3x', 'decryptKey3x', 'dataVersion', 'wxid']
+    const validKeys = ['dbPath', 'decryptKey', 'dbPath3x', 'decryptKey3x', 'dataVersion', 'wxid', 'ntDbPath', 'ntKey', 'ntSalt']
     if (!validKeys.includes(key)) {
       console.log(chalk.red(`无效的配置项: ${key}`))
       console.log(chalk.gray(`可用: ${validKeys.join(', ')}`))

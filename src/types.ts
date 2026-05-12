@@ -76,4 +76,10 @@ export interface ConfigData {
   decryptKey3x?: string
   dataVersion?: DataVersion
   dbPath3x?: string
+  /** NT 格式: 主消息数据库路径 (message_0.db) */
+  ntDbPath?: string
+  /** NT 格式: 64位十六进制密钥 */
+  ntKey?: string
+  /** NT 格式: 32位十六进制盐值 */
+  ntSalt?: string
 }

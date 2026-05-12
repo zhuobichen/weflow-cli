@@ -2,6 +2,7 @@ import { join } from 'path'
 import { existsSync } from 'fs'
 import { WcdbCore } from '../core/wcdbCore.js'
 import { SqlcipherCore } from '../core/sqlcipherCore.js'
+import { NtCore } from '../core/ntCore.js'
 import { configService } from './configService.js'
 import type { ChatSession, Message, Contact, DataVersion } from '../types.js'
 
@@ -14,6 +15,8 @@ export class ChatService {
   private activeVersion: DataVersion | null = null
   /** 4.x 是否通过原始 SQLite 连接 (而非 WCDB API) */
   private useRawSqlite4x = false
+  /** NT 格式数据库访问 (通过 Python sqlcipher3) */
+  private ntCore: NtCore | null = null
 
   /**
    * 检测数据版本: 3.x 或 4.x
@@ -58,7 +61,7 @@ export class ChatService {
       return { success: false, error: '4.x 配置不完整，请运行 weflow-cli init' }
     }
 
-    // 优先使用已解密的 MSG0_decrypted.db (纯 SQLite)
+    // 方案 1: 使用已解密的 MSG0_decrypted.db (纯 SQLite)
     const rawMsg0Path = join(dbPath, wxid || '', 'Msg', 'Multi', 'MSG0_decrypted.db')
     if (existsSync(rawMsg0Path)) {
       const result = await sqlcipherCore.openRaw(rawMsg0Path, wxid || '')
@@ -70,7 +73,35 @@ export class ChatService {
       }
     }
 
-    // 尝试 WCDB API 连接 (需要 db_storage/session.db 结构)
+    // 方案 2: 尝试直接解密 MSG0.db (需要正确的密钥和盐值)
+    const msg0Path = join(dbPath, wxid || '', 'Msg', 'Multi', 'MSG0.db')
+    if (existsSync(msg0Path) && decryptKey) {
+      const result = await sqlcipherCore.open4x(msg0Path, decryptKey, wxid || '')
+      if (result.success) {
+        this.connected = true
+        this.activeVersion = '4.x'
+        this.useRawSqlite4x = true
+        return { success: true }
+      }
+    }
+
+    // 方案 3: 尝试 NT 格式数据库 (xwechat_files/*/db_storage/message/message_0.db)
+    const ntDbPath = configService.get('ntDbPath')
+    const ntKey = configService.get('ntKey')
+    const ntSalt = configService.get('ntSalt')
+    if (ntDbPath && ntKey && ntSalt && existsSync(ntDbPath)) {
+      this.ntCore = new NtCore(ntDbPath, ntKey, ntSalt)
+      // 快速验证: 尝试获取会话列表
+      const testResult = await this.ntCore.getSessions()
+      if (testResult.success) {
+        this.connected = true
+        this.activeVersion = '4.x'
+        return { success: true }
+      }
+      this.ntCore = null
+    }
+
+    // 方案 4: 尝试 WCDB API 连接 (需要 db_storage/session.db 结构，仅 3.x 兼容)
     const resourcesPath = join(process.cwd(), 'resources')
     wcdbCore.setPaths(resourcesPath, '')
 
@@ -81,7 +112,31 @@ export class ChatService {
       this.useRawSqlite4x = false
       return { success: true }
     }
-    return { success: false, error: '4.x 数据库连接失败，请确保 MSG0_decrypted.db 存在或 db_storage 目录结构正确' }
+
+    // 所有方案失败，给出明确的指导
+    const msgDir = join(dbPath, wxid || '', 'Msg', 'Multi')
+    return {
+      success: false,
+      error: [
+        '4.x 数据库连接失败，请尝试以下方案之一：',
+        '',
+        '方案 A - 使用解密工具 (推荐):',
+        `  python scripts/scan_decrypt_4x.py --db "${msg0Path}" --out "${rawMsg0Path}"`,
+        '',
+        '方案 B - NT 格式数据库 (微信 4.x 新版):',
+        '  1. 确保微信正在运行',
+        '  2. 运行: weflow-cli init (将自动扫描 NT 数据库)',
+        '',
+        '方案 C - 重新提取密钥 (需要重启微信):',
+        '  1. 关闭微信 4.x (Weixin.exe)',
+        '  2. 运行: weflow-cli dbkey --timeout 120000',
+        '  3. 启动微信并登录，密钥将在登录时自动捕获',
+        '  4. 保存密钥: weflow-cli config set decryptKey <64位密钥>',
+        '',
+        '方案 D - 手动指定已解密数据库路径:',
+        `  将已解密的数据库放到: ${rawMsg0Path}`,
+      ].join('\n'),
+    }
   }
 
   private async connect3x(): Promise<{ success: boolean; error?: string }> {
@@ -108,7 +163,11 @@ export class ChatService {
 
     let sessions: ChatSession[] = []
 
-    if (this.activeVersion === '4.x') {
+    if (this.ntCore) {
+      const result = await this.ntCore.getSessions()
+      if (!result.success || !result.sessions) return []
+      sessions = result.sessions
+    } else if (this.activeVersion === '4.x') {
       if (this.useRawSqlite4x) {
         const result = await sqlcipherCore.getSessions()
         if (!result.success || !result.sessions) return []
@@ -144,7 +203,11 @@ export class ChatService {
     const conn = await this.connect()
     if (!conn.success) return []
 
-    if (this.activeVersion === '4.x') {
+    if (this.ntCore) {
+      const result = await this.ntCore.getMessages(talker, limit, offset)
+      if (!result.success || !result.messages) return []
+      return result.messages
+    } else if (this.activeVersion === '4.x') {
       if (this.useRawSqlite4x) {
         const result = await sqlcipherCore.getMessages(talker, limit, offset)
         if (!result.success || !result.messages) return []
@@ -168,7 +231,11 @@ export class ChatService {
 
     let contacts: Contact[] = []
 
-    if (this.activeVersion === '4.x') {
+    if (this.ntCore) {
+      const result = await this.ntCore.getContacts(limit)
+      if (!result.success || !result.contacts) return []
+      contacts = result.contacts
+    } else if (this.activeVersion === '4.x') {
       if (this.useRawSqlite4x) {
         const result = await sqlcipherCore.getContacts()
         if (!result.success || !result.contacts) return []
@@ -198,6 +265,9 @@ export class ChatService {
   }
 
   disconnect(): void {
+    if (this.ntCore) {
+      this.ntCore = null
+    }
     if (this.activeVersion === '4.x') {
       if (this.useRawSqlite4x) {
         try { sqlcipherCore.close() } catch { }

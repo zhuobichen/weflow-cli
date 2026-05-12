@@ -14,13 +14,16 @@ interface CliConfig {
   decryptKey3x: string
   dataVersion: string
   dbPath3x: string
+  ntDbPath: string
+  ntKey: string
+  ntSalt: string
 }
 
 const CONFIG_DIR = join(homedir(), '.weflow-cli')
 const CONFIG_FILE = join(CONFIG_DIR, 'config.json')
 
 export class ConfigService {
-  private config: CliConfig = { dbPath: '', wxid: '', decryptKey: '', decryptKey3x: '', dataVersion: '', dbPath3x: '' }
+  private config: CliConfig = { dbPath: '', wxid: '', decryptKey: '', decryptKey3x: '', dataVersion: '', dbPath3x: '', ntDbPath: '', ntKey: '', ntSalt: '' }
 
   constructor() {
     this.load()
@@ -36,7 +39,10 @@ export class ConfigService {
           decryptKey: data.decryptKey || '',
           decryptKey3x: data.decryptKey3x || '',
           dataVersion: data.dataVersion || '',
-          dbPath3x: data.dbPath3x || ''
+          dbPath3x: data.dbPath3x || '',
+          ntDbPath: data.ntDbPath || '',
+          ntKey: data.ntKey || '',
+          ntSalt: data.ntSalt || ''
         }
       }
     } catch {
@@ -57,19 +63,19 @@ export class ConfigService {
 
   get<K extends keyof CliConfig>(key: K): CliConfig[K] {
     const raw = this.config[key]
-    if ((key === 'decryptKey' || key === 'decryptKey3x') && typeof raw === 'string' && raw.startsWith(LOCK_PREFIX)) {
+    if ((key === 'decryptKey' || key === 'decryptKey3x' || key === 'ntKey') && typeof raw === 'string' && raw.startsWith(LOCK_PREFIX)) {
       return this.lockDecrypt(raw) as CliConfig[K]
     }
-    if ((key === 'dbPath' || key === 'dbPath3x') && typeof raw === 'string') {
+    if ((key === 'dbPath' || key === 'dbPath3x' || key === 'ntDbPath') && typeof raw === 'string') {
       return expandHomePath(raw) as CliConfig[K]
     }
     return raw
   }
 
   set<K extends keyof CliConfig>(key: K, value: CliConfig[K]): void {
-    if ((key === 'decryptKey' || key === 'decryptKey3x') && typeof value === 'string' && value) {
+    if ((key === 'decryptKey' || key === 'decryptKey3x' || key === 'ntKey') && typeof value === 'string' && value) {
       this.config[key] = this.lockEncrypt(value) as CliConfig[K]
-    } else if ((key === 'dbPath' || key === 'dbPath3x') && typeof value === 'string') {
+    } else if ((key === 'dbPath' || key === 'dbPath3x' || key === 'ntDbPath') && typeof value === 'string') {
       this.config[key] = expandHomePath(value) as CliConfig[K]
     } else {
       this.config[key] = value
@@ -84,18 +90,22 @@ export class ConfigService {
       decryptKey: this.get('decryptKey'),
       decryptKey3x: this.get('decryptKey3x'),
       dataVersion: (this.config.dataVersion || '4.x') as ConfigData['dataVersion'],
-      dbPath3x: this.get('dbPath3x')
+      dbPath3x: this.get('dbPath3x'),
+      ntDbPath: this.config.ntDbPath,
+      ntKey: this.config.ntKey,
+      ntSalt: this.config.ntSalt
     }
   }
 
   isConfigured(): boolean {
     const has4x = !!(this.config.dbPath && this.config.decryptKey)
     const has3x = !!(this.config.dbPath3x && this.config.decryptKey3x)
-    return has4x || has3x
+    const hasNt = !!(this.config.ntDbPath && this.config.ntKey && this.config.ntSalt)
+    return has4x || has3x || hasNt
   }
 
   clear(): void {
-    this.config = { dbPath: '', wxid: '', decryptKey: '', decryptKey3x: '', dataVersion: '', dbPath3x: '' }
+    this.config = { dbPath: '', wxid: '', decryptKey: '', decryptKey3x: '', dataVersion: '', dbPath3x: '', ntDbPath: '', ntKey: '', ntSalt: '' }
     this.save()
   }
 
