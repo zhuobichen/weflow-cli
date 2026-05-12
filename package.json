@@ -1,0 +1,31 @@
+{
+  "name": "weflow-cli",
+  "version": "1.0.0",
+  "description": "WeFlow CLI - 微信聊天记录命令行查询与导出工具",
+  "type": "module",
+  "bin": {
+    "weflow-cli": "./bin/weflow-cli-electron.cjs"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "node bin/weflow-cli-electron.cjs",
+    "start": "node bin/weflow-cli-electron.cjs"
+  },
+  "dependencies": {
+    "chalk": "^5.4.1",
+    "commander": "^13.1.0",
+    "exceljs": "^4.4.0",
+    "fzstd": "^0.1.1",
+    "koffi": "^2.9.0",
+    "lz4": "^0.6.5"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "electron": "^42.0.1",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

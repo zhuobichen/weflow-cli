@@ -1,0 +1,9 @@
+node_modules/
+dist/
+output/
+logs/
+*.db
+*.decrypted.db
+test-*.txt
+.DS_Store
+Thumbs.db
