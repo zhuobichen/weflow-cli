@@ -1,122 +1,87 @@
+<!-- Logo 右对齐 -->
+<!-- <img src="LOGO_URL" width="305" align=right /> -->
+
+<div align="center">
+
 # WeFlow CLI
 
-微信聊天记录命令行查询与导出工具。无需启动 GUI，直接通过命令行操作微信聊天数据。
+*Command-line tool for WeChat chat record query & export*
 
-> **依赖**：需要 Electron 运行时来满足 `wcdb_api.dll` 的安全检查。已通过 wrapper 脚本自动处理。
+> 无 GUI，纯终端操作。取出密钥，读取聊天，导出记录，一步到位。
 
-## 功能
+</div>
 
-- ✅ 自动检测微信数据目录
-- ✅ 从运行中的微信进程自动提取数据库解密密钥
-- ✅ 查看会话列表（支持关键词搜索）
-- ✅ 查询指定用户的聊天记录
-- ✅ 查看联系人列表
-- ✅ 导出聊天记录（JSON/TXT/HTML/Excel）
+---
 
-## 安装
+## 📦 最新版本
+
+当前版本：**v1.0.0**
+
+- ✨ **新增** — 支持 4.x NT 格式加密数据库直接解密（sqlcipher3）
+- ✨ **新增** — 内存扫描匹配密钥 + NT 数据库自动发现
+- ✨ **新增** — `nt_decrypt.py` / `scan_decrypt_4x.py` Python 解密脚本
+- 🔧 **优化** — 连接优先级：预解密文件 → 直接解密 → NT 格式 → WCDB API
+- 🔧 **优化** — `dbPathService` 优先检测 `xwechat_files` NT 路径
+- ✨ **新增** — 支持 3.x 数据库格式，消息类型解析（图片/文件/链接/语音）
+
+[完整 Changelog](https://github.com/zhuobichen/weflow-cli/commits/master)
+
+---
+
+## 👋 Welcome
+
+**English** — WeFlow CLI is a pure command-line tool to access, query, and export WeChat chat records. No GUI, no Electron window — just your terminal.
+
+**中文** — WeFlow CLI 是一个纯命令行工具，用于查看和导出微信聊天记录。无需启动 GUI，直接在终端搞定一切。
+
+---
+
+## ✨ Feature
+
+- **Zero GUI** — 脱离桌面应用，纯终端完成所有操作
+- **Auto Key Extraction** — 从微信进程自动提取解密密钥，支持 WeChat 3.x & 4.x
+- **NT Database Decryption** — 直接解密 4.x NT 加密数据库，无需预解密文件
+- **Multi-format Export** — JSON / TXT / HTML / Excel 四种格式导出
+- **Batch Operations** — 支持按关键词过滤、分页查询、时间范围筛选
+- **Dual Version Support** — 同时兼容微信 3.x 和 4.x（传统 + NT）数据格式
+
+---
+
+## 🚀 Quick Start
 
 ```bash
-npm install
-npm run build
-```
-
-## 使用
-
-### 1. 初始化
-
-首次使用需要初始化，自动检测微信数据目录并提取解密密钥：
-
-```bash
+git clone https://github.com/zhuobichen/weflow-cli.git
+cd weflow-cli
+npm install && npm run build
 npm run dev -- init
 ```
 
-确保微信 4.x 已登录且正在运行。
+> **首次使用提示**：确保微信已登录且正在运行，`init` 命令会自动检测数据目录并提取密钥。4.x NT 格式需要安装 Python 依赖：`pip install sqlcipher3 pycryptodome pymem`
 
-### 2. 查看会话列表
+📥 [最新 Release](https://github.com/zhuobichen/weflow-cli) &nbsp;|&nbsp; 📖 [使用教程](#-quick-start) &nbsp;|&nbsp; 🐛 [提交 Issue](https://github.com/zhuobichen/weflow-cli/issues)
 
-```bash
-npm run dev -- sessions
-npm run dev -- sessions -k "关键词"
-```
+---
 
-### 3. 查询消息
+## 🔗 Link
 
-```bash
-npm run dev -- messages <talker> -n 50
-```
+| 文档 | 仓库 | Issues |
+|:-:|:-:|:-:|
+| [![docs](https://img.shields.io/badge/README-中文-blue)](./README.md) | [![repo](https://img.shields.io/badge/GitHub-weflow--cli-black)](https://github.com/zhuobichen/weflow-cli) | [![issues](https://img.shields.io/badge/GitHub-Issues-orange)](https://github.com/zhuobichen/weflow-cli/issues) |
 
-### 4. 查看联系人
+---
 
-```bash
-npm run dev -- contacts
-npm run dev -- contacts -k "关键词"
-```
+## 🙏 Thanks
 
-### 5. 导出聊天记录
+- [[WeFlow]](https://github.com/hicccc77/WeFlow) — 原始桌面应用，本项目的设计灵感与原生库来源
+- [[sqlcipher3]](https://pypi.org/project/sqlcipher3/) — Python SQLCipher 绑定，NT 数据库解密的关键依赖
+- [[koffi]](https://koffi.dev/) — 高性能 Node.js FFI 库
+- [[ExcelJS]](https://github.com/exceljs/exceljs) — Excel 导出引擎
+- [[fzstd]](https://www.npmjs.com/package/fzstd) — Node.js zstd 解压，处理微信压缩消息
 
-```bash
-# 导出为 JSON
-npm run dev -- export <talker> json
+感谢每一位使用和反馈的用户 ❤️
 
-# 导出为 TXT
-npm run dev -- export <talker> txt
+---
 
-# 导出为 HTML
-npm run dev -- export <talker> html
+## 📄 License
 
-# 导出为 Excel
-npm run dev -- export <talker> excel
-
-# 指定输出目录
-npm run dev -- export <talker> json -o ./my-output
-```
-
-### 6. 其他命令
-
-```bash
-# 查看当前配置
-npm run dev -- config show
-
-# 手动设置配置
-npm run dev -- config set dbPath <path>
-npm run dev -- config set decryptKey <key>
-
-# 提取数据库密钥
-npm run dev -- dbkey
-
-# 扫描微信账号
-npm run dev -- scan
-```
-
-## 配置
-
-配置文件存储在 `~/.weflow-cli/config.json`，包含：
-
-- `dbPath`: 微信数据目录路径
-- `wxid`: 微信账号 ID
-- `decryptKey`: 数据库解密密钥（自动加密存储）
-
-## 技术栈
-
-- TypeScript
-- Commander.js (CLI 框架)
-- koffi (FFI 调用原生库)
-- Electron (运行时环境)
-- ExcelJS (Excel 导出)
-
-## 依赖的原生库
-
-- `wcdb_api.dll`: WCDB 数据库访问库
-- `wx_key.dll`: 微信密钥提取库
-
-这些原生库从 [WeFlow](https://github.com/hicccc77/WeFlow) 项目复制。
-
-## 注意事项
-
-- 仅支持 **微信 4.x** 数据格式（`xwechat_files` 目录）
-- 需要微信 4.x 已登录才能访问聊天数据
-- 密钥提取功能需要微信进程正在运行
-
-## 许可证
-
-MIT
+MIT © zhuobichen — 本工具仅供学习研究，请勿用于非法用途。
