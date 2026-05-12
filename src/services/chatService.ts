@@ -12,6 +12,8 @@ const sqlcipherCore = new SqlcipherCore()
 export class ChatService {
   private connected = false
   private activeVersion: DataVersion | null = null
+  /** 4.x 是否通过原始 SQLite 连接 (而非 WCDB API) */
+  private useRawSqlite4x = false
 
   /**
    * 检测数据版本: 3.x 或 4.x
@@ -56,6 +58,19 @@ export class ChatService {
       return { success: false, error: '4.x 配置不完整，请运行 weflow-cli init' }
     }
 
+    // 优先使用已解密的 MSG0_decrypted.db (纯 SQLite)
+    const rawMsg0Path = join(dbPath, wxid || '', 'Msg', 'Multi', 'MSG0_decrypted.db')
+    if (existsSync(rawMsg0Path)) {
+      const result = await sqlcipherCore.openRaw(rawMsg0Path, wxid || '')
+      if (result.success) {
+        this.connected = true
+        this.activeVersion = '4.x'
+        this.useRawSqlite4x = true
+        return { success: true }
+      }
+    }
+
+    // 尝试 WCDB API 连接 (需要 db_storage/session.db 结构)
     const resourcesPath = join(process.cwd(), 'resources')
     wcdbCore.setPaths(resourcesPath, '')
 
@@ -63,9 +78,10 @@ export class ChatService {
     if (ok) {
       this.connected = true
       this.activeVersion = '4.x'
+      this.useRawSqlite4x = false
       return { success: true }
     }
-    return { success: false, error: '4.x 数据库连接失败' }
+    return { success: false, error: '4.x 数据库连接失败，请确保 MSG0_decrypted.db 存在或 db_storage 目录结构正确' }
   }
 
   private async connect3x(): Promise<{ success: boolean; error?: string }> {
@@ -93,9 +109,15 @@ export class ChatService {
     let sessions: ChatSession[] = []
 
     if (this.activeVersion === '4.x') {
-      const result = await wcdbCore.getSessions()
-      if (!result.success || !result.sessions) return []
-      sessions = result.sessions
+      if (this.useRawSqlite4x) {
+        const result = await sqlcipherCore.getSessions()
+        if (!result.success || !result.sessions) return []
+        sessions = result.sessions
+      } else {
+        const result = await wcdbCore.getSessions()
+        if (!result.success || !result.sessions) return []
+        sessions = result.sessions
+      }
     } else if (this.activeVersion === '3.x') {
       const result = await sqlcipherCore.getSessions()
       if (!result.success || !result.sessions) return []
@@ -123,6 +145,11 @@ export class ChatService {
     if (!conn.success) return []
 
     if (this.activeVersion === '4.x') {
+      if (this.useRawSqlite4x) {
+        const result = await sqlcipherCore.getMessages(talker, limit, offset)
+        if (!result.success || !result.messages) return []
+        return result.messages
+      }
       const result = await wcdbCore.getMessages(talker, limit, offset)
       if (!result.success || !result.messages) return []
       return result.messages
@@ -142,9 +169,15 @@ export class ChatService {
     let contacts: Contact[] = []
 
     if (this.activeVersion === '4.x') {
-      const result = await wcdbCore.getContactsCompact()
-      if (!result.success || !result.contacts) return []
-      contacts = result.contacts
+      if (this.useRawSqlite4x) {
+        const result = await sqlcipherCore.getContacts()
+        if (!result.success || !result.contacts) return []
+        contacts = result.contacts
+      } else {
+        const result = await wcdbCore.getContactsCompact()
+        if (!result.success || !result.contacts) return []
+        contacts = result.contacts
+      }
     } else if (this.activeVersion === '3.x') {
       const result = await sqlcipherCore.getContacts()
       if (!result.success || !result.contacts) return []
@@ -166,12 +199,16 @@ export class ChatService {
 
   disconnect(): void {
     if (this.activeVersion === '4.x') {
+      if (this.useRawSqlite4x) {
+        try { sqlcipherCore.close() } catch { }
+      }
       try { wcdbCore.close() } catch { }
     } else if (this.activeVersion === '3.x') {
       try { sqlcipherCore.close() } catch { }
     }
     this.connected = false
     this.activeVersion = null
+    this.useRawSqlite4x = false
   }
 }
 

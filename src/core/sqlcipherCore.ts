@@ -128,6 +128,29 @@ export class SqlcipherCore {
   }
 
   /**
+   * 直接打开已解密的 SQLite 数据库 (跳过解密步骤)
+   * 用于 4.x 已解密的 MSG0_decrypted.db 或测试数据库
+   */
+  async openRaw(dbPath: string, wxid: string): Promise<SqlcipherResult> {
+    if (this.opened) this.close()
+
+    if (!existsSync(dbPath)) {
+      return { success: false, error: `数据库不存在: ${dbPath}` }
+    }
+
+    this.wxid = wxid || ''
+
+    try {
+      this.db = new DatabaseSync(dbPath)
+      this.opened = true
+      return { success: true }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      return { success: false, error: `打开 4.x 数据库失败: ${msg}` }
+    }
+  }
+
+  /**
    * 打开 3.x 数据库
    */
   async open(dbPath: string, keyHex: string, wxid: string): Promise<SqlcipherResult> {
