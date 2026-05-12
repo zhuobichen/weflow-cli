@@ -66,6 +66,27 @@ def fetch_messages(conn, talker):
     return messages
 
 
+def build_sender_map(conn, talker):
+    """Map sender_id -> display name using Name2Id table and contact DB."""
+    sender_map = {}
+    c = conn.cursor()
+
+    # Get all sender IDs from the message table
+    tbl = 'Msg_' + hashlib.md5(talker.encode()).hexdigest()
+    c.execute(f'SELECT DISTINCT real_sender_id FROM \"{tbl}\"')
+    sender_ids = [row[0] for row in c.fetchall()]
+
+    # Map sender_id -> user_name using Name2Id
+    c2 = conn.cursor()
+    for sid in sender_ids:
+        c2.execute('SELECT user_name FROM Name2Id WHERE rowid = ?', (sid,))
+        row = c2.fetchone()
+        if row and row[0]:
+            sender_map[sid] = row[0]
+
+    return sender_map
+
+
 def scan_nt_cache(nt_cache_dir, talker):
     """Scan NT cache directory for image thumbnails and temp images.
 
@@ -219,7 +240,7 @@ def parse_source(source_text):
     return sender, content
 
 
-def format_message(row, talker, wx_dir, image_map=None):
+def format_message(row, talker, wx_dir, image_map=None, sender_map=None, display_name=''):
     """Format a single message for HTML display.
 
     Args:
@@ -227,6 +248,8 @@ def format_message(row, talker, wx_dir, image_map=None):
         talker: target wxid
         wx_dir: traditional FileStorage path (fallback)
         image_map: {local_id: (base64_data, mime_type)} from NT cache scan
+        sender_map: {sender_id: user_name} from Name2Id table
+        display_name: human-readable name for the target talker
     """
     local_id = row[0] or 0
     local_type = row[2] or 0
@@ -235,12 +258,19 @@ def format_message(row, talker, wx_dir, image_map=None):
     source = row[7]
     message_content = row[8]
 
-    is_send = (real_sender_id == 0)
-    sender_username = ''
+    # Resolve sender name
+    sender_user_name = (sender_map or {}).get(real_sender_id, '')
+    is_self = (sender_user_name != talker)  # not the target talker = sent by me
 
-    # Parse source for sender info
-    if isinstance(source, str) and source:
-        sender_username, _ = parse_source(source)
+    # Build display sender name
+    if is_self:
+        sender_display = '我'
+    elif display_name:
+        sender_display = display_name
+    elif sender_user_name:
+        sender_display = sender_user_name
+    else:
+        sender_display = talker
 
     # Get content
     content = ''
@@ -334,9 +364,9 @@ def format_message(row, talker, wx_dir, image_map=None):
     return {
         'local_id': local_id,
         'create_time': create_time,
-        'is_send': is_send,
-        'sender': sender_username or ('我' if is_send else talker),
-        'is_self': is_send,
+        'is_send': is_self,
+        'sender': sender_display,
+        'is_self': is_self,
         'local_type': local_type,
         'display': display,
         'image_b64': image_b64,
@@ -520,7 +550,13 @@ def main():
         conn.close()
         sys.exit(1)
 
+    # Build sender name map
+    print(f"Building sender name map...")
+    sender_map = build_sender_map(conn, args.talker)
+    print(f"  Found {len(sender_map)} sender(s): {list(sender_map.values())}")
+
     # Format messages
+    display_name = args.name or args.talker
     print(f"Formatting {len(messages)} messages...")
     wx_dir = args.wx_dir or ''
     formatted = []
@@ -528,7 +564,7 @@ def main():
     for i, row in enumerate(messages):
         if i % 2000 == 0:
             print(f"  Formatting {i}/{len(messages)}...")
-        result = format_message(row, args.talker, wx_dir, image_map)
+        result = format_message(row, args.talker, wx_dir, image_map, sender_map, display_name)
         if result.get('image_b64'):
             img_hit_count += 1
         formatted.append(result)
@@ -542,7 +578,6 @@ def main():
     print(f"Splitting into {parts} parts (~{per_part} messages each)...")
 
     talker_safe = args.talker.replace('@', '_').replace('/', '_')
-    display_name = args.name or args.talker
 
     html_files = []
     for i in range(parts):
