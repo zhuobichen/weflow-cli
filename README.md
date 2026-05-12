@@ -1,4 +1,4 @@
-<!-- <img src="LOGO_URL" width="305" align=right /> -->
+<img src="./logo.png" width="305" align=right />
 
 <div align="center">
 
