@@ -92,23 +92,32 @@ export class WechatMessageService {
     return this.loginSession
   }
 
-  async waitForLogin(pollIntervalMs = 1500): Promise<WechatLoginSession> {
+  async waitForLogin(pollIntervalMs = 2000): Promise<WechatLoginSession> {
     let expiredCount = 0
 
     while (true) {
-      const session = await this.pollQrStatus()
+      try {
+        const session = await this.pollQrStatus()
 
-      if (session.status === 'confirmed') {
-        return session
-      }
-      if (session.status === 'expired') {
-        expiredCount++
-        if (expiredCount >= 3) {
-          session.error = '二维码过期次数过多，请重新运行登录命令'
+        if (session.status === 'confirmed') {
           return session
         }
-        await this.startLogin()
-        console.log('二维码已过期，已获取新二维码，请重新扫码')
+        if (session.status === 'expired') {
+          expiredCount++
+          if (expiredCount >= 3) {
+            session.error = '二维码过期次数过多，请重新运行登录命令'
+            return session
+          }
+          await this.startLogin()
+          console.log('二维码已过期，已获取新二维码，请重新扫码')
+        }
+      } catch (e: any) {
+        // Timeout or network error — retry after interval
+        if (e.message?.includes('timeout')) {
+          // Expected: QR status poll times out, keep retrying
+        } else {
+          console.error(`轮询异常: ${e.message}`)
+        }
       }
 
       await sleep(pollIntervalMs)
@@ -126,11 +135,15 @@ export class WechatMessageService {
             get_updates_buf: this.syncBuf,
           },
           tokenRequired: true,
-          timeoutMs: 35_000,
+          timeoutMs: 40_000, // Long-poll: server will hold until message arrives
         })
 
-        if (data.ret !== 0 || data.errcode !== 0) {
-          console.error(`getupdates error: ${data.errmsg || 'unknown'}`)
+        // ret/errcode may be absent on empty response (normal for long-poll timeout)
+        if (data.ret != null && data.ret !== 0 || data.errcode != null && data.errcode !== 0) {
+          console.error(`getupdates error: ret=${data.ret} errcode=${data.errcode} errmsg=${data.errmsg || 'unknown'}`)
+          if (data.errcode === -1 || data.errcode === 401) {
+            console.error('Token may have expired, please login again')
+          }
           await sleep(5000)
           continue
         }
@@ -152,8 +165,10 @@ export class WechatMessageService {
         }
       } catch (e: any) {
         if (this.shutdownFlag) return
+        // Long-poll timeout is normal — server holds connection until message arrives
         if (e.name === 'AbortError' || e.message?.includes('timeout')) {
-          continue // long-poll timeout is expected, restart
+          // Restart poll immediately
+          continue
         }
         console.error(`Polling error: ${e.message}`)
         await sleep(5000)

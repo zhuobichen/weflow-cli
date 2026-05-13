@@ -588,7 +588,7 @@ program
         console.log(chalk.yellow('(终端二维码显示失败，请安装: npm install qrcode-terminal)'))
       }
 
-      console.log(chalk.cyan('\n等待扫码...'))
+      console.log(chalk.cyan('\n等待扫码 (约2分钟有效)...'))
       const session = await service.waitForLogin()
 
       if (session.status === 'confirmed') {
