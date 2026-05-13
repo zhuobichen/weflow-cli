@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """
-后处理：广告清洗 → DeepSeek主题分类 → 兴趣深度摘要 → 分文件夹输出。
+后处理：广告清洗 → 兴趣主题深度摘要 → 分文件夹 → 重建README。
+
+前置: 已运行 biz_daily.py，md 文件中已含【主题】标签。
 
 用法: python scripts/classify_daily.py [date_dir] --api-key <key> [--interest AI]
 """
@@ -12,7 +14,6 @@ from pathlib import Path
 OUTPUT_ROOT = 'output/biz-daily'
 TOPICS = ['AI', '学术', '新闻', '文学']
 
-# 微信文章广告/垃圾行
 AD_PATTERNS = [
     re.compile(r'在小说阅读器读本章\s*'),
     re.compile(r'在小说阅读器中沉浸阅读\s*'),
@@ -25,15 +26,6 @@ AD_PATTERNS = [
     re.compile(r'!\[.*?\]\(https?://mmbiz[^)]+\)\s*'),
     re.compile(r'\n{4,}'),
 ]
-
-CLASSIFY_PROMPT = """归类以下文章到: AI / 学术 / 新闻 / 文学
-
-AI: AI产品测评、大模型、Agent、Claude/GPT/DeepSeek、编程开发、GitHub开源、科技教程
-学术: 科研论文、Nature/Science期刊、环境科学、实验室、学术会议
-新闻: 时事政策、社会热点、企业通知、招聘、促销
-文学: 散文随笔、生活记录、美食旅游、历史人文
-
-只输出分类名（两个字）。"""
 
 INTEREST_PROMPT = """对以下AI领域文章生成深度解析：
 
@@ -56,7 +48,7 @@ INTEREST_PROMPT = """对以下AI领域文章生成深度解析：
 （1句话）"""
 
 
-def call_deepseek(prompt: str, api_key: str, max_tokens=800) -> str:
+def call_deepseek(prompt: str, api_key: str, max_tokens=2000) -> str:
     payload = json.dumps({
         'model': 'deepseek-v4-pro',
         'messages': [{'role': 'user', 'content': prompt}],
@@ -85,6 +77,15 @@ def clean_ads(text: str) -> str:
     return text.strip()
 
 
+def extract_topic_from_file(content: str) -> str:
+    """Extract topic from md: look for > 主题：xxx or 【主题】xxx"""
+    m = re.search(r'> 主题：(\S+)', content)
+    if m: return m.group(1)
+    m = re.search(r'【主题】\s*(\S+)', content)
+    if m: return m.group(1)
+    return '学术'
+
+
 def main():
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')
     import argparse
@@ -105,11 +106,9 @@ def main():
         if not dirs: print('[ERROR] 未找到日报目录'); sys.exit(1)
         base = dirs[0]
 
-    # Gather all md files (may be in subdirs from previous runs)
     md_files = sorted([f for f in base.rglob('*.md') if f.name != 'README.md'])
     print(f'目录: {base}')
-    print(f'文章: {len(md_files)} 篇')
-    print(f'兴趣: {args.interest}\n')
+    print(f'文章: {len(md_files)} 篇 | 兴趣: {args.interest}\n')
 
     # ====== Step 1: Clean ads ======
     print('=== Step 1: 广告清洗 ===')
@@ -124,30 +123,18 @@ def main():
             f.write(new_content)
     print(f'  清洗 {cleaned} 篇\n')
 
-    # ====== Step 2: Classify with DeepSeek ======
-    print('=== Step 2: DeepSeek 主题分类 ===')
+    # ====== Step 2: Read topics from md (already set by biz_daily) ======
+    print('=== Step 2: 读取主题 ===')
     topic_map = {}
-    for i, fpath in enumerate(md_files):
+    for fpath in md_files:
         with open(fpath, 'r', encoding='utf-8') as f:
             content = f.read()
-        title = re.search(r'^# (.+)', content, re.MULTILINE)
-        summary = re.search(r'## AI 摘要\n\n(.+?)(?:\n\n---|\Z)', content, re.DOTALL)
-        title = title.group(1) if title else fpath.stem
-        summary = summary.group(1)[:300] if summary else content[200:500]
-
-        topic = '学术'
-        try:
-            prompt = CLASSIFY_PROMPT + f'\n\n标题：{title}\n摘要：{summary}'
-            result = call_deepseek(prompt, api_key, max_tokens=500).strip()
+        topic = extract_topic_from_file(content)
+        if topic not in TOPICS:
             for t in TOPICS:
-                if t in result:
-                    topic = t; break
-        except Exception as e:
-            print(f'  [{i+1}] ERR: {e}')
-
+                if t in topic: topic = t; break
+            else: topic = '学术'
         topic_map[fpath] = topic
-        print(f'  [{i+1}/{len(md_files)}] [{topic}] {title[:50]}')
-        time.sleep(0.15)
 
     dist = Counter(topic_map.values())
     print(f'  分布: {dict(dist)}\n')
@@ -163,7 +150,6 @@ def main():
             source = re.search(r'来源：(.+)', content)
             title = title.group(1) if title else ''
             source = source.group(1).strip() if source else ''
-
             body_match = re.search(r'## 正文\n\n(.+)', content, re.DOTALL)
             body = body_match.group(1)[:5000] if body_match else content[500:5500]
 
