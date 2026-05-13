@@ -51,6 +51,56 @@ export interface Contact {
   type?: string
 }
 
+// === 微信消息通道 ===
+
+export interface WechatOCConfig {
+  baseUrl?: string
+  cdnBaseUrl?: string
+  botType?: string
+  token?: string
+  accountId?: string
+  syncBuf?: string
+  contextTokens?: Record<string, string>
+  longPollTimeoutMs?: number
+  apiTimeoutMs?: number
+  typingKeepaliveIntervalS?: number
+  typingTicketTtlS?: number
+}
+
+export interface WechatLoginSession {
+  sessionKey: string
+  qrcode: string
+  qrcodeImgContent: string
+  startedAt: number
+  status: 'wait' | 'confirmed' | 'expired' | 'scanned'
+  botToken?: string
+  accountId?: string
+  baseUrl?: string
+  userId?: string
+  error?: string
+}
+
+export interface WechatInboundMessage {
+  messageId: string
+  fromUserId: string
+  senderNickname: string
+  timestamp: number
+  timestampMs: number
+  components: WechatMessageComponent[]
+  messageStr: string
+  messageKind: 'text' | 'image' | 'voice' | 'file' | 'video' | 'unknown'
+  rawMessage: Record<string, any>
+  isReply: boolean
+  quotedText?: string
+}
+
+export type WechatMessageComponent =
+  | { type: 'plain'; text: string }
+  | { type: 'image'; filePath: string }
+  | { type: 'record'; filePath: string }
+  | { type: 'file'; name: string; filePath: string }
+  | { type: 'video'; filePath: string }
+
 export interface ExportOptions {
   talker: string
   format: 'json' | 'html' | 'txt' | 'excel'

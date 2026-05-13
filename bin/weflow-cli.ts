@@ -11,6 +11,9 @@ import { NtCore } from '../src/core/ntCore.js'
 import { configService } from '../src/services/configService.js'
 import { chatService } from '../src/services/chatService.js'
 import { exportService } from '../src/services/exportService.js'
+import { resolveTalker as resolveTalkerCore } from '../src/utils/talkerUtils.js'
+import { WechatMessageService } from '../src/services/wechatMessageService.js'
+import { whitelistService } from '../src/services/whitelistService.js'
 import type { ChatSession } from '../src/types.js'
 
 const program = new Command()
@@ -62,69 +65,27 @@ function tryReadWeFlowKey(): string | null {
 }
 
 /**
- * 将用户输入解析为 talker (wxid)
- * 支持: wxid_xxx / 昵称 / 备注名 / 序号 [N] / 纯数字
+ * CLI 包装的 talker 解析 (wxid / 昵称 / 备注名 / 序号)。
+ * 委托给 src/utils/talkerUtils 的核心实现，外加 chalk 友好输出。
  */
 async function resolveTalker(input: string): Promise<string> {
-  // 1. wxid 格式直接返回
-  if (input.startsWith('wxid_') || input.includes('@chatroom') || input.includes('@openim')) {
-    return input
-  }
-
-  // 2. 序号匹配: [N] 或纯数字
-  const numMatch = input.match(/^\[?(\d+)\]?$/)
-  if (numMatch) {
-    const index = parseInt(numMatch[1]) - 1
-    const sessions = await chatService.listSessions()
-    if (index < 0 || index >= sessions.length) {
-      console.log(chalk.red(`\n❌ 序号 ${input} 超出范围，共 ${sessions.length} 个会话`))
-      console.log(chalk.gray('  运行 weflow-cli sessions 查看列表\n'))
-      process.exit(1)
+  try {
+    const result = await resolveTalkerCore(input)
+    // 显示解析结果（已知格式跳过打印）
+    if (!input.startsWith('wxid_') && !input.includes('@chatroom') && !input.includes('@openim')) {
+      const isNum = /^\[?\d+\]?$/.test(input)
+      const sessions = await chatService.listSessions(undefined, 50)
+      const match = sessions.find(s => s.username === result)
+      if (match) {
+        const prefix = isNum ? `序号[${input.replace(/[\[\]]/g, '')}] ` : ''
+        console.log(chalk.gray(`  → ${prefix}${match.displayName} (${match.username})`))
+      }
     }
-    const s = sessions[index]
-    console.log(chalk.gray(`  → 序号[${index + 1}] ${s.displayName} (${s.username})`))
-    return s.username
-  }
-
-  // 3. 昵称/备注搜索
-  const sessions = await chatService.listSessions(input, 50)
-
-  if (sessions.length === 0) {
-    console.log(chalk.red(`\n❌ 找不到 "${input}" 对应的会话`))
-    console.log(chalk.gray('  运行 weflow-cli sessions 查看所有会话\n'))
+    return result
+  } catch (e: any) {
+    console.log(chalk.red(`\n❌ ${e.message}\n`))
     process.exit(1)
   }
-
-  // 精确匹配
-  const exact = sessions.find(s =>
-    s.displayName === input || s.username === input
-  )
-  if (exact) {
-    console.log(chalk.gray(`  → ${exact.displayName} (${exact.username})`))
-    return exact.username
-  }
-
-  // 只有一个匹配
-  if (sessions.length === 1) {
-    console.log(chalk.gray(`  → ${sessions[0].displayName} (${sessions[0].username})`))
-    return sessions[0].username
-  }
-
-  // 多个匹配 — 交互选择
-  const choices = sessions.slice(0, 20).map(s => ({
-    name: `${s.displayName}  (${s.username})`,
-    value: s.username,
-  }))
-
-  const { selected } = await inquirer.prompt([{
-    type: 'select',
-    name: 'selected',
-    message: `"${input}" 匹配到多个会话，请选择:`,
-    choices,
-    loop: false,
-  }])
-
-  return selected
 }
 
 program
@@ -590,6 +551,278 @@ program
       const nickname = w.nickname ? ` (${w.nickname})` : ''
       console.log(`  ${w.wxid}${nickname}  ${chalk.gray(time)}`)
     }
+  })
+
+// ==================== login-wechat ====================
+program
+  .command('login-wechat')
+  .description('微信扫码登录，获取消息收发权限')
+  .option('--base-url <url>', 'ilink 服务地址')
+  .action(async (opts) => {
+    const token = configService.get('wechatOcToken')
+    if (token) {
+      const { reconfirm } = await inquirer.prompt([{
+        type: 'confirm',
+        name: 'reconfirm',
+        message: '已有登录状态，要重新登录吗？',
+        default: false,
+      }])
+      if (!reconfirm) {
+        console.log(chalk.gray('保持当前登录状态'))
+        return
+      }
+    }
+
+    console.log(chalk.cyan('正在获取登录二维码...\n'))
+    const service = new WechatMessageService({ baseUrl: opts.baseUrl })
+
+    try {
+      const { qrcodeContent } = await service.startLogin()
+      console.log(chalk.green('请用微信扫描以下二维码:\n'))
+
+      // Print QR in terminal
+      try {
+        const QRCode = (await import('qrcode-terminal')).default
+        QRCode.generate(qrcodeContent, { small: true })
+      } catch {
+        console.log(chalk.yellow('(终端二维码显示失败，请安装: npm install qrcode-terminal)'))
+      }
+
+      console.log(chalk.cyan('\n等待扫码...'))
+      const session = await service.waitForLogin()
+
+      if (session.status === 'confirmed') {
+        console.log(chalk.green('\n✓ 登录成功!'))
+        console.log(chalk.gray(`  account_id: ${session.accountId || '未知'}`))
+      } else {
+        console.log(chalk.red(`\n✗ 登录失败: ${session.error || '超时'}`))
+      }
+    } catch (e: any) {
+      console.log(chalk.red(`\n✗ 登录失败: ${e.message}`))
+    }
+  })
+
+// ==================== logout-wechat ====================
+program
+  .command('logout-wechat')
+  .description('退出微信消息通道登录')
+  .action(() => {
+    configService.set('wechatOcToken', '')
+    configService.set('wechatOcAccountId', '')
+    configService.set('wechatOcSyncBuf', '')
+    console.log(chalk.green('✓ 已退出登录'))
+  })
+
+// ==================== whitelist ====================
+const whitelistCmd = program
+  .command('whitelist')
+  .description('白名单管理 (不传参数显示列表)')
+
+whitelistCmd
+  .action(() => {
+    const list = whitelistService.getList()
+    if (list.length === 0) {
+      console.log(chalk.gray('白名单为空'))
+      console.log(chalk.gray('使用 weflow-cli whitelist add <昵称> 添加'))
+      return
+    }
+    console.log(chalk.cyan(`白名单 (${list.length}):\n`))
+    for (let i = 0; i < list.length; i++) {
+      console.log(`  ${String(i + 1).padStart(2)}. ${list[i]}`)
+    }
+  })
+
+whitelistCmd
+  .command('add <target>')
+  .description('添加白名单 (支持 wxid/昵称/备注名/序号)')
+  .action(async (target: string) => {
+    // 解析目标
+    let wxid: string
+    let displayName = target
+    if (target.startsWith('wxid_') || target.includes('@chatroom') || target.includes('@openim')) {
+      wxid = target
+    } else {
+      try {
+        wxid = await resolveTalker(target)
+        const sessions = await chatService.listSessions(undefined, 50)
+        const match = sessions.find(s => s.username === wxid)
+        if (match) displayName = match.displayName || target
+      } catch (e: any) {
+        console.log(chalk.red(`✗ ${e.message}`))
+        return
+      }
+    }
+
+    // 检查是否已在名单中
+    if (whitelistService.isAllowed(wxid)) {
+      console.log(chalk.yellow(`"${displayName}" (${wxid}) 已在白名单中`))
+      return
+    }
+
+    // 三重确认
+    console.log(chalk.cyan(`\n⚠️  即将添加以下联系人到白名单:`))
+    console.log(chalk.white(`  昵称: ${displayName}`))
+    console.log(chalk.gray(`  wxid: ${wxid}`))
+    console.log(chalk.yellow(`  添加后，该联系人可向你收发消息\n`))
+
+    const { q1 } = await inquirer.prompt([{
+      type: 'confirm',
+      name: 'q1',
+      message: `确认添加 "${displayName}" 到白名单？`,
+      default: false,
+    }])
+    if (!q1) { console.log(chalk.gray('已取消')); return }
+
+    // 再确认一次（防止误操作）
+    const { q2 } = await inquirer.prompt([{
+      type: 'input',
+      name: 'q2',
+      message: `请输入 "确认" 以继续:`,
+    }])
+    if (q2 !== '确认') { console.log(chalk.gray('已取消')); return }
+
+    whitelistService.addDirect(wxid)
+    console.log(chalk.green(`\n✓ 已添加 "${displayName}" 到白名单`))
+  })
+
+whitelistCmd
+  .command('rm <wxid>')
+  .description('移除白名单中的 wxid')
+  .action((wxid: string) => {
+    if (whitelistService.remove(wxid)) {
+      console.log(chalk.green(`✓ 已移除: ${wxid}`))
+    } else {
+      console.log(chalk.yellow(`未找到: ${wxid}`))
+    }
+  })
+
+whitelistCmd
+  .command('clear')
+  .description('清空白名单')
+  .action(async () => {
+    const { confirm } = await inquirer.prompt([{
+      type: 'confirm',
+      name: 'confirm',
+      message: '确定要清空所有白名单吗？',
+      default: false,
+    }])
+    if (confirm) {
+      whitelistService.clear()
+      console.log(chalk.green('✓ 白名单已清空'))
+    }
+  })
+
+// ==================== send ====================
+program
+  .command('send <target> <message>')
+  .description('发送文本消息给指定联系人')
+  .option('--image <path>', '发图片')
+  .option('--file <path>', '发文件')
+  .action(async (target: string, message: string, opts) => {
+    // Resolve target
+    let wxid: string
+    try {
+      wxid = await resolveTalker(target)
+    } catch (e: any) {
+      console.log(chalk.red(`${e.message}`))
+      process.exit(1)
+    }
+
+    // Whitelist check
+    if (!whitelistService.isAllowed(wxid)) {
+      console.log(chalk.red('\n❌ 目标不在白名单中，拒绝发送'))
+      console.log(chalk.gray(`  先运行: weflow-cli whitelist add ${target}`))
+      console.log(chalk.gray(`  查看名单: weflow-cli whitelist\n`))
+      process.exit(1)
+    }
+
+    // 二次确认
+    const { confirm } = await inquirer.prompt([{
+      type: 'confirm',
+      name: 'confirm',
+      message: `确认发送给 ${chalk.cyan(target)}？`,
+      default: false,
+    }])
+    if (!confirm) {
+      console.log(chalk.gray('已取消'))
+      return
+    }
+
+    // Login check
+    const token = configService.get('wechatOcToken')
+    if (!token) {
+      console.log(chalk.red('\n❌ 未登录消息通道'))
+      console.log(chalk.gray('  先运行: weflow-cli login-wechat\n'))
+      process.exit(1)
+    }
+
+    const service = new WechatMessageService({ token })
+
+    let success = false
+    if (opts.image) {
+      success = await service.sendImage(wxid, opts.image)
+    } else if (opts.file) {
+      success = await service.sendFile(wxid, opts.file)
+    } else {
+      success = await service.sendText(wxid, message)
+    }
+
+    if (success) {
+      console.log(chalk.green('✓ 发送成功'))
+    } else {
+      console.log(chalk.red('✗ 发送失败 — 可能需要先收到对方一条消息 (获取 context_token)'))
+    }
+  })
+
+// ==================== listen ====================
+program
+  .command('listen')
+  .description('监听微信消息 (Ctrl+C 退出)')
+  .option('--target <wxid>', '只显示指定用户的消息')
+  .action(async (opts) => {
+    const token = configService.get('wechatOcToken')
+    if (!token) {
+      console.log(chalk.red('\n❌ 未登录消息通道'))
+      console.log(chalk.gray('  先运行: weflow-cli login-wechat\n'))
+      process.exit(1)
+    }
+
+    // Whitelist must be non-empty before listening
+    const wl = whitelistService.getList()
+    if (wl.length === 0) {
+      console.log(chalk.red('\n❌ 白名单为空，拒绝监听'))
+      console.log(chalk.gray('  为了防止收到非预期消息，必须先配置白名单'))
+      console.log(chalk.gray('  运行: weflow-cli whitelist add <昵称>\n'))
+      process.exit(1)
+    }
+    console.log(chalk.gray(`当前白名单: ${wl.join(', ')}`))
+
+    const service = new WechatMessageService({ token })
+    console.log(chalk.cyan('\n开始监听消息... (Ctrl+C 退出)\n'))
+
+    service.onMessage((msg) => {
+      // Whitelist filter (strict)
+      if (!whitelistService.isAllowed(msg.fromUserId)) {
+        return
+      }
+      // Target filter
+      if (opts.target && msg.fromUserId !== opts.target) {
+        return
+      }
+
+      const time = new Date(msg.timestampMs).toLocaleString('zh-CN')
+      const kind = msg.messageKind !== 'text' ? ` [${msg.messageKind}]` : ''
+      console.log(chalk.gray(`[${time}]`) + ` ${chalk.blue(msg.senderNickname || msg.fromUserId)}:${kind} ${msg.messageStr}`)
+    })
+
+    // Graceful shutdown
+    process.on('SIGINT', async () => {
+      console.log(chalk.gray('\n正在停止监听...'))
+      await service.stop()
+      process.exit(0)
+    })
+
+    await service.startPolling()
   })
 
 program.parse()

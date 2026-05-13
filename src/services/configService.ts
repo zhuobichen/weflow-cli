@@ -20,13 +20,20 @@ interface CliConfig {
   contactDbPath: string
   contactKey: string
   contactSalt: string
+  // 微信消息通道
+  wechatOcToken: string
+  wechatOcAccountId: string
+  wechatOcBaseUrl: string
+  wechatOcSyncBuf: string
+  // 白名单
+  whitelist: string[]
 }
 
 const CONFIG_DIR = join(homedir(), '.weflow-cli')
 const CONFIG_FILE = join(CONFIG_DIR, 'config.json')
 
 export class ConfigService {
-  private config: CliConfig = { dbPath: '', wxid: '', decryptKey: '', decryptKey3x: '', dataVersion: '', dbPath3x: '', ntDbPath: '', ntKey: '', ntSalt: '', contactDbPath: '', contactKey: '', contactSalt: '' }
+  private config: CliConfig = { dbPath: '', wxid: '', decryptKey: '', decryptKey3x: '', dataVersion: '', dbPath3x: '', ntDbPath: '', ntKey: '', ntSalt: '', contactDbPath: '', contactKey: '', contactSalt: '', wechatOcToken: '', wechatOcAccountId: '', wechatOcBaseUrl: '', wechatOcSyncBuf: '', whitelist: [] }
 
   constructor() {
     this.load()
@@ -48,7 +55,12 @@ export class ConfigService {
           ntSalt: data.ntSalt || '',
           contactDbPath: data.contactDbPath || '',
           contactKey: data.contactKey || '',
-          contactSalt: data.contactSalt || ''
+          contactSalt: data.contactSalt || '',
+          wechatOcToken: data.wechatOcToken || '',
+          wechatOcAccountId: data.wechatOcAccountId || '',
+          wechatOcBaseUrl: data.wechatOcBaseUrl || '',
+          wechatOcSyncBuf: data.wechatOcSyncBuf || '',
+          whitelist: Array.isArray(data.whitelist) ? data.whitelist : [],
         }
       }
     } catch {
@@ -69,7 +81,7 @@ export class ConfigService {
 
   get<K extends keyof CliConfig>(key: K): CliConfig[K] {
     const raw = this.config[key]
-    if ((key === 'decryptKey' || key === 'decryptKey3x' || key === 'ntKey' || key === 'contactKey') && typeof raw === 'string' && raw.startsWith(LOCK_PREFIX)) {
+    if ((key === 'decryptKey' || key === 'decryptKey3x' || key === 'ntKey' || key === 'contactKey' || key === 'wechatOcToken') && typeof raw === 'string' && raw.startsWith(LOCK_PREFIX)) {
       return this.lockDecrypt(raw) as CliConfig[K]
     }
     if ((key === 'dbPath' || key === 'dbPath3x' || key === 'ntDbPath') && typeof raw === 'string') {
@@ -79,7 +91,7 @@ export class ConfigService {
   }
 
   set<K extends keyof CliConfig>(key: K, value: CliConfig[K]): void {
-    if ((key === 'decryptKey' || key === 'decryptKey3x' || key === 'ntKey' || key === 'contactKey') && typeof value === 'string' && value) {
+    if ((key === 'decryptKey' || key === 'decryptKey3x' || key === 'ntKey' || key === 'contactKey' || key === 'wechatOcToken') && typeof value === 'string' && value) {
       this.config[key] = this.lockEncrypt(value) as CliConfig[K]
     } else if ((key === 'dbPath' || key === 'dbPath3x' || key === 'ntDbPath') && typeof value === 'string') {
       this.config[key] = expandHomePath(value) as CliConfig[K]
@@ -106,6 +118,15 @@ export class ConfigService {
     }
   }
 
+  getWhitelist(): string[] {
+    return this.config.whitelist || []
+  }
+
+  setWhitelist(list: string[]): void {
+    this.config.whitelist = list
+    this.save()
+  }
+
   isConfigured(): boolean {
     const has4x = !!(this.config.dbPath && this.config.decryptKey)
     const has3x = !!(this.config.dbPath3x && this.config.decryptKey3x)
@@ -114,7 +135,7 @@ export class ConfigService {
   }
 
   clear(): void {
-    this.config = { dbPath: '', wxid: '', decryptKey: '', decryptKey3x: '', dataVersion: '', dbPath3x: '', ntDbPath: '', ntKey: '', ntSalt: '', contactDbPath: '', contactKey: '', contactSalt: '' }
+    this.config = { dbPath: '', wxid: '', decryptKey: '', decryptKey3x: '', dataVersion: '', dbPath3x: '', ntDbPath: '', ntKey: '', ntSalt: '', contactDbPath: '', contactKey: '', contactSalt: '', wechatOcToken: '', wechatOcAccountId: '', wechatOcBaseUrl: '', wechatOcSyncBuf: '', whitelist: [] }
     this.save()
   }
 
