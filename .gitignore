@@ -5,5 +5,9 @@ logs/
 *.db
 *.decrypted.db
 test-*.txt
+test-*.py
+test-*.cjs
+scan-key*.py
+*.zip
 .DS_Store
 Thumbs.db
