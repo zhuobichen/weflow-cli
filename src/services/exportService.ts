@@ -1,7 +1,15 @@
-import { join, basename } from 'path'
+import { join, basename, dirname } from 'path'
 import { existsSync, mkdirSync, writeFileSync } from 'fs'
+import { execFile } from 'child_process'
+import { promisify } from 'util'
+import { fileURLToPath } from 'url'
 import { chatService } from './chatService.js'
+import { configService } from './configService.js'
 import type { Message } from '../types.js'
+
+const execFileAsync = promisify(execFile)
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = dirname(__filename)
 
 export class ExportService {
   async exportJson(talker: string, outputDir: string, limit = 10000): Promise<{ success: boolean; path?: string; error?: string }> {
@@ -45,19 +53,76 @@ export class ExportService {
 
   async exportHtml(talker: string, outputDir: string, limit = 10000): Promise<{ success: boolean; path?: string; error?: string }> {
     try {
-      const messages = await chatService.getMessages(talker, limit)
-      if (messages.length === 0) {
-        return { success: false, error: '未找到消息' }
+      // Use Python export_chat_html.py for rich HTML with images
+      const cfg = configService.getAll()
+      const db = cfg.ntDbPath
+      const key = cfg.ntKey
+      const salt = cfg.ntSalt
+
+      if (!db || !key || !salt) {
+        // Fallback: basic HTML
+        return this.exportHtmlBasic(talker, outputDir, limit)
       }
 
-      const html = this.buildHtml(talker, messages)
-      const dir = this.ensureOutputDir(outputDir)
-      const filePath = join(dir, `${talker}_messages.html`)
-      writeFileSync(filePath, html, 'utf8')
-      return { success: true, path: filePath }
-    } catch (e) {
-      return { success: false, error: String(e) }
+      // Resolve Python script path (dist/src/services → package root)
+      const pkgRoot = join(__dirname, '..', '..', '..')
+      const script = join(pkgRoot, 'scripts', 'export_chat_html.py')
+
+      // Cache dir for image thumbnails
+      const cacheDir = cfg.contactDbPath
+        ? join(dirname(dirname(cfg.contactDbPath)), 'cache')
+        : ''
+
+      const args: string[] = [
+        script,
+        '--db', db,
+        '--key', key,
+        '--salt', salt,
+        '--talker', talker,
+        '--out', outputDir || `./output/${talker.replace(/[@/]/g, '_')}`,
+        '--single',
+        '--parts', '1',
+      ]
+      if (cacheDir && existsSync(cacheDir)) {
+        args.push('--cache-dir', cacheDir)
+      }
+
+      console.log(`  Exporting HTML via Python...`)
+      const { stdout } = await execFileAsync('python', args, {
+        timeout: 300_000,
+        maxBuffer: 50 * 1024 * 1024,
+      })
+
+      // Parse JSON result from Python output
+      const lines = stdout.split('\n').filter((l: string) => l.trim())
+      for (let i = lines.length - 1; i >= 0; i--) {
+        try {
+          const result = JSON.parse(lines[i])
+          if (result.success && result.files?.length > 0) {
+            return { success: true, path: result.files[0] }
+          }
+        } catch {}
+      }
+
+      return { success: false, error: 'Python export succeeded but no output found' }
+    } catch (e: any) {
+      console.error(`  Python export failed: ${e.message}`)
+      // Fallback to basic HTML
+      return this.exportHtmlBasic(talker, outputDir, limit)
     }
+  }
+
+  private async exportHtmlBasic(talker: string, outputDir: string, limit = 10000): Promise<{ success: boolean; path?: string; error?: string }> {
+    const messages = await chatService.getMessages(talker, limit)
+    if (messages.length === 0) {
+      return { success: false, error: '未找到消息' }
+    }
+
+    const html = this.buildHtml(talker, messages)
+    const dir = this.ensureOutputDir(outputDir)
+    const filePath = join(dir, `${talker}_messages.html`)
+    writeFileSync(filePath, html, 'utf8')
+    return { success: true, path: filePath }
   }
 
   async exportExcel(talker: string, outputDir: string, limit = 10000): Promise<{ success: boolean; path?: string; error?: string }> {

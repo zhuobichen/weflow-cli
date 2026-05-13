@@ -526,6 +526,7 @@ def main():
     parser.add_argument('--parts', type=int, default=5, help='Number of parts to split into')
     parser.add_argument('--wx-dir', default='', help='Traditional WeChat data dir (FileStorage fallback)')
     parser.add_argument('--cache-dir', default='', help='NT cache directory for image thumbnails')
+    parser.add_argument('--single', action='store_true', help='Generate a single HTML file (no splitting)')
     args = parser.parse_args()
 
     os.makedirs(args.out, exist_ok=True)
@@ -570,12 +571,15 @@ def main():
         formatted.append(result)
     print(f"  Messages with embedded images: {img_hit_count}")
 
-    # Split into parts
+    # Split into parts (or single file)
     total = len(formatted)
-    parts = min(args.parts, total)
+    if args.single:
+        parts = 1
+    else:
+        parts = min(args.parts, total)
     per_part = (total + parts - 1) // parts
 
-    print(f"Splitting into {parts} parts (~{per_part} messages each)...")
+    print(f"Splitting into {parts} part(s) (~{per_part} messages each)...")
 
     talker_safe = args.talker.replace('@', '_').replace('/', '_')
 
@@ -589,7 +593,10 @@ def main():
             break
 
         html = build_html_page(args.talker, chunk, i + 1, parts, display_name)
-        filename = f"{talker_safe}_part{i+1}.html"
+        if args.single:
+            filename = f"{talker_safe}.html"
+        else:
+            filename = f"{talker_safe}_part{i+1}.html"
         filepath = os.path.join(args.out, filename)
 
         with open(filepath, 'w', encoding='utf-8') as f:
