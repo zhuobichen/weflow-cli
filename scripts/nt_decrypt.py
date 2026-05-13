@@ -170,6 +170,22 @@ def find_nt_databases():
             except:
                 pass
 
+        # Scan SNS (朋友圈) database
+        sns_db = os.path.join(xwechat, wxid_dir, 'db_storage', 'sns', 'sns.db')
+        if os.path.isfile(sns_db):
+            try:
+                with open(sns_db, 'rb') as fh:
+                    salt = fh.read(16)
+                databases.append({
+                    "path": sns_db,
+                    "name": "sns/sns.db",
+                    "salt": salt.hex(),
+                    "size": os.path.getsize(sns_db),
+                    "wxid": wxid_dir,
+                })
+            except:
+                pass
+
     return databases
 
 

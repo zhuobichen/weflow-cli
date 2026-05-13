@@ -13,8 +13,12 @@
 - [x] 多格式导出：JSON / TXT / Markdown / HTML / Excel
 - [x] HTML 导出：微信风格气泡、图片 base64 内嵌（从 NT 缓存提取）
 - [x] 导出发送人显示备注名 + "我"（不再是 wxid）
+- [x] contact.db 昵称/备注名映射，sessions/contacts 自动替换 wxid
+- [x] CLI 兼容昵称、备注名、序号（resolveTalker + inquirer 交互选择）
+- [x] sns.db 朋友圈数据库扫描支持（密钥已匹配，可解密读取）
 - [x] README 对齐 qchat-cli NapCatQQ 风格
 - [x] 联系人搜索（来自 contact.db）
+- [x] 隐私修复：删除含敏感信息的测试文件，git filter-repo 清理历史
 
 ### 运行命令
 
