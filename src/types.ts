@@ -82,4 +82,10 @@ export interface ConfigData {
   ntKey?: string
   /** NT 格式: 32位十六进制盐值 */
   ntSalt?: string
+  /** NT 格式: 联系人数据库路径 (contact.db) */
+  contactDbPath?: string
+  /** NT 格式: contact.db 64位十六进制密钥 */
+  contactKey?: string
+  /** NT 格式: contact.db 32位十六进制盐值 */
+  contactSalt?: string
 }

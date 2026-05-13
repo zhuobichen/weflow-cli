@@ -7,6 +7,7 @@
  */
 import { execFile } from 'child_process'
 import { promisify } from 'util'
+import { existsSync } from 'fs'
 import { join } from 'path'
 import type { ChatSession, Message, Contact } from '../types.js'
 
@@ -41,11 +42,38 @@ export class NtCore {
   private dbPath: string
   private keyHex: string
   private saltHex: string
+  /** contact.db 路径 (用于显示备注名/昵称) */
+  contactDbPath: string | null = null
+  /** contact.db 解密密钥 */
+  contactKey: string | null = null
+  /** contact.db 盐值 */
+  contactSalt: string | null = null
 
   constructor(dbPath: string, keyHex: string, saltHex: string) {
     this.dbPath = dbPath
     this.keyHex = keyHex
     this.saltHex = saltHex
+  }
+
+  /** 尝试自动发现并连接 contact.db */
+  autoDetectContactDb(): boolean {
+    // 从 message_0.db 路径推导 contact.db
+    // message_0.db:  <xwechat>/<wxid>/db_storage/message/message_0.db
+    // contact.db:    <xwechat>/<wxid>/db_storage/contact/contact.db
+    const msgDir = this.dbPath.replace(/\\/g, '/')
+    const parts = msgDir.split('/')
+    // 找到 db_storage 位置
+    const dbStorageIdx = parts.lastIndexOf('db_storage')
+    if (dbStorageIdx < 0) return false
+
+    const wxidDir = parts.slice(0, dbStorageIdx).join('/')
+    const contactDbPath = `${wxidDir}/db_storage/contact/contact.db`
+
+    if (existsSync(contactDbPath)) {
+      this.contactDbPath = contactDbPath
+      return true
+    }
+    return false
   }
 
   private get scriptPath(): string {
@@ -121,13 +149,20 @@ export class NtCore {
     }
   }
 
-  async getSessions(): Promise<NtSessionsResult> {
-    const result = await this.callPython([
+  async getSessions(keyword?: string): Promise<NtSessionsResult> {
+    const args: string[] = [
       'sessions',
       '--db', this.dbPath,
       '--key', this.keyHex,
       '--salt', this.saltHex,
-    ])
+    ]
+    if (keyword) args.push('--keyword', keyword)
+    if (this.contactDbPath && this.contactKey && this.contactSalt) {
+      args.push('--contact-db', this.contactDbPath)
+      args.push('--contact-key', this.contactKey)
+      args.push('--contact-salt', this.contactSalt)
+    }
+    const result = await this.callPython(args)
     if (result.error) {
       return { success: false, error: result.error }
     }
@@ -150,14 +185,21 @@ export class NtCore {
     return { success: true, messages: result.messages || [] }
   }
 
-  async getContacts(limit = 200): Promise<NtContactsResult> {
-    const result = await this.callPython([
+  async getContacts(keyword?: string, limit = 200): Promise<NtContactsResult> {
+    const args: string[] = [
       'contacts',
       '--db', this.dbPath,
       '--key', this.keyHex,
       '--salt', this.saltHex,
       '--limit', String(limit),
-    ])
+    ]
+    if (keyword) args.push('--keyword', keyword)
+    if (this.contactDbPath && this.contactKey && this.contactSalt) {
+      args.push('--contact-db', this.contactDbPath)
+      args.push('--contact-key', this.contactKey)
+      args.push('--contact-salt', this.contactSalt)
+    }
+    const result = await this.callPython(args)
     if (result.error) {
       return { success: false, error: result.error }
     }

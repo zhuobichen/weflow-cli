@@ -91,6 +91,14 @@ export class ChatService {
     const ntSalt = configService.get('ntSalt')
     if (ntDbPath && ntKey && ntSalt && existsSync(ntDbPath)) {
       this.ntCore = new NtCore(ntDbPath, ntKey, ntSalt)
+      // 自动发现 contact.db 路径
+      if (this.ntCore.autoDetectContactDb()) {
+        const allConfig = configService.getAll()
+        if (allConfig.contactKey && allConfig.contactSalt) {
+          this.ntCore.contactKey = allConfig.contactKey
+          this.ntCore.contactSalt = allConfig.contactSalt
+        }
+      }
       // 快速验证: 尝试获取会话列表
       const testResult = await this.ntCore.getSessions()
       if (testResult.success) {
@@ -164,7 +172,7 @@ export class ChatService {
     let sessions: ChatSession[] = []
 
     if (this.ntCore) {
-      const result = await this.ntCore.getSessions()
+      const result = await this.ntCore.getSessions(keyword)
       if (!result.success || !result.sessions) return []
       sessions = result.sessions
     } else if (this.activeVersion === '4.x') {
@@ -232,7 +240,7 @@ export class ChatService {
     let contacts: Contact[] = []
 
     if (this.ntCore) {
-      const result = await this.ntCore.getContacts(limit)
+      const result = await this.ntCore.getContacts(keyword, limit)
       if (!result.success || !result.contacts) return []
       contacts = result.contacts
     } else if (this.activeVersion === '4.x') {

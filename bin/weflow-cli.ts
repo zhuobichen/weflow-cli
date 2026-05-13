@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { Command } from 'commander'
 import chalk from 'chalk'
+import inquirer from 'inquirer'
 import { join } from 'path'
 import { existsSync, readFileSync } from 'fs'
 import { homedir } from 'os'
@@ -10,6 +11,7 @@ import { NtCore } from '../src/core/ntCore.js'
 import { configService } from '../src/services/configService.js'
 import { chatService } from '../src/services/chatService.js'
 import { exportService } from '../src/services/exportService.js'
+import type { ChatSession } from '../src/types.js'
 
 const program = new Command()
 
@@ -57,6 +59,72 @@ function tryReadWeFlowKey(): string | null {
     }
   }
   return null
+}
+
+/**
+ * 将用户输入解析为 talker (wxid)
+ * 支持: wxid_xxx / 昵称 / 备注名 / 序号 [N] / 纯数字
+ */
+async function resolveTalker(input: string): Promise<string> {
+  // 1. wxid 格式直接返回
+  if (input.startsWith('wxid_') || input.includes('@chatroom') || input.includes('@openim')) {
+    return input
+  }
+
+  // 2. 序号匹配: [N] 或纯数字
+  const numMatch = input.match(/^\[?(\d+)\]?$/)
+  if (numMatch) {
+    const index = parseInt(numMatch[1]) - 1
+    const sessions = await chatService.listSessions()
+    if (index < 0 || index >= sessions.length) {
+      console.log(chalk.red(`\n❌ 序号 ${input} 超出范围，共 ${sessions.length} 个会话`))
+      console.log(chalk.gray('  运行 weflow-cli sessions 查看列表\n'))
+      process.exit(1)
+    }
+    const s = sessions[index]
+    console.log(chalk.gray(`  → 序号[${index + 1}] ${s.displayName} (${s.username})`))
+    return s.username
+  }
+
+  // 3. 昵称/备注搜索
+  const sessions = await chatService.listSessions(input, 50)
+
+  if (sessions.length === 0) {
+    console.log(chalk.red(`\n❌ 找不到 "${input}" 对应的会话`))
+    console.log(chalk.gray('  运行 weflow-cli sessions 查看所有会话\n'))
+    process.exit(1)
+  }
+
+  // 精确匹配
+  const exact = sessions.find(s =>
+    s.displayName === input || s.username === input
+  )
+  if (exact) {
+    console.log(chalk.gray(`  → ${exact.displayName} (${exact.username})`))
+    return exact.username
+  }
+
+  // 只有一个匹配
+  if (sessions.length === 1) {
+    console.log(chalk.gray(`  → ${sessions[0].displayName} (${sessions[0].username})`))
+    return sessions[0].username
+  }
+
+  // 多个匹配 — 交互选择
+  const choices = sessions.slice(0, 20).map(s => ({
+    name: `${s.displayName}  (${s.username})`,
+    value: s.username,
+  }))
+
+  const { selected } = await inquirer.prompt([{
+    type: 'select',
+    name: 'selected',
+    message: `"${input}" 匹配到多个会话，请选择:`,
+    choices,
+    loop: false,
+  }])
+
+  return selected
 }
 
 program
@@ -220,9 +288,18 @@ program
             configService.set('ntSalt', primaryDb.salt)
             console.log(chalk.green(`  ✓ 主数据库: ${primaryDb.name} (${(primaryDb.size / 1024 / 1024).toFixed(1)}MB)`))
 
+            // 检查 contact.db 是否已匹配
+            const contactDb = ntResult.matched.find((db: any) => db.name === 'contact/contact.db')
+            if (contactDb) {
+              configService.set('contactDbPath', contactDb.path)
+              configService.set('contactKey', contactDb.key)
+              configService.set('contactSalt', contactDb.salt)
+              console.log(chalk.green(`  ✓ 联系人数据库: ${contactDb.name} (${(contactDb.size / 1024 / 1024).toFixed(1)}MB)`))
+            }
+
             // 显示所有匹配的数据库
             for (const db of ntResult.matched) {
-              const marker = db === primaryDb ? chalk.green('  → ') : '     '
+              const marker = db === primaryDb || db === contactDb ? chalk.green('  → ') : '     '
               console.log(chalk.gray(`${marker}${db.name} (${(db.size / 1024 / 1024).toFixed(1)}MB)`))
             }
           }
@@ -273,6 +350,8 @@ configCmd
     console.log(`3.x 密钥: ${config.decryptKey3x ? '已设置' : chalk.gray('(未设置)')}`)
     console.log(`NT 数据库: ${config.ntDbPath || chalk.gray('(未设置)')}`)
     console.log(`NT 密钥: ${config.ntKey ? '已设置' : chalk.gray('(未设置)')}`)
+    console.log(`联系人DB: ${config.contactDbPath || chalk.gray('(未设置)')}`)
+    console.log(`联系人DB密钥: ${config.contactKey ? '已设置' : chalk.gray('(未设置)')}`)
     console.log(`微信账号: ${config.wxid || chalk.gray('(未设置)')}`)
   })
 
@@ -280,7 +359,7 @@ configCmd
   .command('set <key> <value>')
   .description('设置配置项 (dbPath, decryptKey, dbPath3x, decryptKey3x, dataVersion, wxid)')
   .action((key: string, value: string) => {
-    const validKeys = ['dbPath', 'decryptKey', 'dbPath3x', 'decryptKey3x', 'dataVersion', 'wxid', 'ntDbPath', 'ntKey', 'ntSalt']
+    const validKeys = ['dbPath', 'decryptKey', 'dbPath3x', 'decryptKey3x', 'dataVersion', 'wxid', 'ntDbPath', 'ntKey', 'ntSalt', 'contactDbPath', 'contactKey', 'contactSalt']
     if (!validKeys.includes(key)) {
       console.log(chalk.red(`无效的配置项: ${key}`))
       console.log(chalk.gray(`可用: ${validKeys.join(', ')}`))
@@ -333,16 +412,19 @@ program
 // ==================== messages ====================
 program
   .command('messages <talker>')
-  .description('查看指定会话的消息')
+  .description('查看指定会话的消息 (支持 wxid / 昵称 / 备注 / 序号)')
   .option('-n, --limit <number>', '最大数量', '50')
   .option('-o, --offset <number>', '偏移量', '0')
   .option('-s, --start <timestamp>', '开始时间戳')
   .option('-e, --end <timestamp>', '结束时间戳')
-  .action(async (talker: string, opts) => {
+  .action(async (talkerInput: string, opts) => {
     if (!configService.isConfigured()) {
-      console.log(chalk.red('请先运行 weflow-cli init'))
+      console.log(chalk.red('\n❌ 还没配置'))
+      console.log(chalk.gray('  运行: weflow-cli init\n'))
       process.exit(1)
     }
+
+    const talker = await resolveTalker(talkerInput)
 
     const messages = await chatService.getMessages(
       talker,
@@ -369,8 +451,8 @@ program
 program
   .command('contacts')
   .description('查看联系人列表')
-  .option('-k, --keyword <keyword>', '搜索关键词')
-  .option('-n, --limit <number>', '最大数量', '100')
+  .option('-k, --keyword <keyword>', '搜索关键词 (自动扩大搜索范围)')
+  .option('-n, --limit <number>', '最大数量', '500')
   .action(async (opts) => {
     if (!configService.isConfigured()) {
       console.log(chalk.red('请先运行 weflow-cli init'))
@@ -399,14 +481,17 @@ program
 // ==================== export ====================
 program
   .command('export <talker> <format>')
-  .description('导出聊天记录 (json/txt/html/excel)')
+  .description('导出聊天记录 (支持 wxid / 昵称 / 备注 / 序号)')
   .option('-o, --output <dir>', '输出目录', './output')
   .option('-n, --limit <number>', '最大数量', '10000')
-  .action(async (talker: string, format: string, opts) => {
+  .action(async (talkerInput: string, format: string, opts) => {
     if (!configService.isConfigured()) {
-      console.log(chalk.red('请先运行 weflow-cli init'))
+      console.log(chalk.red('\n❌ 还没配置'))
+      console.log(chalk.gray('  运行: weflow-cli init\n'))
       process.exit(1)
     }
+
+    const talker = await resolveTalker(talkerInput)
 
     const validFormats = ['json', 'txt', 'html', 'excel']
     if (!validFormats.includes(format)) {

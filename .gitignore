@@ -9,5 +9,7 @@ test-*.py
 test-*.cjs
 scan-key*.py
 *.zip
+__pycache__/
+tmp_*
 .DS_Store
 Thumbs.db

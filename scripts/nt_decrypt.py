@@ -120,8 +120,7 @@ def scan_memory_keys(pid):
 # ========== NT Database Discovery ==========
 
 def find_nt_databases():
-    """Find all NT-format databases under xwechat_files."""
-    # Check multiple possible locations
+    """Find all NT-format databases under xwechat_files (message + contact)."""
     candidates = [
         os.path.expandvars(r'%USERPROFILE%\xwechat_files'),
         os.path.expandvars(r'%USERPROFILE%\Documents\xwechat_files'),
@@ -136,29 +135,96 @@ def find_nt_databases():
 
     databases = []
     for wxid_dir in os.listdir(xwechat):
-        db_storage = os.path.join(xwechat, wxid_dir, 'db_storage', 'message')
-        if not os.path.isdir(db_storage):
-            continue
+        # Scan message databases
+        msg_storage = os.path.join(xwechat, wxid_dir, 'db_storage', 'message')
+        if os.path.isdir(msg_storage):
+            for f in os.listdir(msg_storage):
+                if f.endswith('.db') and not any(x in f for x in ['-shm', '-wal']):
+                    full_path = os.path.join(msg_storage, f)
+                    try:
+                        with open(full_path, 'rb') as fh:
+                            salt = fh.read(16)
+                        databases.append({
+                            "path": full_path,
+                            "name": f"message/{f}",
+                            "salt": salt.hex(),
+                            "size": os.path.getsize(full_path),
+                            "wxid": wxid_dir,
+                        })
+                    except:
+                        pass
 
-        # Find all .db files (excluding -shm, -wal, .material, .kvdb)
-        for f in os.listdir(db_storage):
-            if f.endswith('.db') and not any(x in f for x in ['-shm', '-wal']):
-                full_path = os.path.join(db_storage, f)
-                # Read first 16 bytes (salt)
-                try:
-                    with open(full_path, 'rb') as fh:
-                        salt = fh.read(16)
-                    databases.append({
-                        "path": full_path,
-                        "name": f,
-                        "salt": salt.hex(),
-                        "size": os.path.getsize(full_path),
-                        "wxid": wxid_dir,
-                    })
-                except:
-                    pass
+        # Scan contact database
+        contact_db = os.path.join(xwechat, wxid_dir, 'db_storage', 'contact', 'contact.db')
+        if os.path.isfile(contact_db):
+            try:
+                with open(contact_db, 'rb') as fh:
+                    salt = fh.read(16)
+                databases.append({
+                    "path": contact_db,
+                    "name": "contact/contact.db",
+                    "salt": salt.hex(),
+                    "size": os.path.getsize(contact_db),
+                    "wxid": wxid_dir,
+                })
+            except:
+                pass
 
     return databases
+
+
+def find_contact_db_path(message_db_path):
+    """Derive contact.db path from message_0.db path.
+
+    message_0.db:  <xwechat_files>/<wxid>/db_storage/message/message_0.db
+    contact.db:    <xwechat_files>/<wxid>/db_storage/contact/contact.db
+    """
+    msg_dir = os.path.dirname(message_db_path)
+    wxid_dir = os.path.dirname(msg_dir)     # .../db_storage
+    xwechat_dir = os.path.dirname(wxid_dir) # .../<wxid>
+    contact_db = os.path.join(xwechat_dir, 'db_storage', 'contact', 'contact.db')
+    if os.path.isfile(contact_db):
+        return contact_db
+    return None
+
+
+def load_contact_names(contact_db_path, contact_key_hex, contact_salt_hex):
+    """Load wxid -> {remark, nick_name} map from contact.db.
+
+    Returns dict: {wxid: display_name}
+    display_name priority: remark > nick_name > alias > wxid
+    """
+    if not contact_db_path or not contact_key_hex or not contact_salt_hex:
+        return {}
+
+    try:
+        raw_key = f"x'{contact_key_hex}{contact_salt_hex}'"
+        conn = sqlcipher.connect(contact_db_path)
+        c = conn.cursor()
+        c.execute(f'PRAGMA key = "{raw_key}";')
+
+        # contact.db schema: username, alias, remark, nick_name, ...
+        c.execute("SELECT username, COALESCE(NULLIF(remark,''), NULLIF(nick_name,''), NULLIF(alias,''), username) FROM contact")
+        name_map = {}
+        for username, display in c.fetchall():
+            if username:
+                name_map[username] = display
+
+        conn.close()
+        return name_map
+    except Exception as e:
+        return {}
+
+
+def apply_contact_names(sessions, name_map):
+    """Apply contact names to session list, replacing bare wxid displayNames."""
+    if not name_map:
+        return sessions
+    for s in sessions:
+        username = s.get('username', '')
+        if username in name_map:
+            s['displayName'] = name_map[username]
+    return sessions
 
 
 def match_keys_to_databases(keys, databases):
@@ -340,6 +406,9 @@ def main():
     sessions_parser.add_argument('--key', required=True, help='Key hex (64 chars)')
     sessions_parser.add_argument('--salt', required=True, help='Salt hex (32 chars)')
     sessions_parser.add_argument('--keyword', help='Filter by keyword')
+    sessions_parser.add_argument('--contact-db', help='Path to contact.db for display names')
+    sessions_parser.add_argument('--contact-key', help='Contact DB key hex (64 chars)')
+    sessions_parser.add_argument('--contact-salt', help='Contact DB salt hex (32 chars)')
 
     # messages command
     msg_parser = sub.add_parser('messages', help='Get messages')
@@ -357,6 +426,9 @@ def main():
     contacts_parser.add_argument('--salt', required=True, help='Salt hex (32 chars)')
     contacts_parser.add_argument('--keyword', help='Filter by keyword')
     contacts_parser.add_argument('--limit', type=int, default=200)
+    contacts_parser.add_argument('--contact-db', help='Path to contact.db for display names')
+    contacts_parser.add_argument('--contact-key', help='Contact DB key hex (64 chars)')
+    contacts_parser.add_argument('--contact-salt', help='Contact DB salt hex (32 chars)')
 
     args = parser.parse_args()
 
@@ -385,15 +457,25 @@ def main():
         else:
             print(json.dumps({"keys": keys, "databases": databases, "matched": matched}))
 
-    elif args.command == 'sessions':
+    # Build contact name map once if contact db provided
+    contact_name_map = {}
+    contact_db = getattr(args, 'contact_db', None)
+    contact_key = getattr(args, 'contact_key', None)
+    contact_salt = getattr(args, 'contact_salt', None)
+    if contact_db and contact_key and contact_salt:
+        contact_name_map = load_contact_names(contact_db, contact_key, contact_salt)
+
+    if args.command == 'sessions':
         conn, _ = connect_nt_db(args.db, args.key, args.salt)
         result = get_sessions(conn)
-        if args.keyword and 'sessions' in result:
-            kw = args.keyword.lower()
-            result['sessions'] = [
-                s for s in result['sessions']
-                if kw in (s.get('username', '') + s.get('displayName', '') + s.get('summary', '')).lower()
-            ]
+        if 'sessions' in result:
+            result['sessions'] = apply_contact_names(result['sessions'], contact_name_map)
+            if args.keyword:
+                kw = args.keyword.lower()
+                result['sessions'] = [
+                    s for s in result['sessions']
+                    if kw in (s.get('username', '') + s.get('displayName', '') + s.get('summary', '')).lower()
+                ]
         print(json.dumps(result, ensure_ascii=True))
         conn.close()
 
@@ -406,12 +488,14 @@ def main():
     elif args.command == 'contacts':
         conn, _ = connect_nt_db(args.db, args.key, args.salt)
         result = get_contacts(conn, args.limit)
-        if args.keyword and 'contacts' in result:
-            kw = args.keyword.lower()
-            result['contacts'] = [
-                c for c in result['contacts']
-                if kw in (c.get('username', '') + c.get('displayName', '') + c.get('remark', '') + c.get('nickname', '')).lower()
-            ]
+        if 'contacts' in result:
+            result['contacts'] = apply_contact_names(result['contacts'], contact_name_map)
+            if args.keyword:
+                kw = args.keyword.lower()
+                result['contacts'] = [
+                    c for c in result['contacts']
+                    if kw in (c.get('username', '') + c.get('displayName', '') + c.get('remark', '') + c.get('nickname', '')).lower()
+                ]
         print(json.dumps(result, ensure_ascii=True))
         conn.close()
 
