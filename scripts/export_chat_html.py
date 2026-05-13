@@ -581,7 +581,8 @@ def main():
 
     print(f"Splitting into {parts} part(s) (~{per_part} messages each)...")
 
-    talker_safe = args.talker.replace('@', '_').replace('/', '_')
+    # Use display name for filename if provided, otherwise fallback to wxid
+    file_prefix = sanitize_filename(display_name) if display_name else args.talker.replace('@', '_').replace('/', '_')
 
     html_files = []
     for i in range(parts):
@@ -594,9 +595,9 @@ def main():
 
         html = build_html_page(args.talker, chunk, i + 1, parts, display_name)
         if args.single:
-            filename = f"{talker_safe}.html"
+            filename = f"{file_prefix}.html"
         else:
-            filename = f"{talker_safe}_part{i+1}.html"
+            filename = f"{file_prefix}_part{i+1}.html"
         filepath = os.path.join(args.out, filename)
 
         with open(filepath, 'w', encoding='utf-8') as f:
@@ -618,6 +619,11 @@ def main():
         "parts": len(html_files),
         "files": html_files,
     }))
+
+
+def sanitize_filename(name: str) -> str:
+    """Remove characters unsafe for filenames."""
+    return re.sub(r'[\\/:*?"<>|]', '_', name)[:80]
 
 
 if __name__ == '__main__':

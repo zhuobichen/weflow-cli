@@ -73,16 +73,29 @@ export class ExportService {
         ? join(dirname(dirname(cfg.contactDbPath)), 'cache')
         : ''
 
+      // Resolve display name for filename (prefer remark/nickname over wxid)
+      let displayName = ''
+      try {
+        const sessions = await chatService.listSessions()
+        const match = sessions.find(s => s.username === talker)
+        if (match?.displayName && match.displayName !== talker) {
+          displayName = match.displayName
+        }
+      } catch {}
+
       const args: string[] = [
         script,
         '--db', db,
         '--key', key,
         '--salt', salt,
         '--talker', talker,
-        '--out', outputDir || `./output/${talker.replace(/[@/]/g, '_')}`,
+        '--out', outputDir || `./output`,
         '--single',
         '--parts', '1',
       ]
+      if (displayName) {
+        args.push('--name', displayName)
+      }
       if (cacheDir && existsSync(cacheDir)) {
         args.push('--cache-dir', cacheDir)
       }
