@@ -47,6 +47,18 @@ DEEPSEEK_TIMEOUT = 60
 FETCH_DELAY_MIN = 8   # 最小抓取间隔 (秒)
 FETCH_DELAY_MAX = 12  # 最大抓取间隔 (秒)
 
+TOPICS = ['AI', '学术', '编程', '时事', '生活']
+TOPIC_PROMPT = f"""请完成以下两个任务：
+
+1. 用2-4句话总结文章核心内容（中文）
+2. 将文章归类到以下主题之一：{' / '.join(TOPICS)}
+
+请严格按以下格式返回：
+【主题】主题名
+【摘要】你的总结内容
+
+注意：只返回上述格式，不要加其他说明。"""
+
 # ====== Helpers ======
 
 def load_config():
@@ -372,86 +384,125 @@ def main():
         elif a.get('local_text'):
             print(f'  无URL, 使用本地缓存')
 
-    # ====== Phase 2: DeepSeek summaries ======
+    # ====== Phase 2: DeepSeek summary + topic classification ======
     if api_key:
-        print(f'\n=== Phase 2: AI 摘要 ===\n')
+        print(f'\n=== Phase 2: AI 摘要 + 主题分类 ===\n')
         for i, a in enumerate(articles):
             t, n, ti = a['time'], a['account_name'], a['title']
             content = a.get('fetched_md') or a.get('local_text', '')
             if content and len(content.strip()) > 50:
                 try:
-                    prompt = f"""请用2-4句话总结以下微信公众号文章的核心内容，用中文回答。
+                    prompt = TOPIC_PROMPT + f'\n\n标题：{a["title"]}\n来源：{a["account_name"]}\n\n内容：\n{content[:4000]}'
+                    response = call_deepseek(prompt, api_key, max_tokens=500)
 
-标题：{a['title']}
-来源：{a['account_name']}
+                    # Parse response: 【主题】xxx 【摘要】xxx
+                    topic_match = re.search(r'【主题】\s*(.+)', response)
+                    summary_match = re.search(r'【摘要】\s*(.+)', response, re.DOTALL)
 
-内容：
-{content[:4000]}
+                    if topic_match:
+                        a['topic'] = topic_match.group(1).strip()
+                        # Validate topic
+                        if a['topic'] not in TOPICS:
+                            a['topic'] = '学术'  # default fallback
+                    else:
+                        a['topic'] = '学术'
 
-请直接返回总结，不要加前缀说明。"""
-                    summary = call_deepseek(prompt, api_key, max_tokens=500)
-                    a['summary'] = summary
-                    print(f'[{i+1}/{len(articles)}] [{t}] {n} - OK ({len(summary)}字)')
+                    if summary_match:
+                        a['summary'] = summary_match.group(1).strip()
+                    else:
+                        a['summary'] = response[:300]
+
+                    print(f'[{i+1}/{len(articles)}] [{t}] {n} - [{a.get("topic","?")}] ({len(a.get("summary",""))}字)')
                     time.sleep(0.3)
                 except Exception as e:
                     a['summary'] = a.get('digest', '') or content[:300]
+                    a['topic'] = '学术'
                     print(f'[{i+1}/{len(articles)}] [{t}] {n} - ERR: {e}')
             elif content:
                 a['summary'] = content[:400]
+                a['topic'] = '学术'
             else:
                 a['summary'] = a.get('digest', '(无内容)')
+                a['topic'] = '学术'
 
-    # ====== Phase 3: Write files ======
-    print(f'\n=== Phase 3: 写入文件 ===\n')
+        # Print topic distribution
+        from collections import Counter
+        topic_counts = Counter(a.get('topic', '学术') for a in articles)
+        print(f'\n  主题分布: {dict(topic_counts)}')
+
+    # ====== Phase 3: Write files (by topic folders) ======
+    print(f'\n=== Phase 3: 写入文件 (按主题) ===\n')
+
+    # Create topic subdirs
+    for topic in TOPICS:
+        (out_dir / topic).mkdir(parents=True, exist_ok=True)
+
+    # Group articles by topic
+    topic_groups = {t: [] for t in TOPICS}
+    for a in articles:
+        t = a.get('topic', '学术')
+        if t not in topic_groups:
+            t = '学术'
+        topic_groups[t].append(a)
+
     index_lines = [
         f'# 公众号日报 — {date_str}',
         '',
-        f'共 {len(articles)} 篇推送',
+        f'共 {len(articles)} 篇推送，按主题分类',
         '',
-        '| # | 时间 | 公众号 | 标题 |',
-        '|---|------|--------|------|',
     ]
 
-    for i, a in enumerate(articles):
-        t, n, ti = a['time'], a['account_name'], a['title']
-        markdown = a.get('fetched_md') or a.get('local_text', '')
-        summary = a.get('summary', a.get('digest', ''))
+    for topic in TOPICS:
+        group = topic_groups[topic]
+        if not group:
+            continue
+        index_lines.append(f'## {topic} ({len(group)}篇)')
+        index_lines.append('')
+        index_lines.append('| # | 时间 | 公众号 | 标题 |')
+        index_lines.append('|---|------|--------|------|')
+        for j, a in enumerate(group):
+            safe_name = sanitize_filename(f'{a["account_name"]}-{a["title"]}')
+            file_name = f'{safe_name}.md'
+            file_path = out_dir / topic / file_name
 
-        # Write individual article
-        safe_name = sanitize_filename(f'{a["account_name"]}-{a["title"]}')
-        file_name = f'{safe_name}.md'
-        file_path = out_dir / file_name
+            markdown = a.get('fetched_md') or a.get('local_text', '')
+            summary = a.get('summary', a.get('digest', ''))
 
-        with open(file_path, 'w', encoding='utf-8') as f:
-            f.write(f'# {a["title"]}\n\n')
-            f.write(f'> 来源：{a["account_name"]}  \n')
-            f.write(f'> 时间：{date_str} {a["time"]}  \n')
-            if a['url']:
-                f.write(f'> 原文：[阅读原文]({a["url"]})\n')
-            f.write('\n---\n\n')
-            f.write(f'## AI 摘要\n\n{summary}\n\n')
-            if markdown:
-                f.write('---\n\n')
-                f.write('## 正文\n\n')
-                body = markdown[:10000]
-                if len(markdown) > 10000:
-                    body += f'\n\n*(原文过长，截取前10000字，共{len(markdown)}字)*'
-                f.write(body)
+            # Write individual article
+            with open(file_path, 'w', encoding='utf-8') as f:
+                f.write(f'# {a["title"]}\n\n')
+                f.write(f'> 来源：{a["account_name"]}  \n')
+                f.write(f'> 时间：{date_str} {a["time"]}  \n')
+                f.write(f'> 主题：{topic}  \n')
+                if a['url']:
+                    f.write(f'> 原文：[阅读原文]({a["url"]})\n')
+                f.write('\n---\n\n')
+                f.write(f'## AI 摘要\n\n{summary}\n\n')
+                if markdown:
+                    f.write('---\n\n')
+                    f.write('## 正文\n\n')
+                    body = markdown[:10000]
+                    if len(markdown) > 10000:
+                        body += f'\n\n*(原文过长，截取前10000字，共{len(markdown)}字)*'
+                    f.write(body)
 
-        # Add to index
-        index_lines.append(
-            f'| {i+1} | {a["time"]} | {a["account_name"]} | [{a["title"]}](./{file_name}) |'
-        )
+            index_lines.append(
+                f'| {j+1} | {a["time"]} | {a["account_name"]} | [{a["title"]}](./{topic}/{file_name}) |'
+            )
+        index_lines.append('')
 
     # Write index
     index_path = out_dir / 'README.md'
     with open(index_path, 'w', encoding='utf-8') as f:
         f.write('\n'.join(index_lines))
-        f.write('\n\n---\n\n*由 weflow-cli 公众号日报自动生成*\n')
+        f.write('\n---\n\n*由 weflow-cli 公众号日报自动生成*\n')
 
     print(f'\n✓ 完成！输出到 {out_dir}')
     print(f'  总索引: {index_path}')
     print(f'  文章数: {len(articles)}')
+    for t in TOPICS:
+        if topic_groups[t]:
+            print(f'  {t}/: {len(topic_groups[t])} 篇')
 
 
 if __name__ == '__main__':
