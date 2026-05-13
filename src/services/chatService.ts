@@ -1,4 +1,5 @@
-import { join } from 'path'
+import { join, dirname } from 'path'
+import { fileURLToPath } from 'url'
 import { existsSync } from 'fs'
 import { WcdbCore } from '../core/wcdbCore.js'
 import { SqlcipherCore } from '../core/sqlcipherCore.js'
@@ -110,7 +111,9 @@ export class ChatService {
     }
 
     // 方案 4: 尝试 WCDB API 连接 (需要 db_storage/session.db 结构，仅 3.x 兼容)
-    const resourcesPath = join(process.cwd(), 'resources')
+    // Use package root instead of cwd for global install support
+    const pkgRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
+    const resourcesPath = join(pkgRoot, 'resources')
     wcdbCore.setPaths(resourcesPath, '')
 
     const ok = await wcdbCore.open(dbPath, decryptKey, wxid || '')

@@ -8,11 +8,14 @@
 import { execFile } from 'child_process'
 import { promisify } from 'util'
 import { existsSync } from 'fs'
-import { join } from 'path'
+import { join, dirname } from 'path'
+import { fileURLToPath } from 'url'
 import { configService } from '../services/configService.js'
 import type { ChatSession, Message, Contact } from '../types.js'
 
 const execFileAsync = promisify(execFile)
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = dirname(__filename)
 
 export interface NtResult {
   success: boolean
@@ -78,7 +81,9 @@ export class NtCore {
   }
 
   private get scriptPath(): string {
-    return join(process.cwd(), 'scripts', 'nt_decrypt.py')
+    // __dirname = dist/src/core, so ../../.. = package root
+    const pkgRoot = join(__dirname, '..', '..', '..')
+    return join(pkgRoot, 'scripts', 'nt_decrypt.py')
   }
 
   private async callPython(args: string[]): Promise<any> {
@@ -116,7 +121,8 @@ export class NtCore {
    */
   static async scan(): Promise<NtScanResult> {
     try {
-      const scriptPath = join(process.cwd(), 'scripts', 'nt_decrypt.py')
+      const pkgRoot = join(__dirname, '..', '..', '..')
+      const scriptPath = join(pkgRoot, 'scripts', 'nt_decrypt.py')
       const { stdout } = await execFileAsync('python', [scriptPath, 'scan', '--json'], {
         timeout: 300_000,
         maxBuffer: 10 * 1024 * 1024,
