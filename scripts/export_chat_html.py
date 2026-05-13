@@ -494,6 +494,34 @@ body {{
   color: #bbb;
   font-size: 12px;
 }}
+.footer .hint {{
+  color: #ccc;
+  font-size: 11px;
+  margin-top: 4px;
+}}
+.search-box {{
+  margin: 10px 0;
+}}
+.search-box input {{
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid #e0e0e0;
+  border-radius: 6px;
+  font-size: 14px;
+  outline: none;
+}}
+.search-box input:focus {{
+  border-color: #07c160;
+}}
+.search-info {{
+  font-size: 12px;
+  color: #999;
+  margin-top: 4px;
+  display: none;
+}}
+.msg-row.hidden {{
+  display: none;
+}}
 </style>
 </head>
 <body>
@@ -504,12 +532,45 @@ body {{
   <div class="part-nav">
 {chr(10).join(f'    <a href="{talker_safe}_part{i+1}.html" class="{"active" if i+1 == part_num else ""}">第{i+1}部分</a>' for i in range(total_parts))}
   </div>
+  <div class="search-box">
+    <input type="text" placeholder="搜索聊天记录..." oninput="searchMessages(this.value)">
+    <div class="search-info" id="search-info"></div>
+  </div>
 </div>
 {chr(10).join(rows)}
 </div>
 <div class="footer">
   <p>Exported by WeFlow CLI · {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}</p>
+  <p class="hint">💡 图片来自微信本地缓存，仅覆盖最近2个月。滚动查看更多聊天可生成更多缩略图。</p>
 </div>
+<script>
+function searchMessages(query) {{
+  const rows = document.querySelectorAll('.msg-row');
+  const info = document.getElementById('search-info');
+  let found = 0;
+  const q = query.toLowerCase().trim();
+  rows.forEach(row => {{
+    if (!q) {{
+      row.classList.remove('hidden');
+      found++;
+    }} else {{
+      const text = row.textContent.toLowerCase();
+      if (text.includes(q)) {{
+        row.classList.remove('hidden');
+        found++;
+      }} else {{
+        row.classList.add('hidden');
+      }}
+    }}
+  }});
+  if (q) {{
+    info.style.display = 'block';
+    info.textContent = `找到 ${{found}} 条匹配`;
+  }} else {{
+    info.style.display = 'none';
+  }}
+}}
+</script>
 </body>
 </html>'''
 
