@@ -19,6 +19,12 @@
 - [x] README 对齐 qchat-cli NapCatQQ 风格
 - [x] 联系人搜索（来自 contact.db）
 - [x] 隐私修复：删除含敏感信息的测试文件，git filter-repo 清理历史
+- [x] 公众号日报：biz_daily.py 抓取全文 + DeepSeek 摘要分类
+- [x] 后处理管线：classify_daily.py 广告清洗 + 兴趣深度摘要 + 分文件夹
+- [x] CLI 命令：login-wechat / whitelist / send / listen（实验性）
+- [x] resolveTalker 提取到 utils/talkerUtils.ts 复用
+- [x] 微信消息 bridge（wechatClient + wechatMessageService）
+- [x] ARCHITECTURE.md 技术架构文档
 
 ### 运行命令
 
