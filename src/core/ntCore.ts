@@ -9,6 +9,7 @@ import { execFile } from 'child_process'
 import { promisify } from 'util'
 import { existsSync } from 'fs'
 import { join } from 'path'
+import { configService } from '../services/configService.js'
 import type { ChatSession, Message, Contact } from '../types.js'
 
 const execFileAsync = promisify(execFile)
@@ -170,7 +171,7 @@ export class NtCore {
   }
 
   async getMessages(talker: string, limit = 100, offset = 0): Promise<NtMessagesResult> {
-    const result = await this.callPython([
+    const args: string[] = [
       'messages',
       '--db', this.dbPath,
       '--key', this.keyHex,
@@ -178,7 +179,16 @@ export class NtCore {
       '--talker', talker,
       '--limit', String(limit),
       '--offset', String(offset),
-    ])
+    ]
+    if (this.contactDbPath && this.contactKey && this.contactSalt) {
+      args.push('--contact-db', this.contactDbPath)
+      args.push('--contact-key', this.contactKey)
+      args.push('--contact-salt', this.contactSalt)
+    }
+    // Pass own wxid from config for self-message detection
+    const ownWxid = configService.get('wxid')
+    if (ownWxid) args.push('--own-wxid', ownWxid)
+    const result = await this.callPython(args)
     if (result.error) {
       return { success: false, error: result.error }
     }

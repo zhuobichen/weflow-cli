@@ -441,9 +441,9 @@ program
 
     for (const m of messages) {
       const time = new Date(m.createTime * 1000).toLocaleString('zh-CN')
-      const sender = m.isSend ? chalk.green('我') : chalk.blue(m.senderUsername || talker)
+      const senderName = m.isSend ? chalk.green('我') : chalk.blue((m as any).senderDisplay || m.senderUsername || talker)
       const content = (m.parsedContent || m.rawContent || '').replace(/\n/g, ' ').slice(0, 80)
-      console.log(chalk.gray(`[${time}]`) + ` ${sender}: ${content}`)
+      console.log(chalk.gray(`[${time}]`) + ` ${senderName}: ${content}`)
     }
   })
 

@@ -335,9 +335,16 @@ def get_sessions(conn):
     return {"sessions": sessions}
 
 
-def get_messages(conn, talker, limit=100, offset=0):
-    """Get messages for a specific talker from NT database."""
+def get_messages(conn, talker, limit=100, offset=0, name_map=None, own_wxid=None):
+    """Get messages for a specific talker from NT database.
+
+    Args:
+        name_map: optional {wxid: display_name} dict for resolving sender names
+        own_wxid: account owner wxid for self-message detection
+    """
     import hashlib
+    if name_map is None:
+        name_map = {}
     c = conn.cursor()
 
     msg_table = f"Msg_{hashlib.md5(talker.encode()).hexdigest()}"
@@ -360,18 +367,35 @@ def get_messages(conn, talker, limit=100, offset=0):
         rows = c.fetchall()
         messages = []
 
+        # Build sender_id -> username map from Name2Id (one query for all messages)
+        c.execute("SELECT rowid, user_name FROM Name2Id")
+        sender_id_map = {rowid: uname for rowid, uname in c.fetchall()}
+
         for row in rows:
             local_type = row[2] or 0
             create_time = row[5] or 0
-            is_send = (row[4] or 0) == 0  # real_sender_id == 0 means self
+            real_sender_id = row[4] or 0
 
-            # Parse source (sender info) - TEXT column
-            source_text = row[11]
-            sender_username = ""
-            if isinstance(source_text, str) and source_text:
-                # Format: "wxid_xxx:\ncontent..."
-                if ':' in source_text:
-                    sender_username = source_text.split(':')[0]
+            # Resolve sender: real_sender_id -> Name2Id -> user_name
+            sender_username = sender_id_map.get(real_sender_id, "")
+
+            # Determine if message is from self
+            # own_wxid may have _xxxx suffix (from xwechat_files dir), try both
+            is_self = bool(own_wxid and (
+                sender_username == own_wxid or
+                (own_wxid.endswith('_') is False and sender_username.startswith(own_wxid))
+            ))
+            if not is_self and own_wxid:
+                # Strip _xxxx suffix and retry
+                parts = own_wxid.rsplit('_', 1)
+                if len(parts) == 2 and len(parts[1]) == 4 and parts[1].isalnum():
+                    is_self = (sender_username == parts[0])
+
+            # Resolve sender display name from contact map
+            if is_self:
+                sender_display = ""  # Let the CLI show "我"
+            else:
+                sender_display = name_map.get(sender_username, sender_username) if sender_username else sender_username
 
             # Parse message_content - TEXT column
             content = row[12] if isinstance(row[12], str) else ""
@@ -381,8 +405,9 @@ def get_messages(conn, talker, limit=100, offset=0):
                 "serverId": str(row[1] or ''),
                 "localType": local_type,
                 "createTime": create_time,
-                "isSend": 1 if is_send else 0,
+                "isSend": 1 if is_self else 0,  # 1 = I sent this
                 "senderUsername": sender_username,
+                "senderDisplay": sender_display,
                 "content": content,
                 "rawContent": content,
                 "parsedContent": content[:200] if local_type == 1 else "",
@@ -434,6 +459,10 @@ def main():
     msg_parser.add_argument('--talker', required=True, help='Talker username')
     msg_parser.add_argument('--limit', type=int, default=100)
     msg_parser.add_argument('--offset', type=int, default=0)
+    msg_parser.add_argument('--contact-db', help='Path to contact.db for sender names')
+    msg_parser.add_argument('--contact-key', help='Contact DB key hex (64 chars)')
+    msg_parser.add_argument('--contact-salt', help='Contact DB salt hex (32 chars)')
+    msg_parser.add_argument('--own-wxid', help='Account owner wxid (for self-message detection)')
 
     # contacts command
     contacts_parser = sub.add_parser('contacts', help='List contacts')
@@ -497,7 +526,8 @@ def main():
 
     elif args.command == 'messages':
         conn, _ = connect_nt_db(args.db, args.key, args.salt)
-        result = get_messages(conn, args.talker, args.limit, args.offset)
+        own_wxid = getattr(args, 'own_wxid', None)
+        result = get_messages(conn, args.talker, args.limit, args.offset, contact_name_map, own_wxid)
         print(json.dumps(result, ensure_ascii=True))
         conn.close()
 
