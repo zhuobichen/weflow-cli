@@ -85,3 +85,9 @@ python scripts/classify_daily.py --api-key <key> --interest AI
 
 - 推理模型需 `max_tokens ≥ 500`（含 reasoning_tokens），否则输出为空
 - 分类 prompt 需简短，避免过多 examples 触发长推理
+
+### 隐私安全规则
+
+- 文档中的示例命令**必须使用占位符**（联系人A、示例群等），禁止真实人名/群名
+- `wxid_` 格式仅允许代码逻辑（如 `startswith('wxid_')`），不允许硬编码真实值
+- 提交前运行: `git diff --staged | grep -E "sk-[a-z0-9]{30,}|wxid_[a-z0-9]{10,}|备注名"` 检查泄露
