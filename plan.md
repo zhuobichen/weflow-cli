@@ -35,10 +35,10 @@ weflow-cli init
 
 # 查看会话 / 消息
 weflow-cli sessions
-weflow-cli messages 彪弟 -n 20
+weflow-cli messages 联系人A -n 20
 
 # 导出 HTML（单文件，含图片+搜索+昵称）
-weflow-cli export 彪弟 html
+weflow-cli export 联系人A html
 
 # 公众号日报 + AI 分类
 python scripts/biz_daily.py --api-key <key>
