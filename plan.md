@@ -16,6 +16,8 @@
 - [x] 公众号日报：biz_daily.py 抓取全文 + DeepSeek V4 摘要与分类
 - [x] 后处理管线：classify_daily.py 广告清洗 + 兴趣深度摘要 + AI/学术/新闻/文学分文件夹
 - [x] npm 全局安装支持：`npm install -g weflow-cli` → `weflow-cli <command>`
+- [x] 聊天月报：chat_report.py 三阶段（采集→AI任务识别→Markdown），支持 --talker 多选
+- [x] 公共工具模块 scripts/_utils.py
 - [x] export 命令内置 Python HTML 导出
 - [x] sns.db 朋友圈数据库扫描
 - [x] 微信消息 bridge（实验性，ilink API）

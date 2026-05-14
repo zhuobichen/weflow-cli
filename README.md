@@ -88,6 +88,7 @@ python scripts/classify_daily.py --api-key <DeepSeek-key> --interest AI
 | `npm run dev -- export <昵称> <json\|html\|txt\|excel>` | 导出聊天记录 |
 | `npm run dev -- contacts [-k 关键词]` | 查看联系人列表 |
 | `npm run dev -- whitelist add\|rm\|clear` | 白名单管理 |
+| `npm run dev -- report --month <YYYY-MM> --talker <昵称>` | 生成聊天月报（AI 任务分析） |
 | `python scripts/biz_daily.py --api-key <key>` | 生成今日公众号日报 |
 | `python scripts/classify_daily.py --api-key <key>` | 后处理：广告清洗+分类+深度摘要 |
 

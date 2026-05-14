@@ -64,7 +64,14 @@ biz_message_0.db → 提取今日推送(protobuf解压→XML元数据)
   → classify_daily.py 后处理: 广告清洗+兴趣深度摘要
 ```
 
-**链路 C：微信消息收发（实验性）**
+**链路 C：聊天月报**
+```
+message_0.db → 获取所有会话 → 按时间/联系人过滤消息
+  → 任务关键词预筛 → DeepSeek V4 识别任务+回复分析
+  → 生成 Markdown 月报（统计+AI分析+按联系人详情）
+```
+
+**链路 D：微信消息收发（实验性）**
 ```
 ilink 扫码登录 → bot_token
   → 长轮询 getupdates(40s timeout)
