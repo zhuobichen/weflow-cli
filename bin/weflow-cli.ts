@@ -825,4 +825,56 @@ program
     await service.startPolling()
   })
 
+// ==================== report ====================
+program
+  .command('report')
+  .description('生成聊天月报（AI 分析任务和回复）')
+  .option('--month <YYYY-MM>', '指定月份')
+  .option('--talker <昵称>', '指定联系人（可多次使用）')
+  .option('--from-whitelist', '使用白名单中的联系人')
+  .option('--api-key <key>', 'DeepSeek API key')
+  .option('--no-ai', '仅统计，不调用 AI')
+  .option('-o, --output <dir>', '输出目录', './output')
+  .action(async (opts) => {
+    if (!configService.isConfigured()) {
+      console.log(chalk.red('\n❌ 还没配置\n  运行: weflow-cli init\n'))
+      process.exit(1)
+    }
+
+    const { execFile } = await import('child_process')
+    const { promisify } = await import('util')
+    const execFileAsync = promisify(execFile)
+    const { fileURLToPath } = await import('url')
+    const { dirname } = await import('path')
+    const __filename = fileURLToPath(import.meta.url)
+    const __dirname = dirname(__filename)
+    const pkgRoot = join(__dirname, '..', '..')
+    const script = join(pkgRoot, 'scripts', 'chat_report.py')
+
+    const args: string[] = [script]
+    if (opts.month) args.push('--month', opts.month)
+    if (opts.talker) {
+      // commander collects repeated --talker into array, single value is string
+      const talkers = Array.isArray(opts.talker) ? opts.talker : [opts.talker]
+      for (const t of talkers) args.push('--talker', t)
+    }
+    if (opts.fromWhitelist) args.push('--from-whitelist')
+    if (opts.apiKey) args.push('--api-key', opts.apiKey)
+    if (opts.ai === false) args.push('--no-ai')
+    if (opts.output) args.push('--output', opts.output)
+
+    try {
+      console.log(chalk.cyan('正在生成月报...\n'))
+      const { stdout } = await execFileAsync('python', args, {
+        timeout: 600_000,
+        maxBuffer: 50 * 1024 * 1024,
+        env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
+      })
+      console.log(stdout)
+    } catch (e: any) {
+      console.error(chalk.red(`\n✗ 生成失败: ${e.message}`))
+      process.exit(1)
+    }
+  })
+
 program.parse()
