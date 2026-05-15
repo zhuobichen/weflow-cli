@@ -5,10 +5,11 @@
 用法:
   python scripts/pipeline.py --api-key <key> [--date 2026-05-15] [--interest AI] [--wiki-limit 20]
 """
-import sys, os, subprocess, time
+import sys, os, subprocess, time, shutil
 from pathlib import Path
 
 SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
+SOURCE_ROOT = 'output/biz-daily'
 PYTHON = sys.executable
 
 
@@ -34,6 +35,7 @@ def main():
     parser.add_argument('--wiki-limit', type=int, default=20, help='概念编译数量（默认 20）')
     parser.add_argument('--skip-classify', action='store_true', help='跳过后处理')
     parser.add_argument('--skip-wiki', action='store_true', help='跳过概念编译')
+    parser.add_argument('--skip-vault', action='store_true', help='跳过 Vault 同步')
     args = parser.parse_args()
 
     api_key = args.api_key or os.environ.get('DEEPSEEK_API_KEY', '')
@@ -57,7 +59,19 @@ def main():
             step2_args.insert(1, args.date)
         run_step('classify_daily — 后处理', step2_args)
 
-    # Step 3: wiki compile（可选）
+    # Step 3: Vault sync（可选）
+    if not args.skip_vault:
+        date_str = args.date or time.strftime('%Y-%m-%d')
+        source_dir = os.path.join(SOURCE_ROOT, date_str)
+        vault_dir = os.path.join(os.path.dirname(SCRIPTS_DIR), 'output', 'wechat-vault', 'Sources', 'WeChat', date_str)
+        if os.path.exists(source_dir):
+            if os.path.exists(vault_dir):
+                shutil.rmtree(vault_dir)
+            shutil.copytree(source_dir, vault_dir)
+            file_count = sum(1 for _ in Path(vault_dir).rglob('*.md'))
+            print(f'\n  Vault 同步: {file_count} 个文件 → {vault_dir}')
+
+    # Step 4: wiki compile（可选）
     if not args.skip_wiki:
         step3_args = [
             os.path.join(SCRIPTS_DIR, 'compile_wiki.py'),
