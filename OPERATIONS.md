@@ -195,6 +195,9 @@ weflow-cli export <联系人> json
 # 生成月报
 weflow-cli report --month 2026-05 --talker <联系人>
 
+# 初始化 Obsidian Vault
+weflow-cli vault init
+
 # 公众号日报
 python scripts/biz_daily.py --api-key <DeepSeek-key>
 python scripts/classify_daily.py --api-key <DeepSeek-key> --interest AI
@@ -216,6 +219,76 @@ EOF
 
 python scripts/user/my_query.py
 ```
+
+---
+
+## 十一、Obsidian Vault 集成
+
+### 初始化 Vault
+
+```bash
+weflow-cli vault init                    # 默认 output/wechat-vault/
+weflow-cli vault init --path ~/my-vault  # 自定义路径
+```
+
+生成的结构：
+```
+wechat-vault/
+├── .obsidian/app.json       # Obsidian 基础配置
+├── .gitignore
+├── README.md                # Vault 总索引（含 Dataview 查询示例）
+├── Templates/article.md     # 文章模板
+├── Sources/WeChat/          # 公众号文章（按日期+主题）
+├── Wiki/Concepts/           # AI 生成的概念页
+├── Wiki/Entities/           # 实体页（公众号、作者）
+└── Wiki/Topics/             # 主题总览页
+```
+
+### 在 Obsidian 中打开
+
+1. 安装 [Obsidian](https://obsidian.md/)
+2. `File → Open Vault` → 选择 `output/wechat-vault/` 目录
+3. 安装推荐插件：**Dataview**（表格查询）、**Graph View**（知识图谱）
+
+### 日常工作流
+
+```bash
+# 1. 生成日报（文章自动带 Frontmatter + Wiki Links）
+python scripts/biz_daily.py --api-key <key>
+
+# 2. 后处理（广告清洗 + AI 深度摘要 + 更新 Frontmatter）
+python scripts/classify_daily.py --api-key <key> --interest AI
+
+# 3. 复制到 Vault
+cp -r output/biz-daily/YYYY-MM-DD/* output/wechat-vault/Sources/WeChat/YYYY-MM-DD/
+```
+
+### Dataview 查询示例
+
+```dataview
+TABLE date, topic, tags
+FROM "Sources/WeChat"
+WHERE topic = "AI"
+SORT date DESC
+```
+
+### Frontmatter 格式
+
+每篇文章自动带 YAML 元数据：
+
+```yaml
+---
+title: "文章标题"
+source: "公众号名称"
+date: 2026-05-15
+topic: AI
+tags: [AI, Agent, 开源]
+url: "https://mp.weixin.qq.com/s/xxx"
+created: 2026-05-15
+---
+```
+
+文末自动生成 `[[Wiki Links]]` 概念链接，可在 Graph View 中作为节点展示。
 
 ---
 

@@ -877,4 +877,136 @@ program
     }
   })
 
+  // vault init
+  program
+    .command('vault')
+    .description('Obsidian Vault 管理')
+    .addCommand(
+      new Command('init')
+        .description('初始化 Obsidian Vault 目录结构')
+        .option('-p, --path <dir>', 'Vault 路径', './output/wechat-vault')
+        .action(async (opts) => {
+          const { mkdirSync, writeFileSync } = await import('fs')
+          const { join } = await import('path')
+
+          const vaultPath = opts.path
+          console.log(chalk.cyan(`\n🔧 初始化 Obsidian Vault: ${vaultPath}\n`))
+
+          // Directory structure
+          const dirs = [
+            '.obsidian',
+            'Templates',
+            'Sources/WeChat',
+            'Wiki/Concepts',
+            'Wiki/Entities',
+            'Wiki/Topics',
+          ]
+          for (const d of dirs) {
+            mkdirSync(join(vaultPath, d), { recursive: true })
+            console.log(`  ✓ ${d}/`)
+          }
+
+          // .obsidian/app.json
+          writeFileSync(join(vaultPath, '.obsidian', 'app.json'), JSON.stringify({
+            "newFileLocation": "folder",
+            "newFileFolderPath": "Sources",
+            "attachmentFolderPath": "Assets",
+            "showInlineTitle": false,
+          }, null, 2), 'utf-8')
+
+          // Templates/article.md
+          writeFileSync(join(vaultPath, 'Templates', 'article.md'), [
+            '---',
+            'title: "{{title}}"',
+            'source: ""',
+            'date: {{date}}',
+            'topic: AI',
+            'tags: []',
+            'created: {{date}}',
+            '---',
+            '',
+            '# {{title}}',
+            '',
+            '> 来源：  ',
+            '> 时间：{{date}}  ',
+            '',
+            '---',
+            '',
+            '## AI 摘要',
+            '',
+            '',
+            '## 相关概念',
+            '',
+            '',
+            '---',
+            '',
+            '## 正文',
+            '',
+          ].join('\n'), 'utf-8')
+
+          // README.md
+          writeFileSync(join(vaultPath, 'README.md'), [
+            '# WeChat Knowledge Vault',
+            '',
+            '> 由 weflow-cli 自动生成，兼容 Obsidian。',
+            '',
+            '## 目录结构',
+            '',
+            '| 目录 | 说明 |',
+            '|------|------|',
+            '| `Sources/WeChat/` | 公众号文章（按日期+主题分类） |',
+            '| `Wiki/Concepts/` | 概念页（手动或 AI 生成） |',
+            '| `Wiki/Entities/` | 实体页（公众号、作者等） |',
+            '| `Wiki/Topics/` | 主题总览页 |',
+            '| `Templates/` | 模板文件 |',
+            '',
+            '## 快速查询',
+            '',
+            '使用 Obsidian Dataview 插件：',
+            '',
+            '```dataview',
+            'TABLE date, topic, tags',
+            'FROM "Sources/WeChat"',
+            'WHERE topic = "AI"',
+            'SORT date DESC',
+            '```',
+            '',
+            '```dataview',
+            'TABLE length(rows) as "篇数"',
+            'FROM "Sources/WeChat"',
+            'GROUP BY topic',
+            'SORT rows.length DESC',
+            '```',
+            '',
+            '## 每日更新',
+            '',
+            '```bash',
+            '# 生成今日日报',
+            'python scripts/biz_daily.py --api-key <key>',
+            '',
+            '# 后处理（广告清洗+深度摘要）',
+            'python scripts/classify_daily.py --api-key <key> --interest AI',
+            '',
+            '# 同步到 GitHub',
+            '# (见 OPERATIONS.md)',
+            '```',
+            '',
+            '---',
+            '',
+            '*由 weflow-cli vault init 生成*',
+          ].join('\n'), 'utf-8')
+
+          // .gitignore
+          writeFileSync(join(vaultPath, '.gitignore'), [
+            '.obsidian/workspace*.json',
+            '.obsidian/hotkeys.json',
+            '.trash/',
+            '.DS_Store',
+          ].join('\n'), 'utf-8')
+
+          console.log(chalk.green(`\n✓ Vault 创建完成!`))
+          console.log(`  用 Obsidian 打开: File → Open Vault → ${vaultPath}`)
+        })
+    )
+
 program.parse()

@@ -24,17 +24,24 @@ import urllib.request
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
+# 公共工具
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _utils import call_deepseek, load_config, decrypt_lock, write_with_frontmatter, format_wikilinks
+
 try:
     from sqlcipher3 import dbapi2 as sqlcipher
 except ImportError:
     print("请安装: pip install sqlcipher3")
     sys.exit(1)
 
+# scrapling 按需导入（仅在 fetch_article fallback 时需要）
+# 完整安装: pip install scrapling html2text playwright
+_FETCHER_AVAILABLE = False
 try:
-    from scrapling.fetchers import Fetcher
+    from scrapling.fetchers import Fetcher as _Fetcher
+    _FETCHER_AVAILABLE = True
 except ImportError:
-    print("请安装: pip install scrapling html2text")
-    sys.exit(1)
+    pass
 
 # ====== Config ======
 
@@ -48,9 +55,10 @@ FETCH_DELAY_MIN = 8   # 最小抓取间隔 (秒)
 FETCH_DELAY_MAX = 12  # 最大抓取间隔 (秒)
 
 TOPICS = ['AI', '学术', '新闻', '文学']
-TOPIC_PROMPT = f"""完成两个任务：
+TOPIC_PROMPT = f"""完成三个任务：
 1. 用2-4句话总结文章核心内容（中文）
 2. 归类到：{' / '.join(TOPICS)}
+3. 提取3-5个核心技术/主题标签，以及1-3个关键概念
 
 分类标准：
 - AI：AI产品/模型/Agent/工具、编程开发、GitHub开源、科技教程
@@ -60,33 +68,11 @@ TOPIC_PROMPT = f"""完成两个任务：
 
 严格按格式返回：
 【主题】主题名
-【摘要】总结内容"""
+【标签】tag1, tag2, tag3
+【摘要】总结内容
+【概念】概念名|简短说明, 概念名|简短说明"""
 
 # ====== Helpers ======
-
-def load_config():
-    """Load weflow-cli config and decrypt sensitive fields."""
-    with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
-        return json.load(f)
-
-
-def decrypt_lock(locked_str: str) -> str:
-    """Decrypt a lock: prefixed value."""
-    if not locked_str or not locked_str.startswith('lock:'):
-        return locked_str
-    import base64, socket
-    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-    from cryptography.hazmat.primitives import hashes
-    from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
-    from cryptography.hazmat.backends import default_backend
-
-    raw = base64.b64decode(locked_str[5:])
-    salt, iv, auth_tag, ciphertext = raw[:16], raw[16:28], raw[28:44], raw[44:]
-    machine_id = f'{socket.gethostname()}-{os.environ.get("USERNAME","")}-weflow-cli'
-    kdf = PBKDF2HMAC(algorithm=hashes.SHA256(), length=32, salt=salt, iterations=100000, backend=default_backend())
-    key = kdf.derive(machine_id.encode('utf-8'))
-    aesgcm = AESGCM(key)
-    return aesgcm.decrypt(iv, ciphertext + auth_tag, None).decode()
 
 
 def get_db_keys(config):
@@ -124,28 +110,6 @@ def get_db_keys(config):
     }
 
 
-def call_deepseek(prompt: str, api_key: str, max_tokens=1500) -> str:
-    """Call DeepSeek API for summarization."""
-    payload = json.dumps({
-        'model': 'deepseek-v4-pro',
-        'messages': [{'role': 'user', 'content': prompt}],
-        'max_tokens': max_tokens,
-    }).encode('utf-8')
-
-    req = urllib.request.Request(
-        'https://api.deepseek.com/v1/chat/completions',
-        data=payload,
-        headers={
-            'Content-Type': 'application/json',
-            'Authorization': f'Bearer {api_key}',
-        },
-        method='POST',
-    )
-    with urllib.request.urlopen(req, timeout=DEEPSEEK_TIMEOUT) as resp:
-        data = json.loads(resp.read())
-    return data['choices'][0]['message']['content']
-
-
 WECHAT_UA = (
     'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) '
     'AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 '
@@ -179,16 +143,19 @@ def fetch_article(url: str) -> str | None:
         return h.handle(html)
     except Exception as e:
         # L2: Fallback to Scrapling with custom headers
-        try:
-            from scrapling.fetchers import Fetcher
-            page = Fetcher.get(url)
-            import html2text
-            h = html2text.HTML2Text()
-            h.ignore_links = False
-            h.body_width = 0
-            return h.handle(page.html_content)
-        except Exception as e2:
-            print(f'  [WARN] 抓取失败 (L1+L2): {e}')
+        if _FETCHER_AVAILABLE:
+            try:
+                page = _Fetcher.get(url)
+                import html2text
+                h = html2text.HTML2Text()
+                h.ignore_links = False
+                h.body_width = 0
+                return h.handle(page.html_content)
+            except Exception as e2:
+                print(f'  [WARN] 抓取失败 (L1+L2): {e}')
+                return None
+        else:
+            print(f'  [WARN] 抓取失败: {e} (scrapling 未安装，无 fallback)')
             return None
 
 
@@ -396,30 +363,54 @@ def main():
             if content and len(content.strip()) > 50:
                 try:
                     prompt = TOPIC_PROMPT + f'\n\n标题：{a["title"]}\n来源：{a["account_name"]}\n\n内容：\n{content[:4000]}'
-                    response = call_deepseek(prompt, api_key, max_tokens=500)
+                    response = call_deepseek(prompt, api_key, max_tokens=600)
 
-                    # Parse response: 【主题】xxx 【摘要】xxx
+                    # Parse response: 【主题】xxx 【标签】xxx 【摘要】xxx 【概念】xxx
                     topic_match = re.search(r'【主题】\s*(.+)', response)
-                    summary_match = re.search(r'【摘要】\s*(.+)', response, re.DOTALL)
+                    tags_match = re.search(r'【标签】\s*(.+)', response)
+                    # Stop summary at next 【tag or end
+                    summary_match = re.search(r'【摘要】\s*(.+?)(?=\n【|$)', response, re.DOTALL)
+                    concepts_match = re.search(r'【概念】\s*(.+)', response, re.DOTALL)
 
                     if topic_match:
                         a['topic'] = topic_match.group(1).strip()
-                        # Validate topic
                         if a['topic'] not in TOPICS:
-                            a['topic'] = '学术'  # default fallback
+                            a['topic'] = '学术'
                     else:
                         a['topic'] = '学术'
+
+                    # Parse tags: comma-separated, clean up
+                    if tags_match:
+                        a['tags'] = [t.strip() for t in tags_match.group(1).split(',') if t.strip()]
+                    else:
+                        a['tags'] = [a['topic']]
+
+                    # Parse concepts: name|desc, name|desc
+                    if concepts_match:
+                        concepts_raw = concepts_match.group(1).strip()
+                        a['concepts'] = []
+                        for pair in concepts_raw.split(','):
+                            pair = pair.strip()
+                            if '|' in pair:
+                                name, desc = pair.split('|', 1)
+                                a['concepts'].append((name.strip(), desc.strip()))
+                            elif pair:
+                                a['concepts'].append((pair.strip(), ''))
+                    else:
+                        a['concepts'] = []
 
                     if summary_match:
                         a['summary'] = summary_match.group(1).strip()
                     else:
                         a['summary'] = response[:300]
 
-                    print(f'[{i+1}/{len(articles)}] [{t}] {n} - [{a.get("topic","?")}] ({len(a.get("summary",""))}字)')
+                    print(f'[{i+1}/{len(articles)}] [{t}] {n} - [{a.get("topic","?")}] tags={a.get("tags",[])} ({len(a.get("summary",""))}字)')
                     time.sleep(0.3)
                 except Exception as e:
                     a['summary'] = a.get('digest', '') or content[:300]
                     a['topic'] = '学术'
+                    a['tags'] = ['学术']
+                    a['concepts'] = []
                     print(f'[{i+1}/{len(articles)}] [{t}] {n} - ERR: {e}')
             elif content:
                 a['summary'] = content[:400]
@@ -470,24 +461,44 @@ def main():
 
             markdown = a.get('fetched_md') or a.get('local_text', '')
             summary = a.get('summary', a.get('digest', ''))
+            tags = a.get('tags', [topic])
+            concepts = a.get('concepts', [])
 
-            # Write individual article
-            with open(file_path, 'w', encoding='utf-8') as f:
-                f.write(f'# {a["title"]}\n\n')
-                f.write(f'> 来源：{a["account_name"]}  \n')
-                f.write(f'> 时间：{date_str} {a["time"]}  \n')
-                f.write(f'> 主题：{topic}  \n')
-                if a['url']:
-                    f.write(f'> 原文：[阅读原文]({a["url"]})\n')
-                f.write('\n---\n\n')
-                f.write(f'## AI 摘要\n\n{summary}\n\n')
-                if markdown:
-                    f.write('---\n\n')
-                    f.write('## 正文\n\n')
-                    body = markdown[:10000]
-                    if len(markdown) > 10000:
-                        body += f'\n\n*(原文过长，截取前10000字，共{len(markdown)}字)*'
-                    f.write(body)
+            # Frontmatter
+            fm = {
+                'title': f'"{a["title"]}"',
+                'source': f'"{a["account_name"]}"',
+                'date': date_str,
+                'topic': topic,
+                'tags': tags,
+                'created': date_str,
+            }
+            if a['url']:
+                fm['url'] = f'"{a["url"]}"'
+
+            # Body
+            body_parts = [f'# {a["title"]}\n']
+            body_parts.append(f'> 来源：{a["account_name"]}  \n')
+            body_parts.append(f'> 时间：{date_str} {a["time"]}  \n')
+            if a['url']:
+                body_parts.append(f'> 原文：[阅读原文]({a["url"]})\n')
+            body_parts.append('\n---\n\n')
+            body_parts.append(f'## AI 摘要\n\n{summary}\n\n')
+
+            # Wiki Links
+            if concepts:
+                body_parts.append(format_wikilinks(concepts))
+                body_parts.append('\n')
+
+            if markdown:
+                body_parts.append('---\n\n')
+                body_parts.append('## 正文\n\n')
+                body = markdown[:10000]
+                if len(markdown) > 10000:
+                    body += f'\n\n*(原文过长，截取前10000字，共{len(markdown)}字)*'
+                body_parts.append(body)
+
+            write_with_frontmatter(str(file_path), fm, ''.join(body_parts))
 
             index_lines.append(
                 f'| {j+1} | {a["time"]} | {a["account_name"]} | [{a["title"]}](./{topic}/{file_name}) |'

@@ -58,6 +58,89 @@ def decrypt_lock(locked_str: str) -> str:
     return aesgcm.decrypt(iv, ciphertext + auth_tag, None).decode()
 
 
+def write_with_frontmatter(filepath: str, frontmatter: dict, body: str):
+    """原子写入带 YAML frontmatter 的 Markdown 文件。"""
+    import tempfile as _tmp
+    fm_lines = ['---']
+    for k, v in frontmatter.items():
+        if isinstance(v, list):
+            fm_lines.append(f'{k}: [{", ".join(v)}]')
+        elif isinstance(v, str) and ('"' in v or ':' in v or '#' in v):
+            # Only wrap if not already quoted
+            v_stripped = v.strip()
+            if not (v_stripped.startswith('"') and v_stripped.endswith('"')):
+                fm_lines.append(f'{k}: "{v}"')
+            else:
+                fm_lines.append(f'{k}: {v}')
+        else:
+            fm_lines.append(f'{k}: {v}')
+    fm_lines.append('---')
+    fm_block = '\n'.join(fm_lines) + '\n\n'
+
+    dir_name = os.path.dirname(filepath)
+    fd, tmp_path = _tmp.mkstemp(suffix='.md', dir=dir_name or '.')
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8') as f:
+            f.write(fm_block)
+            f.write(body)
+        os.replace(tmp_path, filepath)
+    except:
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+        raise
+
+
+def parse_frontmatter(content: str) -> tuple[dict, str]:
+    """从 Markdown 内容中提取 YAML frontmatter，返回 (frontmatter_dict, body)。
+
+    无 frontmatter 时返回 ({}, content)。
+    兼容 YAML 格式，也兼容简单的 key: value / key: [v1, v2] 格式（无需 PyYAML）。
+    """
+    import re as _re
+    if not content.startswith('---'):
+        return {}, content
+
+    end = content.find('---', 3)
+    if end == -1:
+        return {}, content
+
+    fm_text = content[3:end].strip()
+    body = content[end + 3:].lstrip('\n')
+
+    result = {}
+    for line in fm_text.split('\n'):
+        line = line.strip()
+        if not line or ':' not in line:
+            continue
+        key, _, val = line.partition(':')
+        key = key.strip()
+        val = val.strip()
+        # list: [a, b, c]
+        if val.startswith('[') and val.endswith(']'):
+            inner = val[1:-1]
+            items = [v.strip().strip('"\'') for v in inner.split(',')] if inner.strip() else []
+            result[key] = items
+        elif val.startswith('"') and val.endswith('"'):
+            result[key] = val[1:-1]
+        else:
+            result[key] = val
+    return result, body
+
+
+def format_wikilinks(concepts: list[tuple[str, str]]) -> str:
+    """将概念列表格式化为 [[Wiki Links]] 段落。
+
+    concepts: [(name, description), ...]
+    """
+    lines = ['## 相关概念', '']
+    for name, desc in concepts:
+        if desc:
+            lines.append(f'- [[{name}]] — {desc}')
+        else:
+            lines.append(f'- [[{name}]]')
+    return '\n'.join(lines) + '\n'
+
+
 def get_db_config(config=None):
     """Extract NT database paths and keys from config."""
     if config is None:

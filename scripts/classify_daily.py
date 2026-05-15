@@ -11,6 +11,10 @@ import sys, os, json, re, time, urllib.request, shutil
 from collections import Counter
 from pathlib import Path
 
+# 公共工具
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _utils import call_deepseek, parse_frontmatter, write_with_frontmatter
+
 OUTPUT_ROOT = 'output/biz-daily'
 TOPICS = ['AI', '学术', '新闻', '文学']
 
@@ -48,26 +52,6 @@ INTEREST_PROMPT = """对以下AI领域文章生成深度解析：
 （1句话）"""
 
 
-def call_deepseek(prompt: str, api_key: str, max_tokens=2000) -> str:
-    payload = json.dumps({
-        'model': 'deepseek-v4-pro',
-        'messages': [{'role': 'user', 'content': prompt}],
-        'max_tokens': max_tokens,
-    }).encode('utf-8')
-    req = urllib.request.Request(
-        'https://api.deepseek.com/v1/chat/completions',
-        data=payload,
-        headers={
-            'Content-Type': 'application/json',
-            'Authorization': f'Bearer {api_key}',
-        },
-        method='POST',
-    )
-    with urllib.request.urlopen(req, timeout=60) as resp:
-        data = json.loads(resp.read())
-    return data['choices'][0]['message']['content']
-
-
 def clean_ads(text: str) -> str:
     for pat in AD_PATTERNS:
         text = pat.sub('', text)
@@ -78,12 +62,20 @@ def clean_ads(text: str) -> str:
 
 
 def extract_topic_from_file(content: str) -> str:
-    """Extract topic from md: look for > 主题：xxx or 【主题】xxx"""
+    """Extract topic from YAML frontmatter, fallback to text parsing."""
+    fm, _ = parse_frontmatter(content)
+    if 'topic' in fm and fm['topic'] in TOPICS:
+        return fm['topic']
+    # Fallback: legacy text-based parsing
     m = re.search(r'> 主题：(\S+)', content)
     if m: return m.group(1)
-    m = re.search(r'【主题】\s*(\S+)', content)
-    if m: return m.group(1)
     return '学术'
+
+
+def extract_tags_from_file(content: str) -> list[str]:
+    """Extract tags from YAML frontmatter."""
+    fm, _ = parse_frontmatter(content)
+    return fm.get('tags', [])
 
 
 def main():
@@ -161,8 +153,14 @@ def main():
                     f'## 深度解析\n\n{deep}',
                     content, flags=re.DOTALL,
                 )
-                with open(fpath, 'w', encoding='utf-8') as f:
-                    f.write(content)
+                # Update frontmatter: mark as enhanced
+                fm, body = parse_frontmatter(content)
+                if fm:
+                    fm['enhanced'] = 'true'
+                    write_with_frontmatter(str(fpath), fm, body)
+                else:
+                    with open(fpath, 'w', encoding='utf-8') as f:
+                        f.write(content)
                 print(f'  [{i+1}/{len(interest_files)}] {title[:50]}')
                 time.sleep(0.3)
             except Exception as e:
