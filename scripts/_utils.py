@@ -9,28 +9,82 @@ import urllib.request
 CONFIG_PATH = os.path.join(os.path.expanduser('~'), '.weflow-cli', 'config.json')
 
 
-# ====== DeepSeek ======
+# ====== AI Engine 抽象 ======
+
+class AIEngine:
+    """OpenAI-compatible API 引擎基类。"""
+    def __init__(self, api_key: str, base_url: str, model: str, temperature=0.2, timeout=60):
+        self.api_key = api_key
+        self.base_url = base_url.rstrip('/')
+        self.model = model
+        self.temperature = temperature
+        self.timeout = timeout
+
+    def chat(self, prompt: str, max_tokens=2000) -> str:
+        """发送 prompt，返回文本响应。"""
+        payload = json.dumps({
+            'model': self.model,
+            'messages': [{'role': 'user', 'content': prompt}],
+            'max_tokens': max_tokens,
+            'temperature': self.temperature,
+        }).encode('utf-8')
+
+        req = urllib.request.Request(
+            f'{self.base_url}/chat/completions',
+            data=payload,
+            headers={
+                'Content-Type': 'application/json',
+                'Authorization': f'Bearer {self.api_key}',
+            },
+            method='POST',
+        )
+        with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+            data = json.loads(resp.read())
+        return data['choices'][0]['message']['content']
+
+    def check_connectivity(self) -> tuple[bool, str]:
+        """检测连通性，返回 (ok, message)。"""
+        try:
+            self.chat('Hi', max_tokens=1)
+            return True, 'OK'
+        except Exception as e:
+            return False, str(e)
+
+
+class DeepSeekEngine(AIEngine):
+    def __init__(self, api_key: str, model='deepseek-v4-pro', timeout=60):
+        super().__init__(api_key, 'https://api.deepseek.com/v1', model, timeout=timeout)
+
+
+class ClaudeEngine(AIEngine):
+    def __init__(self, api_key: str, model='claude-sonnet-4-6', timeout=90):
+        super().__init__(api_key, 'https://api.anthropic.com/v1', model, timeout=timeout)
+
+
+class OllamaEngine(AIEngine):
+    def __init__(self, model='llama3', timeout=120):
+        super().__init__('ollama', 'http://localhost:11434/v1', model, timeout=timeout)
+
+
+def create_engine(engine_type: str, api_key='') -> AIEngine:
+    """工厂函数：根据类型创建 AI 引擎实例。"""
+    engines = {
+        'deepseek': lambda: DeepSeekEngine(api_key),
+        'claude': lambda: ClaudeEngine(api_key),
+        'ollama': lambda: OllamaEngine(),
+    }
+    t = engine_type.lower()
+    if t in engines:
+        return engines[t]()
+    raise ValueError(f"未知引擎: {engine_type}，可选: {', '.join(engines.keys())}")
+
+
+# ====== DeepSeek (向后兼容) ======
 
 def call_deepseek(prompt: str, api_key: str, max_tokens=2000, timeout=60) -> str:
-    """Call DeepSeek V4 API. Returns response text."""
-    payload = json.dumps({
-        'model': 'deepseek-v4-pro',
-        'messages': [{'role': 'user', 'content': prompt}],
-        'max_tokens': max_tokens,
-    }).encode('utf-8')
-
-    req = urllib.request.Request(
-        'https://api.deepseek.com/v1/chat/completions',
-        data=payload,
-        headers={
-            'Content-Type': 'application/json',
-            'Authorization': f'Bearer {api_key}',
-        },
-        method='POST',
-    )
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        data = json.loads(resp.read())
-    return data['choices'][0]['message']['content']
+    """调用 DeepSeek V4 API（向后兼容，内部使用 AIEngine）。"""
+    engine = DeepSeekEngine(api_key, timeout=timeout)
+    return engine.chat(prompt, max_tokens=max_tokens)
 
 
 # ====== Config Decrypt ======

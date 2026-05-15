@@ -319,6 +319,51 @@ cat output/wechat-vault/Wiki/00-Overview.md
 
 ---
 
+## 十三、端到端流水线
+
+```bash
+# 一键跑完 biz_daily → classify → wiki compile
+weflow-cli pipeline run --api-key <key> [--date 2026-05-15]
+
+# 或直接 Python
+python scripts/pipeline.py --api-key <key> --interest AI --wiki-limit 20
+```
+
+## 十四、AI 日报生成
+
+```bash
+# 基于今日文章生成学习日报
+python scripts/generate_review.py --api-key <key> [--date 2026-05-15]
+
+# 输出: output/reviews/Daily/Daily-YYYY-MM-DD.md
+```
+
+## 十五、GitHub 自动同步
+
+```bash
+# 设置远端仓库
+weflow-cli config set vaultRepo git@github.com:user/wechat-knowledge.git
+
+# 增量同步
+weflow-cli vault sync
+# 或指定: weflow-cli vault sync --repo <url> --branch main
+```
+
+## 十六、多 AI 引擎切换
+
+```bash
+# 切换到 Claude
+weflow-cli config set aiEngine claude
+
+# 切换到本地 Ollama
+weflow-cli config set aiEngine ollama
+
+# Python 脚本也支持：
+python scripts/biz_daily.py --api-key <key> --engine claude
+```
+
+---
+
 ## 附录
 
 ### 关键路径

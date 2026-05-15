@@ -27,13 +27,16 @@ interface CliConfig {
   wechatOcSyncBuf: string
   // 白名单
   whitelist: string[]
+  // Vault & Pipeline
+  vaultRepo: string
+  aiEngine: string
 }
 
 const CONFIG_DIR = join(homedir(), '.weflow-cli')
 const CONFIG_FILE = join(CONFIG_DIR, 'config.json')
 
 export class ConfigService {
-  private config: CliConfig = { dbPath: '', wxid: '', decryptKey: '', decryptKey3x: '', dataVersion: '', dbPath3x: '', ntDbPath: '', ntKey: '', ntSalt: '', contactDbPath: '', contactKey: '', contactSalt: '', wechatOcToken: '', wechatOcAccountId: '', wechatOcBaseUrl: '', wechatOcSyncBuf: '', whitelist: [] }
+  private config: CliConfig = { dbPath: '', wxid: '', decryptKey: '', decryptKey3x: '', dataVersion: '', dbPath3x: '', ntDbPath: '', ntKey: '', ntSalt: '', contactDbPath: '', contactKey: '', contactSalt: '', wechatOcToken: '', wechatOcAccountId: '', wechatOcBaseUrl: '', wechatOcSyncBuf: '', whitelist: [], vaultRepo: '', aiEngine: 'deepseek' }
 
   constructor() {
     this.load()
@@ -61,6 +64,8 @@ export class ConfigService {
           wechatOcBaseUrl: data.wechatOcBaseUrl || '',
           wechatOcSyncBuf: data.wechatOcSyncBuf || '',
           whitelist: Array.isArray(data.whitelist) ? data.whitelist : [],
+          vaultRepo: data.vaultRepo || '',
+          aiEngine: data.aiEngine || 'deepseek',
         }
       }
     } catch {
@@ -135,7 +140,7 @@ export class ConfigService {
   }
 
   clear(): void {
-    this.config = { dbPath: '', wxid: '', decryptKey: '', decryptKey3x: '', dataVersion: '', dbPath3x: '', ntDbPath: '', ntKey: '', ntSalt: '', contactDbPath: '', contactKey: '', contactSalt: '', wechatOcToken: '', wechatOcAccountId: '', wechatOcBaseUrl: '', wechatOcSyncBuf: '', whitelist: [] }
+    this.config = { dbPath: '', wxid: '', decryptKey: '', decryptKey3x: '', dataVersion: '', dbPath3x: '', ntDbPath: '', ntKey: '', ntSalt: '', contactDbPath: '', contactKey: '', contactSalt: '', wechatOcToken: '', wechatOcAccountId: '', wechatOcBaseUrl: '', wechatOcSyncBuf: '', whitelist: [], vaultRepo: '', aiEngine: 'deepseek' }
     this.save()
   }
 

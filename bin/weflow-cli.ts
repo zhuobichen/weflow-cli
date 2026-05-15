@@ -1049,4 +1049,103 @@ program
         })
     )
 
+  // pipeline run
+  program
+    .command('pipeline')
+    .description('端到端自动化流水线')
+    .addCommand(
+      new Command('run')
+        .description('一键运行 biz_daily → classify → wiki compile')
+        .option('--date <YYYY-MM-DD>', '日期')
+        .option('--api-key <key>', 'DeepSeek API key')
+        .option('--interest <topic>', '兴趣主题', 'AI')
+        .option('--wiki-limit <n>', '概念编译数', '20')
+        .action(async (opts) => {
+          const { execFile } = await import('child_process')
+          const { promisify } = await import('util')
+          const execFileAsync = promisify(execFile)
+          const { fileURLToPath } = await import('url')
+          const { dirname } = await import('path')
+          const __filename = fileURLToPath(import.meta.url)
+          const __dirname = dirname(__filename)
+          const pkgRoot = join(__dirname, '..', '..')
+          const script = join(pkgRoot, 'scripts', 'pipeline.py')
+
+          const args: string[] = [script, '--api-key', opts.apiKey, '--interest', opts.interest, '--wiki-limit', opts.wikiLimit]
+          if (opts.date) args.push('--date', opts.date)
+
+          try {
+            console.log(chalk.cyan('\n启动端到端流水线...\n'))
+            const { stdout } = await execFileAsync('python', args, {
+              timeout: 600_000,
+              maxBuffer: 50 * 1024 * 1024,
+              env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
+            })
+            console.log(stdout)
+          } catch (e: any) {
+            console.error(chalk.red(`\n✗ 流水线失败: ${e.message}`))
+            process.exit(1)
+          }
+        })
+    )
+
+  // vault sync — add to existing vault command
+  program.commands
+    .find(c => c.name() === 'vault')
+    ?.addCommand(
+      new Command('sync')
+        .description('增量提交 Vault 并推送到远端仓库')
+        .option('-r, --repo <url>', '远端 Git 仓库地址')
+        .option('-b, --branch <name>', '分支名', 'main')
+        .option('--include-chat', '包含聊天记录（默认不同步）')
+        .action(async (opts) => {
+          const { execFile } = await import('child_process')
+          const { promisify } = await import('util')
+          const execFileAsync = promisify(execFile)
+          const vaultPath = join(process.cwd(), 'output', 'wechat-vault')
+
+          const repo = opts.repo || configService.get('vaultRepo')
+          if (!repo) {
+            console.error(chalk.red('\n❌ 未指定远端仓库。运行: weflow-cli config set vaultRepo <url> 或使用 --repo 参数\n'))
+            process.exit(1)
+          }
+
+          try {
+            // Ensure vault is a git repo
+            const gitDir = join(vaultPath, '.git')
+            const { existsSync } = await import('fs')
+            if (!existsSync(gitDir)) {
+              console.log(chalk.cyan('初始化 Vault Git 仓库...'))
+              await execFileAsync('git', ['init'], { cwd: vaultPath })
+              await execFileAsync('git', ['remote', 'add', 'origin', repo], { cwd: vaultPath })
+            }
+
+            // Check for changes
+            try {
+              await execFileAsync('git', ['diff', '--cached', '--quiet'], { cwd: vaultPath })
+              await execFileAsync('git', ['diff', '--quiet'], { cwd: vaultPath })
+              console.log(chalk.yellow('没有变更，跳过同步'))
+              return
+            } catch {
+              // Has changes, proceed
+            }
+
+            const dateStr = new Date().toISOString().slice(0, 10)
+            const { stdout: statOut } = await execFileAsync('git', ['diff', '--stat'], { cwd: vaultPath })
+
+            console.log(chalk.cyan('提交变更...'))
+            await execFileAsync('git', ['add', '-A'], { cwd: vaultPath })
+            await execFileAsync('git', ['commit', '-m', `vault sync: ${dateStr} | ${statOut.split('\n').length} files`], { cwd: vaultPath })
+
+            console.log(chalk.cyan('推送到远端...'))
+            await execFileAsync('git', ['push', '-u', 'origin', opts.branch], { cwd: vaultPath, timeout: 60_000 })
+
+            console.log(chalk.green(`\n✓ Vault 已同步到 ${repo} (${opts.branch})`))
+          } catch (e: any) {
+            console.error(chalk.red(`\n✗ 同步失败: ${e.message}`))
+            process.exit(1)
+          }
+        })
+    )
+
 program.parse()
