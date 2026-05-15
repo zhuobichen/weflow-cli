@@ -55,23 +55,27 @@ FETCH_DELAY_MIN = 8   # 最小抓取间隔 (秒)
 FETCH_DELAY_MAX = 12  # 最大抓取间隔 (秒)
 
 TOPICS = ['AI', '学术', '新闻', '文学', '投资']
-TOPIC_PROMPT = f"""完成三个任务：
-1. 用2-4句话总结文章核心内容（中文）
-2. 归类到：{' / '.join(TOPICS)}
-3. 提取3-5个核心技术/主题标签，以及1-3个关键概念
+TOPIC_PROMPT = f"""对文章分类、摘要、打标签。
 
-分类标准：
-- AI：AI产品/模型/Agent/工具、编程开发、GitHub开源、科技教程
-- 学术：科研论文、Nature/Science期刊、环境科学、实验室
-- 新闻：时事政策、社会热点、企业通知、招聘促销
-- 文学：散文随笔、生活记录、美食旅游、历史人文
-- 投资：股票基金、经济分析、市场趋势、理财策略、商业洞察
+【主题】必须且只能是：{' / '.join(TOPICS)} 中的一个词，不要写其他任何文字。
 
-严格按格式返回：
-【主题】主题名
+判断规则：
+- AI：涉及AI大模型/Agent/编程/开源/科技产品/工具教程 → 归AI
+- 投资：涉及股票基金/融资/经济分析/商业市场 → 归投资
+- 新闻：时事政策/社会热点/娱乐圈/招聘促销/会议通知 → 归新闻
+- 文学：散文小说/美食旅游/生活随笔/历史文化 → 归文学
+- 学术：严格科研论文/学术期刊/实验室研究/学位论文 → 归学术（公众号文章极少属此类）
+
+**关键**：
+- 【主题】这一行只写一个词：AI 或 学术 或 新闻 或 文学 或 投资
+- 科技报道、开发者工具、AI产品即使提到Nature/Science也归AI或新闻，不归学术
+- 不确定时选最可能的非学术分类
+
+返回格式（严格）：
+【主题】AI
 【标签】tag1, tag2, tag3
-【摘要】总结内容
-【概念】概念名|简短说明, 概念名|简短说明"""
+【摘要】2-4句中文总结
+【概念】概念名|说明, 概念名|说明"""
 
 # ====== Helpers ======
 
@@ -394,9 +398,19 @@ def main():
                     concepts_match = re.search(r'【概念】\s*(.+)', response, re.DOTALL)
 
                     if topic_match:
-                        a['topic'] = topic_match.group(1).strip()
-                        if a['topic'] not in TOPICS:
-                            a['topic'] = '学术'
+                        raw_topic = topic_match.group(1).strip()
+                        if raw_topic in TOPICS:
+                            a['topic'] = raw_topic
+                        else:
+                            # Fuzzy match: try each known topic
+                            matched = False
+                            for t in TOPICS:
+                                if t in raw_topic:
+                                    a['topic'] = t
+                                    matched = True
+                                    break
+                            if not matched:
+                                a['topic'] = '学术'
                     else:
                         a['topic'] = '学术'
 
