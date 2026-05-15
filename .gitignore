@@ -10,6 +10,7 @@ test-*.cjs
 scan-key*.py
 *.zip
 __pycache__/
+scripts/user/
 tmp_*
 .DS_Store
 Thumbs.db
