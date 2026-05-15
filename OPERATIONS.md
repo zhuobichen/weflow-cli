@@ -292,6 +292,33 @@ created: 2026-05-15
 
 ---
 
+## 十二、概念图谱编译
+
+将 Phase 1 生成的 `[[Wiki Links]]` 编译为 Wiki 概念页，在 Obsidian Graph View 中形成真正的知识节点。
+
+```bash
+# 扫描所有文章 wikilinks → 聚合 → AI 生成概念页
+weflow-cli wiki compile --limit 20 --api-key <key>
+
+# 或直接调用 Python
+python scripts/compile_wiki.py --api-key <key> --limit 20 \
+  --source output/biz-daily \
+  --output output/wechat-vault/Wiki/Concepts
+```
+
+生成的每个概念页包含：
+- **定义** — 1-2 句话精确定义
+- **关键要点** — 3 条简洁摘要
+- **相关概念** — `[[wikilinks]]` 到其他概念
+- **来源** — 引用该概念的所有文章
+
+```bash
+# 查看概念索引
+cat output/wechat-vault/Wiki/00-Overview.md
+```
+
+---
+
 ## 附录
 
 ### 关键路径

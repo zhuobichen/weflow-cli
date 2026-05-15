@@ -322,6 +322,28 @@ def main():
     if args.limit and args.limit > 0:
         articles = articles[:args.limit]
 
+    # === Incremental dedup: load previous run state ===
+    out_dir = Path(OUTPUT_ROOT) / date_str
+    out_dir.mkdir(parents=True, exist_ok=True)
+    state_file = out_dir / '.run_state.json'
+    processed = {}
+    if state_file.exists():
+        with open(state_file, 'r', encoding='utf-8') as f:
+            processed = json.load(f)
+
+    new_articles = []
+    skipped = 0
+    for a in articles:
+        fp = hashlib.sha256(a.get('url', '').encode()).hexdigest()[:16]
+        if a.get('url') and fp in processed:
+            skipped += 1
+            print(f'  [SKIP] {a["title"][:40]}')
+        else:
+            new_articles.append(a)
+    articles = new_articles
+    if skipped:
+        print(f'  （跳过 {skipped} 篇已处理）')
+
     print(f'找到 {len(articles)} 篇文章\n')
 
     if args.dry_run:
@@ -331,9 +353,7 @@ def main():
         print(f'\n共 {len(articles)} 篇 (预览模式)')
         return
 
-    # Create output folder
-    out_dir = Path(OUTPUT_ROOT) / date_str
-    out_dir.mkdir(parents=True, exist_ok=True)
+    # Output folder already created above (with dedup state)
     print(f'输出目录: {out_dir}\n')
 
     # ====== Phase 1: Fetch all articles ======
@@ -517,6 +537,15 @@ def main():
     for t in TOPICS:
         if topic_groups[t]:
             print(f'  {t}/: {len(topic_groups[t])} 篇')
+
+    # Save run state for incremental dedup
+    for a in topic_groups.values():
+        for art in a:
+            fp = hashlib.sha256(art.get('url', '').encode()).hexdigest()[:16]
+            if art.get('url'):
+                processed[fp] = art['title'][:50]
+    with open(state_file, 'w', encoding='utf-8') as f:
+        json.dump(processed, f, ensure_ascii=False, indent=2)
 
 
 if __name__ == '__main__':

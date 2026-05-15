@@ -1009,4 +1009,44 @@ program
         })
     )
 
+  // wiki compile
+  program
+    .command('wiki')
+    .description('概念图谱管理')
+    .addCommand(
+      new Command('compile')
+        .description('扫描文章 [[Wikilinks]] 聚合生成概念页')
+        .option('-l, --limit <n>', '最多生成概念数', '20')
+        .option('--source <dir>', '文章目录', './output/biz-daily')
+        .option('-o, --output <dir>', '概念页输出目录', './output/wechat-vault/Wiki/Concepts')
+        .option('--api-key <key>', 'DeepSeek API key')
+        .action(async (opts) => {
+          const { execFile } = await import('child_process')
+          const { promisify } = await import('util')
+          const execFileAsync = promisify(execFile)
+          const { fileURLToPath } = await import('url')
+          const { dirname } = await import('path')
+          const __filename = fileURLToPath(import.meta.url)
+          const __dirname = dirname(__filename)
+          const pkgRoot = join(__dirname, '..', '..')
+          const script = join(pkgRoot, 'scripts', 'compile_wiki.py')
+
+          const args: string[] = [script, '--limit', opts.limit, '--source', opts.source, '--output', opts.output]
+          if (opts.apiKey) args.push('--api-key', opts.apiKey)
+
+          try {
+            console.log(chalk.cyan('正在编译概念图谱...\n'))
+            const { stdout } = await execFileAsync('python', args, {
+              timeout: 300_000,
+              maxBuffer: 10 * 1024 * 1024,
+              env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
+            })
+            console.log(stdout)
+          } catch (e: any) {
+            console.error(chalk.red(`\n✗ 编译失败: ${e.message}`))
+            process.exit(1)
+          }
+        })
+    )
+
 program.parse()
