@@ -16,7 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _utils import call_deepseek, parse_frontmatter, write_with_frontmatter
 
 OUTPUT_ROOT = 'output/biz-daily'
-TOPICS = ['AI', '学术', '新闻', '文学']
+TOPICS = ['AI', '学术', '新闻', '文学', '投资']
 
 AD_PATTERNS = [
     re.compile(r'在小说阅读器读本章\s*'),
