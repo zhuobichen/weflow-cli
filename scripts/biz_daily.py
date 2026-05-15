@@ -319,10 +319,6 @@ def main():
     articles.sort(key=lambda a: a['timestamp'])
     conn.close()
 
-    # Apply limit
-    if args.limit and args.limit > 0:
-        articles = articles[:args.limit]
-
     # === Incremental dedup: load previous run state ===
     out_dir = Path(OUTPUT_ROOT) / date_str
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -344,6 +340,10 @@ def main():
     articles = new_articles
     if skipped:
         print(f'  （跳过 {skipped} 篇已处理）')
+
+    # Apply limit after dedup
+    if args.limit and args.limit > 0:
+        articles = articles[:args.limit]
 
     print(f'找到 {len(articles)} 篇文章\n')
 
