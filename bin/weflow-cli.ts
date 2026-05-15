@@ -320,7 +320,7 @@ configCmd
   .command('set <key> <value>')
   .description('设置配置项 (dbPath, decryptKey, dbPath3x, decryptKey3x, dataVersion, wxid)')
   .action((key: string, value: string) => {
-    const validKeys = ['dbPath', 'decryptKey', 'dbPath3x', 'decryptKey3x', 'dataVersion', 'wxid', 'ntDbPath', 'ntKey', 'ntSalt', 'contactDbPath', 'contactKey', 'contactSalt']
+    const validKeys = ['dbPath', 'decryptKey', 'dbPath3x', 'decryptKey3x', 'dataVersion', 'wxid', 'ntDbPath', 'ntKey', 'ntSalt', 'contactDbPath', 'contactKey', 'contactSalt', 'vaultRepo', 'aiEngine']
     if (!validKeys.includes(key)) {
       console.log(chalk.red(`无效的配置项: ${key}`))
       console.log(chalk.gray(`可用: ${validKeys.join(', ')}`))
