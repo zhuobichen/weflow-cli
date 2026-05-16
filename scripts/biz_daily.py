@@ -55,7 +55,9 @@ FETCH_DELAY_MIN = 8   # 最小抓取间隔 (秒)
 FETCH_DELAY_MAX = 12  # 最大抓取间隔 (秒)
 
 TOPICS = ['AI', '学术', '新闻', '文学', '投资']
-TOPIC_PROMPT = f"""对文章分类、摘要、打标签。
+TOPIC_PROMPT = f"""对文章分类、摘要、打标签，并评估与读者的相关度。
+
+【读者定位】环境科学研究生，研究方向是计算机与环境的交叉领域（环境模型、大气污染模拟、遥感反演、环境大数据分析、LCA等），关注AI工具如何提升科研效率。
 
 【主题】必须且只能是：{' / '.join(TOPICS)} 中的一个词，不要写其他任何文字。
 
@@ -66,13 +68,20 @@ TOPIC_PROMPT = f"""对文章分类、摘要、打标签。
 - 文学：散文小说/美食旅游/生活随笔/历史文化 → 归文学
 - 学术：严格科研论文/学术期刊/实验室研究/学位论文 → 归学术（公众号文章极少属此类）
 
+【相关度】判断这篇文章对上述读者的实用价值：
+- 高：可直接用于科研（新工具/新方法/数据源/代码库）
+- 中：有启发性，需转化后使用（思路/趋势/跨领域技术）
+- 低：信息性阅读，无直接行动价值（纯新闻/娱乐/文学）
+
 **关键**：
 - 【主题】这一行只写一个词：AI 或 学术 或 新闻 或 文学 或 投资
+- 【相关度】只写：高 / 中 / 低
 - 科技报道、开发者工具、AI产品即使提到Nature/Science也归AI或新闻，不归学术
 - 不确定时选最可能的非学术分类
 
 返回格式（严格）：
 【主题】AI
+【相关度】高
 【标签】tag1, tag2, tag3
 【摘要】2-4句中文总结
 【概念】概念名|说明, 概念名|说明"""
@@ -390,8 +399,9 @@ def main():
                     prompt = TOPIC_PROMPT + f'\n\n标题：{a["title"]}\n来源：{a["account_name"]}\n\n内容：\n{content[:4000]}'
                     response = call_deepseek(prompt, api_key, max_tokens=600)
 
-                    # Parse response: 【主题】xxx 【标签】xxx 【摘要】xxx 【概念】xxx
+                    # Parse response: 【主题】xxx 【相关度】xxx 【标签】xxx 【摘要】xxx 【概念】xxx
                     topic_match = re.search(r'【主题】\s*(.+)', response)
+                    relevance_match = re.search(r'【相关度】\s*(.+)', response)
                     tags_match = re.search(r'【标签】\s*(.+)', response)
                     # Stop summary at next 【tag or end
                     summary_match = re.search(r'【摘要】\s*(.+?)(?=\n【|$)', response, re.DOTALL)
@@ -413,6 +423,22 @@ def main():
                                 a['topic'] = '学术'
                     else:
                         a['topic'] = '学术'
+
+                    # Parse relevance: 高/中/低
+                    if relevance_match:
+                        raw_rel = relevance_match.group(1).strip()
+                        if raw_rel in ['高', '中', '低']:
+                            a['relevance'] = raw_rel
+                        elif '高' in raw_rel:
+                            a['relevance'] = '高'
+                        elif '中' in raw_rel:
+                            a['relevance'] = '中'
+                        elif '低' in raw_rel:
+                            a['relevance'] = '低'
+                        else:
+                            a['relevance'] = '中'
+                    else:
+                        a['relevance'] = '中'
 
                     # Parse tags: comma-separated, clean up
                     if tags_match:
@@ -505,6 +531,7 @@ def main():
                 'source': f'"{a["account_name"]}"',
                 'date': date_str,
                 'topic': topic,
+                'relevance': a.get('relevance', '中'),
                 'tags': tags,
                 'created': date_str,
             }

@@ -212,3 +212,73 @@ def get_db_config(config=None):
         'contact_db': contact_db, 'contact_key': decrypt_lock(contact_key_enc) if contact_key_enc else '',
         'contact_salt': contact_salt,
     }
+
+
+# ====== 用户定位 & 行动建议 ======
+
+DEFAULT_USER_PROFILE = (
+    "你是一名对AI感兴趣的环境科学研究生，研究方向是计算机与环境的交叉领域"
+    "（如环境模型、大气污染模拟、遥感反演、环境大数据分析、LCA生命周期评估等）。"
+    "你关注AI工具如何提升科研效率、环境数据处理新技术、以及交叉领域的学术机会。"
+)
+
+ACTION_PROMPT = """基于以下文章，为读者生成**可落地的行动建议**。
+
+【读者定位】
+{profile}
+
+【文章信息】
+标题：{title}
+来源：{source}
+主题：{topic}
+摘要：{summary}
+
+【正文节选】
+{content}
+
+请根据读者定位，判断这篇文章与他/她的相关性，然后给出建议。严格按以下格式返回：
+
+### 相关度
+（高/中/低，一句话解释原因）
+
+### 行动建议
+- **立即可做**：1-2个今天就能执行的具体动作（如"试用某工具"、"收藏某论文"、"关注某公众号"）
+- **本周计划**：1个本周可以推进的中期动作（如"跑一个demo"、"写一段代码"、"整理一个文献列表"）
+- **长期关注**：1个值得持续跟踪的方向（仅当相关度为高或中时输出）
+
+如果相关度为低，行动建议部分可以简短，重点解释为什么与读者关系不大即可。"""
+
+
+def generate_action_suggestion(title: str, source: str, topic: str,
+                                summary: str, content: str,
+                                api_key: str, profile: str = '',
+                                engine_type: str = 'deepseek',
+                                max_tokens: int = 1500) -> str:
+    """调用 AI 生成个性化行动建议。
+
+    Args:
+        title: 文章标题
+        source: 文章来源（公众号名）
+        topic: 文章主题分类
+        summary: 文章摘要
+        content: 文章正文（节选）
+        api_key: AI API key
+        profile: 用户定位描述（默认使用 DEFAULT_USER_PROFILE）
+        engine_type: AI 引擎类型
+        max_tokens: 最大 token 数
+
+    Returns:
+        AI 生成的行动建议 markdown 文本
+    """
+    if not profile:
+        profile = DEFAULT_USER_PROFILE
+    prompt = ACTION_PROMPT.format(
+        profile=profile,
+        title=title,
+        source=source,
+        topic=topic,
+        summary=summary[:500],
+        content=content[:3000],
+    )
+    engine = create_engine(engine_type, api_key)
+    return engine.chat(prompt, max_tokens=max_tokens)

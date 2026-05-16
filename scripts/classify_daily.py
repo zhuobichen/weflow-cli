@@ -13,7 +13,10 @@ from pathlib import Path
 
 # 公共工具
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _utils import call_deepseek, parse_frontmatter, write_with_frontmatter
+from _utils import (
+    call_deepseek, parse_frontmatter, write_with_frontmatter,
+    DEFAULT_USER_PROFILE, generate_action_suggestion
+)
 
 OUTPUT_ROOT = 'output/biz-daily'
 TOPICS = ['AI', '学术', '新闻', '文学', '投资']
@@ -52,6 +55,88 @@ INTEREST_PROMPT = """对以下AI领域文章生成深度解析：
 （1句话）"""
 
 
+BATCH_ACTION_PROMPT = """你是读者的科研助手。基于以下文章列表，为读者筛选并生成可落地的行动建议。
+
+【读者定位】
+{profile}
+
+【文章列表】
+{articles}
+
+请完成以下任务：
+
+1. **筛选**：只保留对读者有实际落地价值的文章（排除纯新闻、娱乐、广告、无关内容）
+2. **评估**：对每篇保留的文章，判断相关度（高/中）并给出理由
+3. **生成建议**：为每篇保留的文章生成三级行动建议：
+   - **立即可做**：今天就能执行的具体动作
+   - **本周计划**：本周可以推进的中期动作
+   - **长期关注**：值得持续跟踪的方向（仅高相关度时输出）
+
+输出格式要求：
+
+```
+## 📋 今日行动清单（快速浏览）
+- [ ] 动作1（来自：文章标题）
+- [ ] 动作2（来自：文章标题）
+...
+
+---
+
+## 详细建议
+
+### 🔴 高相关度
+
+#### 1. 《文章标题》
+> 来源：公众号名 | 主题：AI/学术
+
+**相关度**：高 — 一句话解释原因
+
+**行动建议**
+- **立即可做**：xxx
+- **本周计划**：xxx
+- **长期关注**：xxx
+
+### 🟡 中相关度
+
+#### 1. 《文章标题》
+...
+```
+
+如果筛选后没有值得建议的文章，直接输出：「今日文章暂无直接可落地的行动建议，建议信息性阅读即可。」"""
+
+
+def generate_batch_action_suggestions(articles_data: list[dict], api_key: str, profile: str = '') -> str:
+    """批量生成行动建议。
+    
+    Args:
+        articles_data: 文章数据列表，每项包含 title, source, topic, summary, content
+        api_key: DeepSeek API key
+        profile: 用户定位描述
+        
+    Returns:
+        格式化的行动建议 markdown 文本
+    """
+    if not profile:
+        profile = DEFAULT_USER_PROFILE
+    
+    # 构建文章列表文本
+    articles_text = []
+    for i, a in enumerate(articles_data, 1):
+        articles_text.append(
+            f"[{i}] 《{a['title']}》\n"
+            f"    来源：{a['source']} | 主题：{a['topic']} | 相关度：{a.get('relevance', '中')}\n"
+            f"    摘要：{a['summary'][:200]}...\n"
+            f"    正文节选：{a['content'][:500]}...\n"
+        )
+    
+    prompt = BATCH_ACTION_PROMPT.format(
+        profile=profile,
+        articles='\n'.join(articles_text)
+    )
+    
+    return call_deepseek(prompt, api_key, max_tokens=4000, timeout=120)
+
+
 def clean_ads(text: str) -> str:
     for pat in AD_PATTERNS:
         text = pat.sub('', text)
@@ -85,11 +170,15 @@ def main():
     parser.add_argument('date_dir', nargs='?', help='日期目录')
     parser.add_argument('--api-key', help='DeepSeek API key')
     parser.add_argument('--interest', default='AI', help='兴趣主题，默认 AI')
+    parser.add_argument('--profile', default='', help='用户定位描述（默认使用环境科学研究生画像）')
+    parser.add_argument('--skip-action', action='store_true', help='跳过行动建议生成')
     args = parser.parse_args()
 
     api_key = args.api_key or os.environ.get('DEEPSEEK_API_KEY', '')
     if not api_key:
         print('[ERROR] 需要 DeepSeek API key'); sys.exit(1)
+    
+    user_profile = args.profile if args.profile else DEFAULT_USER_PROFILE
 
     if args.date_dir:
         base = Path(OUTPUT_ROOT) / args.date_dir
@@ -166,8 +255,78 @@ def main():
             except Exception as e:
                 print(f'  [{i+1}] ERR: {e}')
 
-    # ====== Step 4: Move to topic folders ======
-    print(f'\n=== Step 4: 重建目录 ===')
+    # ====== Step 4: Generate action suggestions (batch) ======
+    if not args.skip_action:
+        print(f'\n=== Step 4: 生成行动建议 ===')
+        # 只处理 AI 和 学术 主题的文章
+        candidate_files = [f for f, t in topic_map.items() if t in ['AI', '学术']]
+        if candidate_files:
+            articles_data = []
+            skipped_articles = []
+            for fpath in candidate_files:
+                with open(fpath, 'r', encoding='utf-8') as f:
+                    content = f.read()
+                
+                fm, body = parse_frontmatter(content)
+                title = fm.get('title', '') if fm else ''
+                source = fm.get('source', '') if fm else ''
+                topic = fm.get('topic', '') if fm else ''
+                relevance = fm.get('relevance', '中') if fm else '中'
+                
+                # 提取摘要
+                summary_match = re.search(r'## AI 摘要\n\n(.+?)(?=\n\n---|\n\n## |\Z)', content, re.DOTALL)
+                summary = summary_match.group(1).strip() if summary_match else ''
+                
+                # 提取正文
+                body_match = re.search(r'## 正文\n\n(.+)', content, re.DOTALL)
+                body_text = body_match.group(1)[:3000] if body_match else content[:3000]
+                
+                articles_data.append({
+                    'title': title,
+                    'source': source,
+                    'topic': topic,
+                    'relevance': relevance,
+                    'summary': summary,
+                    'content': body_text,
+                })
+            
+            # 收集被跳过的文章（新闻/文学/投资类）
+            for fpath, topic in topic_map.items():
+                if topic not in ['AI', '学术']:
+                    with open(fpath, 'r', encoding='utf-8') as f:
+                        content = f.read()
+                    fm, _ = parse_frontmatter(content)
+                    title = fm.get('title', '') if fm else ''
+                    source = fm.get('source', '') if fm else ''
+                    skipped_articles.append({'title': title, 'source': source, 'topic': topic})
+            
+            try:
+                print(f'  候选文章: {len(articles_data)} 篇 (AI/学术)')
+                print(f'  跳过文章: {len(skipped_articles)} 篇 (新闻/文学/投资)')
+                action_content = generate_batch_action_suggestions(articles_data, api_key, user_profile)
+                
+                # 添加被跳过的文章列表
+                if skipped_articles:
+                    action_content += '\n\n---\n\n## 被跳过的文章（主题不符）\n\n'
+                    for a in skipped_articles:
+                        action_content += f"- 《{a['title']}》| 来源：{a['source']} | 主题：{a['topic']}\n"
+                
+                # 写入行动建议文件
+                action_file = base / '行动建议.md'
+                with open(action_file, 'w', encoding='utf-8') as f:
+                    f.write(f'# 行动建议 — {base.name}\n\n')
+                    f.write(f'> 基于定位：{user_profile[:80]}...\n\n')
+                    f.write(action_content)
+                print(f'  ✓ 已生成: {action_file}')
+            except Exception as e:
+                print(f'  [WARN] 行动建议生成失败: {e}')
+        else:
+            print('  无 AI/学术 类文章，跳过行动建议')
+    else:
+        print(f'\n=== Step 4: 跳过行动建议 (--skip-action) ===')
+
+    # ====== Step 5: Move to topic folders ======
+    print(f'\n=== Step 5: 重建目录 ===')
     for topic in TOPICS:
         (base / topic).mkdir(exist_ok=True)
     for fpath, topic in topic_map.items():
@@ -178,8 +337,16 @@ def main():
         except:
             pass
 
-    # ====== Step 5: README ======
-    lines = [f'# 公众号日报 — {base.name}', '', f'共 {len(md_files)} 篇 | 兴趣: {args.interest}', '']
+    # ====== Step 6: README ======
+    action_badge = ' ✅' if (base / '行动建议.md').exists() else ''
+    lines = [
+        f'# 公众号日报 — {base.name}',
+        '',
+        f'共 {len(md_files)} 篇 | 兴趣: {args.interest}',
+        '',
+        f'**[📋 查看行动建议](./行动建议.md){action_badge}** — 基于你的定位生成的可落地建议',
+        ''
+    ]
     for topic in TOPICS:
         files = sorted((base / topic).glob('*.md'))
         if not files: continue
