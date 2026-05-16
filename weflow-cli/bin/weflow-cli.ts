@@ -1188,6 +1188,7 @@ async function showInteractiveMenu() {
   choices.push({ name: '  导出聊天记录', value: 'export' })
   choices.push({ name: '  生成聊天月报', value: 'report' })
   choices.push({ name: '  🧠 提取待办事项', value: 'extract-todos' })
+  choices.push({ name: '  📊 个人信息消费报告', value: 'chat-stats' })
 
   choices.push(new inquirer.Separator('  📰 公众号日报'))
   choices.push({ name: '  生成今日日报', value: 'biz-daily' })
@@ -1310,6 +1311,18 @@ async function showInteractiveMenu() {
     case 'report':
       await runCmd('report', {})
       break
+    case 'chat-stats': {
+      const { period } = await inquirer.prompt([{
+        type: 'select' as any, name: 'period', message: '选择报告周期',
+        choices: [
+          { name: '本周（周一至今）', value: 'week' },
+          { name: '本月', value: 'month' },
+        ],
+        loop: false,
+      }])
+      await runPython('chat_stats.py', '生成个人信息消费报告', `--period ${period}`)
+      break
+    }
     case 'extract-todos': {
       const sessions = await chatService.listSessions(undefined, 50)
       if (sessions.length === 0) { console.log(chalk.gray('无会话')); break }
