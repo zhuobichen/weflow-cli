@@ -223,6 +223,28 @@ async function main() {
           },
         },
       },
+      {
+        name: 'wechat.semantic_search',
+        description: '语义搜索聊天记录和文章（自然语言查询，基于向量相似度）',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            query: { type: 'string', description: '自然语言查询，如"有人推荐过遥感工具吗"' },
+            top_k: { type: 'number', description: '返回数量，默认10' },
+          },
+          required: ['query'],
+        },
+      },
+      {
+        name: 'wechat.build_search_index',
+        description: '构建/更新语义搜索索引（首次使用或增量更新）',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            full: { type: 'boolean', description: '是否全量重建，默认增量更新' },
+          },
+        },
+      },
     ],
   }))
 
@@ -350,6 +372,59 @@ async function main() {
             text += `- ${t.name}: ${t.count} 条\n`
           }
           return { content: [{ type: 'text', text }] }
+        }
+
+        case 'wechat.semantic_search': {
+          const query = String(args.query || '')
+          if (!query) return { content: [{ type: 'text', text: '请提供查询内容' }] }
+          const apiKey = process.env.DEEPSEEK_API_KEY || ''
+          if (!apiKey) return { content: [{ type: 'text', text: '请设置 DEEPSEEK_API_KEY 环境变量' }] }
+          // Direct call to semantic_search.py
+          const script = join(PKG_ROOT, 'scripts', 'semantic_search.py')
+          try {
+            const stdout = execFileSync('python', [script, 'search', query, '--api-key', apiKey, '--top-k', String(args.top_k || 10)], {
+              timeout: 30_000,
+              maxBuffer: 10 * 1024 * 1024,
+              encoding: 'utf-8',
+              env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
+            })
+            const data = JSON.parse(stdout)
+            if (data.error) return { content: [{ type: 'text', text: `错误: ${data.error}` }] }
+            const results = data.results || []
+            if (!results.length) return { content: [{ type: 'text', text: '未找到相关内容' }] }
+            const text = results.map((r: any) => {
+              const score = (r.score * 100).toFixed(1)
+              if (r.type === 'chat') {
+                return `[${score}%] [${r.time}] ${r.talker} > ${r.sender}: ${r.text.slice(0, 150)}`
+              } else {
+                return `[${score}%] [文章] ${r.title} (${r.date}) — ${r.text.slice(0, 100)}`
+              }
+            }).join('\n\n')
+            return { content: [{ type: 'text', text: `语义搜索结果 (共 ${data.total} 条索引):\n\n${text}` }] }
+          } catch (e: any) {
+            return { content: [{ type: 'text', text: `错误: ${e.message}` }] }
+          }
+        }
+
+        case 'wechat.build_search_index': {
+          const apiKey = process.env.DEEPSEEK_API_KEY || ''
+          if (!apiKey) return { content: [{ type: 'text', text: '请设置 DEEPSEEK_API_KEY 环境变量' }] }
+          const script = join(PKG_ROOT, 'scripts', 'semantic_search.py')
+          const cmdArgs = [script, 'build', '--api-key', apiKey]
+          if (args.full) cmdArgs.push('--full')
+          try {
+            const stdout = execFileSync('python', cmdArgs, {
+              timeout: 300_000,
+              maxBuffer: 50 * 1024 * 1024,
+              encoding: 'utf-8',
+              env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
+            })
+            const data = JSON.parse(stdout)
+            if (data.error) return { content: [{ type: 'text', text: `错误: ${data.error}` }] }
+            return { content: [{ type: 'text', text: `索引构建完成: 共 ${data.total} 条, 新增 ${data.new} 条` }] }
+          } catch (e: any) {
+            return { content: [{ type: 'text', text: `错误: ${e.message}` }] }
+          }
         }
 
         default:

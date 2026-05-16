@@ -1189,6 +1189,7 @@ async function showInteractiveMenu() {
   choices.push({ name: '  生成聊天月报', value: 'report' })
   choices.push({ name: '  🧠 提取待办事项', value: 'extract-todos' })
   choices.push({ name: '  📊 个人信息消费报告', value: 'chat-stats' })
+  choices.push({ name: '  🔍 语义搜索', value: 'semantic-search' })
 
   choices.push(new inquirer.Separator('  📰 公众号日报'))
   choices.push({ name: '  生成今日日报', value: 'biz-daily' })
@@ -1321,6 +1322,27 @@ async function showInteractiveMenu() {
         loop: false,
       }])
       await runPython('chat_stats.py', '生成个人信息消费报告', `--period ${period}`)
+      break
+    }
+    case 'semantic-search': {
+      const { action } = await inquirer.prompt([{
+        type: 'select' as any, name: 'action', message: '语义搜索操作',
+        choices: [
+          { name: '🔍 搜索', value: 'search' },
+          { name: '🔨 构建索引', value: 'build' },
+          { name: '🔄 增量更新', value: 'update' },
+        ],
+        loop: false,
+      }])
+      if (action === 'build' || action === 'update') {
+        await runPython('semantic_search.py', '构建索引', `${action} --api-key $env:DEEPSEEK_API_KEY`)
+      } else {
+        const { query } = await inquirer.prompt([{
+          type: 'input', name: 'query', message: '输入搜索内容（自然语言）',
+        }])
+        if (!query.trim()) { console.log(chalk.gray('已取消')); break }
+        await runPython('semantic_search.py', '语义搜索', `search "${query}" --api-key $env:DEEPSEEK_API_KEY`)
+      }
       break
     }
     case 'extract-todos': {
