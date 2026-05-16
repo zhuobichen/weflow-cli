@@ -1148,4 +1148,221 @@ program
         })
     )
 
-program.parse()
+// ==================== Interactive Menu (no arguments) ====================
+async function showInteractiveMenu() {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const configured = configService.isConfigured()
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const hasNtKey = !!configService.get('ntKey')
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const hasLogin = !!configService.get('wechatOcToken')
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const hasVault = !!configService.get('vaultRepo')
+
+  // 首次运行：自动引导初始化
+  if (!configured) {
+    console.log(chalk.cyan('\n👋 欢迎使用 WeFlow CLI！'))
+    console.log(chalk.gray('检测到尚未初始化，让我们开始设置...\n'))
+
+    const { startInit } = await inquirer.prompt([{
+      type: 'confirm',
+      name: 'startInit',
+      message: '是否现在开始初始化（检测微信数据目录并提取密钥）？',
+      default: true,
+    }])
+    if (startInit) {
+      const initCmd = program.commands.find(c => c.name() === 'init')
+      if (initCmd) { await (initCmd as any).action(); return }
+    }
+    console.log(chalk.gray('\n稍后可运行: weflow-cli init\n'))
+    return
+  }
+
+  // 构建菜单选项
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const choices: any[] = []
+
+  choices.push(new inquirer.Separator('  📬 聊天记录'))
+  choices.push({ name: '  查看会话列表', value: 'sessions' })
+  choices.push({ name: '  查看聊天消息', value: 'messages' })
+  choices.push({ name: '  导出聊天记录', value: 'export' })
+  choices.push({ name: '  生成聊天月报', value: 'report' })
+
+  choices.push(new inquirer.Separator('  📰 公众号日报'))
+  choices.push({ name: '  生成今日日报', value: 'biz-daily' })
+  choices.push({ name: '  查看行动建议', value: 'action-suggest' })
+
+  choices.push(new inquirer.Separator('  💬 微信消息'))
+  choices.push({
+    name: `  扫码登录${hasLogin ? chalk.green(' (已登录)') : ''}`,
+    value: 'login-wechat',
+  })
+  choices.push({
+    name: `  监听消息${!hasLogin ? chalk.gray(' (需先登录)') : ''}`,
+    value: 'listen',
+    disabled: !hasLogin ? '请先扫码登录' : undefined,
+  })
+  choices.push({
+    name: `  发送消息${!hasLogin ? chalk.gray(' (需先登录)') : ''}`,
+    value: 'send',
+    disabled: !hasLogin ? '请先扫码登录' : undefined,
+  })
+
+  choices.push(new inquirer.Separator('  📚 知识库'))
+  choices.push({ name: '  初始化 Obsidian Vault', value: 'vault-init' })
+  choices.push({ name: '  编译概念图谱', value: 'wiki-compile' })
+  choices.push({
+    name: `  同步到远端${hasVault ? '' : chalk.gray(' (未配置仓库)')}`,
+    value: 'vault-sync',
+    disabled: !hasVault ? '请先配置 vaultRepo' : undefined,
+  })
+
+  choices.push(new inquirer.Separator('  ⚙️ 系统'))
+  choices.push({ name: '  查看配置', value: 'config-show' })
+  choices.push({ name: '  重新初始化', value: 'init' })
+
+  // 显示状态摘要
+  console.log(chalk.cyan('\n🚀 WeFlow CLI v1.1.0\n'))
+  const statusParts: string[] = []
+  statusParts.push(hasNtKey ? chalk.green('✓ 数据库') : chalk.yellow('○ 数据库'))
+  statusParts.push(hasLogin ? chalk.green('✓ 消息通道') : chalk.gray('○ 消息通道'))
+  statusParts.push(hasVault ? chalk.green('✓ Vault') : chalk.gray('○ Vault'))
+  console.log(chalk.gray(`  状态: ${statusParts.join('  ')}\n`))
+
+  const { action } = await inquirer.prompt([{
+    type: 'select' as any,
+    name: 'action',
+    message: '请选择操作',
+    choices,
+    loop: false,
+  }])
+
+  // 辅助函数：执行命令
+  const runCmd = async (name: string, opts: Record<string, any> = {}) => {
+    const cmd = program.commands.find(c => c.name() === name)
+    if (cmd) await (cmd as any).action(opts)
+  }
+  const runSubCmd = async (parent: string, child: string, opts: Record<string, any> = {}) => {
+    const cmd = program.commands.find(c => c.name() === parent) as any
+    const sub = cmd?.commands?.find((c: any) => c.name() === child)
+    if (sub) await sub.action(opts)
+  }
+  const runPython = async (scriptName: string, label: string) => {
+    const { execFile } = await import('child_process')
+    const { promisify } = await import('util')
+    const execFileAsync = promisify(execFile)
+    const { fileURLToPath } = await import('url')
+    const { dirname } = await import('path')
+    const __filename = fileURLToPath(import.meta.url)
+    const __dirname = dirname(__filename)
+    const pkgRoot = join(__dirname, '..', '..')
+    const script = join(pkgRoot, 'scripts', scriptName)
+    console.log(chalk.cyan(`正在${label}...\n`))
+    try {
+      const { stdout } = await execFileAsync('python', [script], {
+        timeout: 600_000, maxBuffer: 50 * 1024 * 1024,
+        env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
+      })
+      console.log(stdout)
+    } catch (e: any) {
+      console.error(chalk.red(`${label}失败: ${e.message}`))
+    }
+  }
+
+  switch (action) {
+    case 'sessions':
+      await runCmd('sessions')
+      break
+    case 'messages': {
+      const sessions = await chatService.listSessions(undefined, 30)
+      if (sessions.length === 0) { console.log(chalk.gray('无会话')); break }
+      const { talker } = await inquirer.prompt([{
+        type: 'select' as any, name: 'talker', message: '选择会话',
+        choices: sessions.map((s, i) => ({
+          name: `${String(i + 1).padStart(3)}. ${s.displayName || s.username}  ${chalk.gray((s.summary || '').slice(0, 30))}`,
+          value: s.username,
+        })),
+        loop: false,
+      }])
+      await runCmd('messages', { talker, limit: '50', offset: '0' })
+      break
+    }
+    case 'export': {
+      const sessions = await chatService.listSessions(undefined, 30)
+      if (sessions.length === 0) { console.log(chalk.gray('无会话')); break }
+      const { talker } = await inquirer.prompt([{
+        type: 'select' as any, name: 'talker', message: '选择要导出的会话',
+        choices: sessions.map((s, i) => ({
+          name: `${String(i + 1).padStart(3)}. ${s.displayName || s.username}`,
+          value: s.username,
+        })),
+        loop: false,
+      }])
+      const { format } = await inquirer.prompt([{
+        type: 'select' as any, name: 'format', message: '选择导出格式',
+        choices: ['html', 'json', 'txt', 'excel'], loop: false,
+      }])
+      await runCmd('export', { talker, format, output: './output' })
+      break
+    }
+    case 'report':
+      await runCmd('report', {})
+      break
+    case 'biz-daily':
+      await runPython('biz_daily.py', '生成今日日报')
+      break
+    case 'action-suggest':
+      await runPython('classify_daily.py', '生成行动建议')
+      break
+    case 'login-wechat':
+      await runCmd('login-wechat', {})
+      break
+    case 'listen':
+      await runCmd('listen', {})
+      break
+    case 'send': {
+      const sessions = await chatService.listSessions(undefined, 30)
+      if (sessions.length === 0) { console.log(chalk.gray('无会话')); break }
+      const { talker } = await inquirer.prompt([{
+        type: 'select' as any, name: 'talker', message: '选择接收人',
+        choices: sessions.map((s, i) => ({
+          name: `${String(i + 1).padStart(3)}. ${s.displayName || s.username}`,
+          value: s.username,
+        })),
+        loop: false,
+      }])
+      const { message } = await inquirer.prompt([{
+        type: 'input', name: 'message', message: '输入消息内容',
+      }])
+      if (!message.trim()) { console.log(chalk.gray('已取消')); break }
+      await runCmd('send', { talker, message })
+      break
+    }
+    case 'vault-init':
+      await runSubCmd('vault', 'init', {})
+      break
+    case 'wiki-compile':
+      await runSubCmd('wiki', 'compile', {})
+      break
+    case 'vault-sync':
+      await runSubCmd('vault', 'sync', {})
+      break
+    case 'config-show':
+      await runSubCmd('config', 'show')
+      break
+    case 'init':
+      await runCmd('init')
+      break
+  }
+}
+
+// 检测是否无参数启动（显示交互式菜单）
+const cliArgs = process.argv.slice(2)
+if (cliArgs.length === 0) {
+  showInteractiveMenu().catch((e) => {
+    console.error(chalk.red(`\n错误: ${e.message}`))
+    process.exit(1)
+  })
+} else {
+  program.parse()
+}
