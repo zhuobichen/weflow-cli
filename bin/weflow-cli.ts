@@ -1148,6 +1148,165 @@ program
         })
     )
 
+  // chat-stats
+  program
+    .command('chat-stats')
+    .description('微信个人信息消费报告（支付 + 转账）')
+    .option('--period <week|month>', '报告周期', 'week')
+    .option('--month <YYYY-MM>', '指定月份（覆盖 --period）')
+    .option('-o, --output <path>', '输出路径')
+    .action(async (opts) => {
+      const { execFile } = await import('child_process')
+      const { promisify } = await import('util')
+      const execFileAsync = promisify(execFile)
+      const { fileURLToPath } = await import('url')
+      const { dirname } = await import('path')
+      const __filename = fileURLToPath(import.meta.url)
+      const __dirname = dirname(__filename)
+      const pkgRoot = join(__dirname, '..', '..')
+      const script = join(pkgRoot, 'scripts', 'chat_stats.py')
+      const args: string[] = [script, '--period', opts.period]
+      if (opts.month) { args.push('--month', opts.month) }
+      if (opts.output) { args.push('--output', opts.output) }
+      try {
+        const { stdout } = await execFileAsync('python', args, {
+          timeout: 600_000, maxBuffer: 50 * 1024 * 1024,
+          env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
+        })
+        console.log(stdout)
+      } catch (e: any) {
+        console.error(chalk.red(`\n✗ 失败: ${e.message}`))
+        process.exit(1)
+      }
+    })
+
+  // extract-todos
+  program
+    .command('todos')
+    .description('从聊天记录提取待办事项')
+    .option('--talker <联系人>', '联系人名称')
+    .option('--days <n>', '扫描最近多少天', '7')
+    .option('--api-key <key>', 'DeepSeek API key')
+    .action(async (opts) => {
+      if (!opts.talker) {
+        console.log(chalk.red('请指定联系人: weflow-cli todos --talker <昵称>'))
+        process.exit(1)
+      }
+      const { execFile } = await import('child_process')
+      const { promisify } = await import('util')
+      const execFileAsync = promisify(execFile)
+      const { fileURLToPath } = await import('url')
+      const { dirname } = await import('path')
+      const __filename = fileURLToPath(import.meta.url)
+      const __dirname = dirname(__filename)
+      const pkgRoot = join(__dirname, '..', '..')
+      const script = join(pkgRoot, 'scripts', 'extract_todos.py')
+      const args: string[] = [script, '--talker', opts.talker, '--days', opts.days]
+      if (opts.apiKey) args.push('--api-key', opts.apiKey)
+      try {
+        const { stdout } = await execFileAsync('python', args, {
+          timeout: 120_000, maxBuffer: 10 * 1024 * 1024,
+          env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
+        })
+        console.log(stdout)
+      } catch (e: any) {
+        console.error(chalk.red(`\n✗ 失败: ${e.message}`))
+        process.exit(1)
+      }
+    })
+
+  // generate-review
+  program
+    .command('review')
+    .description('生成 AI 学习日报')
+    .option('--date <YYYY-MM-DD>', '日期')
+    .option('--api-key <key>', 'DeepSeek API key')
+    .action(async (opts) => {
+      const { execFile } = await import('child_process')
+      const { promisify } = await import('util')
+      const execFileAsync = promisify(execFile)
+      const { fileURLToPath } = await import('url')
+      const { dirname } = await import('path')
+      const __filename = fileURLToPath(import.meta.url)
+      const __dirname = dirname(__filename)
+      const pkgRoot = join(__dirname, '..', '..')
+      const script = join(pkgRoot, 'scripts', 'generate_review.py')
+      const args: string[] = [script]
+      if (opts.date) args.push('--date', opts.date)
+      if (opts.apiKey) args.push('--api-key', opts.apiKey)
+      try {
+        const { stdout } = await execFileAsync('python', args, {
+          timeout: 120_000, maxBuffer: 10 * 1024 * 1024,
+          env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
+        })
+        console.log(stdout)
+      } catch (e: any) {
+        console.error(chalk.red(`\n✗ 失败: ${e.message}`))
+        process.exit(1)
+      }
+    })
+
+  // semantic-search
+  program
+    .command('search')
+    .description('语义搜索知识库（聊天记录 + 文章）')
+    .argument('<query>', '搜索关键词')
+    .option('--top-k <n>', '返回数量', '10')
+    .option('--api-key <key>', 'DeepSeek API key')
+    .action(async (query, opts) => {
+      const { execFile } = await import('child_process')
+      const { promisify } = await import('util')
+      const execFileAsync = promisify(execFile)
+      const { fileURLToPath } = await import('url')
+      const { dirname } = await import('path')
+      const __filename = fileURLToPath(import.meta.url)
+      const __dirname = dirname(__filename)
+      const pkgRoot = join(__dirname, '..', '..')
+      const script = join(pkgRoot, 'scripts', 'semantic_search.py')
+      const args: string[] = [script, 'search', query, '--top-k', opts.topK]
+      if (opts.apiKey) args.push('--api-key', opts.apiKey)
+      try {
+        const { stdout } = await execFileAsync('python', args, {
+          timeout: 60_000, maxBuffer: 10 * 1024 * 1024,
+          env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
+        })
+        console.log(stdout)
+      } catch (e: any) {
+        console.error(chalk.red(`\n✗ 搜索失败: ${e.message}`))
+        process.exit(1)
+      }
+    })
+
+  program
+    .command('search-index')
+    .description('构建语义搜索索引')
+    .option('--full', '全量重建')
+    .option('--api-key <key>', 'DeepSeek API key')
+    .action(async (opts) => {
+      const { execFile } = await import('child_process')
+      const { promisify } = await import('util')
+      const execFileAsync = promisify(execFile)
+      const { fileURLToPath } = await import('url')
+      const { dirname } = await import('path')
+      const __filename = fileURLToPath(import.meta.url)
+      const __dirname = dirname(__filename)
+      const pkgRoot = join(__dirname, '..', '..')
+      const script = join(pkgRoot, 'scripts', 'semantic_search.py')
+      const args: string[] = [script, 'build']
+      if (opts.full) args.push('--full')
+      if (opts.apiKey) args.push('--api-key', opts.apiKey)
+      try {
+        const { stdout } = await execFileAsync('python', args, {
+          timeout: 300_000, maxBuffer: 10 * 1024 * 1024,
+          env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
+        })
+        console.log(stdout)
+      } catch (e: any) {
+        console.error(chalk.red(`\n✗ 失败: ${e.message}`))
+        process.exit(1)
+      }
+    })
+
 // ==================== Interactive Menu (no arguments) ====================
 async function showInteractiveMenu() {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1216,6 +1375,11 @@ async function showInteractiveMenu() {
     value: 'vault-sync',
     disabled: !hasVault ? '请先配置 vaultRepo' : undefined,
   })
+
+  choices.push(new inquirer.Separator('  📊 统计 & 报告'))
+  choices.push({ name: '  📊 个人信息消费报告', value: 'chat-stats' })
+  choices.push({ name: '  🧠 提取待办事项', value: 'extract-todos' })
+  choices.push({ name: '  📝 AI 学习日报', value: 'generate-review' })
 
   choices.push(new inquirer.Separator('  ⚙️ 系统'))
   choices.push({ name: '  查看配置', value: 'config-show' })
@@ -1349,6 +1513,26 @@ async function showInteractiveMenu() {
       break
     case 'config-show':
       await runSubCmd('config', 'show')
+      break
+    case 'chat-stats':
+      await runCmd('chat-stats', { period: 'week' })
+      break
+    case 'extract-todos': {
+      const sessions = await chatService.listSessions(undefined, 30)
+      if (sessions.length === 0) { console.log(chalk.gray('无会话')); break }
+      const { talker } = await inquirer.prompt([{
+        type: 'select' as any, name: 'talker', message: '选择联系人',
+        choices: sessions.map((s, i) => ({
+          name: `${String(i + 1).padStart(3)}. ${s.displayName || s.username}`,
+          value: s.displayName || s.username,
+        })),
+        loop: false,
+      }])
+      await runCmd('todos', { talker, days: '7' })
+      break
+    }
+    case 'generate-review':
+      await runCmd('review', {})
       break
     case 'init':
       await runCmd('init')
