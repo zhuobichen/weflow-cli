@@ -54,7 +54,13 @@ def get_name_map(contact_db, contact_key, contact_salt):
 
 
 def get_own_wxid(nt_db, nt_key, nt_salt):
-    """Get own wxid from UserInfo table."""
+    """Get own wxid — prefer config, fallback to UserInfo table."""
+    # Priority 1: config wxid (strip _xxxx suffix)
+    config = load_config()
+    wxid = config.get('wxid', '')
+    if wxid:
+        return wxid
+    # Priority 2: UserInfo table
     try:
         conn = open_db(nt_db, nt_key, nt_salt)
         c = conn.cursor()
@@ -106,6 +112,11 @@ def collect_chat_stats(conn, start_ts, end_ts, name_map, own_wxid):
         c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'Msg_%'")
         sessions = [r[0] for r in c.fetchall()]
 
+    # Build sender_id → username map from Name2Id
+    c.execute("SELECT rowid, user_name FROM Name2Id")
+    sender_id_map = {r[0]: r[1] for r in c.fetchall()}
+    own_wxid_base = own_wxid.rsplit('_', 1)[0] if own_wxid and '_' in own_wxid else ''
+
     total_sent = 0
     total_recv = 0
     talker_stats = Counter()  # talker -> total messages
@@ -134,12 +145,11 @@ def collect_chat_stats(conn, start_ts, end_ts, name_map, own_wxid):
 
                 is_self = False
                 if own_wxid:
-                    username = sender if sender else talker
-                    is_self = (username == own_wxid)
-                    if not is_self:
-                        p = own_wxid.rsplit('_', 1)
-                        if len(p) == 2 and len(p[1]) == 4 and p[1].isalnum():
-                            is_self = (username == p[0])
+                    # Resolve real_sender_id (int) → username via Name2Id
+                    username = sender_id_map.get(sender, '') if isinstance(sender, int) else str(sender)
+                    is_self = (username == own_wxid or username == own_wxid_base)
+                    if not is_self and username:
+                        is_self = (username == talker)  # sent by self in self-chat
 
                 if is_self:
                     total_sent += 1
@@ -239,7 +249,73 @@ def collect_biz_stats(biz_db, biz_key, biz_salt, start_ts, end_ts, name_map):
 WEEKDAY_NAMES = ['周一', '周二', '周三', '周四', '周五', '周六', '周日']
 
 
-def format_report(chat_stats, biz_stats, period_label, start_date, end_date):
+def extract_payment_totals(biz_db, biz_key, biz_salt, start_ts, end_ts):
+    """Scan biz_message_0.db for 微信支付 transaction amounts."""
+    import hashlib as _hashlib, re as _re
+    try:
+        biz_conn = open_db(biz_db, biz_key, biz_salt)
+    except:
+        return []
+    c = biz_conn.cursor()
+
+    # Find 微信支付 account
+    c.execute("SELECT user_name FROM Name2Id WHERE user_name LIKE 'gh_%' ORDER BY user_name")
+    payee = None
+    for r in c.fetchall():
+        tbl = f"Msg_{_hashlib.md5(r[0].encode()).hexdigest()}"
+        try:
+            c.execute(f"SELECT message_content FROM \"{tbl}\" LIMIT 1")
+            row = c.fetchone()
+            if row and row[0]:
+                content = row[0]
+                if isinstance(content, bytes):
+                    try:
+                        import zstandard
+                        dctx = zstandard.ZstdDecompressor()
+                        content = dctx.decompress(content).decode('utf-8', errors='ignore')
+                    except:
+                        content = content.decode('utf-8', errors='ignore')[:200]
+                if '¥' in (content or ''):
+                    payee = r[0]
+                    break
+        except:
+            pass
+
+    if not payee:
+        biz_conn.close()
+        return []
+
+    tbl = f"Msg_{_hashlib.md5(payee.encode()).hexdigest()}"
+    try:
+        c.execute(f"SELECT create_time, message_content FROM \"{tbl}\" WHERE create_time >= ? AND create_time < ? ORDER BY create_time",
+                  (start_ts, end_ts))
+        payments = []
+        for ts, content in c.fetchall():
+            if isinstance(content, bytes):
+                try:
+                    import zstandard
+                    dctx = zstandard.ZstdDecompressor()
+                    text = dctx.decompress(content).decode('utf-8', errors='ignore')
+                except:
+                    text = content.decode('utf-8', errors='ignore')[:200]
+            else:
+                text = str(content) if content else ''
+
+            amounts = _re.findall(r'¥(\d+\.?\d*)', text)
+            if amounts:
+                dt = datetime.fromtimestamp(ts, tz=timezone(timedelta(hours=8)))
+                payments.append({
+                    'time': dt.strftime('%m-%d %H:%M'),
+                    'amount': sum(float(a) for a in amounts),
+                })
+        biz_conn.close()
+        return payments
+    except:
+        biz_conn.close()
+        return []
+
+
+def format_report(chat_stats, biz_stats, payments, period_label, start_date, end_date):
     """Generate markdown report."""
     lines = [
         f'# 📊 微信个人信息消费报告',
@@ -339,6 +415,9 @@ def format_report(chat_stats, biz_stats, period_label, start_date, end_date):
     d2 = datetime.strptime(end_date, '%Y-%m-%d') if isinstance(end_date, str) else end_date
     avg_per_day = total_msgs / max(1, (d2 - d1).days)
     lines.append(f'- 📊 日均消息量：**{avg_per_day:.0f} 条**')
+    if payments:
+        total_spend = sum(p['amount'] for p in payments)
+        lines.append(f'- 💰 微信支付：**¥{total_spend:.2f}**（{len(payments)} 笔交易）')
     if chat_stats['total_sent'] > 0 and chat_stats['total_recv'] > 0:
         ratio = chat_stats['total_sent'] / chat_stats['total_recv']
         if ratio > 1.2:
@@ -423,10 +502,19 @@ def main():
     print(f'  文章: {biz_stats["total_articles"]:,} 篇')
     print(f'  公众号: {len(biz_stats["account_stats"])} 个')
 
+    # Collect payment data from biz database
+    payments = extract_payment_totals(
+        keys['biz_db'], keys['biz_key'], keys['biz_salt'],
+        start_ts, end_ts
+    )
+    if payments:
+        total = sum(p['amount'] for p in payments)
+        print(f'  微信支付: {len(payments)} 笔, ¥{total:.2f}')
+
     # Generate report
     print(f'\n生成报告...')
     report = format_report(
-        chat_stats, biz_stats, period_label,
+        chat_stats, biz_stats, payments, period_label,
         start_date.strftime('%Y-%m-%d'), now.strftime('%Y-%m-%d')
     )
 
