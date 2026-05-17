@@ -301,15 +301,31 @@ def extract_payment_totals(biz_db, biz_key, biz_salt, start_ts, end_ts):
             else:
                 text = str(content) if content else ''
 
-            # Only extract from the first <title> tag (duplicate in template area)
-            title_match = _re.search(r'<title><!\[CDATA\[.*?¥(\d+\.?\d*)]]></title>', text)
+            # Extract amount from first <title> (duplicate in template area)
+            title_match = _re.search(r'<title><!\[CDATA\[(.*?)\]\]></title>', text)
             if title_match:
-                amt = float(title_match.group(1))
-                dt = datetime.fromtimestamp(ts, tz=timezone(timedelta(hours=8)))
-                payments.append({
-                    'time': dt.strftime('%m-%d %H:%M'),
-                    'amount': amt,
-                })
+                title_text = title_match.group(1)
+                amt_match = _re.search(r'¥(\d+\.?\d*)', title_text)
+                if amt_match:
+                    amt = float(amt_match.group(1))
+                    # Get payment method from <des> (e.g. "使用建设银行储蓄卡支付￥50.00")
+                    desc = ''
+                    des_match = _re.search(r'<des><!\[CDATA\[(.*?)\]\]></des>', text)
+                    if des_match:
+                        raw = des_match.group(1)
+                        raw = _re.sub(r'￥?\d+\.?\d*', '', raw)   # remove amount
+                        raw = _re.sub(r'\(\d+\)', '', raw)         # remove card number
+                        raw = _re.sub(r'\(\)', '', raw)            # remove empty parens
+                        raw = _re.sub(r'\s+', ' ', raw).strip()    # collapse whitespace
+                        desc = raw
+                    if not desc:
+                        desc = '—'
+                    dt = datetime.fromtimestamp(ts, tz=timezone(timedelta(hours=8)))
+                    payments.append({
+                        'time': dt.strftime('%m-%d %H:%M'),
+                        'amount': amt,
+                        'desc': desc,
+                    })
         biz_conn.close()
         return payments
     except:
@@ -442,11 +458,11 @@ def format_report(chat_stats, biz_stats, payments, period_label, start_date, end
         total_spend = sum(p['amount'] for p in payments)
         lines.append(f'> 共 {len(payments)} 笔 | 合计 ¥{total_spend:.2f}')
         lines.append('')
-        lines.append('| 时间 | 金额 |')
-        lines.append('|------|------|')
-        # Sort by amount descending
+        lines.append('| 时间 | 金额 | 说明 |')
+        lines.append('|------|------|------|')
         for p in sorted(payments, key=lambda x: -x['amount']):
-            lines.append(f'| {p["time"]} | ¥{p["amount"]:.2f} |')
+            desc = p.get('desc', '')
+            lines.append(f'| {p["time"]} | ¥{p["amount"]:.2f} | {desc} |')
         lines.append('')
 
     return '\n'.join(lines)
