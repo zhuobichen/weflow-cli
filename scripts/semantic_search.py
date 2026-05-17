@@ -304,28 +304,73 @@ def build_index(api_key: str, full: bool = False):
     }
 
 
+def keyword_search(query: str, top_k: int = 10):
+    """Simple keyword fallback: scan articles + messages for keyword matches."""
+    results = []
+    keywords = query.lower().split()
+
+    # Scan biz-daily articles
+    biz_dir = Path('output/biz-daily')
+    if biz_dir.exists():
+        for md_file in sorted(biz_dir.rglob('*.md'), reverse=True):
+            if md_file.name == 'README.md' or md_file.name.startswith('.'):
+                continue
+            try:
+                content = md_file.read_text(encoding='utf-8')[:5000]
+            except:
+                continue
+            score = sum(content.lower().count(kw) for kw in keywords)
+            if score > 0:
+                title = content.split('\n')[0].lstrip('# ').strip() if content.startswith('#') else md_file.stem
+                results.append({
+                    'title': title,
+                    'source': str(md_file.relative_to(biz_dir)),
+                    'score': score,
+                    'text': content[:300].strip(),
+                })
+
+    # Scan chat messages from mcp_bridge
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        from mcp_bridge import search_messages as _search_msg
+        msg_results = _search_msg(query, 50)
+        for r in msg_results.get('results', [])[:top_k]:
+            results.append({
+                'title': f"[{r.get('time','')}] {r.get('talker','')} > {r.get('sender','')}",
+                'source': '微信聊天',
+                'score': len(query),
+                'text': r.get('content', '')[:200],
+            })
+    except:
+        pass
+
+    results.sort(key=lambda x: -x['score'])
+    return results[:top_k]
+
+
 def search(query: str, api_key: str, top_k: int = 10):
-    """Semantic search."""
-    if not VECTORS_FILE.exists() or not META_FILE.exists():
-        return {"error": "索引不存在，请先运行 build"}
+    """Semantic search with keyword fallback."""
+    # Try embedding-based search first
+    if VECTORS_FILE.exists() and META_FILE.exists():
+        try:
+            vectors = np.load(VECTORS_FILE)
+            meta = json.loads(META_FILE.read_text(encoding='utf-8'))
+            query_embeddings = get_embeddings([query], api_key)
+            if query_embeddings and not all(v == 0 for v in query_embeddings[0]):
+                query_vec = np.array(query_embeddings[0], dtype=np.float32)
+                query_vec = query_vec / np.linalg.norm(query_vec)
+                similarities = np.dot(vectors, query_vec)
+                top_indices = np.argsort(similarities)[::-1][:top_k]
+                results = []
+                for idx in top_indices:
+                    item = meta[idx]
+                    results.append({**item, 'score': float(similarities[idx])})
+                return results
+        except:
+            pass
 
-    # Load index
-    vectors = np.load(VECTORS_FILE)
-    meta = json.loads(META_FILE.read_text(encoding='utf-8'))
-
-    # Get query embedding
-    query_embeddings = get_embeddings([query], api_key)
-    if not query_embeddings:
-        return {"error": "Embedding 生成失败"}
-
-    query_vec = np.array(query_embeddings[0], dtype=np.float32)
-    query_vec = query_vec / np.linalg.norm(query_vec)
-
-    # Cosine similarity (vectors already normalized)
-    similarities = np.dot(vectors, query_vec)
-
-    # Top K
-    top_indices = np.argsort(similarities)[::-1][:top_k]
+    # Fallback: keyword search
+    return keyword_search(query, top_k)
 
     results = []
     for idx in top_indices:
