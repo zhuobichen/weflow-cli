@@ -333,7 +333,80 @@ def extract_payment_totals(biz_db, biz_key, biz_salt, start_ts, end_ts):
         return []
 
 
-def format_report(chat_stats, biz_stats, payments, period_label, start_date, end_date):
+def extract_transfers(nt_db, nt_key, nt_salt, start_ts, end_ts, name_map, own_wxid):
+    """Scan message_0.db for 微信转账 records (type 8589934592049)."""
+    import hashlib as _hashlib, re as _re
+    try:
+        conn = open_db(nt_db, nt_key, nt_salt)
+    except:
+        return []
+    c = conn.cursor()
+
+    # Build sender_id → username map
+    c.execute("SELECT rowid, user_name FROM Name2Id")
+    sender_map = {r[0]: r[1] for r in c.fetchall()}
+
+    c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'Msg_%'")
+    tables = [r[0] for r in c.fetchall()]
+
+    transfers = []
+    # First pass: collect all records into {key: {send_record, recv_record}}
+    raw = {}
+
+    for tbl in tables:
+        try:
+            c.execute(f"SELECT create_time, message_content, real_sender_id FROM \"{tbl}\" WHERE local_type = 8589934592049 AND create_time >= ? AND create_time < ?",
+                      (start_ts, end_ts))
+            for ct, content, sid in c.fetchall():
+                if isinstance(content, bytes):
+                    try:
+                        import zstandard
+                        dctx = zstandard.ZstdDecompressor()
+                        text = dctx.decompress(content).decode('utf-8', errors='ignore')
+                    except:
+                        text = content.decode('utf-8', errors='ignore')[:500]
+                else:
+                    text = str(content) if content else ''
+
+                amt_match = _re.search(r'收到转账(\d+\.?\d*)元', text)
+                if not amt_match or '转账' not in text:
+                    continue
+
+                amt = float(amt_match.group(1))
+                sender_wxid = sender_map.get(sid, str(sid))
+                is_send = (sender_wxid == own_wxid or sender_wxid == own_wxid.rsplit('_', 1)[0])
+                dt = datetime.fromtimestamp(ct, tz=timezone(timedelta(hours=8)))
+                key = (dt.strftime('%m-%d %H:%M'), amt)
+
+                if key not in raw:
+                    raw[key] = {}
+                if is_send:
+                    raw[key]['send'] = (sender_wxid, ct)
+                else:
+                    raw[key]['recv'] = (sender_wxid, ct)
+        except:
+            pass
+
+    # Second pass: merge pairs into transfer records
+    for key, pair in raw.items():
+        time_str, amt = key
+        if 'send' in pair and 'recv' in pair:
+            # User sent to contact
+            contact_wxid = pair['recv'][0]
+            contact_name = name_map.get(contact_wxid, contact_wxid)
+            transfers.append({'time': time_str, 'amount': amt, 'direction': '发出', 'contact': contact_name})
+        elif 'recv' in pair:
+            # Contact sent to user (no matching send record from user)
+            contact_wxid = pair['recv'][0]
+            if contact_wxid != own_wxid:
+                contact_name = name_map.get(contact_wxid, contact_wxid)
+                transfers.append({'time': time_str, 'amount': amt, 'direction': '收到', 'contact': contact_name})
+
+    conn.close()
+    return transfers
+
+
+def format_report(chat_stats, biz_stats, payments, transfers, period_label, start_date, end_date):
     """Generate markdown report."""
     lines = [
         f'# 📊 微信个人信息消费报告',
@@ -465,6 +538,42 @@ def format_report(chat_stats, biz_stats, payments, period_label, start_date, end
             lines.append(f'| {p["time"]} | ¥{p["amount"]:.2f} | {desc} |')
         lines.append('')
 
+    # === Transfer Details ===
+    if transfers:
+        lines.append('## 💸 微信转账')
+        lines.append('')
+        total_out = sum(t['amount'] for t in transfers if t['direction'] == '发出')
+        total_in = sum(t['amount'] for t in transfers if t['direction'] == '收到')
+        lines.append(f'> 共 {len(transfers)} 笔 | 收到 ¥{total_in:.2f} | 发出 ¥{total_out:.2f}')
+        lines.append('')
+        lines.append('| 日期 | 方向 | 金额 | 对方 |')
+        lines.append('|------|------|------|------|')
+        for t in sorted(transfers, key=lambda x: x['time']):
+            dir_icon = '←' if t['direction'] == '收到' else '→'
+            lines.append(f'| {t["time"]} | {dir_icon} {t["direction"]} | ¥{t["amount"]:.2f} | {t["contact"]} |')
+        lines.append('')
+
+    # === 收支总览 ===
+    total_pay = sum(p['amount'] for p in payments) if payments else 0
+    total_in = sum(t['amount'] for t in transfers if t['direction'] == '收到') if transfers else 0
+    total_out = sum(t['amount'] for t in transfers if t['direction'] == '发出') if transfers else 0
+    if total_pay or total_in or total_out:
+        lines.append('## 📊 收支总览')
+        lines.append('')
+        net = total_in - total_pay - total_out
+        lines.append(f'| 收入 | 支出 | 净额 |')
+        lines.append(f'|------|------|------|')
+        income_str = f'转账收到 ¥{total_in:.2f}' if total_in else '—'
+        expense_parts = []
+        if total_pay:
+            expense_parts.append(f'消费 ¥{total_pay:.2f}')
+        if total_out:
+            expense_parts.append(f'转出 ¥{total_out:.2f}')
+        expense_str = ' + '.join(expense_parts) if expense_parts else '—'
+        sign = '+' if net >= 0 else ''
+        lines.append(f'| {income_str} | {expense_str} | {sign}¥{net:.2f} |')
+        lines.append('')
+
     return '\n'.join(lines)
 
 
@@ -553,10 +662,18 @@ def main():
         total = sum(p['amount'] for p in payments)
         print(f'  微信支付: {len(payments)} 笔, ¥{total:.2f}')
 
+    # Collect transfer data
+    print(f'\n统计转账...')
+    transfers = extract_transfers(nt_db, nt_key, nt_salt, start_ts, end_ts, name_map, own_wxid)
+    total_in = sum(t['amount'] for t in transfers if t['direction'] == '收到')
+    total_out = sum(t['amount'] for t in transfers if t['direction'] == '发出')
+    if transfers:
+        print(f'  转账: {len(transfers)} 笔 | 收到 ¥{total_in:.2f} | 发出 ¥{total_out:.2f}')
+
     # Generate report
     print(f'\n生成报告...')
     report = format_report(
-        chat_stats, biz_stats, payments, period_label,
+        chat_stats, biz_stats, payments, transfers, period_label,
         start_date.strftime('%Y-%m-%d'), end_date.strftime('%Y-%m-%d')
     )
 
