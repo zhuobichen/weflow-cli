@@ -390,13 +390,23 @@ def extract_transfers(nt_db, nt_key, nt_salt, start_ts, end_ts, name_map, own_wx
     # Second pass: merge pairs into transfer records
     for key, pair in raw.items():
         time_str, amt = key
+        send_time = pair.get('send', (None, 0))[1] if 'send' in pair else 0
+        recv_time = pair.get('recv', (None, 0))[1] if 'recv' in pair else 0
+
         if 'send' in pair and 'recv' in pair:
-            # User sent to contact
-            contact_wxid = pair['recv'][0]
-            contact_name = name_map.get(contact_wxid, contact_wxid)
-            transfers.append({'time': time_str, 'amount': amt, 'direction': '发出', 'contact': contact_name})
+            # Both sides exist: order determines direction
+            if send_time < recv_time:
+                # User sent first → 发出
+                contact_wxid = pair['recv'][0]
+                contact_name = name_map.get(contact_wxid, contact_wxid)
+                transfers.append({'time': time_str, 'amount': amt, 'direction': '发出', 'contact': contact_name})
+            else:
+                # Contact sent first → 收到
+                contact_wxid = pair['recv'][0]
+                if contact_wxid != own_wxid:
+                    contact_name = name_map.get(contact_wxid, contact_wxid)
+                    transfers.append({'time': time_str, 'amount': amt, 'direction': '收到', 'contact': contact_name})
         elif 'recv' in pair:
-            # Contact sent to user (no matching send record from user)
             contact_wxid = pair['recv'][0]
             if contact_wxid != own_wxid:
                 contact_name = name_map.get(contact_wxid, contact_wxid)
