@@ -458,24 +458,34 @@ def main():
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')
     parser = argparse.ArgumentParser(description='微信个人信息消费报告')
     parser.add_argument('--period', choices=['week', 'month'], default='week', help='报告周期（默认 week）')
+    parser.add_argument('--month', help='指定月份 YYYY-MM（覆盖 --period）')
     parser.add_argument('--output', help='输出文件路径')
     args = parser.parse_args()
 
     tz = timezone(timedelta(hours=8))
     now = datetime.now(tz)
 
-    if args.period == 'week':
-        # 本周（周一到今天）
+    if args.month:
+        # Specified month
+        y, m = args.month.split('-')
+        start_date = datetime(int(y), int(m), 1, tzinfo=tz)
+        if int(m) == 12:
+            end_date = datetime(int(y) + 1, 1, 1, tzinfo=tz)
+        else:
+            end_date = datetime(int(y), int(m) + 1, 1, tzinfo=tz)
+        period_label = f'月报 — {args.month}'
+    elif args.period == 'week':
         days_since_monday = now.weekday()
         start_date = (now - timedelta(days=days_since_monday)).replace(hour=0, minute=0, second=0, microsecond=0)
-        period_label = f'周报 — {start_date.strftime("%Y-%m-%d")} ~ {now.strftime("%Y-%m-%d")}'
+        end_date = now
+        period_label = f'周报 — {start_date.strftime("%Y-%m-%d")} ~ {end_date.strftime("%Y-%m-%d")}'
     else:
-        # 本月
         start_date = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        end_date = now
         period_label = f'月报 — {now.strftime("%Y-%m")}'
 
     start_ts = int(start_date.timestamp())
-    end_ts = int(now.timestamp())
+    end_ts = int(end_date.timestamp())
 
     print(f'=== 微信个人信息消费报告 ===')
     print(f'周期: {period_label}')
@@ -531,11 +541,12 @@ def main():
     print(f'\n生成报告...')
     report = format_report(
         chat_stats, biz_stats, payments, period_label,
-        start_date.strftime('%Y-%m-%d'), now.strftime('%Y-%m-%d')
+        start_date.strftime('%Y-%m-%d'), end_date.strftime('%Y-%m-%d')
     )
 
     # Save
-    output_path = args.output or os.path.join(OUTPUT_ROOT, f'微信报告_{args.period}.md')
+    suffix = args.month.replace('-', '') if args.month else args.period
+    output_path = args.output or os.path.join(OUTPUT_ROOT, f'微信报告_{suffix}.md')
     os.makedirs(os.path.dirname(output_path) or '.', exist_ok=True)
     with open(output_path, 'w', encoding='utf-8') as f:
         f.write(report)
