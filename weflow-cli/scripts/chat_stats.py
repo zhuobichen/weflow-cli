@@ -301,12 +301,14 @@ def extract_payment_totals(biz_db, biz_key, biz_salt, start_ts, end_ts):
             else:
                 text = str(content) if content else ''
 
-            amounts = _re.findall(r'¥(\d+\.?\d*)', text)
-            if amounts:
+            # Only extract from the first <title> tag (duplicate in template area)
+            title_match = _re.search(r'<title><!\[CDATA\[.*?¥(\d+\.?\d*)]]></title>', text)
+            if title_match:
+                amt = float(title_match.group(1))
                 dt = datetime.fromtimestamp(ts, tz=timezone(timedelta(hours=8)))
                 payments.append({
                     'time': dt.strftime('%m-%d %H:%M'),
-                    'amount': sum(float(a) for a in amounts),
+                    'amount': amt,
                 })
         biz_conn.close()
         return payments
