@@ -89,8 +89,8 @@ def get_biz_keys(config):
     if biz_key_enc and biz_salt:
         biz_key = decrypt_lock(biz_key_enc)
     else:
-        biz_key = '1c0451540217eb0373eb9242f61c173f8f7b3a4f29e922a9623ed59a3f90630e'
-        biz_salt = '0478298c58563d07e3fa53b45f13d593'
+        print('[ERROR] 缺少 biz_message_0.db 密钥，请运行: python scripts/nt_decrypt.py scan --json')
+        sys.exit(1)
 
     return {
         'biz_db': biz_db, 'biz_key': biz_key, 'biz_salt': biz_salt,
