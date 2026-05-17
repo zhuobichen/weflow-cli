@@ -334,7 +334,10 @@ def format_report(chat_stats, biz_stats, period_label, start_date, end_date):
     # === Fun Facts ===
     lines.append('## 💡 趣味数据')
     lines.append('')
-    avg_per_day = total_msgs / max(1, (end_date - start_date).days)
+    from datetime import datetime
+    d1 = datetime.strptime(start_date, '%Y-%m-%d') if isinstance(start_date, str) else start_date
+    d2 = datetime.strptime(end_date, '%Y-%m-%d') if isinstance(end_date, str) else end_date
+    avg_per_day = total_msgs / max(1, (d2 - d1).days)
     lines.append(f'- 📊 日均消息量：**{avg_per_day:.0f} 条**')
     if chat_stats['total_sent'] > 0 and chat_stats['total_recv'] > 0:
         ratio = chat_stats['total_sent'] / chat_stats['total_recv']

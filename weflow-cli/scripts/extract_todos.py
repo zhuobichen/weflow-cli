@@ -77,16 +77,24 @@ def get_messages(conn, talker, start_ts, end_ts, name_map):
     rows = []
     try:
         c.execute(f'''
-            SELECT create_time, sender, type, str_content
+            SELECT create_time, real_sender_id, local_type, message_content
             FROM "{tbl}"
             WHERE create_time >= ? AND create_time < ?
             ORDER BY create_time
         ''', (start_ts, end_ts))
         for r in c.fetchall():
-            ts, sender, msg_type, content = r
+            ts, sender_id, msg_type, content = r
             # 只取文本消息 (type=1)
+            # Ensure content is str (might be bytes in some DBs)
+            if isinstance(content, bytes):
+                content = content.decode('utf-8', errors='ignore')
             if msg_type == 1 and content and content.strip():
-                sender_name = name_map.get(sender, sender)
+                # Resolve sender via Name2Id → username → name_map
+                c2 = conn.cursor()
+                c2.execute("SELECT user_name FROM Name2Id WHERE rowid = ?", (sender_id,))
+                row = c2.fetchone()
+                sender_raw = row[0] if row else str(sender_id)
+                sender_name = name_map.get(sender_raw, sender_raw)
                 dt = datetime.fromtimestamp(ts, tz=timezone(timedelta(hours=8)))
                 rows.append({
                     'timestamp': dt.strftime('%m-%d %H:%M'),
