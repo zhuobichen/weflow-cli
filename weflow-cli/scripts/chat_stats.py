@@ -433,6 +433,20 @@ def format_report(chat_stats, biz_stats, payments, period_label, start_date, end
         lines.append(f'- 🏆 最常聊天：**{top_talkers[0][0]}**（{top_talkers[0][1]:,} 条）')
     lines.append('')
 
+    # === Payment Details ===
+    if payments:
+        lines.append('## 💰 微信支付明细')
+        lines.append('')
+        total_spend = sum(p['amount'] for p in payments)
+        lines.append(f'> 共 {len(payments)} 笔 | 合计 ¥{total_spend:.2f}')
+        lines.append('')
+        lines.append('| 时间 | 金额 |')
+        lines.append('|------|------|')
+        # Sort by amount descending
+        for p in sorted(payments, key=lambda x: -x['amount']):
+            lines.append(f'| {p["time"]} | ¥{p["amount"]:.2f} |')
+        lines.append('')
+
     return '\n'.join(lines)
 
 
