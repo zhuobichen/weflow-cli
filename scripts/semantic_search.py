@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 """
-全局语义搜索 — 基于 DeepSeek Embedding API + NumPy。
+全局语义搜索 — 基于阿里云百炼 Embedding API (text-embedding-v4) + NumPy。
 
 用法:
   # 构建索引（首次或增量）
-  python scripts/semantic_search.py build --api-key <key>
+  python scripts/semantic_search.py build
 
-  # 搜索
+  # 搜索（有索引用向量，否则关键词 fallback）
   python scripts/semantic_search.py search "有人推荐过遥感的工具吗" --top-k 10
 
   # 增量更新（只处理新数据）
-  python scripts/semantic_search.py update --api-key <key>
+  python scripts/semantic_search.py update
 
 输出: JSON 格式
 """
@@ -44,8 +44,8 @@ OUTPUT_ROOT = 'output'
 INDEX_DIR = Path(OUTPUT_ROOT) / '.semantic_index'
 VECTORS_FILE = INDEX_DIR / 'vectors.npy'
 META_FILE = INDEX_DIR / 'meta.json'
-EMBEDDING_DIM = 1536  # DeepSeek embedding dimension
-BATCH_SIZE = 100  # Embedding API batch size
+EMBEDDING_DIM = 1024  # 阿里云 text-embedding-v4
+BATCH_SIZE = 10  # 阿里云 text-embedding-v4 单次最多 10 条
 TZ = timezone(timedelta(hours=8))
 
 
@@ -56,22 +56,21 @@ def json_output(data):
 # ====== Embedding API ======
 
 def get_embeddings(texts: list[str], api_key: str) -> list[list[float]]:
-    """Call DeepSeek embedding API."""
+    """Call 阿里云百炼 embedding API (OpenAI-compatible)."""
     if not texts:
         return []
 
-    url = "https://api.deepseek.com/v1/embeddings"
+    url = "https://dashscope.aliyuncs.com/compatible-mode/v1/embeddings"
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
 
-    # Batch processing
     all_embeddings = []
     for i in range(0, len(texts), BATCH_SIZE):
         batch = texts[i:i + BATCH_SIZE]
         data = {
-            "model": "deepseek-embedding",  # DeepSeek embedding model
+            "model": "text-embedding-v4",
             "input": batch,
         }
 
@@ -82,13 +81,16 @@ def get_embeddings(texts: list[str], api_key: str) -> list[list[float]]:
         )
 
         try:
-            with urllib.request.urlopen(req, timeout=60) as resp:
+            with urllib.request.urlopen(req, timeout=120) as resp:
                 result = json.loads(resp.read().decode('utf-8'))
                 embeddings = [item['embedding'] for item in result['data']]
                 all_embeddings.extend(embeddings)
         except Exception as e:
-            print(f"[WARN] Embedding API 调用失败: {e}", file=sys.stderr)
-            # Fallback: return zero vectors
+            err_body = ''
+            if hasattr(e, 'read'):
+                try: err_body = e.read().decode()[:300]
+                except: pass
+            print(f"[WARN] Embedding API batch {i//BATCH_SIZE + 1} 失败: {e} {err_body}", file=sys.stderr)
             all_embeddings.extend([[0.0] * EMBEDDING_DIM for _ in batch])
 
     return all_embeddings
@@ -396,21 +398,22 @@ def main():
 
     # build
     p = subparsers.add_parser('build')
-    p.add_argument('--api-key', required=True)
+    p.add_argument('--api-key', help='DeepSeek API key（优先从 config 读取）')
     p.add_argument('--full', action='store_true', help='全量重建')
 
     # update
     p = subparsers.add_parser('update')
-    p.add_argument('--api-key', required=True)
+    p.add_argument('--api-key', help='DeepSeek API key（优先从 config 读取）')
 
     # search
     p = subparsers.add_parser('search')
     p.add_argument('query')
-    p.add_argument('--api-key', required=True)
+    p.add_argument('--api-key', help='DeepSeek API key（向量搜索时需要，关键词 fallback 不需要）')
     p.add_argument('--top-k', type=int, default=10)
 
     args = parser.parse_args()
-    api_key = args.api_key or os.environ.get('DEEPSEEK_API_KEY', '')
+    config = load_config()
+    api_key = args.api_key or os.environ.get('DASHSCOPE_API_KEY', '') or config.get('dashscopeApiKey', '')
 
     if args.command == 'build':
         result = build_index(api_key, full=args.full)
