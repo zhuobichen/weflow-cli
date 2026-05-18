@@ -12,5 +12,12 @@ scan-key*.py
 __pycache__/
 scripts/user/
 tmp_*
+msg.txt
+.claude/
+*.md
+!README.md
+!ARCHITECTURE.md
+!CLAUDE.md
+!OPERATIONS.md
 .DS_Store
 Thumbs.db

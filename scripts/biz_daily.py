@@ -266,15 +266,15 @@ def main():
     day_end = day_start + 86400
     date_str = target_date.strftime('%Y-%m-%d')
 
-    # API key
-    api_key = args.api_key or os.environ.get('DEEPSEEK_API_KEY', '')
-    if not args.dry_run and not api_key:
-        print('[ERROR] 缺少 DeepSeek API key。请通过 --api-key 或环境变量 DEEPSEEK_API_KEY 提供')
-        sys.exit(1)
-
     # Load config & DB keys
     config = load_config()
     keys = get_db_keys(config)
+
+    # API key
+    api_key = args.api_key or os.environ.get('DEEPSEEK_API_KEY', '') or config.get('deepseekApiKey', '')
+    if not args.dry_run and not api_key:
+        print('[ERROR] 缺少 DeepSeek API key。请通过 --api-key、环境变量 DEEPSEEK_API_KEY 或 ~/.weflow-cli/config.json 中的 deepseekApiKey 提供')
+        sys.exit(1)
 
     print(f'=== 公众号日报 {date_str} ===')
     print(f'Biz DB: {keys["biz_db"]}')

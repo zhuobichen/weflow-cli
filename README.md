@@ -102,16 +102,18 @@ python scripts/classify_daily.py --api-key <DeepSeek-key> --interest AI
 
 ---
 
-## Link
+## 问题反馈
 
-| ![docs] | ![repo] | ![issues] |
-|:-:|:-:|:-:|
-| ![license] | | |
+遇到 Bug 或有功能建议？欢迎通过以下渠道反馈：
 
-[docs]: https://img.shields.io/badge/Docs-README.md-blue?style=flat-square
-[repo]: https://img.shields.io/badge/GitHub-weflow--cli-black?style=flat-square&logo=github
-[issues]: https://img.shields.io/badge/GitHub-Issues-orange?style=flat-square
-[license]: https://img.shields.io/badge/License-MIT-yellow?style=flat-square
+- **[GitHub Issues](https://github.com/zhuobichen/weflow-cli/issues)** — 提交 Bug 报告 / 功能请求
+
+提交 Issue 时建议附上：
+- 使用的命令和参数
+- 错误信息截图或日志
+- 微信版本（3.x / 4.x）和操作系统
+
+[GitHub Issues]: https://img.shields.io/badge/GitHub-Issues-orange?style=flat-square
 
 ---
 

@@ -36,11 +36,15 @@ def main():
     parser.add_argument('--skip-classify', action='store_true', help='跳过后处理')
     parser.add_argument('--skip-wiki', action='store_true', help='跳过概念编译')
     parser.add_argument('--skip-vault', action='store_true', help='跳过 Vault 同步')
+    parser.add_argument('--skip-html', action='store_true', help='跳过 HTML 生成')
     args = parser.parse_args()
 
-    api_key = args.api_key or os.environ.get('DEEPSEEK_API_KEY', '')
+    sys.path.insert(0, SCRIPTS_DIR)
+    from _utils import load_config
+    config = load_config()
+    api_key = args.api_key or os.environ.get('DEEPSEEK_API_KEY', '') or config.get('deepseekApiKey', '')
     if not api_key:
-        print('[ERROR] 需要 DeepSeek API key')
+        print('[ERROR] 需要 DeepSeek API key。请通过 --api-key、环境变量 DEEPSEEK_API_KEY 或 ~/.weflow-cli/config.json 中的 deepseekApiKey 提供')
         sys.exit(1)
 
     started = time.time()
@@ -79,6 +83,11 @@ def main():
             '--limit', str(args.wiki_limit),
         ]
         run_step('wiki compile — 概念编译', step3_args)
+
+    # Step 5: HTML 生成（可选）
+    if not args.skip_html:
+        date_str = args.date or time.strftime('%Y-%m-%d')
+        run_step('generate_html', [os.path.join(SCRIPTS_DIR, 'generate_html.py'), '--date', date_str])
 
     elapsed = time.time() - started
     print(f'\n{"="*50}')
