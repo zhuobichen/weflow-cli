@@ -4,6 +4,15 @@
       "command": "npx",
       "args": ["tsx", "mcp-server/index.ts"],
       "cwd": "${workspaceFolder}"
+    },
+    "wechat-official-account": {
+      "command": "npx",
+      "args": [
+        "tsx", "src/cli.ts", "mcp",
+        "-a", "${env:WECHAT_APPID}",
+        "-s", "${env:WECHAT_APPSECRET}"
+      ],
+      "cwd": "E:\\CodeProject\\wechat-official-account-mcp"
     }
   }
 }
