@@ -575,7 +575,6 @@ def main():
                     # Find time after frontmatter
                     break
             # Extract time from markdown body
-            import re
             m = re.search(r'时间：\d{4}-\d{2}-\d{2} (\d{2}:\d{2})', content)
             if m:
                 article_time = m.group(1)
@@ -642,9 +641,11 @@ def main():
 {highlight_text}
 
 请直接输出简报内容（不要标题）。"""
-                briefing = call_deepseek(briefing_prompt, api_key, max_tokens=500, timeout=60).strip()
+                briefing = call_deepseek(briefing_prompt, api_key, max_tokens=500, timeout=90).strip()
                 if briefing:
                     print(f'\n  ✓ 简报生成完成')
+                else:
+                    print(f'\n  [WARN] 简报 API 返回空，跳过')
             except Exception as e:
                 print(f'\n  [WARN] 简报生成失败: {e}')
 

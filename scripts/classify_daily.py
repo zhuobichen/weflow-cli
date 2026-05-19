@@ -15,7 +15,7 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _utils import (
     call_deepseek, parse_frontmatter, write_with_frontmatter,
-    DEFAULT_USER_PROFILE, generate_action_suggestion
+    DEFAULT_USER_PROFILE, generate_action_suggestion, load_config
 )
 
 OUTPUT_ROOT = 'output/biz-daily'
@@ -174,9 +174,11 @@ def main():
     parser.add_argument('--skip-action', action='store_true', help='跳过行动建议生成')
     args = parser.parse_args()
 
-    api_key = args.api_key or os.environ.get('DEEPSEEK_API_KEY', '')
+    config = load_config()
+    api_key = args.api_key or os.environ.get('DEEPSEEK_API_KEY', '') or config.get('deepseekApiKey', '')
     if not api_key:
-        print('[ERROR] 需要 DeepSeek API key'); sys.exit(1)
+        print('[ERROR] 需要 DeepSeek API key。请通过 --api-key、环境变量 DEEPSEEK_API_KEY 或 ~/.weflow-cli/config.json 中的 deepseekApiKey 提供')
+        sys.exit(1)
     
     user_profile = args.profile if args.profile else DEFAULT_USER_PROFILE
 
@@ -338,15 +340,40 @@ def main():
             pass
 
     # ====== Step 6: README ======
+    # Preserve briefing block from biz_daily README
+    briefing_block = []
+    old_readme = base / 'README.md'
+    if old_readme.exists():
+        try:
+            with open(old_readme, 'r', encoding='utf-8') as f:
+                for line in f:
+                    if '📋' in line and '简报' in line:
+                        briefing_block.append(line.rstrip())
+                        for line in f:
+                            if line.startswith('>'):
+                                stripped = line.rstrip()
+                                if stripped != '>':  # skip empty blockquote lines
+                                    briefing_block.append(stripped)
+                            else:
+                                break
+                        break
+        except:
+            pass
+
     action_badge = ' ✅' if (base / '行动建议.md').exists() else ''
     lines = [
         f'# 公众号日报 — {base.name}',
         '',
+    ]
+    if briefing_block:
+        lines.extend(briefing_block)
+        lines.append('')
+    lines.extend([
         f'共 {len(md_files)} 篇 | 兴趣: {args.interest}',
         '',
         f'**[📋 查看行动建议](./行动建议.md){action_badge}** — 基于你的定位生成的可落地建议',
         ''
-    ]
+    ])
     for topic in TOPICS:
         files = sorted((base / topic).glob('*.md'))
         if not files: continue
