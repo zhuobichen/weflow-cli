@@ -587,12 +587,75 @@ def main():
                 'file': md_file.name,
             })
 
+    # Generate AI briefing from all article files on disk
+    briefing = ''
+    if api_key and all_articles:
+        topic_counts = {}
+        for a in all_articles:
+            t = a['topic']
+            topic_counts[t] = topic_counts.get(t, 0) + 1
+        topic_summary = '、'.join(f'{t}{c}篇' for t, c in sorted(topic_counts.items()))
+
+        # Read summaries from existing md files
+        highlights = []
+        for topic in TOPICS:
+            topic_dir = out_dir / topic
+            if not topic_dir.is_dir():
+                continue
+            for md_file in sorted(topic_dir.glob('*.md'), key=lambda f: f.stat().st_mtime, reverse=True)[:15]:
+                try:
+                    content = md_file.read_text(encoding='utf-8')
+                    # Extract title
+                    title = md_file.stem
+                    summary = ''
+                    in_summary = False
+                    for line in content.split('\n'):
+                        if line.startswith('title:'):
+                            title = line.split(':', 1)[1].strip().strip('"').strip("'")
+                        if '## AI 摘要' in line or '## 深度解析' in line:
+                            in_summary = True
+                            continue
+                        if in_summary and line.startswith('##'):
+                            break
+                        if in_summary and line.strip():
+                            summary += line.strip()[:100]
+                            if len(summary) > 80:
+                                break
+                    if summary:
+                        highlights.append(f"[{topic}] {title} | {summary}")
+                except:
+                    pass
+            if len(highlights) >= 25:
+                break
+
+        highlight_text = '\n'.join(highlights[:25])
+        if highlight_text:
+            try:
+                briefing_prompt = f"""你是公众号日报助手。基于今天 {len(all_articles)} 篇文章（{topic_summary}），生成一段200字以内的今日简报。
+
+要求：
+1. 按主题分组，每个主题1-2句话概括重点
+2. 突出3-5篇最值得关注的文章及其核心观点
+3. 语气简洁专业
+
+文章概览：
+{highlight_text}
+
+请直接输出简报内容（不要标题）。"""
+                briefing = call_deepseek(briefing_prompt, api_key, max_tokens=500, timeout=60).strip()
+                if briefing:
+                    print(f'\n  ✓ 简报生成完成')
+            except Exception as e:
+                print(f'\n  [WARN] 简报生成失败: {e}')
+
     index_lines = [
         f'# 公众号日报 — {date_str}',
         '',
-        f'共 {len(all_articles)} 篇推送，按主题分类',
-        '',
     ]
+    if briefing:
+        index_lines.append(f'> 📋 **今日简报**\n> \n> {briefing}\n')
+    index_lines.append(f'共 {len(all_articles)} 篇推送，按主题分类')
+    index_lines.append('')
     for topic in TOPICS:
         group = [a for a in all_articles if a['topic'] == topic]
         if not group:

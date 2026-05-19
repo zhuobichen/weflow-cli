@@ -99,7 +99,7 @@ def escape_html(text: str) -> str:
     return text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;').replace('"', '&quot;')
 
 
-def generate_html(date_str: str, topics: dict, action_suggestions_exist: bool) -> str:
+def generate_html(date_str: str, topics: dict, action_suggestions_exist: bool, briefing: str = '') -> str:
     """生成完整 HTML。"""
     total = sum(len(v) for v in topics.values())
 
@@ -189,6 +189,14 @@ def generate_html(date_str: str, topics: dict, action_suggestions_exist: bool) -
         <a href="./行动建议.md" target="_blank" class="action-link">📋 行动建议</a>
         '''
 
+    briefing_html = ''
+    if briefing:
+        briefing_html = f'''
+<div class="briefing">
+  <div class="briefing-title">📋 今日简报</div>
+  <div class="briefing-text">{escape_html(briefing)}</div>
+</div>'''
+
     html = f'''<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -241,6 +249,26 @@ body {{
     transition: all .2s;
 }}
 .action-link:hover {{ background: #fbbf241a; }}
+
+/* Briefing */
+.briefing {{
+  background: linear-gradient(135deg, #1a1040, #0d1b3e);
+  border: 1px solid #2d2d6e;
+  border-radius: 14px;
+  padding: 20px 24px;
+  margin-bottom: 16px;
+}}
+.briefing-title {{
+  font-size: 15px;
+  font-weight: 700;
+  color: #a5b4fc;
+  margin-bottom: 10px;
+}}
+.briefing-text {{
+  font-size: 14px;
+  line-height: 1.9;
+  color: #cbd5e1;
+}}
 
 /* Stats bar */
 .stats-bar {{
@@ -493,6 +521,8 @@ body {{
     </div>
 </div>
 
+    {briefing_html}
+
 <div class="stats-bar">
     <span>📊 <strong id="unread-count">-</strong> 篇未读 / {total} 篇</span>
     <span style="color:#334155">|</span>
@@ -635,7 +665,34 @@ def main():
         sys.exit(1)
 
     action_exist = os.path.exists(os.path.join(date_dir, '行动建议.md'))
-    html = generate_html(date_str, topics, action_exist)
+
+    # Extract briefing from README
+    briefing = ''
+    readme_path = os.path.join(date_dir, 'README.md')
+    if os.path.exists(readme_path):
+        try:
+            with open(readme_path, 'r', encoding='utf-8') as f:
+                readme = f.read()
+            # Find briefing line, extract all subsequent > lines (blockquote)
+            lines = readme.split('\n')
+            in_briefing = False
+            briefing_lines = []
+            for line in lines:
+                if '📋' in line and '简报' in line:
+                    in_briefing = True
+                    continue
+                if in_briefing:
+                    if line.startswith('> '):
+                        text = line[2:].strip()
+                        if text:
+                            briefing_lines.append(text)
+                    elif not line.startswith('>') and briefing_lines:
+                        break  # End of blockquote
+            briefing = ' '.join(briefing_lines)
+        except:
+            pass
+
+    html = generate_html(date_str, topics, action_exist, briefing)
 
     out_path = args.output or os.path.join(date_dir, 'index.html')
     with open(out_path, 'w', encoding='utf-8') as f:
