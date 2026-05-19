@@ -55,6 +55,39 @@ FETCH_DELAY_MIN = 8   # 最小抓取间隔 (秒)
 FETCH_DELAY_MAX = 12  # 最大抓取间隔 (秒)
 
 TOPICS = ['AI', '学术', '新闻', '文学', '投资']
+def _guess_topic(article: dict) -> str:
+    """Keyword-based topic guess when AI classification fails."""
+    title = article.get('title', '')
+    account = article.get('account_name', '')
+    text = (title + ' ' + account).lower()
+
+    # Strong AI signals
+    ai_keywords = ['ai', 'agent', 'llm', 'gpt', 'claude', 'codex', 'cursor',
+                   '大模型', '编程', '开源', 'skill', 'prompt', 'deepseek',
+                   'copilot', 'vibe coding', 'rag', 'embedding', 'token']
+    if any(kw in text for kw in ai_keywords):
+        return 'AI'
+
+    # Investment signals
+    invest_keywords = ['股票', '基金', '融资', 'ipo', '上市', '财报', 'a股', '港股']
+    if any(kw in text for kw in invest_keywords):
+        return '投资'
+
+    # Academic signals
+    academic_keywords = ['nature', 'science', 'cell', 'est', '论文', '研究', '实验室',
+                        'doi', 'et al', 'abstract', 'method', 'result', 'conclusion']
+    if any(kw in text for kw in academic_keywords):
+        return '学术'
+
+    # Literature signals
+    lit_keywords = ['小说', '散文', '诗词', '美食', '旅游', '随笔', '历史', '读书']
+    if any(kw in text for kw in lit_keywords):
+        return '文学'
+
+    # Default: news
+    return '新闻'
+
+
 TOPIC_PROMPT = f"""对文章分类、摘要、打标签，并评估与读者的相关度。
 
 【读者定位】环境科学研究生，研究方向是计算机与环境的交叉领域（环境模型、大气污染模拟、遥感反演、环境大数据分析、LCA等），关注AI工具如何提升科研效率。
@@ -420,9 +453,9 @@ def main():
                                     matched = True
                                     break
                             if not matched:
-                                a['topic'] = '学术'
+                                a['topic'] = _guess_topic(a)
                     else:
-                        a['topic'] = '学术'
+                        a['topic'] = _guess_topic(a)
 
                     # Parse relevance: 高/中/低
                     if relevance_match:
