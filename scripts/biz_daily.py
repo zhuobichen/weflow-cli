@@ -500,22 +500,12 @@ def main():
             t = '学术'
         topic_groups[t].append(a)
 
-    index_lines = [
-        f'# 公众号日报 — {date_str}',
-        '',
-        f'共 {len(articles)} 篇推送，按主题分类',
-        '',
-    ]
-
+    # Write new article files
     for topic in TOPICS:
         group = topic_groups[topic]
         if not group:
             continue
-        index_lines.append(f'## {topic} ({len(group)}篇)')
-        index_lines.append('')
-        index_lines.append('| # | 时间 | 公众号 | 标题 |')
-        index_lines.append('|---|------|--------|------|')
-        for j, a in enumerate(group):
+        for a in group:
             safe_name = sanitize_filename(f'{a["account_name"]}-{a["title"]}')
             file_name = f'{safe_name}.md'
             file_path = out_dir / topic / file_name
@@ -525,7 +515,6 @@ def main():
             tags = a.get('tags', [topic])
             concepts = a.get('concepts', [])
 
-            # Frontmatter
             fm = {
                 'title': f'"{a["title"]}"',
                 'source': f'"{a["account_name"]}"',
@@ -538,7 +527,6 @@ def main():
             if a['url']:
                 fm['url'] = f'"{a["url"]}"'
 
-            # Body
             body_parts = [f'# {a["title"]}\n']
             body_parts.append(f'> 来源：{a["account_name"]}  \n')
             body_parts.append(f'> 时间：{date_str} {a["time"]}  \n')
@@ -547,7 +535,6 @@ def main():
             body_parts.append('\n---\n\n')
             body_parts.append(f'## AI 摘要\n\n{summary}\n\n')
 
-            # Wiki Links
             if concepts:
                 body_parts.append(format_wikilinks(concepts))
                 body_parts.append('\n')
@@ -562,23 +549,75 @@ def main():
 
             write_with_frontmatter(str(file_path), fm, ''.join(body_parts))
 
+    # Rebuild README from ALL existing md files (not just this batch)
+    index_path = out_dir / 'README.md'
+    all_articles = []
+    for topic in TOPICS:
+        topic_dir = out_dir / topic
+        if not topic_dir.is_dir():
+            continue
+        for md_file in sorted(topic_dir.glob('*.md')):
+            try:
+                content = md_file.read_text(encoding='utf-8')
+            except:
+                continue
+            # Extract title and time from frontmatter
+            title = md_file.stem
+            source = ''
+            article_time = ''
+            for line in content.split('\n'):
+                line = line.strip()
+                if line.startswith('title:'):
+                    title = line.split(':', 1)[1].strip().strip('"').strip("'")
+                elif line.startswith('source:'):
+                    source = line.split(':', 1)[1].strip().strip('"').strip("'")
+                elif line.startswith('date:') and source:
+                    # Find time after frontmatter
+                    break
+            # Extract time from markdown body
+            import re
+            m = re.search(r'时间：\d{4}-\d{2}-\d{2} (\d{2}:\d{2})', content)
+            if m:
+                article_time = m.group(1)
+            all_articles.append({
+                'title': title,
+                'source': source,
+                'time': article_time,
+                'topic': topic,
+                'file': md_file.name,
+            })
+
+    index_lines = [
+        f'# 公众号日报 — {date_str}',
+        '',
+        f'共 {len(all_articles)} 篇推送，按主题分类',
+        '',
+    ]
+    for topic in TOPICS:
+        group = [a for a in all_articles if a['topic'] == topic]
+        if not group:
+            continue
+        index_lines.append(f'## {topic} ({len(group)}篇)')
+        index_lines.append('')
+        index_lines.append('| # | 时间 | 公众号 | 标题 |')
+        index_lines.append('|---|------|--------|------|')
+        for j, a in enumerate(group):
             index_lines.append(
-                f'| {j+1} | {a["time"]} | {a["account_name"]} | [{a["title"]}](./{topic}/{file_name}) |'
+                f'| {j+1} | {a["time"]} | {a["source"]} | [{a["title"]}](./{topic}/{a["file"]}) |'
             )
         index_lines.append('')
 
-    # Write index
-    index_path = out_dir / 'README.md'
     with open(index_path, 'w', encoding='utf-8') as f:
         f.write('\n'.join(index_lines))
         f.write('\n---\n\n*由 weflow-cli 公众号日报自动生成*\n')
 
     print(f'\n✓ 完成！输出到 {out_dir}')
     print(f'  总索引: {index_path}')
-    print(f'  文章数: {len(articles)}')
+    print(f'  文章数: {len(all_articles)}')
     for t in TOPICS:
-        if topic_groups[t]:
-            print(f'  {t}/: {len(topic_groups[t])} 篇')
+        count = len([a for a in all_articles if a['topic'] == t])
+        if count:
+            print(f'  {t}/: {count} 篇')
 
     # Save run state for incremental dedup
     for a in topic_groups.values():
