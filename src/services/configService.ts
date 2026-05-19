@@ -30,13 +30,15 @@ interface CliConfig {
   // Vault & Pipeline
   vaultRepo: string
   aiEngine: string
+  // 微信读书
+  wereadApiKey: string
 }
 
 const CONFIG_DIR = join(homedir(), '.weflow-cli')
 const CONFIG_FILE = join(CONFIG_DIR, 'config.json')
 
 export class ConfigService {
-  private config: CliConfig = { dbPath: '', wxid: '', decryptKey: '', decryptKey3x: '', dataVersion: '', dbPath3x: '', ntDbPath: '', ntKey: '', ntSalt: '', contactDbPath: '', contactKey: '', contactSalt: '', wechatOcToken: '', wechatOcAccountId: '', wechatOcBaseUrl: '', wechatOcSyncBuf: '', whitelist: [], vaultRepo: '', aiEngine: 'deepseek' }
+  private config: CliConfig = { dbPath: '', wxid: '', decryptKey: '', decryptKey3x: '', dataVersion: '', dbPath3x: '', ntDbPath: '', ntKey: '', ntSalt: '', contactDbPath: '', contactKey: '', contactSalt: '', wechatOcToken: '', wechatOcAccountId: '', wechatOcBaseUrl: '', wechatOcSyncBuf: '', whitelist: [], vaultRepo: '', aiEngine: 'deepseek', wereadApiKey: '' }
 
   constructor() {
     this.load()
@@ -66,6 +68,7 @@ export class ConfigService {
           whitelist: Array.isArray(data.whitelist) ? data.whitelist : [],
           vaultRepo: data.vaultRepo || '',
           aiEngine: data.aiEngine || 'deepseek',
+          wereadApiKey: data.wereadApiKey || '',
         }
       }
     } catch {
@@ -140,7 +143,7 @@ export class ConfigService {
   }
 
   clear(): void {
-    this.config = { dbPath: '', wxid: '', decryptKey: '', decryptKey3x: '', dataVersion: '', dbPath3x: '', ntDbPath: '', ntKey: '', ntSalt: '', contactDbPath: '', contactKey: '', contactSalt: '', wechatOcToken: '', wechatOcAccountId: '', wechatOcBaseUrl: '', wechatOcSyncBuf: '', whitelist: [], vaultRepo: '', aiEngine: 'deepseek' }
+    this.config = { dbPath: '', wxid: '', decryptKey: '', decryptKey3x: '', dataVersion: '', dbPath3x: '', ntDbPath: '', ntKey: '', ntSalt: '', contactDbPath: '', contactKey: '', contactSalt: '', wechatOcToken: '', wechatOcAccountId: '', wechatOcBaseUrl: '', wechatOcSyncBuf: '', whitelist: [], vaultRepo: '', aiEngine: 'deepseek', wereadApiKey: '' }
     this.save()
   }
 
