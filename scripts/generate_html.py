@@ -99,6 +99,162 @@ def escape_html(text: str) -> str:
     return text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;').replace('"', '&quot;')
 
 
+def generate_article_viewer(out_path: str):
+    """生成 article.html — Markdown 渲染阅读器。"""
+    html = r'''<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>文章阅读</title>
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: #0f172a;
+    color: #e2e8f0;
+    min-height: 100vh;
+    line-height: 1.8;
+}
+.container { max-width: 960px; margin: 0 auto; padding: 24px; }
+.top-bar {
+    display: flex; align-items: center; gap: 12px; padding: 12px 0;
+    margin-bottom: 24px; border-bottom: 1px solid #1e293b;
+    position: sticky; top: 0; background: #0f172a; z-index: 10; flex-wrap: wrap;
+}
+.btn-back {
+    color: #94a3b8; text-decoration: none; font-size: 14px;
+    padding: 6px 14px; border: 1px solid #334155; border-radius: 8px;
+    transition: all .2s; white-space: nowrap;
+}
+.btn-back:hover { color: #e2e8f0; border-color: #475569; }
+.article-source { color: #818cf8; font-size: 13px; font-weight: 600; }
+.article-meta { color: #64748b; font-size: 12px; margin-left: auto; }
+.mode-badge { font-size: 11px; padding: 2px 10px; border-radius: 10px; font-weight: 600; }
+.mode-badge.html { background: #10b98120; color: #34d399; border: 1px solid #10b98140; }
+.view-switch { display: inline-flex; background: #1e293b; border-radius: 8px; overflow: hidden; border: 1px solid #334155; }
+.view-switch a { padding: 4px 12px; font-size: 12px; color: #64748b; text-decoration: none; transition: all .2s; }
+.view-switch a.active { background: #334155; color: #e2e8f0; }
+.view-switch a:hover:not(.active) { color: #94a3b8; }
+.article-header { margin-bottom: 32px; padding-bottom: 20px; border-bottom: 1px solid #1e293b; }
+.article-header h1 { font-size: 26px; font-weight: 700; line-height: 1.4; margin-bottom: 12px; color: #f1f5f9; }
+.article-header .meta-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; font-size: 13px; color: #64748b; }
+.article-header .source-tag { background: #312e81; color: #a5b4fc; padding: 2px 10px; border-radius: 6px; font-size: 12px; }
+.tags-row { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
+.tag { font-size: 11px; padding: 2px 8px; background: #334155; border-radius: 6px; color: #94a3b8; }
+.article-body { font-size: 16px; color: #cbd5e1; }
+.article-body h2 { font-size: 22px; font-weight: 700; margin: 32px 0 16px; color: #f1f5f9; border-bottom: 1px solid #1e293b; padding-bottom: 8px; }
+.article-body h3 { font-size: 18px; font-weight: 600; margin: 24px 0 12px; color: #e2e8f0; }
+.article-body h4 { font-size: 16px; font-weight: 600; margin: 20px 0 8px; color: #cbd5e1; }
+.article-body p { margin: 12px 0; }
+.article-body strong { color: #f1f5f9; font-weight: 700; }
+.article-body a { color: #818cf8; text-decoration: none; }
+.article-body a:hover { text-decoration: underline; }
+.article-body img { max-width: 100%; height: auto; border-radius: 8px; margin: 16px 0; border: 1px solid #334155; }
+.article-body blockquote { border-left: 3px solid #818cf8; padding: 8px 16px; margin: 16px 0; background: #1a1040; border-radius: 0 8px 8px 0; color: #a5b4fc; }
+.article-body blockquote p { margin: 4px 0; }
+.article-body code { background: #1e293b; padding: 2px 6px; border-radius: 4px; font-size: 14px; color: #fbbf24; }
+.article-body pre { background: #0c1222; border: 1px solid #1e293b; border-radius: 10px; padding: 16px; overflow-x: auto; margin: 16px 0; font-size: 13px; line-height: 1.7; }
+.article-body pre code { background: none; padding: 0; color: #e2e8f0; }
+.article-body ul, .article-body ol { margin: 12px 0; padding-left: 24px; }
+.article-body li { margin: 6px 0; color: #cbd5e1; }
+.article-body hr { border: none; border-top: 1px solid #1e293b; margin: 24px 0; }
+.article-body table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 14px; }
+.article-body th { background: #1e293b; padding: 10px 14px; text-align: left; color: #e2e8f0; font-weight: 600; border-bottom: 2px solid #334155; }
+.article-body td { padding: 8px 14px; border-bottom: 1px solid #1e293b; color: #94a3b8; }
+.loading { text-align: center; padding: 80px 20px; color: #64748b; font-size: 16px; }
+.error-box { background: #dc262610; border: 1px solid #dc262630; border-radius: 12px; padding: 20px; text-align: center; color: #f87171; margin: 40px 0; }
+@media (max-width: 640px) {
+    .container { padding: 12px; }
+    .article-header h1 { font-size: 20px; }
+    .article-body { font-size: 15px; }
+}
+</style>
+</head>
+<body>
+<div class="container" id="app">
+  <div class="loading">&#x1f4d6; 加载中...</div>
+</div>
+<script>
+(async function() {
+  const params = new URLSearchParams(location.search);
+  const file = params.get('file');
+  if (!file) {
+    document.getElementById('app').innerHTML = '<div class="error-box">\u274c \u7f3a\u5c11 file \u53c2\u6570</div>';
+    return;
+  }
+  let mdUrl = file;
+  if (!file.startsWith('http') && !file.startsWith('/')) { mdUrl = './' + file; }
+  try {
+    const res = await fetch(mdUrl);
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const text = await res.text();
+    let title = '', source = '', tags = [], body = text;
+    if (text.startsWith('---')) {
+      const endIdx = text.indexOf('---', 3);
+      if (endIdx !== -1) {
+        const fm = text.slice(3, endIdx).trim();
+        body = text.slice(endIdx + 3).trim();
+        fm.split('\n').forEach(line => {
+          const ci = line.indexOf(':');
+          if (ci === -1) return;
+          const key = line.slice(0, ci).trim();
+          let val = line.slice(ci + 1).trim().replace(/^["']|["']$/g, '');
+          if (key === 'title') title = val;
+          if (key === 'source') source = val;
+          if (key === 'tags') {
+            try { tags = JSON.parse(val); } catch(e) {
+              tags = val.replace(/[\\[\\]]/g, '').split(',').map(s => s.trim().replace(/["']/g, ''));
+            }
+          }
+        });
+      }
+    }
+    if (!title) {
+      const h1m = body.match(/^#\s+(.+)/m);
+      if (h1m) { title = h1m[1]; body = body.replace(h1m[0], '').trim(); }
+    }
+    if (!title) title = file.split('/').pop().replace('.md', '');
+    let htmlContent = '';
+    if (typeof marked !== 'undefined') {
+      marked.setOptions({ breaks: true, gfm: true });
+      htmlContent = marked.parse(body);
+    } else {
+      htmlContent = body.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n\n/g, '</p><p>').replace(/\n/g, '<br>');
+      htmlContent = '<p>' + htmlContent + '</p>';
+    }
+    const tagsHtml = tags.length ? '<div class="tags-row">' + tags.map(t => '<span class="tag">' + t + '</span>').join('') + '</div>' : '';
+    document.getElementById('app').innerHTML =
+      '<div class="top-bar">' +
+        '<a href="./" class="btn-back">\u2190 \u8fd4\u56de\u5217\u8868</a>' +
+        '<span class="article-source">' + (source || '') + '</span>' +
+        '<span class="article-meta">\u9605\u8bfb\u6a21\u5f0f</span>' +
+        '<span class="mode-badge html">\ud83c\udfa8 HTML</span>' +
+        '<div class="view-switch">' +
+          '<a href="' + file + '">\ud83d\udcdd MD</a>' +
+          '<a href="article.html?file=' + encodeURIComponent(file) + '" class="active">\ud83c\udfa8 HTML</a>' +
+        '</div>' +
+      '</div>' +
+      '<div class="article-header">' +
+        '<h1>' + title + '</h1>' +
+        '<div class="meta-row">' + (source ? '<span class="source-tag">' + source + '</span>' : '') + '</div>' +
+        tagsHtml +
+      '</div>' +
+      '<div class="article-body">' + htmlContent + '</div>' +
+      '<div style="text-align:center;padding:40px;color:#475569;font-size:12px;">\u2014 END \u2014</div>';
+  } catch(e) {
+    document.getElementById('app').innerHTML =
+      '<div class="error-box">\u274c \u52a0\u8f7d\u5931\u8d25: ' + e.message + '<br><br><a href="./" class="btn-back">\u2190 \u8fd4\u56de\u5217\u8868</a></div>';
+  }
+})();
+</script>
+</body>
+</html>'''
+    with open(out_path, 'w', encoding='utf-8') as f:
+        f.write(html)
+
+
 def generate_html(date_str: str, topics: dict, action_suggestions_exist: bool, briefing: str = '') -> str:
     """生成完整 HTML。"""
     total = sum(len(v) for v in topics.values())
@@ -169,6 +325,9 @@ def generate_html(date_str: str, topics: dict, action_suggestions_exist: bool, b
                         <button class="btn-toggle" onclick="toggleRead('{escape_html(art['rel_path'])}')">
                            <span class="toggle-label">✓ 标记已读</span>
                         </button>
+                        <button class="btn-fav" onclick="toggleFav('{escape_html(art['rel_path'])}')" title="收藏">
+                           ☆
+                        </button>
                     </div>
                 </article>''')
         sections_html = '\n'.join(cards)
@@ -211,7 +370,7 @@ body {{
     color: #e2e8f0;
     min-height: 100vh;
 }}
-.container {{ max-width: 960px; margin: 0 auto; padding: 20px; }}
+.container {{ max-width: 1200px; margin: 0 auto; padding: 24px; }}
 
 /* Header */
 .header {{
@@ -296,6 +455,10 @@ body {{
     transition: background .2s;
 }}
 .btn-clear:hover {{ background: #475569; }}
+.btn-clear.active-mode {{
+    background: #818cf8 !important;
+    color: #fff !important;
+}}
 
 /* Tabs */
 .tabs {{
@@ -473,6 +636,28 @@ body {{
 .card.read .toggle-label::before {{ content: '↩ 标记未读'; }}
 .toggle-label::before {{ content: '✓ 标记已读'; }}
 
+/* Favorite */
+.btn-fav {{
+    font-size: 13px;
+    background: none;
+    border: 1px solid #334155;
+    padding: 4px 10px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all .2s;
+    color: #64748b;
+}}
+.btn-fav:hover {{ color: #fbbf24; border-color: #fbbf2450; }}
+.btn-fav.faved {{ color: #fbbf24; border-color: #fbbf2440; background: #fbbf2412; }}
+.card.faved {{ border-color: #fbbf2430; }}
+.fav-empty {{
+    text-align: center;
+    padding: 60px 20px;
+    color: #475569;
+    font-size: 15px;
+    line-height: 2;
+}}
+
 /* Footer */
 .footer {{
     text-align: center;
@@ -528,13 +713,31 @@ body {{
     <span style="color:#334155">|</span>
     <button class="btn-clear" onclick="markAllRead()">✅ 全部标为已读</button>
     <button class="btn-clear" onclick="clearAll()">🔄 重置所有标记</button>
-</div>
+    <button class="btn-clear" onclick="exportFav()" id="btn-export-fav" title="下载 .fav_state.json 后运行 sync_fav.py 即可同步到磁盘">📥 导出收藏</button>
+    <span id="sync-indicator" style="display:none;font-size:12px;color:#10b981">⚡ 实时同步</span>
+    <span style="color:#334155">|</span>
+    <span style="font-size:13px;color:#94a3b8">阅读:</span>
+    <button class="btn-clear" id="btn-mode-md" onclick="setViewMode('md')" style="background:#334155;color:#cbd5e1">📝 MD</button>
+    <button class="btn-clear" id="btn-mode-html" onclick="setViewMode('html')">🎨 HTML</button>
 
 <input type="text" class="search-box" placeholder="🔍 搜索文章标题、来源、标签..." oninput="doSearch(this.value)">
 
 <nav class="tabs">
     {''.join(nav_items)}
+            <button class="tab-btn" data-topic="收藏"
+                    style="--accent: #fbbf24" onclick="switchTab('收藏')">
+                ⭐ 收藏 <span class="count" id="fav-count">0</span>
+            </button>
 </nav>
+
+            <section class="topic-section" id="section-收藏" data-topic="收藏">
+                <h2 class="topic-heading" style="--accent: #fbbf24">
+                    ⭐ 收藏 <span class="count" id="fav-section-count">0 篇</span>
+                </h2>
+                <div class="cards-grid" id="fav-cards">
+                    <div class="fav-empty">⭐ 点击文章卡片上的 ☆ 按钮即可收藏<br>收藏的文章会显示在这里</div>
+                </div>
+            </section>
 
 {''.join(topic_sections)}
 
@@ -546,6 +749,7 @@ body {{
 
 <script>
 const STORAGE_KEY = 'weflow_read_{date_str}';
+const FAV_STORAGE_KEY = 'weflow_fav_{date_str}';
 const ALL_IDS = {json.dumps([a['id'] for a in articles_json], ensure_ascii=False)};
 
 function getState() {{
@@ -599,11 +803,15 @@ function applyState() {{
             unread++;
         }}
     }});
-    document.getElementById('unread-count').textContent = unread;
+    const el = document.getElementById('unread-count');
+    if (el) el.textContent = unread;
 }}
 function switchTab(topic) {{
     document.querySelectorAll('.topic-section').forEach(s => s.classList.remove('active'));
     document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    if (topic === '收藏') {{
+        renderFavSection();
+    }}
     const section = document.getElementById('section-' + topic);
     if (section) section.classList.add('active');
     const btn = document.querySelector(`.tab-btn[data-topic="${{topic}}"]`);
@@ -617,7 +825,6 @@ function doSearch(query) {{
         const text = (card.getAttribute('data-id') + ' ' + card.textContent).toLowerCase();
         card.style.display = text.includes(q) ? '' : 'none';
     }});
-    // Show all sections when searching
     if (q) {{
         document.querySelectorAll('.topic-section').forEach(s => s.classList.add('active'));
         document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
@@ -626,9 +833,164 @@ function doSearch(query) {{
     }}
 }}
 
+// --- Favorites ---
+const IS_LOCALHOST = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+const API_BASE = IS_LOCALHOST ? '/api/fav' : null;
+
+function getFavState() {{
+    try {{
+        return JSON.parse(localStorage.getItem(FAV_STORAGE_KEY) || '[]');
+    }} catch(e) {{ return []; }}
+}}
+function saveFavState(arr) {{
+    localStorage.setItem(FAV_STORAGE_KEY, JSON.stringify(arr));
+}}
+function isFaved(id) {{
+    return getFavState().includes(id);
+}}
+async function toggleFav(id) {{
+    if (API_BASE) {{
+        // 实时模式：调 API 写入磁盘
+        try {{
+            const res = await fetch(API_BASE + '/toggle', {{
+                method: 'POST',
+                headers: {{'Content-Type': 'application/json'}},
+                body: JSON.stringify({{id: id}})
+            }});
+            const data = await res.json();
+            if (data.ok) {{
+                await loadFavFromServer();
+            }}
+        }} catch(e) {{
+            console.error('API 请求失败，回退到本地模式', e);
+            toggleFavLocal(id);
+        }}
+    }} else {{
+        toggleFavLocal(id);
+    }}
+}}
+function toggleFavLocal(id) {{
+    const arr = getFavState();
+    const idx = arr.indexOf(id);
+    if (idx >= 0) {{ arr.splice(idx, 1); }}
+    else {{ arr.push(id); }}
+    saveFavState(arr);
+    applyFavState();
+}}
+async function loadFavFromServer() {{
+    try {{
+        const res = await fetch(API_BASE + '/list');
+        const data = await res.json();
+        saveFavState(data);
+        applyFavState();
+    }} catch(e) {{
+        console.error('加载收藏列表失败', e);
+    }}
+}}
+function applyFavState() {{
+    const favs = getFavState();
+    // Update fav buttons
+    document.querySelectorAll('.btn-fav').forEach(btn => {{
+        const card = btn.closest('.card');
+        if (!card) return;
+        const id = card.getAttribute('data-id');
+        if (favs.includes(id)) {{
+            btn.classList.add('faved');
+            btn.innerHTML = '★';
+            card.classList.add('faved');
+        }} else {{
+            btn.classList.remove('faved');
+            btn.innerHTML = '☆';
+            card.classList.remove('faved');
+        }}
+    }});
+    // Update fav count
+    const countEl = document.getElementById('fav-count');
+    if (countEl) countEl.textContent = favs.length;
+    const sectionCountEl = document.getElementById('fav-section-count');
+    if (sectionCountEl) sectionCountEl.textContent = favs.length + ' 篇';
+}}
+function renderFavSection() {{
+    const favs = getFavState();
+    const container = document.getElementById('fav-cards');
+    if (!container) return;
+    if (favs.length === 0) {{
+        container.innerHTML = '<div class="fav-empty">⭐ 点击文章卡片上的 ☆ 按钮即可收藏<br>收藏的文章会显示在这里</div>';
+        return;
+    }}
+    let html = '';
+    favs.forEach(id => {{
+        const card = document.querySelector(`.card[data-id="${{id.replace(/"/g, '&quot;')}}"]`);
+        if (card) {{
+            html += card.outerHTML;
+        }}
+    }});
+    container.innerHTML = html || '<div class="fav-empty">⭐ 暂无收藏文章</div>';
+}}
+
+const VIEW_MODE_KEY = 'weflow_vmode_{date_str}';
+function getViewMode() {{
+    return localStorage.getItem(VIEW_MODE_KEY) || 'md';
+}}
+function setViewMode(mode) {{
+    localStorage.setItem(VIEW_MODE_KEY, mode);
+    applyViewMode();
+}}
+function applyViewMode() {{
+    const mode = getViewMode();
+    const btnMd = document.getElementById('btn-mode-md');
+    const btnHtml = document.getElementById('btn-mode-html');
+    if (btnMd && btnHtml) {{
+        btnMd.classList.toggle('active-mode', mode === 'md');
+        btnHtml.classList.toggle('active-mode', mode === 'html');
+    }}
+    // Update all article title links and read buttons
+    document.querySelectorAll('.card-title a, .btn-read').forEach(a => {{
+        const card = a.closest('.card');
+        if (!card) return;
+        const id = card.getAttribute('data-id');
+        if (!id) return;
+        if (mode === 'html') {{
+            const newHref = 'article.html?file=' + encodeURIComponent(id);
+            if (a.getAttribute('data-md-href') === null) {{
+                a.setAttribute('data-md-href', a.getAttribute('href') || '');
+            }}
+            a.setAttribute('href', newHref);
+        }} else {{
+            const mdHref = a.getAttribute('data-md-href');
+            if (mdHref) a.setAttribute('href', mdHref);
+        }}
+    }});
+}}
+
+function exportFav() {{
+    const favs = getFavState();
+    if (IS_LOCALHOST) {{
+        alert('✅ 收藏已实时同步到磁盘！\\n\\n' + favs.length + ' 篇收藏在 收藏/ 文件夹中');
+        return;
+    }}
+    const blob = new Blob([JSON.stringify(favs, null, 2)], {{type: 'application/json'}});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = '.fav_state.json';
+    a.click();
+    URL.revokeObjectURL(url);
+    alert('已导出 ' + favs.length + ' 篇收藏到 .fav_state.json\\n\\n运行: python scripts/sync_fav.py --date {date_str}');
+}}
+
 // Init
-(function() {{
+(async function() {{
     applyState();
+    applyFavState();
+    applyViewMode();
+    if (IS_LOCALHOST) {{
+        await loadFavFromServer();
+        const indicator = document.getElementById('sync-indicator');
+        if (indicator) {{ indicator.style.display = ''; }}
+        const exportBtn = document.getElementById('btn-export-fav');
+        if (exportBtn) {{ exportBtn.textContent = '✅ 已实时同步'; exportBtn.title = '收藏已实时同步到磁盘'; }}
+    }}
     const hash = window.location.hash.slice(1);
     switchTab(hash || 'AI');
 }})();
@@ -697,6 +1059,12 @@ def main():
     out_path = args.output or os.path.join(date_dir, 'index.html')
     with open(out_path, 'w', encoding='utf-8') as f:
         f.write(html)
+
+    # 同时生成 article.html（Markdown 渲染阅读器）
+    article_html_path = os.path.join(date_dir, 'article.html')
+    if not os.path.exists(article_html_path):
+        generate_article_viewer(article_html_path)
+
     total = sum(len(v) for v in topics.values())
     print(f'✓ HTML 生成完成: {out_path}')
     print(f'  共 {total} 篇文章, {len(topics)} 个主题')

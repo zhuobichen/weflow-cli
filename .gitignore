@@ -11,6 +11,7 @@ scan-key*.py
 *.zip
 __pycache__/
 scripts/user/
+private/
 tmp_*
 msg.txt
 .claude/

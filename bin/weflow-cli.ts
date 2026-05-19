@@ -1211,6 +1211,49 @@ program
       }
     })
 
+  // fav-server
+  program
+    .command('fav-server')
+    .description('启动收藏服务器 — 浏览器访问 localhost 实时同步收藏夹')
+    .option('--date <YYYY-MM-DD>', '日期（默认今天）')
+    .option('--port <number>', '端口', '8765')
+    .option('--open', '自动打开浏览器')
+    .action(async (opts) => {
+      const { spawn } = await import('child_process')
+      const { fileURLToPath } = await import('url')
+      const { dirname } = await import('path')
+      const __filename = fileURLToPath(import.meta.url)
+      const __dirname = dirname(__filename)
+      const pkgRoot = join(__dirname, '..', '..')
+      const script = join(pkgRoot, 'scripts', 'fav_server.py')
+
+      if (!opts.date) {
+        const now = new Date()
+        const yyyy = now.getFullYear()
+        const mm = String(now.getMonth() + 1).padStart(2, '0')
+        const dd = String(now.getDate()).padStart(2, '0')
+        opts.date = `${yyyy}-${mm}-${dd}`
+      }
+
+      const args = [script, '--date', opts.date, '--port', opts.port]
+      console.log(chalk.cyan(`⭐ 启动收藏服务器 (${opts.date})\n`))
+      console.log(chalk.gray(`  按住 Ctrl 并点击: http://localhost:${opts.port}`))
+
+      if (opts.open) {
+        const { exec } = await import('child_process')
+        exec(`start http://localhost:${opts.port}`)
+      }
+
+      const child = spawn('python', args, {
+        stdio: 'inherit',
+        env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
+      })
+      await new Promise<void>((resolve) => child.on('exit', (code) => {
+        if (code !== 0 && code !== null) process.exit(code)
+        resolve()
+      }))
+    })
+
   // semantic-search
   program
     .command('search')
@@ -1464,6 +1507,7 @@ async function showInteractiveMenu() {
   choices.push(new inquirer.Separator('  📰 公众号日报'))
   choices.push({ name: '  生成今日日报', value: 'biz-daily' })
   choices.push({ name: '  查看行动建议', value: 'action-suggest' })
+  choices.push({ name: '  ⭐ 启动收藏服务器', value: 'fav-server' })
 
   choices.push(new inquirer.Separator('  💬 微信消息'))
   choices.push({
@@ -1592,6 +1636,15 @@ async function showInteractiveMenu() {
     case 'action-suggest':
       await runPython('classify_daily.py', '生成行动建议')
       break
+    case 'fav-server': {
+      const now = new Date()
+      const yyyy = now.getFullYear()
+      const mm = String(now.getMonth() + 1).padStart(2, '0')
+      const dd = String(now.getDate()).padStart(2, '0')
+      const dateStr = `${yyyy}-${mm}-${dd}`
+      await runCmd('fav-server', { date: dateStr, port: '8765', open: true })
+      break
+    }
     case 'login-wechat':
       await runCmd('login-wechat', {})
       break
