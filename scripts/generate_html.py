@@ -291,7 +291,12 @@ def generate_html(date_str: str, topics: dict, action_suggestions_exist: bool, b
         _, color, icon = TOPIC_LABELS[topic]
         cards = []
         for art in topics[topic]:
-            tags_html = ''.join(f'<span class="tag">{escape_html(t)}</span>' for t in (art['tags'] or [])[:5])
+            all_tags = art['tags'] or []
+            shown_tags = all_tags[:4]
+            hidden_count = len(all_tags) - 4
+            tags_html = ''.join(f'<span class="tag">{escape_html(t)}</span>' for t in shown_tags)
+            if hidden_count > 0:
+                tags_html += f'<span class="tag tag-more">+{hidden_count}</span>'
             relevance_badge = ''
             if art.get('relevance') == '高':
                 relevance_badge = '<span class="relevance high">高相关</span>'
@@ -365,333 +370,232 @@ def generate_html(date_str: str, topics: dict, action_suggestions_exist: bool, b
 <style>
 * {{ margin: 0; padding: 0; box-sizing: border-box; }}
 body {{
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans SC", "PingFang SC", sans-serif;
-    background: #0f172a;
-    color: #e2e8f0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: #f5f0e8;
+    color: #3c3a38;
     min-height: 100vh;
+    -webkit-font-smoothing: antialiased;
 }}
-.container {{ max-width: 1200px; margin: 0 auto; padding: 24px; }}
+.container {{ max-width: 1400px; margin: 0 auto; padding: 28px 32px; }}
 
-/* Header */
+/* ---- Header ---- */
 .header {{
     text-align: center;
-    padding: 40px 20px 30px;
-    border-bottom: 1px solid #1e293b;
+    padding: 44px 20px 28px;
     margin-bottom: 24px;
+    position: relative;
+}}
+.header::after {{
+    content: '';
+    position: absolute;
+    bottom: 0; left: 50%; transform: translateX(-50%);
+    width: 60px; height: 3px;
+    background: linear-gradient(90deg, #8b6914, #c8963e, #d4a853);
+    border-radius: 2px;
 }}
 .header h1 {{
-    font-size: 28px;
-    font-weight: 700;
-    background: linear-gradient(135deg, #818cf8, #c084fc);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    background-clip: text;
+    font-size: 28px; font-weight: 800; letter-spacing: -.3px;
+    color: #4a3728;
 }}
 .header .meta {{
-    margin-top: 8px;
-    color: #94a3b8;
-    font-size: 14px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 16px;
-    flex-wrap: wrap;
+    margin-top: 8px; color: #8b7355; font-size: 14px;
+    display: flex; align-items: center; justify-content: center; gap: 14px; flex-wrap: wrap;
 }}
 .action-link {{
-    color: #fbbf24;
-    text-decoration: none;
-    font-weight: 600;
-    padding: 4px 12px;
-    border: 1px solid #fbbf24;
-    border-radius: 20px;
-    font-size: 13px;
-    transition: all .2s;
+    color: #8b6914; text-decoration: none; font-weight: 600;
+    padding: 5px 14px; border: 1px solid #c8963e40; border-radius: 20px;
+    font-size: 13px; transition: all .25s; background: #faf6ef;
 }}
-.action-link:hover {{ background: #fbbf241a; }}
+.action-link:hover {{ background: #c8963e15; border-color: #c8963e70; }}
 
-/* Briefing */
+/* ---- Briefing ---- */
 .briefing {{
-  background: linear-gradient(135deg, #1a1040, #0d1b3e);
-  border: 1px solid #2d2d6e;
-  border-radius: 14px;
-  padding: 20px 24px;
-  margin-bottom: 16px;
+  background: linear-gradient(135deg, #faf6ef, #f7f0e4);
+  border: 1px solid #d4c5a0; border-radius: 14px; padding: 22px 26px; margin-bottom: 20px;
 }}
-.briefing-title {{
-  font-size: 15px;
-  font-weight: 700;
-  color: #a5b4fc;
-  margin-bottom: 10px;
-}}
-.briefing-text {{
-  font-size: 14px;
-  line-height: 1.9;
-  color: #cbd5e1;
-}}
+.briefing-title {{ font-size: 15px; font-weight: 700; color: #6b4c1e; margin-bottom: 10px; }}
+.briefing-text {{ font-size: 14px; line-height: 1.9; color: #5c4a32; }}
 
-/* Stats bar */
+/* ---- Stats Bar ---- */
 .stats-bar {{
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 12px;
-    flex-wrap: wrap;
-    margin-bottom: 24px;
-    padding: 12px 20px;
-    background: #1e293b;
-    border-radius: 12px;
-    font-size: 14px;
-    color: #94a3b8;
+    display: flex; align-items: center; justify-content: center; gap: 10px;
+    flex-wrap: wrap; margin-bottom: 22px; padding: 10px 22px;
+    background: #faf6ef; border: 1px solid #d4c5a060; border-radius: 12px;
+    font-size: 13px; color: #8b7355;
 }}
-.stats-bar strong {{ color: #e2e8f0; }}
+.stats-bar strong {{ color: #3c3a38; font-weight: 700; }}
+.stats-group {{
+    display: flex; align-items: center; gap: 8px;
+}}
 .btn-clear {{
-    background: #334155;
-    color: #cbd5e1;
-    border: none;
-    padding: 6px 14px;
-    border-radius: 8px;
-    cursor: pointer;
-    font-size: 13px;
-    transition: background .2s;
+    background: #f0e8d5; color: #5c4a32; border: 1px solid #d4c5a0;
+    padding: 5px 14px; border-radius: 8px; cursor: pointer;
+    font-size: 12px; font-weight: 500; transition: all .2s;
 }}
-.btn-clear:hover {{ background: #475569; }}
+.btn-clear:hover {{ background: #e8dcc0; border-color: #c8963e; color: #3c3a38; }}
 .btn-clear.active-mode {{
-    background: #818cf8 !important;
-    color: #fff !important;
+    background: #8b6914 !important; border-color: #8b6914 !important; color: #fff !important;
 }}
 
-/* Tabs */
+/* ---- Tabs ---- */
 .tabs {{
-    display: flex;
-    gap: 8px;
-    flex-wrap: wrap;
-    margin-bottom: 24px;
-    position: sticky;
-    top: 12px;
-    z-index: 10;
-    padding: 8px 0;
-    background: #0f172a;
+    display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 24px;
+    position: sticky; top: 12px; z-index: 10; padding: 6px;
+    background: #faf6eff2; backdrop-filter: blur(12px);
+    border: 1px solid #d4c5a060; border-radius: 12px;
 }}
 .tab-btn {{
-    background: #1e293b;
-    color: #94a3b8;
-    border: 2px solid transparent;
-    padding: 8px 16px;
-    border-radius: 10px;
-    cursor: pointer;
-    font-size: 14px;
-    font-weight: 500;
-    transition: all .2s;
+    background: transparent; color: #8b7355; border: none;
+    padding: 9px 18px; border-radius: 10px; cursor: pointer;
+    font-size: 14px; font-weight: 500; transition: all .2s;
 }}
-.tab-btn:hover {{ color: #e2e8f0; background: #334155; }}
+.tab-btn:hover {{ color: #3c3a38; background: #f0e8d5; }}
 .tab-btn.active {{
-    color: #e2e8f0;
-    background: #1e293b;
-    border-color: var(--accent);
+    color: #2a2018; background: #dcc89a;
+    box-shadow: 0 1px 4px #00000018, inset 0 1px 0 #fff8;
+    font-weight: 700;
+    border: 1px solid #c8963e30;
 }}
 .tab-btn .count {{
-    background: #334155;
-    padding: 1px 7px;
-    border-radius: 10px;
-    font-size: 12px;
-    margin-left: 4px;
+    background: #d4c5a040; padding: 2px 8px; border-radius: 8px;
+    font-size: 12px; margin-left: 5px; font-weight: 600;
 }}
+.tab-btn.active .count {{ background: #c8963e20; color: #8b6914; }}
 
-/* Topic sections */
+/* ---- Topic Sections ---- */
 .topic-section {{ display: none; }}
 .topic-section.active {{ display: block; }}
 .topic-heading {{
-    font-size: 20px;
-    font-weight: 700;
-    margin-bottom: 16px;
-    display: flex;
-    align-items: center;
-    gap: 8px;
+    font-size: 18px; font-weight: 700; margin-bottom: 16px;
+    display: flex; align-items: center; gap: 10px; color: #4a3728;
 }}
 .topic-heading::after {{
-    content: '';
-    flex: 1;
-    height: 1px;
-    background: #1e293b;
-    margin-left: 8px;
+    content: ''; flex: 1; height: 1px; background: #d4c5a0; margin-left: 8px;
 }}
+.topic-heading .count {{ font-size: 13px; color: #8b7355; font-weight: 400; }}
 
-/* Cards */
-.cards-grid {{
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-}}
+/* ---- Cards ---- */
+.cards-grid {{ display: flex; flex-direction: column; gap: 10px; }}
 .card {{
-    background: #1e293b;
-    border-radius: 12px;
-    padding: 16px 20px;
-    border: 1px solid #334155;
-    transition: all .2s;
-    position: relative;
+    background: #fefcf8; border-radius: 12px; padding: 20px 24px;
+    border: 1px solid #d4c5a0; transition: all .25s ease;
+    position: relative; overflow: hidden;
 }}
-.card:hover {{ border-color: #475569; }}
+.card::before {{
+    content: ''; position: absolute; top: 0; left: 0; width: 3px; height: 100%;
+    background: transparent; transition: background .3s; border-radius: 12px 0 0 12px;
+}}
+.card:hover {{
+    border-color: #c8963e50; background: #fffdf7;
+    transform: translateY(-1px); box-shadow: 0 3px 16px #3c3a3810;
+}}
+.card:hover::before {{ background: #c8963e; }}
 .card.read {{
-    opacity: 0.55;
-    border-color: #1e293b;
+    opacity: 0.55; background: #f5f0e8; border-color: #d4c5a030;
 }}
-.card.read:hover {{ opacity: 0.7; border-color: #334155; }}
+.card.read:hover {{ opacity: 0.7; border-color: #d4c5a060; transform: none; box-shadow: none; }}
+.card.read:hover::before {{ background: #b8a080; }}
+.card.faved {{ border-color: #c8963e40; background: #fffcf5; }}
 
 .card-header {{ margin-bottom: 8px; }}
-.card-title-row {{
-    display: flex;
-    align-items: center;
-    gap: 8px;
-}}
+.card-title-row {{ display: flex; align-items: flex-start; gap: 10px; }}
 .unread-dot {{
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    background: #3b82f6;
-    flex-shrink: 0;
-    transition: background .3s;
+    width: 9px; height: 9px; border-radius: 50%;
+    background: #c8963e; flex-shrink: 0; margin-top: 5px; transition: all .3s;
+    box-shadow: 0 0 6px #c8963e40;
 }}
-.card.read .unread-dot {{ background: #475569; }}
+.card.read .unread-dot {{ background: #b8a080; box-shadow: none; }}
 .card-title {{
-    font-size: 15px;
-    font-weight: 600;
-    flex: 1;
-    line-height: 1.4;
+    font-size: 18px; font-weight: 700; flex: 1; line-height: 1.4; letter-spacing: -.3px;
 }}
-.card-title a {{
-    color: #e2e8f0;
-    text-decoration: none;
-    transition: color .2s;
-}}
-.card-title a:hover {{ color: #818cf8; }}
-.card.read .card-title a {{ color: #94a3b8; }}
+.card-title a {{ color: #2a2018; text-decoration: none; transition: color .2s; }}
+.card-title a:hover {{ color: #8b6914; text-decoration: underline; text-underline-offset: 3px; }}
+.card.read .card-title a {{ color: #8b7355; }}
 
-.card-meta {{
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    margin-top: 4px;
-    font-size: 12px;
-    color: #64748b;
+.card-meta {{ display: flex; align-items: center; gap: 8px; margin-top: 6px; font-size: 13px; color: #8b7355; font-weight: 500; }}
+.card-meta .source {{
+    color: #6b4c1e; font-weight: 600;
 }}
-.source {{ color: #818cf8; }}
 
 .relevance {{
-    font-size: 11px;
-    padding: 2px 8px;
-    border-radius: 10px;
-    font-weight: 600;
-    flex-shrink: 0;
+    font-size: 10px; padding: 3px 10px; border-radius: 12px; font-weight: 700;
+    flex-shrink: 0; letter-spacing: .3px;
 }}
-.relevance.high {{ background: #dc262620; color: #f87171; border: 1px solid #dc262640; }}
-.relevance.mid {{ background: #f59e0b20; color: #fbbf24; border: 1px solid #f59e0b40; }}
+.relevance.high {{ background: #dc5b5b15; color: #b04444; border: 1px solid #dc5b5b30; }}
+.relevance.mid {{ background: #c8963e15; color: #8b6914; border: 1px solid #c8963e40; }}
 
 .card-tags {{ display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }}
 .tag {{
-    font-size: 11px;
-    padding: 2px 8px;
-    background: #334155;
-    border-radius: 6px;
-    color: #94a3b8;
+    font-size: 11px; padding: 3px 10px; background: #f0e8d5; border-radius: 6px;
+    color: #8b7355; font-weight: 500; letter-spacing: .2px;
+}}
+.tag-more {{
+    background: #ede0c8; color: #96876a; font-weight: 600; cursor: default;
 }}
 
 .card-preview {{
-    font-size: 13px;
-    color: #64748b;
-    line-height: 1.6;
-    margin-bottom: 10px;
-    display: -webkit-box;
-    -webkit-line-clamp: 2;
-    -webkit-box-orient: vertical;
-    overflow: hidden;
+    font-size: 13px; color: #a0987a; line-height: 1.65; margin-bottom: 12px;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
 }}
 
-.card-actions {{
-    display: flex;
-    gap: 8px;
-    align-items: center;
-}}
+/* ---- Card Actions ---- */
+.card-actions {{ display: flex; gap: 8px; align-items: center; justify-content: flex-end; }}
 .btn-read {{
-    font-size: 12px;
-    color: #818cf8;
-    text-decoration: none;
-    padding: 4px 12px;
-    border: 1px solid #818cf840;
-    border-radius: 6px;
-    transition: all .2s;
+    font-size: 13px; color: #fff; text-decoration: none;
+    padding: 6px 18px; border: none; border-radius: 7px;
+    transition: all .2s; font-weight: 600;
+    background: linear-gradient(135deg, #8b6914, #a07828);
+    box-shadow: 0 1px 3px #8b691420;
 }}
-.btn-read:hover {{ background: #818cf820; }}
+.btn-read:hover {{ background: linear-gradient(135deg, #6b4c1e, #8b6914); box-shadow: 0 2px 8px #8b691430; color: #fff; }}
 .btn-toggle {{
-    font-size: 12px;
-    color: #64748b;
-    background: none;
-    border: 1px solid #334155;
-    padding: 4px 12px;
-    border-radius: 6px;
-    cursor: pointer;
-    transition: all .2s;
+    font-size: 12px; color: #8b7355; background: none; border: 1px solid #d4c5a0;
+    padding: 5px 14px; border-radius: 7px; cursor: pointer;
+    transition: all .2s; font-weight: 500;
 }}
-.btn-toggle:hover {{ color: #e2e8f0; border-color: #475569; }}
-.card.read .btn-toggle {{ color: #10b981; border-color: #10b98140; }}
+.btn-toggle:hover {{ color: #3c3a38; border-color: #b8a080; }}
+.card.read .btn-toggle {{ color: #6b8f5e; border-color: #6b8f5e30; }}
 .card.read .toggle-label::before {{ content: '↩ 标记未读'; }}
 .toggle-label::before {{ content: '✓ 标记已读'; }}
 
-/* Favorite */
+/* ---- Favorite ---- */
 .btn-fav {{
-    font-size: 13px;
-    background: none;
-    border: 1px solid #334155;
-    padding: 4px 10px;
-    border-radius: 6px;
-    cursor: pointer;
-    transition: all .2s;
-    color: #64748b;
+    font-size: 14px; background: none; border: 1px solid #d4c5a0;
+    padding: 4px 10px; border-radius: 7px; cursor: pointer;
+    transition: all .2s; color: #8b7355; line-height: 1;
 }}
-.btn-fav:hover {{ color: #fbbf24; border-color: #fbbf2450; }}
-.btn-fav.faved {{ color: #fbbf24; border-color: #fbbf2440; background: #fbbf2412; }}
-.card.faved {{ border-color: #fbbf2430; }}
+.btn-fav:hover {{ color: #c8963e; border-color: #c8963e60; }}
+.btn-fav.faved {{ color: #c8963e; border-color: #c8963e50; background: #c8963e10; }}
 .fav-empty {{
-    text-align: center;
-    padding: 60px 20px;
-    color: #475569;
-    font-size: 15px;
-    line-height: 2;
+    text-align: center; padding: 60px 20px; color: #96876a;
+    font-size: 15px; line-height: 2;
 }}
 
-/* Footer */
-.footer {{
-    text-align: center;
-    padding: 30px 20px;
-    color: #475569;
-    font-size: 12px;
-    margin-top: 20px;
-    border-top: 1px solid #1e293b;
-}}
-
-/* Search */
+/* ---- Search ---- */
 .search-box {{
-    width: 100%;
-    max-width: 400px;
-    margin: 0 auto 16px;
-    display: block;
-    padding: 10px 16px;
-    border-radius: 10px;
-    border: 1px solid #334155;
-    background: #1e293b;
-    color: #e2e8f0;
-    font-size: 14px;
-    outline: none;
-    transition: border-color .2s;
+    width: 100%; max-width: 480px; margin: 0 auto 20px; display: block;
+    padding: 11px 18px; border-radius: 12px; border: 1px solid #d4c5a0;
+    background: #fdfaf5; color: #3c3a38; font-size: 14px; outline: none;
+    transition: all .25s; font-family: inherit;
 }}
-.search-box:focus {{ border-color: #818cf8; }}
-.search-box::placeholder {{ color: #475569; }}
+.search-box:focus {{ border-color: #c8963e; box-shadow: 0 0 0 3px #c8963e15; }}
+.search-box::placeholder {{ color: #b8a080; }}
 
+/* ---- Footer ---- */
+.footer {{
+    text-align: center; padding: 32px 20px; color: #b8a080;
+    font-size: 12px; margin-top: 24px; border-top: 1px solid #d4c5a050;
+}}
+
+/* ---- Responsive ---- */
 @media (max-width: 640px) {{
-    .container {{ padding: 12px; }}
+    .container {{ padding: 14px; }}
+    .header {{ padding: 28px 14px 22px; }}
     .header h1 {{ font-size: 22px; }}
-    .card {{ padding: 12px 14px; }}
-    .tabs {{ gap: 4px; }}
-    .tab-btn {{ padding: 6px 10px; font-size: 13px; }}
+    .card {{ padding: 14px 16px; }}
+    .tabs {{ gap: 2px; padding: 4px; }}
+    .tab-btn {{ padding: 7px 11px; font-size: 13px; }}
+    .card-title {{ font-size: 14px; }}
 }}
 </style>
 </head>
@@ -703,22 +607,28 @@ body {{
     <div class="meta">
         <span>共 <strong>{total}</strong> 篇文章 {', '.join(f'{TOPIC_LABELS[t][2]} {len(topics[t])}' for t in TOPIC_ORDER if t in topics)}</span>
         {action_link}
+        <span style="font-size:12px;color:#b8a080;display:flex;align-items:center;gap:6px">
+          <button class="btn-clear" id="btn-mode-md" onclick="setViewMode('md')" style="font-size:11px;padding:3px 10px">📝</button>
+          <button class="btn-clear" id="btn-mode-html" onclick="setViewMode('html')" style="font-size:11px;padding:3px 10px">🎨</button>
+          <button class="btn-clear" onclick="exportFav()" id="btn-export-fav" style="font-size:11px;padding:3px 10px">📥</button>
+        </span>
     </div>
 </div>
 
     {briefing_html}
 
 <div class="stats-bar">
-    <span>📊 <strong id="unread-count">-</strong> 篇未读 / {total} 篇</span>
-    <span style="color:#334155">|</span>
-    <button class="btn-clear" onclick="markAllRead()">✅ 全部标为已读</button>
-    <button class="btn-clear" onclick="clearAll()">🔄 重置所有标记</button>
-    <button class="btn-clear" onclick="exportFav()" id="btn-export-fav" title="下载 .fav_state.json 后运行 sync_fav.py 即可同步到磁盘">📥 导出收藏</button>
-    <span id="sync-indicator" style="display:none;font-size:12px;color:#10b981">⚡ 实时同步</span>
-    <span style="color:#334155">|</span>
-    <span style="font-size:13px;color:#94a3b8">阅读:</span>
-    <button class="btn-clear" id="btn-mode-md" onclick="setViewMode('md')" style="background:#334155;color:#cbd5e1">📝 MD</button>
-    <button class="btn-clear" id="btn-mode-html" onclick="setViewMode('html')">🎨 HTML</button>
+    <span class="stats-group">
+        <span>📊 <strong id="unread-count">-</strong> 篇未读 / {total} 篇</span>
+        <button class="btn-clear" id="btn-filter-unread" onclick="toggleUnreadFilter()" style="font-weight:600">👁 仅看未读</button>
+    </span>
+    <span class="stats-group">
+        <button class="btn-clear" onclick="markAllRead()">✅ 全部标为已读</button>
+        <button class="btn-clear" onclick="clearAll()">🔄 重置</button>
+    </span>
+    <span class="stats-group">
+        <span id="sync-indicator" style="display:none;font-size:12px;color:#6b8f5e;font-weight:600">🟢 已同步</span>
+    </span>
 
 <input type="text" class="search-box" placeholder="🔍 搜索文章标题、来源、标签..." oninput="doSearch(this.value)">
 
@@ -930,12 +840,34 @@ function renderFavSection() {{
 
 const VIEW_MODE_KEY = 'weflow_vmode_{date_str}';
 function getViewMode() {{
-    return localStorage.getItem(VIEW_MODE_KEY) || 'md';
+    return localStorage.getItem(VIEW_MODE_KEY) || 'html';
 }}
 function setViewMode(mode) {{
     localStorage.setItem(VIEW_MODE_KEY, mode);
     applyViewMode();
 }}
+let unreadFilterOn = false;
+function toggleUnreadFilter() {{
+    unreadFilterOn = !unreadFilterOn;
+    const btn = document.getElementById('btn-filter-unread');
+    if (btn) {{
+        if (unreadFilterOn) {{
+            btn.classList.add('active-mode');
+            btn.textContent = '👁 仅看未读 ✓';
+        }} else {{
+            btn.classList.remove('active-mode');
+            btn.textContent = '👁 仅看未读';
+        }}
+    }}
+    applyUnreadFilter();
+}}
+function applyUnreadFilter() {{
+    document.querySelectorAll('.card').forEach(card => {{
+        if (!unreadFilterOn) {{ card.style.display = ''; return; }}
+        card.style.display = card.classList.contains('read') ? 'none' : '';
+    }});
+}}
+
 function applyViewMode() {{
     const mode = getViewMode();
     const btnMd = document.getElementById('btn-mode-md');
@@ -989,7 +921,7 @@ function exportFav() {{
         const indicator = document.getElementById('sync-indicator');
         if (indicator) {{ indicator.style.display = ''; }}
         const exportBtn = document.getElementById('btn-export-fav');
-        if (exportBtn) {{ exportBtn.textContent = '✅ 已实时同步'; exportBtn.title = '收藏已实时同步到磁盘'; }}
+        if (exportBtn) {{ exportBtn.textContent = '📥 导出'; exportBtn.title = '收藏已实时同步到磁盘'; }}
     }}
     const hash = window.location.hash.slice(1);
     switchTab(hash || 'AI');
