@@ -12,6 +12,7 @@
 import sys, os, json
 from pathlib import Path
 from http.server import HTTPServer, SimpleHTTPRequestHandler
+import urllib.request
 
 SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(SCRIPTS_DIR)
@@ -48,6 +49,8 @@ class FavHandler(SimpleHTTPRequestHandler):
     def do_POST(self):
         if self.path == '/api/fav/toggle':
             self._handle_fav_toggle()
+        elif self.path == '/api/explain':
+            self._handle_explain()
         else:
             self.send_error(404)
 
@@ -118,6 +121,53 @@ class FavHandler(SimpleHTTPRequestHandler):
             if item.name not in desired_names:
                 if item.is_symlink() or item.is_file():
                     item.unlink()
+
+    def _handle_explain(self):
+        content_len = int(self.headers.get('Content-Length', 0))
+        body = self.rfile.read(content_len)
+        try:
+            data = json.loads(body.decode('utf-8'))
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            self.send_error(400, 'Invalid JSON')
+            return
+        text = data.get('text', '').strip()
+        context = data.get('context', '').strip()
+        if not text:
+            self.send_error(400, 'Missing text')
+            return
+
+        # 读 DeepSeek API key
+        api_key = os.environ.get('ANTHROPIC_AUTH_TOKEN', '') or os.environ.get('DEEPSEEK_API_KEY', '')
+
+        prompt = f'''你是一个阅读助手。用户正在读一篇文章，有问题要问你。请根据文章内容回答。
+
+文章全文：
+{context[:8000]}
+
+用户提问："{text}"
+
+请根据文章内容回答。如果涉及专业术语请解释，如果问的是文章观点请总结相关段落。'''
+
+        payload = json.dumps({
+            'model': 'deepseek-chat',
+            'messages': [
+                {'role': 'system', 'content': '你是一个简洁准确的知识助手，用中文回答。'},
+                {'role': 'user', 'content': prompt}
+            ],
+            'max_tokens': 1000,
+            'temperature': 0.3
+        }).encode('utf-8')
+
+        try:
+            req = urllib.request.Request('https://api.deepseek.com/v1/chat/completions', data=payload)
+            req.add_header('Content-Type', 'application/json; charset=utf-8')
+            req.add_header('Authorization', f'Bearer {api_key}')
+            resp = urllib.request.urlopen(req, timeout=15)
+            result = json.loads(resp.read().decode('utf-8'))
+            explanation = result['choices'][0]['message']['content']
+            self._send_json({'ok': True, 'text': text, 'explanation': explanation})
+        except Exception as e:
+            self._send_json({'ok': False, 'error': f'AI 调用失败: {str(e)}'})
 
     def _send_json(self, data):
         body = json.dumps(data, ensure_ascii=False).encode('utf-8')
