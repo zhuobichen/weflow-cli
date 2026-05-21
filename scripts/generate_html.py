@@ -309,7 +309,7 @@ def generate_html(date_str: str, topics: dict, action_suggestions_exist: bool, b
                         <div class="card-title-row">
                             <span class="unread-dot" id="dot-{escape_html(art['rel_path']).replace('/', '_').replace('.', '_')}"></span>
                             <h3 class="card-title">
-                                <a href="{escape_html(art['rel_path'])}" target="_blank"
+                                <a href="{escape_html(art['rel_path'])}"
                                    onclick="markRead('{escape_html(art['rel_path'])}')">
                                     {escape_html(art['title'])}
                                 </a>
@@ -323,7 +323,7 @@ def generate_html(date_str: str, topics: dict, action_suggestions_exist: bool, b
                     <div class="card-tags">{tags_html}</div>
                     <p class="card-preview">{escape_html(art['preview'])}</p>
                     <div class="card-actions">
-                        <a href="{escape_html(art['rel_path'])}" target="_blank"
+                        <a href="{escape_html(art['rel_path'])}"
                            class="btn-read" onclick="markRead('{escape_html(art['rel_path'])}')">
                            📖 阅读
                         </a>
@@ -846,9 +846,11 @@ function setViewMode(mode) {{
     localStorage.setItem(VIEW_MODE_KEY, mode);
     applyViewMode();
 }}
-let unreadFilterOn = false;
+const UNREAD_KEY = 'weflow_unread_{date_str}';
+let unreadFilterOn = sessionStorage.getItem(UNREAD_KEY) === '1';
 function toggleUnreadFilter() {{
     unreadFilterOn = !unreadFilterOn;
+    sessionStorage.setItem(UNREAD_KEY, unreadFilterOn ? '1' : '0');
     const btn = document.getElementById('btn-filter-unread');
     if (btn) {{
         if (unreadFilterOn) {{
@@ -883,7 +885,7 @@ function applyViewMode() {{
         const id = card.getAttribute('data-id');
         if (!id) return;
         if (mode === 'html') {{
-            const newHref = 'article.html?file=' + encodeURIComponent(id);
+            const newHref = 'article.html?file=' + encodeURIComponent(id) + '&date={date_str}';
             if (a.getAttribute('data-md-href') === null) {{
                 a.setAttribute('data-md-href', a.getAttribute('href') || '');
             }}
@@ -916,6 +918,35 @@ function exportFav() {{
     applyState();
     applyFavState();
     applyViewMode();
+
+    // 恢复"仅看未读"筛选状态
+    if (unreadFilterOn) {{
+        const btn = document.getElementById('btn-filter-unread');
+        if (btn) {{ btn.classList.add('active-mode'); btn.textContent = '👁 仅看未读 ✓'; }}
+        applyUnreadFilter();
+    }}
+
+    // 恢复滚动位置（兼容 bfcache）
+    const KEY = 'weflow_scroll_{date_str}';
+    function restoreScroll() {{
+        const y = sessionStorage.getItem(KEY);
+        if (y) window.scrollTo(0, parseInt(y));
+    }}
+    restoreScroll();
+    window.addEventListener('pageshow', (e) => {{ if (e.persisted) restoreScroll(); }});
+
+    // 滚动时保存
+    let scrollTimer;
+    window.addEventListener('scroll', () => {{
+        clearTimeout(scrollTimer);
+        scrollTimer = setTimeout(() => sessionStorage.setItem(KEY, String(window.scrollY)), 150);
+    }}, {{passive: true}});
+
+    // 点击文章链接时立即保存
+    document.addEventListener('click', (e) => {{
+        const link = e.target.closest('.card-title a, .btn-read');
+        if (link) sessionStorage.setItem(KEY, String(window.scrollY));
+    }});
     if (IS_LOCALHOST) {{
         await loadFavFromServer();
         const indicator = document.getElementById('sync-indicator');
