@@ -89,6 +89,13 @@ def main():
         date_str = args.date or time.strftime('%Y-%m-%d')
         run_step('generate_html', [os.path.join(SCRIPTS_DIR, 'generate_html.py'), '--date', date_str])
 
+    # Step 6: 双向链接增强
+    date_str = args.date or time.strftime('%Y-%m-%d')
+    run_step('enrich_backlinks — 双向链接', [os.path.join(SCRIPTS_DIR, 'enrich_backlinks.py'), '--date', date_str])
+
+    # Step 7: 阅读笔记生成
+    run_step('create_reading_notes — 阅读笔记', [os.path.join(SCRIPTS_DIR, 'create_reading_notes.py'), '--date', date_str])
+
     elapsed = time.time() - started
     print(f'\n{"="*50}')
     print(f'  流水线完成！耗时 {elapsed/60:.1f} 分钟')

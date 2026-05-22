@@ -1148,6 +1148,127 @@ program
         })
     )
 
+  // vault enrich — bidirectional backlinks
+  program.commands
+    .find(c => c.name() === 'vault')
+    ?.addCommand(
+      new Command('enrich')
+        .description('增强双向链接 — 为文章添加相关阅读段落')
+        .option('--date <YYYY-MM-DD>', '日期（默认今天）')
+        .action(async (opts) => {
+          const { fileURLToPath } = await import('url')
+          const { dirname } = await import('path')
+          const __filename = fileURLToPath(import.meta.url)
+          const __dirname = dirname(__filename)
+          const pkgRoot = join(__dirname, '..', '..')
+          const script = join(pkgRoot, 'scripts', 'enrich_backlinks.py')
+          if (!opts.date) {
+            const now = new Date()
+            opts.date = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`
+          }
+          await runPythonCmd(script, ['--date', opts.date])
+        })
+    )
+
+  // vault notes — create reading notes
+  program.commands
+    .find(c => c.name() === 'vault')
+    ?.addCommand(
+      new Command('notes')
+        .description('创建阅读笔记 — 为文章生成 Vault 笔记页')
+        .option('--date <YYYY-MM-DD>', '日期（默认今天）')
+        .option('--vault <path>', 'Vault 路径', './output/wechat-vault')
+        .action(async (opts) => {
+          const { fileURLToPath } = await import('url')
+          const { dirname } = await import('path')
+          const __filename = fileURLToPath(import.meta.url)
+          const __dirname = dirname(__filename)
+          const pkgRoot = join(__dirname, '..', '..')
+          const script = join(pkgRoot, 'scripts', 'create_reading_notes.py')
+          if (!opts.date) {
+            const now = new Date()
+            opts.date = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`
+          }
+          await runPythonCmd(script, ['--date', opts.date, '--vault', opts.vault])
+        })
+    )
+
+  // vault tag — auto tag
+  program.commands
+    .find(c => c.name() === 'vault')
+    ?.addCommand(
+      new Command('tag')
+        .description('自动标签 — AI 为文章补充标签')
+        .option('--date <YYYY-MM-DD>', '日期（默认今天）')
+        .action(async (opts) => {
+          const { fileURLToPath } = await import('url')
+          const { dirname } = await import('path')
+          const __filename = fileURLToPath(import.meta.url)
+          const __dirname = dirname(__filename)
+          const pkgRoot = join(__dirname, '..', '..')
+          const script = join(pkgRoot, 'scripts', 'auto_tag.py')
+          if (!opts.date) { const n=new Date(); opts.date=`${n.getFullYear()}-${String(n.getMonth()+1).padStart(2,'0')}-${String(n.getDate()).padStart(2,'0')}` }
+          await runPythonCmd(script, ['--date', opts.date])
+        })
+    )
+
+  // vault search — search across Vault
+  program.commands
+    .find(c => c.name() === 'vault')
+    ?.addCommand(
+      new Command('search')
+        .description('Vault 搜索 — 文章+概念+笔记')
+        .argument('<query>', '搜索关键词')
+        .option('--type <type>', 'all / article / concept / note', 'all')
+        .option('--top-k <n>', '返回数量', '10')
+        .action(async (query, opts) => {
+          const { fileURLToPath } = await import('url')
+          const { dirname } = await import('path')
+          const __filename = fileURLToPath(import.meta.url)
+          const __dirname = dirname(__filename)
+          const pkgRoot = join(__dirname, '..', '..')
+          const script = join(pkgRoot, 'scripts', 'vault_search.py')
+          await runPythonCmd(script, [query, '--type', opts.type, '--top-k', opts.topK, '--json'])
+        })
+    )
+
+  // vault rag — RAG dialog over Vault
+  program.commands
+    .find(c => c.name() === 'vault')
+    ?.addCommand(
+      new Command('rag')
+        .description('Vault 问答 — 基于知识库的 AI 对话')
+        .argument('<question>', '问题')
+        .option('--top-k <n>', '检索条数', '8')
+        .action(async (question, opts) => {
+          const { fileURLToPath } = await import('url')
+          const { dirname } = await import('path')
+          const __filename = fileURLToPath(import.meta.url)
+          const __dirname = dirname(__filename)
+          const pkgRoot = join(__dirname, '..', '..')
+          const script = join(pkgRoot, 'scripts', 'vault_rag.py')
+          await runPythonCmd(script, [question, '--top-k', opts.topK])
+        })
+    )
+
+  // vault sync-weread — sync WeRead to Vault
+  program.commands
+    .find(c => c.name() === 'vault')
+    ?.addCommand(
+      new Command('sync-weread')
+        .description('微信读书同步到 Vault')
+        .option('--type <type>', 'all / shelf / notes', 'all')
+        .action(async (opts) => {
+          const { fileURLToPath } = await import('url')
+          const { dirname } = await import('path')
+          const __filename = fileURLToPath(import.meta.url)
+          const __dirname = dirname(__filename)
+          const pkgRoot = join(__dirname, '..', '..')
+          const script = join(pkgRoot, 'scripts', 'sync_weread.py')
+          await runPythonCmd(script, ['--type', opts.type])
+        })
+    )
+
   // chat-stats
   program
     .command('chat-stats')
@@ -1485,6 +1606,21 @@ program
     })
 
   // 辅助函数
+  async function runPythonCmd(script: string, args: string[]) {
+    const { execFile } = await import('child_process')
+    const { promisify } = await import('util')
+    const execFileAsync = promisify(execFile)
+    try {
+      const { stdout } = await execFileAsync('python', [script, ...args], {
+        timeout: 120_000, maxBuffer: 5 * 1024 * 1024,
+        env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
+      })
+      console.log(stdout)
+    } catch (e: any) {
+      console.error(chalk.red(`\n✗ 失败: ${e.message}`))
+    }
+  }
+
   async function getWereadService() {
     const key = process.env.WEREAD_API_KEY || ''
     const mod = await import('../src/services/wereadService.js')
