@@ -1026,7 +1026,13 @@ def main():
     # 同时生成 article.html（Markdown 渲染阅读器）
     article_html_path = os.path.join(date_dir, 'article.html')
     if not os.path.exists(article_html_path):
-        generate_article_viewer(article_html_path)
+        # 从最新版本拷贝（包含 AI 侧边栏等完整功能）
+        import shutil
+        template = os.path.join(SOURCE_ROOT, '2026-05-19', 'article.html')
+        if os.path.exists(template):
+            shutil.copy2(template, article_html_path)
+        else:
+            generate_article_viewer(article_html_path)
 
     total = sum(len(v) for v in topics.values())
     print(f'✓ HTML 生成完成: {out_path}')
