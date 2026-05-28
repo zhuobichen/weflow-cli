@@ -14,16 +14,17 @@
 
 ---
 
-## ✨ v1.1.0 — 公众号日报 + AI 摘要
+## ✨ v1.3.0 — 本地阅读器 + 知识管道 + MCP Server
 
-- ✨ **公众号日报** — 自动抓取今日推送全文，DeepSeek V4 生成摘要与主题分类
-- ✨ **兴趣深度解析** — AI 相关文章自动生成深度分析（核心观点 + 关键细节 + 启示）
-- ✨ **广告清洗** — 自动去除微信文章中的小说阅读器、悬浮提示等广告残留
-- ✨ **按主题分文件夹** — AI / 学术 / 新闻 / 文学 四类独立目录，README 总索引
-- ✨ **联系人昵称映射** — contact.db 交叉引用，sessions/contacts/messages 全面替换 wxid
-- ✨ **CLI 兼容昵称** — 支持用昵称、备注名、序号代替 wxid
-- 🔧 **命令行增强** — 新增 whitelist / login-wechat / send / listen 命令
-- 🔧 **导出优化** — HTML 图片 base64 内嵌（NT 缓存提取），发送人识别为备注名
+- ✨ **本地阅读器** — `fav_server.py` 驱动，浏览器阅读、收藏同步、已读追踪、划词 AI 解释
+- ✨ **HTML 日报** — `generate_html.py` 自动生成分类展示页面，localStorage + 服务端双持久化
+- ✨ **MCP Server** — 微信公众号文章抓取/搜索/发布、概念图谱、学习日报、知识库统计
+- ✨ **公众号日报** — 自动抓取全文，DeepSeek V4 摘要 + 主题分类，增量去重
+- ✨ **Obsidian 集成** — vault 搜索/RAG/反向链接、阅读笔记创建、知识管道 (pipeline)
+- ✨ **微信读书集成** — 书架同步、笔记划线、书评浏览、阅读统计
+- ✨ **支付通知过滤** — 自动过滤微信支付/扣费/续费等非文章消息
+- 🔧 **TLS 兼容** — 修复 weread.qq.com 的 TLS 1.3 → 1.2 降级
+- 🔧 **广告清洗** — 去除微信文章小说阅读器、悬浮提示等广告残留
 
 [完整变更记录 →](https://github.com/zhuobichen/weflow-cli/commits/master)
 
@@ -89,8 +90,11 @@ python scripts/classify_daily.py --api-key <DeepSeek-key> --interest AI
 | `npm run dev -- contacts [-k 关键词]` | 查看联系人列表 |
 | `npm run dev -- whitelist add\|rm\|clear` | 白名单管理 |
 | `npm run dev -- report --month <YYYY-MM> --talker <昵称>` | 生成聊天月报（AI 任务分析） |
-| `python scripts/biz_daily.py --api-key <key>` | 生成今日公众号日报 |
-| `python scripts/classify_daily.py --api-key <key>` | 后处理：广告清洗+分类+深度摘要 |
+| `python scripts/biz_daily.py --date YYYY-MM-DD` | 生成指定日期公众号日报 |
+| `python scripts/generate_html.py --date YYYY-MM-DD` | 生成日报 HTML 页面 |
+| `python scripts/fav_server.py --date YYYY-MM-DD` | 启动本地阅读器 (http://localhost:8765) |
+| `python scripts/classify_daily.py --interest AI` | 后处理：广告清洗 + 兴趣深度摘要 |
+| `python scripts/pipeline.py --date YYYY-MM-DD` | 完整知识管道（日报→Wiki→Review） |
 
 ---
 
