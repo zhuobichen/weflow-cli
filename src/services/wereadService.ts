@@ -5,8 +5,13 @@
  * Gateway:  https://i.weread.qq.com/api/agent/gateway
  */
 
+import https from 'node:https'
+
 const GATEWAY = 'https://i.weread.qq.com/api/agent/gateway'
 const SKILL_VERSION = '1.0.3'
+
+// weread.qq.com 服务端不支持 TLS 1.3，需要强制使用 TLS 1.2
+const httpsAgent = new https.Agent({ maxVersion: 'TLSv1.2' })
 
 export interface WereadResult<T = any> {
   ok: boolean
@@ -170,16 +175,31 @@ export class WereadService {
 
     try {
       const body = JSON.stringify({ api_name: apiName, skill_version: SKILL_VERSION, ...params })
-      const res = await fetch(GATEWAY, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${this.apiKey}`,
-          'Content-Type': 'application/json',
-        },
-        body,
+      const json = await new Promise<any>((resolve, reject) => {
+        const url = new URL(GATEWAY)
+        const req = https.request({
+          hostname: url.hostname,
+          path: url.pathname,
+          method: 'POST',
+          agent: httpsAgent,
+          headers: {
+            'Authorization': `Bearer ${this.apiKey}`,
+            'Content-Type': 'application/json',
+            'Content-Length': Buffer.byteLength(body),
+          },
+        }, (res) => {
+          let data = ''
+          res.on('data', (chunk: Buffer) => data += chunk.toString())
+          res.on('end', () => {
+            try { resolve(JSON.parse(data)) }
+            catch { reject(new Error(`Invalid JSON response: ${data.slice(0, 200)}`)) }
+          })
+        })
+        req.on('error', reject)
+        req.write(body)
+        req.end()
       })
 
-      const json = await res.json()
       if (json.errcode && json.errcode !== 0) {
         return { ok: false, error: `API 错误: ${json.errmsg || json.errcode}` }
       }

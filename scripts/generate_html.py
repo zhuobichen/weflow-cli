@@ -408,14 +408,6 @@ body {{
 }}
 .action-link:hover {{ background: #c8963e15; border-color: #c8963e70; }}
 
-/* ---- Briefing ---- */
-.briefing {{
-  background: linear-gradient(135deg, #faf6ef, #f7f0e4);
-  border: 1px solid #d4c5a0; border-radius: 14px; padding: 22px 26px; margin-bottom: 20px;
-}}
-.briefing-title {{ font-size: 15px; font-weight: 700; color: #6b4c1e; margin-bottom: 10px; }}
-.briefing-text {{ font-size: 14px; line-height: 1.9; color: #5c4a32; }}
-
 /* ---- Stats Bar ---- */
 .stats-bar {{
     display: flex; align-items: center; justify-content: center; gap: 10px;
@@ -615,8 +607,6 @@ body {{
     </div>
 </div>
 
-    {briefing_html}
-
 <div class="stats-bar">
     <span class="stats-group">
         <span>📊 <strong id="unread-count">-</strong> 篇未读 / {total} 篇</span>
@@ -678,12 +668,14 @@ function markRead(id) {{
     state[id] = true;
     saveState(state);
     applyState();
+    if (IS_LOCALHOST) fetch('/api/read/toggle', {{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{id}})}}).catch(()=>{{}});
 }}
 function markUnread(id) {{
     const state = getState();
     delete state[id];
     saveState(state);
     applyState();
+    if (IS_LOCALHOST) fetch('/api/read/toggle', {{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{id}})}}).catch(()=>{{}});
 }}
 function toggleRead(id) {{
     if (isRead(id)) markUnread(id);
@@ -726,6 +718,7 @@ function switchTab(topic) {{
     if (section) section.classList.add('active');
     const btn = document.querySelector(`.tab-btn[data-topic="${{topic}}"]`);
     if (btn) btn.classList.add('active');
+    sessionStorage.setItem('weflow_tab_{date_str}', topic);
     window.location.hash = topic;
 }}
 function doSearch(query) {{
@@ -830,7 +823,8 @@ function renderFavSection() {{
     }}
     let html = '';
     favs.forEach(id => {{
-        const card = document.querySelector(`.card[data-id="${{id.replace(/"/g, '&quot;')}}"]`);
+        // 用属性值精确匹配，避免CSS选择器特殊字符问题
+        const card = Array.from(document.querySelectorAll('.card')).find(c => c.getAttribute('data-id') === id);
         if (card) {{
             html += card.outerHTML;
         }}
@@ -949,13 +943,30 @@ function exportFav() {{
     }});
     if (IS_LOCALHOST) {{
         await loadFavFromServer();
+        // 合并服务端已读状态（只补充，不覆盖本地）
+        try {{
+            const res = await fetch('/api/read/list');
+            const serverState = await res.json();
+            const local = getState();
+            for (const [k,v] of Object.entries(serverState)) {{
+                if (!local[k]) local[k] = true;  // 只补充，不删除
+            }}
+            // 本地的也同步到服务端
+            for (const [k,v] of Object.entries(local)) {{
+                if (!serverState[k]) {{
+                    fetch('/api/read/toggle', {{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{id:k}})}}).catch(()=>{{}});
+                }}
+            }}
+            saveState(local); applyState();
+        }} catch(e) {{}}
         const indicator = document.getElementById('sync-indicator');
         if (indicator) {{ indicator.style.display = ''; }}
         const exportBtn = document.getElementById('btn-export-fav');
         if (exportBtn) {{ exportBtn.textContent = '📥 导出'; exportBtn.title = '收藏已实时同步到磁盘'; }}
     }}
+    const savedTab = sessionStorage.getItem('weflow_tab_{date_str}');
     const hash = window.location.hash.slice(1);
-    switchTab(hash || 'AI');
+    switchTab(hash || savedTab || 'AI');
 }})();
 </script>
 </body>

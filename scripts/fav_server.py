@@ -43,12 +43,16 @@ class FavHandler(SimpleHTTPRequestHandler):
     def do_GET(self):
         if self.path.startswith('/api/fav/list'):
             self._handle_fav_list()
+        elif self.path == '/api/read/list':
+            self._handle_read_list()
         else:
             super().do_GET()
 
     def do_POST(self):
         if self.path == '/api/fav/toggle':
             self._handle_fav_toggle()
+        elif self.path == '/api/read/toggle':
+            self._handle_read_toggle()
         elif self.path == '/api/explain':
             self._handle_explain()
         else:
@@ -121,6 +125,32 @@ class FavHandler(SimpleHTTPRequestHandler):
             if item.name not in desired_names:
                 if item.is_symlink() or item.is_file():
                     item.unlink()
+
+    # ---- 已读状态 ----
+    def _read_run_state(self):
+        f = Path(self.date_dir) / '.read_state.json'
+        if f.exists():
+            try: return json.loads(f.read_text(encoding='utf-8'))
+            except: pass
+        return {}
+    def _write_run_state(self, state):
+        (Path(self.date_dir) / '.read_state.json').write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding='utf-8')
+
+    def _handle_read_list(self):
+        self._send_json(self._read_run_state())
+
+    def _handle_read_toggle(self):
+        content_len = int(self.headers.get('Content-Length', 0))
+        body = self.rfile.read(content_len)
+        try: data = json.loads(body.decode('utf-8'))
+        except: self.send_error(400); return
+        aid = data.get('id', '')
+        if not aid: self.send_error(400); return
+        state = self._read_run_state()
+        if aid in state: del state[aid]; action = 'unread'
+        else: state[aid] = data.get('title', ''); action = 'read'
+        self._write_run_state(state)
+        self._send_json({'ok': True, 'action': action, 'id': aid})
 
     def _handle_explain(self):
         content_len = int(self.headers.get('Content-Length', 0))

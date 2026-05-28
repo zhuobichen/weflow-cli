@@ -346,8 +346,15 @@ def main():
                 if not content:
                     continue
                 info = extract_article_info(content)
-                if info['title']:
-                    articles.append({
+                if not info['title']:
+                    continue
+                # 过滤支付/服务通知（非真实文章）
+                t = info['title']
+                if any(t.startswith(p) for p in ('已支付', '已扣费', '支付成功', '扣费预通知', '你已关闭', '下单成功')):
+                    continue
+                if '自动续费' in t and '微信支付' in name_map.get(user, user):
+                    continue
+                articles.append({
                         'account': user,
                         'account_name': name_map.get(user, user),
                         'title': info['title'],
