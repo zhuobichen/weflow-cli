@@ -262,7 +262,7 @@ def main():
     # 切换到日报目录以提供静态文件服务
     os.chdir(date_dir)
 
-    server = HTTPServer(('127.0.0.1', args.port), FavHandler)
+    server = HTTPServer(('0.0.0.0', args.port), FavHandler)
     print(f'⭐ 收藏服务器已启动')
     print(f'   打开: http://localhost:{args.port}')
     print(f'   日期: {args.date}')
