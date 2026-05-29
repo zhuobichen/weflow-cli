@@ -41,22 +41,43 @@ class FavHandler(SimpleHTTPRequestHandler):
         super().end_headers()
 
     def do_GET(self):
-        if self.path.startswith('/api/fav/list'):
-            self._handle_fav_list()
-        elif self.path == '/api/read/list':
-            self._handle_read_list()
-        else:
-            super().do_GET()
+        try:
+            if self.path.startswith('/api/fav/list'):
+                self._handle_fav_list()
+            elif self.path == '/api/read/list':
+                self._handle_read_list()
+            else:
+                super().do_GET()
+        except (ConnectionResetError, BrokenPipeError, ConnectionAbortedError):
+            pass
+        except Exception:
+            try: self.send_error(500)
+            except: pass
 
     def do_POST(self):
-        if self.path == '/api/fav/toggle':
-            self._handle_fav_toggle()
-        elif self.path == '/api/read/toggle':
-            self._handle_read_toggle()
-        elif self.path == '/api/explain':
-            self._handle_explain()
-        else:
-            self.send_error(404)
+        try:
+            if self.path == '/api/fav/toggle':
+                self._handle_fav_toggle()
+            elif self.path == '/api/read/toggle':
+                self._handle_read_toggle()
+            elif self.path == '/api/explain':
+                self._handle_explain()
+            else:
+                self.send_error(404)
+        except (ConnectionResetError, BrokenPipeError, ConnectionAbortedError):
+            pass
+        except Exception:
+            try: self.send_error(500)
+            except: pass
+
+    def handle_one_request(self):
+        """Override to catch any unhandled exceptions at the lowest level."""
+        try:
+            super().handle_one_request()
+        except (ConnectionResetError, BrokenPipeError, ConnectionAbortedError):
+            pass
+        except Exception:
+            pass
 
     def _handle_fav_list(self):
         favs = self._read_favs()
