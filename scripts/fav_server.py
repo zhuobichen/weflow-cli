@@ -190,14 +190,18 @@ class FavHandler(SimpleHTTPRequestHandler):
         # 读 DeepSeek API key
         api_key = os.environ.get('ANTHROPIC_AUTH_TOKEN', '') or os.environ.get('DEEPSEEK_API_KEY', '')
 
-        prompt = f'''你是一个阅读助手。用户正在读一篇文章，有问题要问你。请根据文章内容回答。
+        prompt = f'''你是一个阅读助手。用户正在读一篇文章，有问题要问你。
 
-文章全文：
+文章全文（供参考）：
 {context[:8000]}
 
 用户提问："{text}"
 
-请根据文章内容回答。如果涉及专业术语请解释，如果问的是文章观点请总结相关段落。'''
+回答规则：
+1. 优先用文章内容回答；如果问题与文章相关但文章信息不足，先用文章已有的部分，再用你的知识补充
+2. 如果问题与文章完全无关，直接用自己的知识回答，不要拒绝
+3. 用大白话解释，假设用户是非技术背景，避免术语堆砌
+4. 简短直接，不要啰嗦'''
 
         payload = json.dumps({
             'model': 'deepseek-chat',
