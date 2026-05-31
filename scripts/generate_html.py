@@ -1035,19 +1035,10 @@ function renderFavSection() {{
         return;
     }}
     let html = '';
-    let found = 0;
     favs.forEach(id => {{
-        // 用属性值精确匹配
         const card = Array.from(document.querySelectorAll('.card')).find(c => c.getAttribute('data-id') === id);
         if (card) {{
             html += card.outerHTML;
-            found++;
-        }} else {{
-            // Fallback: card not found in DOM, show basic link
-            const parts = id.split('/');
-            const title = parts[parts.length-1].replace('.md', '');
-            html += '<article class="card" data-id="' + id.replace(/"/g, '&quot;') + '" data-topic="' + (parts[0]||'') + '"><div class="card-header"><div class="card-title-row"><span class="unread-dot"></span><h3 class="card-title"><a href="' + id.replace(/"/g, '&quot;') + '">' + title + '</a></h3></div></div><div class="card-actions"><a href="' + id.replace(/"/g, '&quot;') + '" class="btn-read">📖 阅读</a><button class="btn-toggle" onclick="toggleRead(\'' + id.replace(/'/g, "\\'") + '\')"><span class="toggle-label"></span></button><button class="btn-fav faved" onclick="toggleFav(\'' + id.replace(/'/g, "\\'") + '\')">★</button></div></article>';
-            found++;
         }}
     }});
     container.innerHTML = html || '<div class="fav-empty">⭐ 暂无收藏文章</div>';
