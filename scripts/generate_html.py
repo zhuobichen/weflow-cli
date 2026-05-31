@@ -170,6 +170,42 @@ body {
     .article-header h1 { font-size: 20px; }
     .article-body { font-size: 15px; }
 }
+/* ---- Highlight & Notes ---- */
+.article-body mark.hl { background: #fef08a; color: #1e1b4b; padding: 1px 0; border-radius: 2px; cursor: pointer; transition: all .2s; }
+.article-body mark.hl:hover { background: #fde047; }
+.article-body mark.hl.active { background: #fbbf24; box-shadow: 0 0 0 2px #fbbf2440; }
+.selection-popup { position: absolute; z-index: 1000; background: #1e293b; border: 1px solid #334155; border-radius: 10px; padding: 6px 10px; display: none; box-shadow: 0 8px 24px #00000040; }
+.selection-popup button { background: #818cf8; color: #fff; border: none; padding: 6px 14px; border-radius: 7px; cursor: pointer; font-size: 13px; font-weight: 600; white-space: nowrap; }
+.selection-popup button:hover { background: #6366f1; }
+.note-modal-overlay { position: fixed; inset: 0; background: #00000060; z-index: 2000; display: flex; align-items: center; justify-content: center; }
+.note-modal { background: #1e293b; border: 1px solid #334155; border-radius: 14px; padding: 24px; width: 90%; max-width: 480px; box-shadow: 0 16px 48px #00000060; }
+.note-modal h3 { color: #e2e8f0; font-size: 16px; margin-bottom: 12px; }
+.note-modal .hl-text { background: #1a1040; border: 1px solid #312e81; border-radius: 8px; padding: 10px 14px; color: #a5b4fc; font-size: 13px; margin-bottom: 14px; max-height: 100px; overflow-y: auto; line-height: 1.6; }
+.note-modal textarea { width: 100%; height: 80px; background: #0f172a; border: 1px solid #334155; border-radius: 8px; color: #e2e8f0; padding: 10px 14px; font-size: 13px; resize: vertical; font-family: inherit; outline: none; }
+.note-modal textarea:focus { border-color: #818cf8; }
+.note-modal .btn-row { display: flex; gap: 8px; justify-content: flex-end; margin-top: 14px; }
+.note-modal .btn-row button { padding: 7px 18px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; border: none; }
+.note-modal .btn-save { background: #818cf8; color: #fff; }
+.note-modal .btn-save:hover { background: #6366f1; }
+.note-modal .btn-cancel { background: #334155; color: #94a3b8; }
+.note-modal .btn-cancel:hover { background: #475569; }
+.notes-sidebar { position: fixed; right: 0; top: 0; width: 340px; height: 100vh; background: #0f172a; border-left: 1px solid #1e293b; z-index: 500; overflow-y: auto; transform: translateX(100%); transition: transform .3s ease; }
+.notes-sidebar.open { transform: translateX(0); }
+.notes-sidebar-header { padding: 16px 20px; border-bottom: 1px solid #1e293b; display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; background: #0f172a; z-index: 2; }
+.notes-sidebar-header h3 { color: #e2e8f0; font-size: 15px; font-weight: 700; }
+.notes-sidebar-header button { background: none; border: none; color: #64748b; font-size: 18px; cursor: pointer; }
+.notes-sidebar-header button:hover { color: #e2e8f0; }
+.note-item { padding: 14px 20px; border-bottom: 1px solid #1e293b; }
+.note-item .hl-text { color: #fef08a; font-size: 13px; line-height: 1.6; margin-bottom: 8px; border-left: 3px solid #fbbf24; padding-left: 10px; }
+.note-item .hl-note { color: #cbd5e1; font-size: 13px; line-height: 1.6; margin-bottom: 6px; }
+.note-item .hl-meta { color: #475569; font-size: 11px; display: flex; align-items: center; gap: 10px; }
+.note-item .hl-meta button { background: none; border: none; color: #dc5b5b; font-size: 11px; cursor: pointer; }
+.note-item .hl-meta button:hover { color: #f87171; }
+.notes-sidebar .empty { text-align: center; padding: 60px 20px; color: #475569; font-size: 14px; line-height: 2; }
+.btn-notes-toggle { position: fixed; right: 16px; bottom: 24px; z-index: 501; background: #818cf8; color: #fff; border: none; width: 44px; height: 44px; border-radius: 12px; font-size: 18px; cursor: pointer; box-shadow: 0 4px 16px #818cf840; transition: all .2s; display: flex; align-items: center; justify-content: center; }
+.btn-notes-toggle:hover { background: #6366f1; transform: scale(1.05); }
+.btn-notes-toggle .badge { position: absolute; top: -4px; right: -4px; background: #ef4444; color: #fff; font-size: 10px; width: 18px; height: 18px; border-radius: 9px; display: flex; align-items: center; justify-content: center; font-weight: 700; }
+@media (max-width: 640px) { .notes-sidebar { width: 100%; } }
 </style>
 </head>
 <body>
@@ -242,12 +278,189 @@ body {
         tagsHtml +
       '</div>' +
       '<div class="article-body">' + htmlContent + '</div>' +
-      '<div style="text-align:center;padding:40px;color:#475569;font-size:12px;">\u2014 END \u2014</div>';
+      '<div style="text-align:center;padding:40px;color:#475569;font-size:12px;">\u2014 END \u2014</div>' +
+      '<div class="notes-sidebar" id="notes-sidebar">' +
+        '<div class="notes-sidebar-header"><h3>\ud83d\udcdd \u7b14\u8bb0</h3><button onclick="toggleNotes()">\u2715</button></div>' +
+        '<div id="notes-list"><div class="empty">\u9009\u4e2d\u6587\u5b57\u540e\u70b9\u51fb\u201c\u6807\u8bb0\u7b14\u8bb0\u201d\u5373\u53ef\u6dfb\u52a0</div></div>' +
+      '</div>' +
+      '<button class="btn-notes-toggle" id="btn-notes-toggle" onclick="toggleNotes()" title="\u7b14\u8bb0">\ud83d\udcdd<span class="badge" id="notes-badge" style="display:none">0</span></button>';
   } catch(e) {
     document.getElementById('app').innerHTML =
       '<div class="error-box">\u274c \u52a0\u8f7d\u5931\u8d25: ' + e.message + '<br><br><a href="./" class="btn-back">\u2190 \u8fd4\u56de\u5217\u8868</a></div>';
   }
 })();
+
+// ---- Notes / Highlight Feature ----
+const NOTES_API = (location.hostname === 'localhost' || location.hostname === '127.0.0.1') ? '/api/notes' : null;
+const ARTICLE_ID = file;
+let allHighlights = [];
+let hlPopup = null, hlModal = null;
+
+function initNotesUI() {
+  hlPopup = document.createElement('div');
+  hlPopup.className = 'selection-popup';
+  hlPopup.innerHTML = '<button onclick="startNote()">\ud83d\udcdd \u6807\u8bb0\u7b14\u8bb0</button>';
+  document.body.appendChild(hlPopup);
+
+  document.addEventListener('mouseup', (e) => {
+    setTimeout(() => {
+      const sel = window.getSelection();
+      const text = sel ? sel.toString().trim() : '';
+      if (!text || text.length < 2 || text.length > 500) {
+        hlPopup.style.display = 'none';
+        return;
+      }
+      const range = sel.getRangeAt(0);
+      const rect = range.getBoundingClientRect();
+      hlPopup.style.display = 'block';
+      hlPopup.style.left = Math.min(rect.left + rect.width/2 - 50, window.innerWidth - 180) + 'px';
+      hlPopup.style.top = (rect.bottom + window.scrollY + 8) + 'px';
+    }, 10);
+  });
+
+  document.addEventListener('mousedown', (e) => {
+    if (!hlPopup.contains(e.target)) hlPopup.style.display = 'none';
+  });
+
+  if (NOTES_API) loadHighlights();
+}
+
+function startNote() {
+  const sel = window.getSelection();
+  const text = sel ? sel.toString().trim() : '';
+  if (!text) return;
+  hlPopup.style.display = 'none';
+  if (hlModal) hlModal.remove();
+
+  hlModal = document.createElement('div');
+  hlModal.className = 'note-modal-overlay';
+  hlModal.innerHTML =
+    '<div class="note-modal">' +
+      '<h3>\ud83d\udcdd \u6dfb\u52a0\u7b14\u8bb0</h3>' +
+      '<div class="hl-text">' + text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;') + '</div>' +
+      '<textarea id="note-input" placeholder="\u5199\u4e0b\u4f60\u7684\u611f\u60f3\u6216\u5907\u6ce8\uff08\u53ef\u9009\uff09"></textarea>' +
+      '<div class="btn-row">' +
+        '<button class="btn-cancel" onclick="this.closest(\'.note-modal-overlay\').remove()">\u53d6\u6d88</button>' +
+        '<button class="btn-save" onclick="saveNote()">\u4fdd\u5b58</button>' +
+      '</div>' +
+    '</div>';
+  document.body.appendChild(hlModal);
+  setTimeout(() => document.getElementById('note-input').focus(), 100);
+}
+
+async function saveNote() {
+  const noteText = document.getElementById('note-input').value.trim();
+  const sel = window.getSelection();
+  const hlText = sel ? sel.toString().trim() : '';
+  if (!hlText) return;
+  if (!NOTES_API) {
+    const local = JSON.parse(localStorage.getItem('weflow_hl_' + ARTICLE_ID) || '[]');
+    local.push({id: Date.now().toString(36), text: hlText, note: noteText, created: new Date().toLocaleString()});
+    localStorage.setItem('weflow_hl_' + ARTICLE_ID, JSON.stringify(local));
+    hlModal.remove();
+    loadHighlights();
+    return;
+  }
+  try {
+    const res = await fetch(NOTES_API, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({article: ARTICLE_ID, text: hlText, note: noteText})});
+    await res.json();
+    hlModal.remove();
+    loadHighlights();
+  } catch(e) { alert('\u4fdd\u5b58\u5931\u8d25: ' + e.message); }
+}
+
+async function loadHighlights() {
+  if (NOTES_API) {
+    try {
+      const res = await fetch(NOTES_API + '?article=' + encodeURIComponent(ARTICLE_ID));
+      allHighlights = await res.json();
+    } catch(e) { allHighlights = []; }
+  } else {
+    allHighlights = JSON.parse(localStorage.getItem('weflow_hl_' + ARTICLE_ID) || '[]');
+  }
+  renderHighlights();
+  renderNotesList();
+}
+
+function renderHighlights() {
+  document.querySelectorAll('.article-body mark.hl').forEach(m => {
+    const parent = m.parentNode;
+    parent.replaceChild(document.createTextNode(m.textContent), m);
+    parent.normalize();
+  });
+  if (allHighlights.length === 0) return;
+
+  const body = document.querySelector('.article-body');
+  if (!body) return;
+  const walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT, null, false);
+  const textNodes = [];
+  let node;
+  while (node = walker.nextNode()) textNodes.push(node);
+
+  allHighlights.forEach(hl => {
+    let remaining = hl.text;
+    for (const tn of textNodes) {
+      if (!remaining) break;
+      const idx = tn.textContent.indexOf(remaining);
+      if (idx >= 0) {
+        const range = document.createRange();
+        range.setStart(tn, idx);
+        range.setEnd(tn, idx + remaining.length);
+        const mark = document.createElement('mark');
+        mark.className = 'hl';
+        mark.setAttribute('data-hid', hl.id);
+        mark.title = hl.note || hl.text;
+        mark.onclick = function(e) {
+          if (hl.note) alert('\u7b14\u8bb0: ' + hl.note);
+        };
+        range.surroundContents(mark);
+        remaining = '';
+        break;
+      }
+    }
+  });
+}
+
+function renderNotesList() {
+  const container = document.getElementById('notes-list');
+  const badge = document.getElementById('notes-badge');
+  if (!container) return;
+  if (allHighlights.length === 0) {
+    container.innerHTML = '<div class="empty">\u9009\u4e2d\u6587\u5b57\u540e\u70b9\u51fb\u201c\u6807\u8bb0\u7b14\u8bb0\u201d\u5373\u53ef\u6dfb\u52a0</div>';
+    if (badge) badge.style.display = 'none';
+    return;
+  }
+  if (badge) { badge.style.display = ''; badge.textContent = allHighlights.length; }
+  container.innerHTML = allHighlights.map(hl =>
+    '<div class="note-item">' +
+      '<div class="hl-text">' + hl.text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;') + '</div>' +
+      (hl.note ? '<div class="hl-note">\ud83d\udcac ' + hl.note.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;') + '</div>' : '') +
+      '<div class="hl-meta"><span>' + (hl.created || '') + '</span>' +
+        '<button onclick="deleteNote(\'' + hl.id + '\')">\u5220\u9664</button>' +
+      '</div>' +
+    '</div>'
+  ).join('');
+}
+
+async function deleteNote(hid) {
+  if (!confirm('\u5220\u9664\u8fd9\u6761\u7b14\u8bb0\uff1f')) return;
+  if (NOTES_API) {
+    try {
+      await fetch(NOTES_API + '/delete', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({article: ARTICLE_ID, id: hid})});
+    } catch(e) {}
+  } else {
+    allHighlights = allHighlights.filter(h => h.id !== hid);
+    localStorage.setItem('weflow_hl_' + ARTICLE_ID, JSON.stringify(allHighlights));
+  }
+  loadHighlights();
+}
+
+function toggleNotes() {
+  const sidebar = document.getElementById('notes-sidebar');
+  if (sidebar) sidebar.classList.toggle('open');
+}
+
+setTimeout(initNotesUI, 500);
 </script>
 </body>
 </html>'''

@@ -46,6 +46,8 @@ class FavHandler(SimpleHTTPRequestHandler):
                 self._handle_fav_list()
             elif self.path == '/api/read/list':
                 self._handle_read_list()
+            elif self.path.startswith('/api/notes'):
+                self._handle_notes_get()
             else:
                 super().do_GET()
         except (ConnectionResetError, BrokenPipeError, ConnectionAbortedError):
@@ -62,6 +64,8 @@ class FavHandler(SimpleHTTPRequestHandler):
                 self._handle_read_toggle()
             elif self.path == '/api/explain':
                 self._handle_explain()
+            elif self.path.startswith('/api/notes'):
+                self._handle_notes_post()
             else:
                 self.send_error(404)
         except (ConnectionResetError, BrokenPipeError, ConnectionAbortedError):
@@ -223,6 +227,77 @@ class FavHandler(SimpleHTTPRequestHandler):
             self._send_json({'ok': True, 'text': text, 'explanation': explanation})
         except Exception as e:
             self._send_json({'ok': False, 'error': f'AI 调用失败: {str(e)}'})
+
+    # ---- 笔记功能 ----
+    def _notes_file(self):
+        return Path(self.date_dir) / 'notes.json'
+
+    def _read_notes(self):
+        f = self._notes_file()
+        if f.exists():
+            try: return json.loads(f.read_text(encoding='utf-8'))
+            except: pass
+        return {}
+
+    def _write_notes(self, notes):
+        self._notes_file().write_text(json.dumps(notes, ensure_ascii=False, indent=2), encoding='utf-8')
+
+    def _handle_notes_get(self):
+        """GET /api/notes?article=xxx → 返回该文章的所有笔记"""
+        qs = self.path.split('?', 1)[1] if '?' in self.path else ''
+        params = {}
+        for p in qs.split('&'):
+            if '=' in p:
+                k, v = p.split('=', 1)
+                params[k] = v
+        article_id = params.get('article', '')
+        notes = self._read_notes()
+        if article_id:
+            self._send_json(notes.get(article_id, []))
+        else:
+            self._send_json(notes)
+
+    def _handle_notes_post(self):
+        """POST /api/notes → 添加笔记, DELETE /api/notes → 删除笔记"""
+        content_len = int(self.headers.get('Content-Length', 0))
+        body = self.rfile.read(content_len)
+        try:
+            data = json.loads(body.decode('utf-8'))
+        except:
+            self.send_error(400); return
+
+        if self.path == '/api/notes/delete':
+            article_id = data.get('article', '')
+            highlight_id = data.get('id', '')
+            if not article_id or not highlight_id:
+                self.send_error(400); return
+            notes = self._read_notes()
+            if article_id in notes:
+                notes[article_id] = [h for h in notes[article_id] if h.get('id') != highlight_id]
+                if not notes[article_id]:
+                    del notes[article_id]
+                self._write_notes(notes)
+            self._send_json({'ok': True})
+        else:
+            # POST /api/notes → add note
+            article_id = data.get('article', '')
+            text = data.get('text', '').strip()
+            note = data.get('note', '').strip()
+            if not article_id or not text:
+                self.send_error(400); return
+            import uuid, time
+            hid = uuid.uuid4().hex[:8]
+            notes = self._read_notes()
+            if article_id not in notes:
+                notes[article_id] = []
+            notes[article_id].append({
+                'id': hid,
+                'text': text,
+                'note': note,
+                'created': time.strftime('%Y-%m-%d %H:%M', time.localtime())
+            })
+            self._write_notes(notes)
+            self._send_json({'ok': True, 'id': hid})
 
     def _send_json(self, data):
         body = json.dumps(data, ensure_ascii=False).encode('utf-8')
