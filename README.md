@@ -2,7 +2,7 @@
 
 <div align="center">
 
-# WeFlow CLI
+<h1>WeFlow CLI <img src="./weflow-cli图标.png" width="80" valign="middle" /></h1>
 
 *本地命令行工具 — 解密微信数据库、导出聊天记录、抓取公众号文章并用 AI 整理为分类日报*
 
@@ -35,6 +35,17 @@
 ## ✨ 近期更新
 
 <details>
+<summary>v1.3.1 — 消息无限制 + 图片完整提取 + CDN 代理（点击展开）</summary>
+
+- ✨ **去掉消息长度限制** — 导出/查询默认拉取全部消息（limit=0），不再截断
+- ✨ **公众号图片完整提取** — `data-src` 懒加载图片识别，图片数量提升 3-4 倍
+- ✨ **公众号封面图嵌入** — 解析公众号消息 XML 提取 `thumburl`，远程下载 base64 嵌入 HTML
+- ✨ **CDN 图片代理** — `fav_server.py` 新增 `/proxy` 端点，绕过微信防盗链 Referer 检查
+- 🔧 **阅读器图片修复** — `article.html` 自动重写 mmbiz 图片 URL 走本地代理
+
+</details>
+
+<details>
 <summary>v1.3.0 — 本地阅读器 + 知识管道 + MCP Server（点击展开）</summary>
 
 - ✨ **本地阅读器** — `fav_server.py` 驱动，浏览器阅读、收藏同步、已读追踪、划词 AI 解释
@@ -55,7 +66,7 @@
 
 | 分类 | 功能 |
 |------|------|
-| 💬 **聊天** | 解密 3.x/4.x 数据库 · 导出 JSON/TXT/MD/HTML/Excel · 图片 base64 内嵌 · 联系人昵称映射 |
+| 💬 **聊天** | 解密 3.x/4.x 数据库 · 导出 JSON/TXT/MD/HTML/Excel · 图片 base64 内嵌 · 公众号封面图嵌入 · 联系人昵称映射 |
 | 📰 **日报** | 自动抓取公众号文章 · DeepSeek V4 摘要+分类 · 本地阅读器 · 收藏/已读同步 |
 | 🧠 **知识** | Obsidian vault RAG · 语义搜索 · 微信读书同步 · 概念 Wiki 编译 |
 | 🔌 **MCP** | 微信公众号抓取/发布 · 知识库搜索 · 学习日报 · Claude Code 集成 |
@@ -111,7 +122,7 @@ python scripts/fav_server.py --date YYYY-MM-DD          # 启动阅读器 → ht
 | `npm run dev -- init` | 自动检测微信数据目录并提取密钥 |
 | `npm run dev -- sessions` | 查看所有聊天会话（含昵称） |
 | `npm run dev -- messages <昵称\|wxid\|序号>` | 查看聊天记录 |
-| `npm run dev -- export <昵称> <json\|html\|txt\|excel>` | 导出聊天记录 |
+| `npm run dev -- export <昵称> <json\|html\|txt\|excel>` | 导出聊天记录（默认全部消息，无长度限制） |
 | `npm run dev -- contacts [-k 关键词]` | 查看联系人列表 |
 | `npm run dev -- whitelist add\|rm\|clear` | 白名单管理 |
 | `npm run dev -- report --month <YYYY-MM> --talker <昵称>` | 生成聊天月报（AI 分析） |

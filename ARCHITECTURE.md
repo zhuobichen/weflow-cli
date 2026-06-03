@@ -59,8 +59,8 @@
 微信进程内存 → 提取密钥(AES-256-GCM加密存储)
   → 解密 SQLCipher 数据库(3层优先级: 预解密→PBKDF2→NT)
   → 查询消息/会话/联系人(contact.db交叉引用昵称)
-  → 导出 JSON/TXT/MD/HTML/Excel
-  → HTML 含图片 base64 内嵌(从 NT 缓存目录提取)
+  → 导出 JSON/TXT/MD/HTML/Excel（默认全部消息，无长度限制）
+  → HTML 含图片 base64 内嵌(NT 缓存 + 公众号封面图远程下载)
 ```
 
 **链路 B：公众号日报**
@@ -86,6 +86,7 @@ fav_server.py(HTTP :8765)
   → /api/fav/toggle 收藏实时同步到 收藏/ 文件夹
   → /api/read/toggle 已读状态持久化(.read_state.json)
   → /api/explain 划词 DeepSeek AI 解释
+  → /api/proxy?url= 微信CDN图片代理(绕防盗链Referer检查)
   → generate_html.py 生成分类展示页(localStorage + 服务端双持久化)
 ```
 

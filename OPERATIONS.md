@@ -385,7 +385,7 @@ python scripts/biz_daily.py --api-key <key> --engine claude
 
 ### 限制 & 注意
 
-- NT 图片：HTML 导出中图片来自缩略图缓存，覆盖率约 15%，仅近两月
+- NT 图片：HTML 导出中图片来自缩略图缓存 + 公众号封面图远程下载；公众号文章通过 `data-src` 懒加载提取，图片覆盖率显著提升
 - DeepSeek V4：推理模型需 `max_tokens ≥ 500`（含 reasoning_tokens），否则输出为空
 - 公众号抓取：8-12s 随机间隔，防止触发 WAF
 - 消息收发：ilink API 是实验性功能，需要扫码登录
