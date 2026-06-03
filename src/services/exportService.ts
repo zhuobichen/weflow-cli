@@ -12,7 +12,7 @@ const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
 
 export class ExportService {
-  async exportJson(talker: string, outputDir: string, limit = 10000): Promise<{ success: boolean; path?: string; error?: string }> {
+  async exportJson(talker: string, outputDir: string, limit = 0): Promise<{ success: boolean; path?: string; error?: string }> {
     try {
       const messages = await chatService.getMessages(talker, limit)
       if (messages.length === 0) {
@@ -28,7 +28,7 @@ export class ExportService {
     }
   }
 
-  async exportTxt(talker: string, outputDir: string, limit = 10000): Promise<{ success: boolean; path?: string; error?: string }> {
+  async exportTxt(talker: string, outputDir: string, limit = 0): Promise<{ success: boolean; path?: string; error?: string }> {
     try {
       const messages = await chatService.getMessages(talker, limit)
       if (messages.length === 0) {
@@ -51,7 +51,7 @@ export class ExportService {
     }
   }
 
-  async exportHtml(talker: string, outputDir: string, limit = 10000): Promise<{ success: boolean; path?: string; error?: string }> {
+  async exportHtml(talker: string, outputDir: string, limit = 0): Promise<{ success: boolean; path?: string; error?: string }> {
     try {
       // Use Python export_chat_html.py for rich HTML with images
       const cfg = configService.getAll()
@@ -125,7 +125,7 @@ export class ExportService {
     }
   }
 
-  private async exportHtmlBasic(talker: string, outputDir: string, limit = 10000): Promise<{ success: boolean; path?: string; error?: string }> {
+  private async exportHtmlBasic(talker: string, outputDir: string, limit = 0): Promise<{ success: boolean; path?: string; error?: string }> {
     const messages = await chatService.getMessages(talker, limit)
     if (messages.length === 0) {
       return { success: false, error: '未找到消息' }
@@ -138,7 +138,7 @@ export class ExportService {
     return { success: true, path: filePath }
   }
 
-  async exportExcel(talker: string, outputDir: string, limit = 10000): Promise<{ success: boolean; path?: string; error?: string }> {
+  async exportExcel(talker: string, outputDir: string, limit = 0): Promise<{ success: boolean; path?: string; error?: string }> {
     try {
       const ExcelJS = await import('exceljs')
       const messages = await chatService.getMessages(talker, limit)

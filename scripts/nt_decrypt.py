@@ -355,14 +355,23 @@ def get_messages(conn, talker, limit=100, offset=0, name_map=None, own_wxid=None
         if c.fetchone()[0] == 0:
             return {"error": f"未找到会话: {talker}"}
 
-        c.execute(f'''
-            SELECT local_id, server_id, local_type, sort_seq, real_sender_id,
-                   create_time, status, upload_status, download_status,
-                   server_seq, origin_source, source, message_content, compress_content
-            FROM "{msg_table}"
-            ORDER BY create_time DESC
-            LIMIT ? OFFSET ?
-        ''', (limit, offset))
+        if limit > 0:
+            c.execute(f'''
+                SELECT local_id, server_id, local_type, sort_seq, real_sender_id,
+                       create_time, status, upload_status, download_status,
+                       server_seq, origin_source, source, message_content, compress_content
+                FROM "{msg_table}"
+                ORDER BY create_time DESC
+                LIMIT ? OFFSET ?
+            ''', (limit, offset))
+        else:
+            c.execute(f'''
+                SELECT local_id, server_id, local_type, sort_seq, real_sender_id,
+                       create_time, status, upload_status, download_status,
+                       server_seq, origin_source, source, message_content, compress_content
+                FROM "{msg_table}"
+                ORDER BY create_time DESC
+            ''')
 
         rows = c.fetchall()
         messages = []

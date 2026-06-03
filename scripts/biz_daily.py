@@ -182,12 +182,26 @@ def fetch_article(url: str) -> str | None:
             print(f'  [WARN] 内容验证失败 (无 js_content)')
             return None
 
+        # 微信文章用 data-src 懒加载图片，先提取再转 markdown
+        # 提取 data-src 并替换到 src，让 html2text 能识别
+        img_count_before = len(re.findall(r'<img\s', html, re.I))
+        html = re.sub(r'data-src="(https?://[^"]+)"', r'src="\1"', html)
+        img_count_after = len(re.findall(r'<img\s[^>]*src="https?://[^"]*mmbiz', html, re.I))
+
         # Convert to markdown
         import html2text
         h = html2text.HTML2Text()
         h.ignore_links = False
+        h.ignore_images = False
         h.body_width = 0
-        return h.handle(html)
+        h.protect_links = True
+        h.wrap_links = False
+        result = h.handle(html)
+
+        # 统计结果中的图片
+        md_imgs = re.findall(r'!\[.*?\]\(https?://', result)
+        print(f'  HTML图片: {img_count_before}个, mmbiz图片: {img_count_after}个, MD图片: {len(md_imgs)}个')
+        return result
     except Exception as e:
         # L2: Fallback to Scrapling with custom headers
         if _FETCHER_AVAILABLE:

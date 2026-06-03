@@ -208,7 +208,7 @@ export class ChatService {
 
   async getMessages(
     talker: string,
-    limit = 100,
+    limit = 0,
     offset = 0
   ): Promise<Message[]> {
     const conn = await this.connect()

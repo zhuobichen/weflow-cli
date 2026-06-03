@@ -48,6 +48,8 @@ class FavHandler(SimpleHTTPRequestHandler):
                 self._handle_read_list()
             elif self.path.startswith('/api/notes'):
                 self._handle_notes_get()
+            elif self.path.startswith('/proxy?url='):
+                self._handle_proxy()
             else:
                 super().do_GET()
         except (ConnectionResetError, BrokenPipeError, ConnectionAbortedError):
@@ -82,6 +84,37 @@ class FavHandler(SimpleHTTPRequestHandler):
             pass
         except Exception:
             pass
+
+    def _handle_proxy(self):
+        """代理微信CDN图片，绕过防盗链Referer检查。"""
+        from urllib.parse import unquote
+        qs = self.path.split('?', 1)[1] if '?' in self.path else ''
+        url = ''
+        for p in qs.split('&'):
+            if p.startswith('url='):
+                url = unquote(p[4:])
+                break
+        if not url or not url.startswith(('http://', 'https://')):
+            self.send_error(400, 'Missing url')
+            return
+        try:
+            req = urllib.request.Request(url, headers={
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                'Referer': 'https://mp.weixin.qq.com/',
+                'Accept': 'image/webp,image/apng,image/*,*/*;q=0.8',
+            })
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                data = resp.read(10 * 1024 * 1024)  # max 10MB
+                content_type = resp.headers.get('Content-Type', 'image/jpeg')
+            self.send_response(200)
+            self.send_header('Content-Type', content_type)
+            self.send_header('Content-Length', len(data))
+            self.send_header('Cache-Control', 'public, max-age=86400')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            self.wfile.write(data)
+        except Exception as e:
+            self.send_error(502, f'Proxy failed: {e}')
 
     def _handle_fav_list(self):
         favs = self._read_favs()

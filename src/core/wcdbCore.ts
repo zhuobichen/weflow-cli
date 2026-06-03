@@ -1706,8 +1706,10 @@ export class WcdbCore {
       return { success: false, error: 'WCDB 未连接' }
     }
     try {
+      // limit=0 means no limit, pass large number to native API
+      const effectiveLimit = limit > 0 ? limit : 999999999
       const outPtr = [null as any]
-      const result = this.wcdbGetMessages(this.handle, sessionId, limit, offset, outPtr)
+      const result = this.wcdbGetMessages(this.handle, sessionId, effectiveLimit, offset, outPtr)
       if (result !== 0 || !outPtr[0]) {
         return { success: false, error: `获取消息失败: ${result}` }
       }

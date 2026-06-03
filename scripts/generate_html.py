@@ -260,6 +260,14 @@ body {
       htmlContent = body.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n\n/g, '</p><p>').replace(/\n/g, '<br>');
       htmlContent = '<p>' + htmlContent + '</p>';
     }
+    // 本地模式：通过代理加载微信CDN图片，绕过防盗链
+    if (location.hostname === 'localhost' || location.hostname === '127.0.0.1') {
+      htmlContent = htmlContent.replace(/src="(https?:\/\/mmbiz\.qpic\.cn\/[^"]+)"/g, function(match, url) {
+        // 还原 marked.js 的 HTML 转义
+        var realUrl = url.replace(/&amp;/g, '&');
+        return 'src="/proxy?url=' + encodeURIComponent(realUrl) + '"';
+      });
+    }
     const tagsHtml = tags.length ? '<div class="tags-row">' + tags.map(t => '<span class="tag">' + t + '</span>').join('') + '</div>' : '';
     document.getElementById('app').innerHTML =
       '<div class="top-bar">' +

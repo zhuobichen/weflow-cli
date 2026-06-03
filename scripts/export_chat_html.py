@@ -11,6 +11,8 @@ import datetime
 import json
 import re
 import base64
+import urllib.request
+import urllib.error
 from pathlib import Path
 
 try:
@@ -204,6 +206,61 @@ def find_thumbnail(create_time, msg_local_id, wx_dir):
     return None
 
 
+def download_image_as_base64(url, timeout=10):
+    """Download image from URL and return (base64_data, mime_type) or None."""
+    if not url or not url.startswith(('http://', 'https://')):
+        return None
+    try:
+        req = urllib.request.Request(url, headers={
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Referer': 'https://mp.weixin.qq.com/',
+        })
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = resp.read(MAX_EMBED_SIZE + 1)
+            if len(data) > MAX_EMBED_SIZE:
+                return None
+            mime = resp.headers.get('Content-Type', 'image/jpeg').split(';')[0].strip()
+            if mime not in ('image/jpeg', 'image/png', 'image/gif', 'image/webp'):
+                # Try detecting from data
+                mime = detect_mime_from_bytes(data) or 'image/jpeg'
+            return (base64.b64encode(data).decode(), mime)
+    except Exception:
+        return None
+
+
+def detect_mime_from_bytes(header_bytes):
+    """Detect MIME type from byte header."""
+    if header_bytes[:2] == b'\xff\xd8':
+        return 'image/jpeg'
+    if header_bytes[:4] == b'\x89PNG':
+        return 'image/png'
+    if header_bytes[:3] == b'GIF':
+        return 'image/gif'
+    if header_bytes[:4] == b'RIFF' and len(header_bytes) >= 12 and header_bytes[8:12] == b'WEBP':
+        return 'image/webp'
+    return None
+
+
+def extract_appmsg_image(content):
+    """Extract image URL from appmsg XML content."""
+    if not content:
+        return None
+    # Try common image URL fields in appmsg XML
+    for tag in ('thumburl', 'cdnthumburl', 'appthumburl'):
+        m = re.search(rf'<{tag}>([^<]+)</{tag}>', content)
+        if m:
+            url = m.group(1).strip()
+            if url.startswith(('http://', 'https://')):
+                return url
+    # Also check for <msg><appmsg> nested structure
+    m = re.search(r'<thumburl>([^<]+)</thumburl>', content)
+    if m:
+        url = m.group(1).strip()
+        if url.startswith(('http://', 'https://')):
+            return url
+    return None
+
+
 def escape_html(text):
     if not text:
         return ''
@@ -324,7 +381,7 @@ def format_message(row, talker, wx_dir, image_map=None, sender_map=None, display
     elif local_type == 47:
         display = escape_html(content) if content else '<span class="msg-media">[表情]</span>'
     elif local_type == 49:
-        # App message (link/file)
+        # App message (link/file/article)
         if content:
             # Try to parse XML for title/desc
             title_m = re.search(r'<title>([^<]*)</title>', content)
@@ -337,6 +394,14 @@ def format_message(row, talker, wx_dir, image_map=None, sender_map=None, display
                 display = f'<span class="msg-file">[文件] {escape_html(fname_m.group(1))}</span>'
             elif title_m:
                 parts = []
+                # Extract and embed article thumbnail image
+                thumb_url = extract_appmsg_image(content)
+                if thumb_url:
+                    img_data = download_image_as_base64(thumb_url)
+                    if img_data:
+                        b64, mime = img_data
+                        image_b64 = b64
+                        parts.append(f'<img class="msg-app-thumb" src="data:{mime};base64,{b64}" loading="lazy" />')
                 if url_m:
                     parts.append(f'<a class="msg-link" href="{escape_html(url_m.group(1))}" target="_blank">{escape_html(decode_xml(title_m.group(1)))}</a>')
                 else:
@@ -488,6 +553,13 @@ body {{
   border-radius: 0 4px 4px 0;
   font-size: 13px;
 }}
+.msg-app-thumb {{
+  max-width: 240px;
+  max-height: 180px;
+  border-radius: 6px;
+  margin-bottom: 6px;
+  display: block;
+}}
 .footer {{
   text-align: center;
   padding: 20px;
@@ -623,14 +695,17 @@ def main():
     wx_dir = args.wx_dir or ''
     formatted = []
     img_hit_count = 0
+    article_img_count = 0
     for i, row in enumerate(messages):
         if i % 2000 == 0:
             print(f"  Formatting {i}/{len(messages)}...")
         result = format_message(row, args.talker, wx_dir, image_map, sender_map, display_name)
         if result.get('image_b64'):
             img_hit_count += 1
+            if result.get('local_type') == 49:
+                article_img_count += 1
         formatted.append(result)
-    print(f"  Messages with embedded images: {img_hit_count}")
+    print(f"  Messages with embedded images: {img_hit_count} (including {article_img_count} article thumbnails)")
 
     # Split into parts (or single file)
     total = len(formatted)

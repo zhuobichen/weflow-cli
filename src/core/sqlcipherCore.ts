@@ -395,22 +395,35 @@ export class SqlcipherCore {
    */
   async getMessages(
     talker: string,
-    limit = 100,
+    limit = 0,
     offset = 0
   ): Promise<MessagesResult> {
     if (!this.db) return { success: false, error: '数据库未打开' }
 
     try {
-      const stmt = this.db.prepare(`
-        SELECT
-          localId, CAST(MsgSvrID AS TEXT) as MsgSvrID, Type, SubType, IsSender,
-          CreateTime, StrTalker, StrContent, CompressContent, BytesExtra
-        FROM MSG
-        WHERE StrTalker = ?
-        ORDER BY CreateTime DESC
-        LIMIT ? OFFSET ?
-      `)
-      const rows = stmt.all(talker, limit, offset) as any[]
+      let rows: any[]
+      if (limit > 0) {
+        const stmt = this.db.prepare(`
+          SELECT
+            localId, CAST(MsgSvrID AS TEXT) as MsgSvrID, Type, SubType, IsSender,
+            CreateTime, StrTalker, StrContent, CompressContent, BytesExtra
+          FROM MSG
+          WHERE StrTalker = ?
+          ORDER BY CreateTime DESC
+          LIMIT ? OFFSET ?
+        `)
+        rows = stmt.all(talker, limit, offset) as any[]
+      } else {
+        const stmt = this.db.prepare(`
+          SELECT
+            localId, CAST(MsgSvrID AS TEXT) as MsgSvrID, Type, SubType, IsSender,
+            CreateTime, StrTalker, StrContent, CompressContent, BytesExtra
+          FROM MSG
+          WHERE StrTalker = ?
+          ORDER BY CreateTime DESC
+        `)
+        rows = stmt.all(talker) as any[]
+      }
 
       const messages: Message[] = rows.map((row: any) =>
         this.processMessage(row)
