@@ -400,20 +400,57 @@ function renderHighlights() {
 
   const body = document.querySelector('.article-body');
   if (!body) return;
+
+  // 收集所有文本节点及其在拼接字符串中的偏移
   const walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT, null, false);
   const textNodes = [];
   let node;
-  while (node = walker.nextNode()) textNodes.push(node);
+  while (node = walker.nextNode()) {
+    if (node.textContent.length > 0) textNodes.push(node);
+  }
 
+  // 构建拼接字符串和偏移映射
+  let fullText = '';
+  const offsets = []; // [{node, start, end}]
+  textNodes.forEach(tn => {
+    offsets.push({node: tn, start: fullText.length, end: fullText.length + tn.textContent.length});
+    fullText += tn.textContent;
+  });
+
+  // 对每个高亮，在拼接字符串中查找并跨节点标记
   allHighlights.forEach(hl => {
-    let remaining = hl.text;
-    for (const tn of textNodes) {
-      if (!remaining) break;
-      const idx = tn.textContent.indexOf(remaining);
-      if (idx >= 0) {
+    const searchText = hl.text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    // 尝试精确匹配，再尝试去除空白差异的模糊匹配
+    let idx = fullText.indexOf(searchText);
+    if (idx < 0) {
+      // 模糊匹配：将搜索文本和全文的连续空白归一化为单空格
+      const normFull = fullText.replace(/\s+/g, ' ');
+      const normSearch = searchText.replace(/\s+/g, ' ');
+      idx = normFull.indexOf(normSearch);
+      if (idx < 0) return; // 找不到，跳过
+      // 需要从 normFull 的 idx 映射回 fullText 的真实 idx
+      let fi = 0, ni = 0;
+      while (ni < idx) {
+        if (/\s/.test(fullText[fi])) {
+          while (fi < fullText.length && /\s/.test(fullText[fi])) fi++;
+          ni++;
+        } else {
+          fi++; ni++;
+        }
+      }
+      idx = fi;
+    }
+    const hlEnd = idx + searchText.length;
+
+    // 找出涉及的文本节点并逐段标记
+    for (const off of offsets) {
+      if (off.end <= idx || off.start >= hlEnd) continue; // 不重叠
+      const segStart = Math.max(idx, off.start) - off.start;
+      const segEnd = Math.min(hlEnd, off.end) - off.start;
+      try {
         const range = document.createRange();
-        range.setStart(tn, idx);
-        range.setEnd(tn, idx + remaining.length);
+        range.setStart(off.node, segStart);
+        range.setEnd(off.node, segEnd);
         const mark = document.createElement('mark');
         mark.className = 'hl';
         mark.setAttribute('data-hid', hl.id);
@@ -422,8 +459,8 @@ function renderHighlights() {
           if (hl.note) alert('\u7b14\u8bb0: ' + hl.note);
         };
         range.surroundContents(mark);
-        remaining = '';
-        break;
+      } catch(e) {
+        // 跨元素选区可能失败，静默跳过
       }
     }
   });

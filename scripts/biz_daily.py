@@ -596,10 +596,7 @@ def main():
             if markdown:
                 body_parts.append('---\n\n')
                 body_parts.append('## 正文\n\n')
-                body = markdown[:10000]
-                if len(markdown) > 10000:
-                    body += f'\n\n*(原文过长，截取前10000字，共{len(markdown)}字)*'
-                body_parts.append(body)
+                body_parts.append(markdown)
 
             write_with_frontmatter(str(file_path), fm, ''.join(body_parts))
 
