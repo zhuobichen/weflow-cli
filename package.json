@@ -1,6 +1,6 @@
 {
   "name": "weflow-cli",
-  "version": "1.1.0",
+  "version": "1.4.0",
   "description": "WeFlow CLI - 微信聊天记录命令行查询与导出工具",
   "type": "module",
   "bin": {

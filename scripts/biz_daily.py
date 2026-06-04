@@ -21,6 +21,7 @@ import random
 import re
 import time
 import urllib.request
+import base64
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
@@ -218,6 +219,72 @@ def fetch_article(url: str) -> str | None:
         else:
             print(f'  [WARN] 抓取失败: {e} (scrapling 未安装，无 fallback)')
             return None
+
+
+def download_images_to_local(markdown: str, images_dir: Path) -> tuple[str, dict]:
+    """Download mmbiz images to local directory. Returns (markdown, url_mapping)."""
+    url_mapping = {}  # remote_url -> local_rel_path
+
+    if not markdown:
+        return markdown, url_mapping
+
+    # Create images directory
+    images_dir.mkdir(parents=True, exist_ok=True)
+
+    # Find all image URLs in markdown
+    img_pattern = re.compile(r'!\[(.*?)\]\((https?://[^)]+)\)')
+    img_matches = img_pattern.findall(markdown)
+
+    if not img_matches:
+        return markdown, url_mapping
+
+    downloaded_count = 0
+    for alt, url in img_matches:
+        # Only process mmbiz images
+        if 'mmbiz' not in url:
+            continue
+
+        # Generate filename from URL hash
+        url_hash = hashlib.md5(url.encode()).hexdigest()[:12]
+        ext = '.jpg'  # default
+        if '.png' in url or 'wx_fmt=png' in url:
+            ext = '.png'
+        elif '.gif' in url or 'wx_fmt=gif' in url:
+            ext = '.gif'
+        elif '.webp' in url or 'wx_fmt=webp' in url:
+            ext = '.webp'
+
+        local_filename = f'{url_hash}{ext}'
+        local_path = images_dir / local_filename
+        rel_path = f'images/{local_filename}'
+
+        # Store mapping
+        url_mapping[url] = rel_path
+
+        # Skip if already downloaded
+        if local_path.exists() and local_path.stat().st_size > 0:
+            downloaded_count += 1
+            continue
+
+        # Download image
+        try:
+            req = urllib.request.Request(url, headers={
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                'Referer': 'https://mp.weixin.qq.com/',
+            })
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = resp.read(10 * 1024 * 1024)  # max 10MB
+                if len(data) > 0:
+                    local_path.write_bytes(data)
+                    downloaded_count += 1
+        except Exception as e:
+            # Keep original URL if download fails
+            pass
+
+    if downloaded_count > 0:
+        print(f'  图片下载: {downloaded_count}张')
+
+    return markdown, url_mapping
 
 
 def extract_article_info(content_bytes: bytes) -> dict:
@@ -594,6 +661,22 @@ def main():
                 body_parts.append('\n')
 
             if markdown:
+                # Download images to local directory
+                images_dir = out_dir / 'images'
+                markdown, url_mapping = download_images_to_local(markdown, images_dir)
+
+                # Save image mapping for HTML fallback
+                if url_mapping:
+                    map_file = out_dir / '.image_map.json'
+                    existing_map = {}
+                    if map_file.exists():
+                        try:
+                            existing_map = json.loads(map_file.read_text(encoding='utf-8'))
+                        except:
+                            pass
+                    existing_map.update(url_mapping)
+                    map_file.write_text(json.dumps(existing_map, ensure_ascii=False, indent=2), encoding='utf-8')
+
                 body_parts.append('---\n\n')
                 body_parts.append('## 正文\n\n')
                 body_parts.append(markdown)

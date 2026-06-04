@@ -8,7 +8,7 @@
 
 > 飘飘乎如遗世独立，羽化而登仙
 
-![Version](https://img.shields.io/badge/version-1.3.0-blue)
+![Version](https://img.shields.io/badge/version-1.4.0-blue)
 ![Node](https://img.shields.io/badge/node-18+-green)
 ![Python](https://img.shields.io/badge/python-3.10+-blue)
 ![License](https://img.shields.io/badge/license-MIT-yellow)
@@ -33,6 +33,16 @@
 ---
 
 ## ✨ 近期更新
+
+<details open>
+<summary>v1.4.0 — 图片本地化 + 远程保底（点击展开）</summary>
+
+- ✨ **图片本地化** — 公众号文章图片自动下载到 `images/` 目录，微信 CDN 不再丢图
+- ✨ **远程优先 + 本地保底** — HTML 阅读器优先加载远程图片，失败时自动切换本地备份
+- 🔧 **图片 fallback 机制** — `generate_html.py` 添加 `onerror` 事件，CDN 不可用时无缝降级
+- 🔧 **LICENSE 文件** — 补充 MIT 许可证文件
+
+</details>
 
 <details>
 <summary>v1.3.1 — 消息无限制 + 图片完整提取 + CDN 代理（点击展开）</summary>
@@ -67,7 +77,7 @@
 | 分类 | 功能 |
 |------|------|
 | 💬 **聊天** | 解密 3.x/4.x 数据库 · 导出 JSON/TXT/MD/HTML/Excel · 图片 base64 内嵌 · 公众号封面图嵌入 · 联系人昵称映射 |
-| 📰 **日报** | 自动抓取公众号文章 · DeepSeek V4 摘要+分类 · 本地阅读器 · 收藏/已读同步 |
+| 📰 **日报** | 自动抓取公众号文章 · DeepSeek V4 摘要+分类 · 图片本地化 · 远程优先+本地保底 · 本地阅读器 · 收藏/已读同步 |
 | 🧠 **知识** | Obsidian vault RAG · 语义搜索 · 微信读书同步 · 概念 Wiki 编译 |
 | 🔌 **MCP** | 微信公众号抓取/发布 · 知识库搜索 · 学习日报 · Claude Code 集成 |
 | 🔒 **隐私** | 密钥 AES-256-GCM 加密绑定单机 · 纯本地运行 · 零网络上传 |
@@ -104,12 +114,14 @@ npm run dev -- export <昵称> html    # 导出 HTML
 **4. 公众号日报**
 
 ```bash
-python scripts/biz_daily.py --date YYYY-MM-DD           # 抓取+AI摘要
+python scripts/biz_daily.py --date YYYY-MM-DD           # 抓取+AI摘要+图片本地化
 python scripts/generate_html.py --date YYYY-MM-DD       # 生成 HTML 页面
 python scripts/fav_server.py --date YYYY-MM-DD          # 启动阅读器 → http://localhost:8765
 ```
 
 > ⚠️ **DeepSeek API key**：通过 `--api-key` 传入或设环境变量 `DEEPSEEK_API_KEY`
+>
+> 💡 **图片说明**：文章图片自动下载到 `images/` 目录作为保底，HTML 阅读器优先加载远程图片，失败时自动切换本地备份
 
 ---
 
@@ -131,7 +143,7 @@ python scripts/fav_server.py --date YYYY-MM-DD          # 启动阅读器 → ht
 
 | 命令 | 说明 |
 |------|------|
-| `python scripts/biz_daily.py --date YYYY-MM-DD` | 抓取公众号 + AI 摘要分类 |
+| `python scripts/biz_daily.py --date YYYY-MM-DD` | 抓取公众号 + AI 摘要分类 + 图片本地化 |
 | `python scripts/generate_html.py --date YYYY-MM-DD` | 生成日报 HTML 页面 |
 | `python scripts/fav_server.py --date YYYY-MM-DD` | 启动本地阅读器 |
 | `python scripts/classify_daily.py --interest AI` | 后处理：广告清洗 + 深度摘要 |
