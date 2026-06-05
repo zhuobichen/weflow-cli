@@ -206,7 +206,7 @@ class FavHandler(SimpleHTTPRequestHandler):
         if not aid: self.send_error(400); return
         state = self._read_run_state()
         if aid in state: del state[aid]; action = 'unread'
-        else: state[aid] = data.get('title', ''); action = 'read'
+        else: state[aid] = True; action = 'read'
         self._write_run_state(state)
         self._send_json({'ok': True, 'action': action, 'id': aid})
 

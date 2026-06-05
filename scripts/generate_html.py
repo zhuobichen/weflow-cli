@@ -1244,19 +1244,21 @@ function exportFav() {{
             for (const [k,v] of Object.entries(serverState)) {{
                 if (!local[k]) local[k] = true;  // 只补充，不删除
             }}
-            // 本地的也同步到服务端
+            // 本地���也同步到服务端
             for (const [k,v] of Object.entries(local)) {{
-                if (!serverState[k]) {{
+                if (!(k in serverState)) {{
                     fetch('/api/read/toggle', {{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{id:k}})}}).catch(()=>{{}});
                 }}
             }}
-            saveState(local); applyState();
+            saveState(local);
         }} catch(e) {{}}
         const indicator = document.getElementById('sync-indicator');
         if (indicator) {{ indicator.style.display = ''; }}
         const exportBtn = document.getElementById('btn-export-fav');
         if (exportBtn) {{ exportBtn.textContent = '📥 导出'; exportBtn.title = '收藏已实时同步到磁盘'; }}
     }}
+    // 无论是否 localhost，都应用已读状态到界面
+    applyState();
     const savedTab = sessionStorage.getItem('weflow_tab_{date_str}');
     const hash = window.location.hash.slice(1);
     switchTab(hash || savedTab || 'AI');
