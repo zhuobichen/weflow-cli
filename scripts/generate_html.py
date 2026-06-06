@@ -217,6 +217,7 @@ body {
 .note-modal .btn-save:hover { background: #6366f1; }
 .note-modal .btn-cancel { background: #334155; color: #94a3b8; }
 .note-modal .btn-cancel:hover { background: #475569; }
+.note-modal .hint { text-align: center; color: #475569; font-size: 11px; margin-top: 10px; }
 .notes-sidebar { position: fixed; right: 0; top: 0; width: 340px; height: 100vh; background: #0f172a; border-left: 1px solid #1e293b; z-index: 500; overflow-y: auto; transform: translateX(100%); transition: transform .3s ease; }
 .notes-sidebar.open { transform: translateX(0); }
 .notes-sidebar-header { padding: 16px 20px; border-bottom: 1px solid #1e293b; display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; background: #0f172a; z-index: 2; }
@@ -233,6 +234,29 @@ body {
 .btn-notes-toggle { position: fixed; right: 16px; bottom: 24px; z-index: 501; background: #818cf8; color: #fff; border: none; width: 44px; height: 44px; border-radius: 12px; font-size: 18px; cursor: pointer; box-shadow: 0 4px 16px #818cf840; transition: all .2s; display: flex; align-items: center; justify-content: center; }
 .btn-notes-toggle:hover { background: #6366f1; transform: scale(1.05); }
 .btn-notes-toggle .badge { position: absolute; top: -4px; right: -4px; background: #ef4444; color: #fff; font-size: 10px; width: 18px; height: 18px; border-radius: 9px; display: flex; align-items: center; justify-content: center; font-weight: 700; }
+/* ---- Notes Toolbar ---- */
+.notes-toolbar { display: flex; gap: 6px; padding: 12px 20px; border-bottom: 1px solid #1e293b; background: #0f172a; position: sticky; top: 52px; z-index: 2; }
+.btn-sort, .btn-export { background: #1e293b; border: 1px solid #334155; color: #94a3b8; padding: 4px 10px; border-radius: 6px; font-size: 11px; cursor: pointer; transition: all .2s; white-space: nowrap; }
+.btn-sort:hover, .btn-export:hover { background: #334155; color: #e2e8f0; }
+.btn-sort.active { background: #818cf820; border-color: #818cf8; color: #818cf8; }
+.btn-export { margin-left: auto; background: #10b98120; border-color: #10b98140; color: #34d399; }
+.btn-export:hover { background: #10b98130; }
+/* ---- Note Item Enhanced ---- */
+.note-item { padding: 14px 20px; border-bottom: 1px solid #1e293b; transition: background .2s; }
+.note-item:hover { background: #1e293b20; }
+.note-header { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.note-num { font-size: 11px; color: #818cf8; font-weight: 700; background: #818cf820; padding: 2px 8px; border-radius: 4px; }
+.note-time { font-size: 11px; color: #475569; }
+.note-item .hl-text { color: #fef08a; font-size: 13px; line-height: 1.6; margin-bottom: 8px; border-left: 3px solid #fbbf24; padding-left: 10px; }
+.note-item .hl-note { color: #cbd5e1; font-size: 13px; line-height: 1.6; margin-bottom: 8px; background: #1e293b; padding: 8px 12px; border-radius: 6px; }
+.hl-actions { display: flex; gap: 6px; margin-top: 8px; }
+.hl-actions button { background: none; border: 1px solid #334155; color: #64748b; padding: 4px 8px; border-radius: 5px; font-size: 12px; cursor: pointer; transition: all .2s; }
+.hl-actions button:hover { background: #334155; color: #e2e8f0; }
+.hl-actions button:hover[title="删除"] { background: #dc262620; border-color: #dc262640; color: #f87171; }
+/* ---- Toast ---- */
+.toast-msg { position: fixed; bottom: 80px; right: 16px; background: #1e293b; border: 1px solid #334155; color: #e2e8f0; padding: 10px 16px; border-radius: 8px; font-size: 13px; z-index: 9999; box-shadow: 0 4px 16px #00000060; animation: slideIn .3s ease; }
+.toast-msg.fade-out { opacity: 0; transform: translateY(10px); transition: all .3s; }
+@keyframes slideIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
 @media (max-width: 640px) { .notes-sidebar { width: 100%; } }
 </style>
 </head>
@@ -384,12 +408,34 @@ function startNote() {
       '<div class="hl-text">' + text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;') + '</div>' +
       '<textarea id="note-input" placeholder="\u5199\u4e0b\u4f60\u7684\u611f\u60f3\u6216\u5907\u6ce8\uff08\u53ef\u9009\uff09"></textarea>' +
       '<div class="btn-row">' +
-        '<button class="btn-cancel" onclick="this.closest(\'.note-modal-overlay\').remove()">\u53d6\u6d88</button>' +
+        '<button class="btn-cancel" onclick="closeNoteModal()">\u53d6\u6d88</button>' +
         '<button class="btn-save" onclick="saveNote()">\u4fdd\u5b58</button>' +
       '</div>' +
+      '<div class="hint">\u2318 Ctrl+Enter \u4fdd\u5b58 | ESC \u53d6\u6d88</div>' +
     '</div>';
   document.body.appendChild(hlModal);
-  setTimeout(() => document.getElementById('note-input').focus(), 100);
+  
+  // 快捷键支持
+  const textarea = document.getElementById('note-input');
+  textarea.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      saveNote();
+    }
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      closeNoteModal();
+    }
+  });
+  
+  setTimeout(() => textarea.focus(), 100);
+}
+
+function closeNoteModal() {
+  if (hlModal) {
+    hlModal.remove();
+    hlModal = null;
+  }
 }
 
 async function saveNote() {
@@ -401,16 +447,20 @@ async function saveNote() {
     const local = JSON.parse(localStorage.getItem('weflow_hl_' + ARTICLE_ID) || '[]');
     local.push({id: Date.now().toString(36), text: hlText, note: noteText, created: new Date().toLocaleString()});
     localStorage.setItem('weflow_hl_' + ARTICLE_ID, JSON.stringify(local));
-    hlModal.remove();
+    closeNoteModal();
     loadHighlights();
+    showToast('\u2705 \u7b14\u8bb0\u5df2\u4fdd\u5b58');
     return;
   }
   try {
     const res = await fetch(NOTES_API, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({article: ARTICLE_ID, text: hlText, note: noteText})});
     await res.json();
-    hlModal.remove();
+    closeNoteModal();
     loadHighlights();
-  } catch(e) { alert('\u4fdd\u5b58\u5931\u8d25: ' + e.message); }
+    showToast('\u2705 \u7b14\u8bb0\u5df2\u4fdd\u5b58');
+  } catch(e) { 
+    showToast('\u274c \u4fdd\u5b58\u5931\u8d25: ' + e.message); 
+  }
 }
 
 async function loadHighlights() {
@@ -512,15 +562,193 @@ function renderNotesList() {
     return;
   }
   if (badge) { badge.style.display = ''; badge.textContent = allHighlights.length; }
-  container.innerHTML = allHighlights.map(hl =>
-    '<div class="note-item">' +
+  
+  // 排序按钮和导出按钮
+  let headerHtml = '<div class="notes-toolbar">' +
+    '<button class="btn-sort" id="btn-sort-time" onclick="sortNotes(\'time\')" title="\u6309\u65f6\u95f4\u6392\u5e8f">\u23f1 \u65f6\u95f4</button>' +
+    '<button class="btn-sort" id="btn-sort-pos" onclick="sortNotes(\'pos\')" title="\u6309\u4f4d\u7f6e\u6392\u5e8f">\u2316 \u4f4d\u7f6e</button>' +
+    '<button class="btn-export" onclick="exportNotes()" title="\u5bfc\u51fa\u7b14\u8bb0">\ud83d\udcc4 \u5bfc\u51fa</button>' +
+  '</div>';
+  
+  container.innerHTML = headerHtml + allHighlights.map((hl, idx) =>
+    '<div class="note-item" data-hid="' + hl.id + '">' +
+      '<div class="note-header">' +
+        '<span class="note-num">#' + (idx + 1) + '</span>' +
+        '<span class="note-time">' + (hl.created || '') + '</span>' +
+      '</div>' +
       '<div class="hl-text">' + hl.text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;') + '</div>' +
       (hl.note ? '<div class="hl-note">\ud83d\udcac ' + hl.note.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;') + '</div>' : '') +
-      '<div class="hl-meta"><span>' + (hl.created || '') + '</span>' +
-        '<button onclick="deleteNote(\'' + hl.id + '\')">\u5220\u9664</button>' +
+      '<div class="hl-actions">' +
+        '<button onclick="editNote(\'' + hl.id + '\')" title="\u7f16\u8f91">\u270f\ufe0f</button>' +
+        '<button onclick="copyNote(\'' + hl.id + '\')" title="\u590d\u5236">\ud83d\udccb</button>' +
+        '<button onclick="deleteNote(\'' + hl.id + '\')" title="\u5220\u9664">\ud83d\udd1d</button>' +
       '</div>' +
     '</div>'
   ).join('');
+}
+
+// 排序笔记
+let noteSortMode = 'time';
+function sortNotes(mode) {
+  noteSortMode = mode;
+  if (mode === 'time') {
+    allHighlights.sort((a, b) => (a.created || '').localeCompare(b.created || ''));
+  } else if (mode === 'pos') {
+    // 按在文章中出现位置排序
+    const body = document.querySelector('.article-body');
+    if (body) {
+      const fullText = body.textContent;
+      allHighlights.sort((a, b) => {
+        const posA = fullText.indexOf(a.text);
+        const posB = fullText.indexOf(b.text);
+        return posA - posB;
+      });
+    }
+  }
+  // 更新排序按钮状态
+  document.querySelectorAll('.btn-sort').forEach(btn => btn.classList.remove('active'));
+  const activeBtn = document.getElementById('btn-sort-' + mode);
+  if (activeBtn) activeBtn.classList.add('active');
+  renderNotesList();
+}
+
+// 编辑笔记
+function editNote(hid) {
+  const hl = allHighlights.find(h => h.id === hid);
+  if (!hl) return;
+  if (hlModal) hlModal.remove();
+  
+  hlModal = document.createElement('div');
+  hlModal.className = 'note-modal-overlay';
+  hlModal.innerHTML =
+    '<div class="note-modal">' +
+      '<h3>\u270f\ufe0f \u7f16\u8f91\u7b14\u8bb0</h3>' +
+      '<div class="hl-text">' + hl.text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;') + '</div>' +
+      '<textarea id="note-input" placeholder="\u5199\u4e0b\u4f60\u7684\u611f\u60f3\u6216\u5907\u6ce8\uff08\u53ef\u9009\uff09">' + (hl.note || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;') + '</textarea>' +
+      '<div class="btn-row">' +
+        '<button class="btn-cancel" onclick="closeNoteModal()">\u53d6\u6d88</button>' +
+        '<button class="btn-save" onclick="updateNote(\'' + hid + '\')">\u4fdd\u5b58</button>' +
+      '</div>' +
+      '<div class="hint">\u2318 Ctrl+Enter \u4fdd\u5b58 | ESC \u53d6\u6d88</div>' +
+    '</div>';
+  document.body.appendChild(hlModal);
+  
+  // 快捷键支持
+  const textarea = document.getElementById('note-input');
+  textarea.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      updateNote(hid);
+    }
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      closeNoteModal();
+    }
+  });
+  
+  setTimeout(() => {
+    textarea.focus();
+    textarea.select();
+  }, 100);
+}
+
+// 更新笔记
+async function updateNote(hid) {
+  const noteText = document.getElementById('note-input').value.trim();
+  const hl = allHighlights.find(h => h.id === hid);
+  if (!hl) return;
+  
+  hl.note = noteText;
+  
+  if (!NOTES_API) {
+    localStorage.setItem('weflow_hl_' + ARTICLE_ID, JSON.stringify(allHighlights));
+    closeNoteModal();
+    loadHighlights();
+    showToast('\u2705 \u7b14\u8bb0\u5df2\u66f4\u65b0');
+    return;
+  }
+  
+  try {
+    // 先删除旧的，再添加新的
+    await fetch(NOTES_API + '/delete', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({article: ARTICLE_ID, id: hid})});
+    await fetch(NOTES_API, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({article: ARTICLE_ID, text: hl.text, note: noteText})});
+    closeNoteModal();
+    loadHighlights();
+    showToast('\u2705 \u7b14\u8bb0\u5df2\u66f4\u65b0');
+  } catch(e) { 
+    showToast('\u274c \u4fdd\u5b58\u5931\u8d25: ' + e.message); 
+  }
+}
+
+// 复制笔记
+function copyNote(hid) {
+  const hl = allHighlights.find(h => h.id === hid);
+  if (!hl) return;
+  
+  const text = '\u3010' + hl.text + '\u3011' + (hl.note ? '\n' + hl.note : '');
+  
+  if (navigator.clipboard) {
+    navigator.clipboard.writeText(text).then(() => {
+      showToast('\u2705 \u5df2\u590d\u5236\u5230\u526a\u8d34\u677f');
+    }).catch(() => {
+      fallbackCopy(text);
+    });
+  } else {
+    fallbackCopy(text);
+  }
+}
+
+function fallbackCopy(text) {
+  const textarea = document.createElement('textarea');
+  textarea.value = text;
+  document.body.appendChild(textarea);
+  textarea.select();
+  document.execCommand('copy');
+  document.body.removeChild(textarea);
+  showToast('\u2705 \u5df2\u590d\u5236\u5230\u526a\u8d34\u677f');
+}
+
+// 导出笔记
+function exportNotes() {
+  if (allHighlights.length === 0) {
+    showToast('\u26a0\ufe0f \u6682\u65e0\u7b14\u8bb0\u53ef\u5bfc\u51fa');
+    return;
+  }
+  
+  let md = '# \u7b14\u8bb0\u5bfc\u51fa\n\n';
+  md += '\u5bfc\u51fa\u65f6\u95f4: ' + new Date().toLocaleString() + '\n';
+  md += '\u6587\u7ae0: ' + ARTICLE_ID + '\n';
+  md += '\u7b14\u8bb0\u6570: ' + allHighlights.length + '\n\n---\n\n';
+  
+  allHighlights.forEach((hl, idx) => {
+    md += '## ' + (idx + 1) + '. ' + (hl.created || '') + '\n\n';
+    md += '> ' + hl.text + '\n\n';
+    if (hl.note) {
+      md += '\ud83d\udcac ' + hl.note + '\n\n';
+    }
+    md += '---\n\n';
+  });
+  
+  const blob = new Blob([md], {type: 'text/markdown;charset=utf-8'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'notes_' + ARTICLE_ID.replace(/[/]/g, '_').replace('.md', '') + '.md';
+  a.click();
+  URL.revokeObjectURL(url);
+  showToast('\u2705 \u5df2\u5bfc\u51fa ' + allHighlights.length + ' \u6761\u7b14\u8bb0');
+}
+
+// Toast 提示
+function showToast(msg) {
+  const toast = document.createElement('div');
+  toast.className = 'toast-msg';
+  toast.textContent = msg;
+  document.body.appendChild(toast);
+  setTimeout(() => {
+    toast.classList.add('fade-out');
+    setTimeout(() => toast.remove(), 300);
+  }, 2000);
 }
 
 async function deleteNote(hid) {
@@ -534,6 +762,7 @@ async function deleteNote(hid) {
     localStorage.setItem('weflow_hl_' + ARTICLE_ID, JSON.stringify(allHighlights));
   }
   loadHighlights();
+  showToast('\u2705 \u7b14\u8bb0\u5df2\u5220\u9664');
 }
 
 function toggleNotes() {
