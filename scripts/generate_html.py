@@ -77,6 +77,13 @@ def collect_articles(date_dir: str) -> dict:
                 content = md_file.read_text(encoding='utf-8')
             except Exception:
                 continue
+            # Skip articles with empty body
+            body_part = content.split('## 正文')
+            if len(body_part) > 1:
+                body_text = body_part[1].strip()
+                body_text = ''.join(c for c in body_text if c not in ' \n\r\t')
+                if len(body_text) < 30:
+                    continue
             meta = parse_frontmatter(content)
             preview = get_body_preview(content)
             articles.append({
@@ -300,7 +307,10 @@ body {
         else if (realUrl.indexOf('.gif') !== -1 || realUrl.indexOf('wx_fmt=gif') !== -1) ext = '.gif';
         else if (realUrl.indexOf('.webp') !== -1 || realUrl.indexOf('wx_fmt=webp') !== -1) ext = '.webp';
         var localPath = 'images/' + hash + ext;
-        // 使用代理加载，失败时 fallback 到本地图片
+        // 优先用本地图片，不存在时走代理
+        if (window._IMG_MAP && window._IMG_MAP[realUrl]) {
+          return 'src="' + localPath + '"';
+        }
         return 'src="/proxy?url=' + encodeURIComponent(realUrl) + '" onerror="this.onerror=null;this.src=\'' + localPath + '\'"';
       });
     }
@@ -1332,13 +1342,26 @@ def main():
     # 同时生成 article.html（Markdown 渲染阅读器）
     article_html_path = os.path.join(date_dir, 'article.html')
     if not os.path.exists(article_html_path):
-        # 从最新版本拷贝（包含 AI 侧边栏等完整功能）
         import shutil
         template = os.path.join(SOURCE_ROOT, '2026-05-19', 'article.html')
         if os.path.exists(template):
             shutil.copy2(template, article_html_path)
         else:
             generate_article_viewer(article_html_path)
+
+    # 注入本地图片映射，优先用本地图片避免代理延迟
+    image_map_path = os.path.join(date_dir, '.image_map.json')
+    if os.path.exists(image_map_path):
+        with open(image_map_path, 'r', encoding='utf-8') as f:
+            img_map = json.load(f)
+        if img_map and os.path.exists(article_html_path):
+            with open(article_html_path, 'r', encoding='utf-8') as f:
+                article_html = f.read()
+            img_map_js = '<script>window._IMG_MAP=' + json.dumps(img_map, ensure_ascii=False) + ';</script>'
+            # 注入到 </head> 之前
+            article_html = article_html.replace('</head>', img_map_js + '\n</head>', 1)
+            with open(article_html_path, 'w', encoding='utf-8') as f:
+                f.write(article_html)
 
     total = sum(len(v) for v in topics.values())
     print(f'✓ HTML 生成完成: {out_path}')

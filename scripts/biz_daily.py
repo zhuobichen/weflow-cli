@@ -46,9 +46,10 @@ except ImportError:
 
 # ====== Config ======
 
+SCRIPT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONFIG_PATH = os.path.join(os.path.expanduser('~'), '.weflow-cli', 'config.json')
 DB_PATH = None  # auto-detect from config
-OUTPUT_ROOT = 'output/biz-daily'
+OUTPUT_ROOT = os.path.join(SCRIPT_DIR, 'output', 'biz-daily')
 MAX_ARTICLES = 50  # 最多抓取篇数
 FETCH_TIMEOUT = 15
 DEEPSEEK_TIMEOUT = 60
@@ -164,61 +165,87 @@ WECHAT_UA = (
     'MicroMessenger/8.0.38(0x18002633) NetType/WIFI Language/zh_CN'
 )
 
-def fetch_article(url: str) -> str | None:
-    """Fetch WeChat article with WeChat browser UA to bypass WAF."""
-    try:
-        # L1: Try direct fetch with WeChat UA headers (most stable per wechat-article-exporter)
-        req = urllib.request.Request(url, headers={
-            'User-Agent': WECHAT_UA,
-            'Referer': 'https://mp.weixin.qq.com/',
-            'Origin': 'https://mp.weixin.qq.com',
-            'Accept': 'text/html,application/xhtml+xml',
-            'Accept-Language': 'zh-CN,zh;q=0.9',
-        })
-        with urllib.request.urlopen(req, timeout=FETCH_TIMEOUT) as resp:
-            html = resp.read().decode('utf-8', errors='ignore')
+def fetch_article(url: str, max_retries: int = 3) -> str | None:
+    """Fetch WeChat article with WeChat browser UA to bypass WAF.
+    Retries up to max_retries times if content is too short."""
+    last_result = None
+    for attempt in range(max_retries):
+        try:
+            # L1: Try direct fetch with WeChat UA headers
+            req = urllib.request.Request(url, headers={
+                'User-Agent': WECHAT_UA,
+                'Referer': 'https://mp.weixin.qq.com/',
+                'Origin': 'https://mp.weixin.qq.com',
+                'Accept': 'text/html,application/xhtml+xml',
+                'Accept-Language': 'zh-CN,zh;q=0.9',
+            })
+            with urllib.request.urlopen(req, timeout=FETCH_TIMEOUT) as resp:
+                html = resp.read().decode('utf-8', errors='ignore')
 
-        # Validate: article content must include js_content div
-        if 'js_content' not in html and 'rich_media_content' not in html:
-            print(f'  [WARN] 内容验证失败 (无 js_content)')
-            return None
-
-        # 微信文章用 data-src 懒加载图片，先提取再转 markdown
-        # 提取 data-src 并替换到 src，让 html2text 能识别
-        img_count_before = len(re.findall(r'<img\s', html, re.I))
-        html = re.sub(r'data-src="(https?://[^"]+)"', r'src="\1"', html)
-        img_count_after = len(re.findall(r'<img\s[^>]*src="https?://[^"]*mmbiz', html, re.I))
-
-        # Convert to markdown
-        import html2text
-        h = html2text.HTML2Text()
-        h.ignore_links = False
-        h.ignore_images = False
-        h.body_width = 0
-        h.protect_links = True
-        h.wrap_links = False
-        result = h.handle(html)
-
-        # 统计结果中的图片
-        md_imgs = re.findall(r'!\[.*?\]\(https?://', result)
-        print(f'  HTML图片: {img_count_before}个, mmbiz图片: {img_count_after}个, MD图片: {len(md_imgs)}个')
-        return result
-    except Exception as e:
-        # L2: Fallback to Scrapling with custom headers
-        if _FETCHER_AVAILABLE:
-            try:
-                page = _Fetcher.get(url)
-                import html2text
-                h = html2text.HTML2Text()
-                h.ignore_links = False
-                h.body_width = 0
-                return h.handle(page.html_content)
-            except Exception as e2:
-                print(f'  [WARN] 抓取失败 (L1+L2): {e}')
+            # Validate: article content must include js_content div
+            if 'js_content' not in html and 'rich_media_content' not in html:
+                print(f'  [WARN] 内容验证失败 (无 js_content)')
                 return None
-        else:
-            print(f'  [WARN] 抓取失败: {e} (scrapling 未安装，无 fallback)')
-            return None
+
+            # 微信文章用 data-src 懒加载图片，先提取再转 markdown
+            img_count_before = len(re.findall(r'<img\s', html, re.I))
+            html = re.sub(r'data-src="(https?://[^"]+)"', r'src="\1"', html)
+            img_count_after = len(re.findall(r'<img\s[^>]*src="https?://[^"]*mmbiz', html, re.I))
+
+            # Convert to markdown
+            import html2text
+            h = html2text.HTML2Text()
+            h.ignore_links = False
+            h.ignore_images = False
+            h.body_width = 0
+            h.protect_links = True
+            h.wrap_links = False
+            result = h.handle(html)
+
+            # 检查内容是否充足（去掉图片链接和空白后至少有 100 字）
+            body_check = re.sub(r'!\[.*?\]\(.*?\)', '', result)
+            body_check = re.sub(r'\[.*?\]\(.*?\)', '', body_check)
+            body_check = ''.join(c for c in body_check if c not in ' \n\r\t#*->|')
+            if len(body_check) < 100:
+                if attempt < max_retries - 1:
+                    retry_delay = (attempt + 1) * 3
+                    print(f'  内容过短({len(body_check)}字), 第{attempt+1}次重试 (等{retry_delay}s)...')
+                    time.sleep(retry_delay)
+                    continue
+                else:
+                    print(f'  内容过短({len(body_check)}字), 已达最大重试次数')
+                    return None
+
+            # 统计结果中的图片
+            md_imgs = re.findall(r'!\[.*?\]\(https?://', result)
+            retry_suffix = f' (重试{attempt}次)' if attempt > 0 else ''
+            print(f'  HTML图片: {img_count_before}个, mmbiz图片: {img_count_after}个, MD图片: {len(md_imgs)}个{retry_suffix}')
+            return result
+        except Exception as e:
+            last_result = e
+            if attempt < max_retries - 1:
+                retry_delay = (attempt + 1) * 3
+                print(f'  抓取异常, 第{attempt+1}次重试 (等{retry_delay}s): {e}')
+                time.sleep(retry_delay)
+                continue
+
+    # L2: Fallback to Scrapling with custom headers
+    if _FETCHER_AVAILABLE:
+        try:
+            page = _Fetcher.get(url)
+            import html2text
+            h = html2text.HTML2Text()
+            h.ignore_links = False
+            h.body_width = 0
+            result = h.handle(page.html_content)
+            body_check = re.sub(r'!\[.*?\]\(.*?\)', '', result)
+            body_check = ''.join(c for c in body_check if c not in ' \n\r\t#*->|')
+            if len(body_check) >= 100:
+                return result
+        except Exception:
+            pass
+    print(f'  [WARN] 抓取失败: {last_result} (scrapling 未安装，无 fallback)')
+    return None
 
 
 def download_images_to_local(markdown: str, images_dir: Path) -> tuple[str, dict]:
@@ -632,6 +659,16 @@ def main():
             file_path = out_dir / topic / file_name
 
             markdown = a.get('fetched_md') or a.get('local_text', '')
+            # Skip articles with empty body content
+            if markdown:
+                body_text = markdown.strip()
+                body_text = ''.join(body_text.split('\n'))  # remove newlines
+                body_text = re.sub(r'!\[.*?\]\(.*?\)', '', body_text)  # remove images
+                body_text = re.sub(r'\[.*?\]\(.*?\)', '', body_text)    # remove links
+                body_text = body_text.strip()
+                if len(body_text) < 100:
+                    print(f'  [SKIP] 内容过短 ({len(body_text)}字): {a["title"]}')
+                    continue
             summary = a.get('summary', a.get('digest', ''))
             tags = a.get('tags', [topic])
             concepts = a.get('concepts', [])
