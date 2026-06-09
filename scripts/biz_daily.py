@@ -648,6 +648,34 @@ def main():
             t = '学术'
         topic_groups[t].append(a)
 
+    # --- 写入结构化 JSON：一次提取，多次复用（供 AI 报告等下游使用） ---
+    serializable = []
+    for a in articles:
+        entry = {
+            'title': a.get('title', ''),
+            'source': a.get('account_name', ''),
+            'date': date_str,
+            'time': a.get('time', ''),
+            'topic': a.get('topic', ''),
+            'relevance': a.get('relevance', '中'),
+            'tags': a.get('tags', []),
+            'summary': a.get('summary', a.get('digest', '')),
+            'url': a.get('url', ''),
+        }
+        serializable.append(entry)
+
+    json_path = out_dir / '.articles.json'
+    try:
+        with open(json_path, 'w', encoding='utf-8') as f:
+            json.dump({
+                'generated_at': datetime.now(timezone(timedelta(hours=8))).strftime('%Y-%m-%d %H:%M:%S'),
+                'date': date_str,
+                'articles': serializable,
+            }, f, ensure_ascii=False, indent=2)
+        print(f'  ✓ 结构化数据: {json_path} ({len(serializable)} 篇)')
+    except Exception as e:
+        print(f'  [WARN] JSON 写入失败: {e}')
+
     # Write new article files
     for topic in TOPICS:
         group = topic_groups[topic]
