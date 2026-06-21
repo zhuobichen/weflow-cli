@@ -1,7 +1,9 @@
 """
 weflow-cli 公共工具函数 — 供 biz_daily / classify_daily / chat_report 等共用。
 """
-import os, json, base64, socket, urllib.request
+import os, json, base64, socket, urllib.request, hashlib, time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from functools import wraps
 
 
 # ======================================================================
@@ -165,7 +167,7 @@ class AnthropicEngine(AIEngine):
 
 
 class DeepSeekEngine(AIEngine):
-    def __init__(self, api_key: str, model='deepseek-v4-pro', timeout=60):
+    def __init__(self, api_key: str, model='deepseek-chat', timeout=180):
         super().__init__(api_key, 'https://api.deepseek.com/v1', model, timeout=timeout)
 
 
@@ -265,6 +267,111 @@ def call_deepseek(prompt: str, api_key: str, max_tokens=2000, timeout=60) -> str
 
 
 # ======================================================================
+# 缓存机制 — 避免重跑 pipeline 时重复调用 API
+# ======================================================================
+
+_CACHE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                          'output', '.cache')
+
+
+def _cache_key(*args, **kwargs) -> str:
+    """根据参数生成 MD5 缓存 key。"""
+    raw = json.dumps({'args': args, 'kwargs': kwargs}, sort_keys=True, ensure_ascii=False)
+    return hashlib.md5(raw.encode('utf-8')).hexdigest()
+
+
+def cached_call(func, *args, cache_subdir: str = '', **kwargs):
+    """带缓存的函数调用。命中缓存则直接返回，否则调用 func 并存储结果。
+
+    Args:
+        func: 要调用的函数（需返回可 JSON 序列化的结果）
+        cache_subdir: 缓存子目录名（如 'classify'、'wiki'）
+    """
+    cache_dir = os.path.join(_CACHE_DIR, cache_subdir) if cache_subdir else _CACHE_DIR
+    os.makedirs(cache_dir, exist_ok=True)
+    key = _cache_key(func.__name__, *args, **kwargs)
+    cache_file = os.path.join(cache_dir, f'{key}.json')
+
+    if os.path.exists(cache_file):
+        try:
+            with open(cache_file, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except (json.JSONDecodeError, OSError):
+            pass  # 缓存损坏，重新调用
+
+    result = func(*args, **kwargs)
+    try:
+        with open(cache_file, 'w', encoding='utf-8') as f:
+            json.dump(result, f, ensure_ascii=False)
+    except (TypeError, OSError):
+        pass  # 结果不可序列化或写入失败，跳过缓存
+
+    return result
+
+
+def clear_cache(cache_subdir: str = ''):
+    """清空指定子目录的缓存，或全部缓存。"""
+    target = os.path.join(_CACHE_DIR, cache_subdir) if cache_subdir else _CACHE_DIR
+    if not os.path.isdir(target):
+        return
+    for fname in os.listdir(target):
+        fpath = os.path.join(target, fname)
+        if os.path.isfile(fpath):
+            os.unlink(fpath)
+
+
+# ======================================================================
+# 并发 API 调用 — 替代串行 + time.sleep() 模式
+# ======================================================================
+
+def parallel_map(func, items, max_workers: int = 3, delay: float = 0.1,
+                 desc: str = '') -> list:
+    """并发执行函数，自动控制并发数和速率。
+
+    Args:
+        func: 接受单个 item 的函数，返回结果
+        items: 待处理的列表
+        max_workers: 最大并发数（默认 3，避免 API 限流）
+        delay: 每个任务提交后的延迟（秒），用于速率控制
+        desc: 进度描述（用于日志输出）
+
+    Returns:
+        与 items 顺序对应的结果列表
+    """
+    results = [None] * len(items)
+    errors = [None] * len(items)
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_idx = {}
+        for idx, item in enumerate(items):
+            future = executor.submit(func, item)
+            future_to_idx[future] = idx
+            if delay > 0:
+                time.sleep(delay)
+
+        done_count = 0
+        total = len(items)
+        for future in as_completed(future_to_idx):
+            idx = future_to_idx[future]
+            try:
+                results[idx] = future.result()
+            except Exception as e:
+                errors[idx] = e
+                if desc:
+                    print(f'  [{desc}] 第 {idx+1}/{total} 项失败: {e}')
+            done_count += 1
+            if desc and done_count % 10 == 0:
+                print(f'  [{desc}] 进度: {done_count}/{total}')
+
+    # 报告错误统计
+    fail_count = sum(1 for e in errors if e is not None)
+    if fail_count > 0 and desc:
+        print(f'  [{desc}] 完成: {total - fail_count} 成功, {fail_count} 失败')
+
+    return results
+
+
+# ======================================================================
 # Config Decrypt
 # ======================================================================
 
@@ -357,6 +464,8 @@ def parse_frontmatter(content: str) -> tuple[dict, str]:
             items = [v.strip().strip('"\'') for v in inner.split(',')] if inner.strip() else []
             result[key] = items
         elif val.startswith('"') and val.endswith('"'):
+            result[key] = val[1:-1]
+        elif val.startswith("'") and val.endswith("'"):
             result[key] = val[1:-1]
         else:
             result[key] = val

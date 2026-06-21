@@ -11,32 +11,13 @@ import sys, os, re
 from pathlib import Path
 from collections import defaultdict
 
+from _utils import parse_frontmatter
+
 SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(SCRIPTS_DIR)
 DEFAULT_SOURCE = os.path.join(PROJECT_ROOT, 'output', 'biz-daily')
 
 TOPIC_ORDER = ['AI', '学术', '新闻', '文学', '投资']
-
-
-def parse_frontmatter(text: str) -> dict:
-    if not text.startswith('---'):
-        return {}, text
-    end = text.find('---', 3)
-    if end == -1:
-        return {}, text
-    fm_text = text[3:end].strip()
-    body = text[end + 3:].strip()
-    meta = {}
-    for line in fm_text.split('\n'):
-        line = line.strip()
-        if ':' in line:
-            key, _, val = line.partition(':')
-            key = key.strip()
-            val = val.strip().strip('"').strip("'")
-            if val.startswith('[') and val.endswith(']'):
-                val = [v.strip().strip('"').strip("'") for v in val[1:-1].split(',') if v.strip()]
-            meta[key] = val
-    return meta, body
 
 
 def collect_articles(date_dir: str) -> list[dict]:

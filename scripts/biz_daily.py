@@ -267,8 +267,8 @@ def download_images_to_local(markdown: str, images_dir: Path) -> tuple[str, dict
 
     downloaded_count = 0
     for alt, url in img_matches:
-        # Only process mmbiz images
-        if 'mmbiz' not in url:
+        # Process any qpic.cn (mmbiz/mmecoa) images
+        if '.qpic.cn' not in url:
             continue
 
         # Generate filename from URL hash

@@ -30,7 +30,6 @@ AD_PATTERNS = [
     re.compile(r'预览时标签不可点\s*'),
     re.compile(r'继续滑动看下一个\s*'),
     re.compile(r'\[.*?\]\(javascript:void\(0\);\)'),
-    re.compile(r'!\[.*?\]\(https?://mmbiz[^)]+\)\s*'),
     re.compile(r'\n{4,}'),
 ]
 
@@ -329,6 +328,15 @@ def main():
 
     # ====== Step 5: Move to topic folders ======
     print(f'\n=== Step 5: 重建目录 ===')
+    # 保护收藏文件夹和状态文件
+    fav_dir = base / '收藏'
+    fav_state = base / '.fav_state.json'
+    fav_backup = None
+    if fav_dir.exists():
+        import tempfile as _tmp
+        fav_backup = Path(_tmp.mkdtemp()) / '收藏'
+        shutil.copytree(str(fav_dir), str(fav_backup))
+        shutil.rmtree(str(fav_dir))
     for topic in TOPICS:
         (base / topic).mkdir(exist_ok=True)
     for fpath, topic in topic_map.items():
@@ -338,6 +346,10 @@ def main():
                 shutil.move(str(fpath), str(dest))
         except:
             pass
+    # 恢复收藏
+    if fav_backup and fav_backup.exists():
+        shutil.copytree(str(fav_backup), str(fav_dir))
+        shutil.rmtree(str(fav_backup.parent))
 
     # ====== Step 6: README ======
     # Preserve briefing block from biz_daily README

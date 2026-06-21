@@ -32,13 +32,21 @@ interface CliConfig {
   aiEngine: string
   // 微信读书
   wereadApiKey: string
+  // AI 引擎 API Key
+  deepseekApiKey: string
 }
+
+/** 需要加密存储的字段 */
+const ENCRYPTED_KEYS: ReadonlySet<keyof CliConfig> = new Set([
+  'decryptKey', 'decryptKey3x', 'ntKey', 'contactKey',
+  'wechatOcToken', 'wereadApiKey', 'deepseekApiKey',
+])
 
 const CONFIG_DIR = join(homedir(), '.weflow-cli')
 const CONFIG_FILE = join(CONFIG_DIR, 'config.json')
 
 export class ConfigService {
-  private config: CliConfig = { dbPath: '', wxid: '', decryptKey: '', decryptKey3x: '', dataVersion: '', dbPath3x: '', ntDbPath: '', ntKey: '', ntSalt: '', contactDbPath: '', contactKey: '', contactSalt: '', wechatOcToken: '', wechatOcAccountId: '', wechatOcBaseUrl: '', wechatOcSyncBuf: '', whitelist: [], vaultRepo: '', aiEngine: 'deepseek', wereadApiKey: '' }
+  private config: CliConfig = { dbPath: '', wxid: '', decryptKey: '', decryptKey3x: '', dataVersion: '', dbPath3x: '', ntDbPath: '', ntKey: '', ntSalt: '', contactDbPath: '', contactKey: '', contactSalt: '', wechatOcToken: '', wechatOcAccountId: '', wechatOcBaseUrl: '', wechatOcSyncBuf: '', whitelist: [], vaultRepo: '', aiEngine: 'deepseek', wereadApiKey: '', deepseekApiKey: '' }
 
   constructor() {
     this.load()
@@ -69,10 +77,12 @@ export class ConfigService {
           vaultRepo: data.vaultRepo || '',
           aiEngine: data.aiEngine || 'deepseek',
           wereadApiKey: data.wereadApiKey || '',
+          deepseekApiKey: data.deepseekApiKey || '',
         }
       }
-    } catch {
-      // 配置文件损坏，使用默认值
+    } catch (e) {
+      // 配置文件损坏，输出警告并使用默认值
+      console.warn(`[weflow-cli] 配置文件解析失败 (${CONFIG_FILE}): ${e instanceof Error ? e.message : e}，将使用默认配置`)
     }
   }
 
@@ -89,7 +99,7 @@ export class ConfigService {
 
   get<K extends keyof CliConfig>(key: K): CliConfig[K] {
     const raw = this.config[key]
-    if ((key === 'decryptKey' || key === 'decryptKey3x' || key === 'ntKey' || key === 'contactKey' || key === 'wechatOcToken') && typeof raw === 'string' && raw.startsWith(LOCK_PREFIX)) {
+    if (ENCRYPTED_KEYS.has(key) && typeof raw === 'string' && raw.startsWith(LOCK_PREFIX)) {
       return this.lockDecrypt(raw) as CliConfig[K]
     }
     if ((key === 'dbPath' || key === 'dbPath3x' || key === 'ntDbPath') && typeof raw === 'string') {
@@ -99,7 +109,7 @@ export class ConfigService {
   }
 
   set<K extends keyof CliConfig>(key: K, value: CliConfig[K]): void {
-    if ((key === 'decryptKey' || key === 'decryptKey3x' || key === 'ntKey' || key === 'contactKey' || key === 'wechatOcToken') && typeof value === 'string' && value) {
+    if (ENCRYPTED_KEYS.has(key) && typeof value === 'string' && value) {
       this.config[key] = this.lockEncrypt(value) as CliConfig[K]
     } else if ((key === 'dbPath' || key === 'dbPath3x' || key === 'ntDbPath') && typeof value === 'string') {
       this.config[key] = expandHomePath(value) as CliConfig[K]
@@ -143,7 +153,7 @@ export class ConfigService {
   }
 
   clear(): void {
-    this.config = { dbPath: '', wxid: '', decryptKey: '', decryptKey3x: '', dataVersion: '', dbPath3x: '', ntDbPath: '', ntKey: '', ntSalt: '', contactDbPath: '', contactKey: '', contactSalt: '', wechatOcToken: '', wechatOcAccountId: '', wechatOcBaseUrl: '', wechatOcSyncBuf: '', whitelist: [], vaultRepo: '', aiEngine: 'deepseek', wereadApiKey: '' }
+    this.config = { dbPath: '', wxid: '', decryptKey: '', decryptKey3x: '', dataVersion: '', dbPath3x: '', ntDbPath: '', ntKey: '', ntSalt: '', contactDbPath: '', contactKey: '', contactSalt: '', wechatOcToken: '', wechatOcAccountId: '', wechatOcBaseUrl: '', wechatOcSyncBuf: '', whitelist: [], vaultRepo: '', aiEngine: 'deepseek', wereadApiKey: '', deepseekApiKey: '' }
     this.save()
   }
 

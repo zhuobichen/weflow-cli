@@ -39,47 +39,48 @@ FOCUS_TOPIC = 'AI'
 # PROMPT（信息密集精炼版，一次调用搞定）
 # ======================================================================
 
-REPORT_PROMPT = """你是一个信息提炼助手。你的任务：把一堆公众号文章浓缩成一份「信息密集但精炼」的日报。
+REPORT_PROMPT = """你是一位为忙碌研究生写作的「深度阅读策展人」。你的任务是用**信息密集但精炼**的方式，把今天的公众号文章整理成一份有深度、有观点的日报。读者读完能清晰了解「今天发生了什么、核心观点是什么、对我有什么用」。
 
-【读者】忙碌的研究生，关注 AI 前沿 + 环境科学交叉，有时每天只有 3-5 分钟看报告。
+【读者】环境科学研究生，关注 AI 前沿 + 环境科学交叉方向（大气模拟、遥感反演、环境大数据等）。
 
 【文章列表】
 {articles_block}
 
 ---
 
-请按以下严格结构生成 Markdown（遵守标题层级，不要额外解释）：
+## 写作要求（核心）
 
-## 🧠 一句话总评
-（用不超过 80 字总结这批文章的整体价值，例如：「本周大模型进展密集，Cursor Agent 化值得关注，其他信息噪音较大」）
+**精炼不是简短，是信息密度高。** 每句话都要有信息量：
+- **覆盖要全面**：尽量覆盖所有文章，至少 20 篇以上要被提及或概括
+- **重点要突出**：对最值得关注的 10-15 篇文章展开讲清楚「是什么、为什么重要、怎么用」
+- **其余也要有存在感**：剩下的文章用主题分类 + 一句话概括，让读者知道今天还有什么
+- 用**段落叙述**串联信息，而不是 bullet list 罗列标题
+- 每个观点回答**「所以呢？」**——对读者有什么启发
 
-## 📈 趋势速览
-- 关键词1 · 关键词2 · 关键词3 · 关键词4 · 关键词5
+## 结构（Markdown，遵守标题层级）
 
-## 🤖 AI 主题（最详细）
-对每一篇 AI 主题的文章：
-- **《标题》** — *来源公众号*
-  - 一句话观点：用你自己的话概括核心论点（≤ 35 字）
-  - 关键信息：一个数字/时间/人名/公司名等最值得记住的事实
+### 今日焦点（3-5 段叙述）
+用叙事段落讲清最重要的事。每段聚焦一个主题，把 2-4 篇相关文章串成故事线。用 **《标题》**(*来源*) 格式。深入解释核心观点、数据和意义。
 
-如果某篇内容太单薄，标注「（信息量有限，略读）」并用 1 句话概括。
+### AI 工具与趋势（2-3 段）
+今天 AI 领域的新动态。对有价值的工具/项目，讲清楚：它是什么、能做什么、和环境科学研究有什么关系、怎么入手。
 
-## 📑 其他主题
-按主题分组（如 投资 / 学术 / 新闻 / 文学），每篇文章用 1-2 行：
-- **《标题》** — *来源*：一句话摘要（≤ 40 字）
+### 学术前沿（2-3 段）
+与环境科学相关的研究进展。每篇讲清：研究了什么问题、用什么方法、得出什么结论、有什么启发。
 
-## 🛠 行动指南
-根据上面的文章内容，为读者（环境科学 + AI 交叉方向的研究生）推荐 5-8 个可以**立即采取的行动或值得关注的工具/项目**。
-每条按格式：
-- **立即可做**：1-2 件今天 15 分钟内可以做的具体事情（访问某个网站、关注某公众号、试一个工具等）
-- **本周计划**：1-2 件本周可以推进的事情（跑一个 demo、读一篇论文、写一段代码等）
-- **长期关注**：1-2 个值得持续跟踪的方向、人物或项目
+### 其他值得关注
+用表格或分组列出今天其他值得知道的文章，每条至少写清楚核心观点。不要只写标题。
 
-写作规则：
-1. 中文输出
-2. 不引入未出现的信息
-3. 简洁直接，用词平实
-4. Markdown 格式，**粗体**标题，*斜体*来源
+### 值得做的事（具体、可执行）
+5-8 个具体行动。不要泛泛而谈，要说「打开 XX 试 YY」或「搜索 XX 论文看第 N 节」。
+
+## 写作规则
+1. 中文输出，语气专业但不僵硬
+2. 不引入文章列表中未出现的信息
+3. 段落为主，可适当用表格对比
+4. Markdown，**粗体**强调关键，*斜体*标注来源
+5. 全文 3000-5000 字，确保信息量和深度
+6. 每个章节都要有实质内容，不要用「今天内容较少，跳过」敷衍
 
 只返回 Markdown 正文。"""
 
@@ -117,14 +118,29 @@ def load_articles_from_date(date_str: str) -> list[dict]:
             fm, body = parse_frontmatter(content)
             if not fm:
                 continue
-            m = re.search(r'## (?:AI 摘要|深度解析)\s*\n\s*(.+?)(?=\n##|\Z)', body, re.DOTALL)
-            summary = m.group(1).strip()[:500] if m else body[:300].strip()
+            relevance = fm.get('relevance', '中')
+            # 非 AI 主题只收录相关度"高"的文章
+            if topic != FOCUS_TOPIC and relevance != '高':
+                continue
+            # AI 主题读取完整正文（最多 5000 字），其他主题读取摘要
+            if topic == FOCUS_TOPIC:
+                # 提取正文部分供 AI 精读
+                body_sections = body.split('## 正文')
+                if len(body_sections) > 1:
+                    full_text = body_sections[1].strip()  # 不限制字数，完整正文
+                else:
+                    m = re.search(r'## (?:AI 摘要|深度解析)\s*\n\s*(.+?)(?=\n##|\Z)', body, re.DOTALL)
+                    full_text = m.group(1).strip()[:2000] if m else body[:2000].strip()
+                summary = full_text
+            else:
+                m = re.search(r'## (?:AI 摘要|深度解析)\s*\n\s*(.+?)(?=\n##|\Z)', body, re.DOTALL)
+                summary = m.group(1).strip()[:800] if m else body[:500].strip()
             articles.append({
                 'date': date_str,
                 'title': fm.get('title', md_file.stem).strip('"\''),
                 'source': fm.get('source', '').strip('"\''),
                 'topic': topic,
-                'relevance': fm.get('relevance', '中'),
+                'relevance': relevance,
                 'tags': fm.get('tags', []),
                 'url': fm.get('url', '').strip('"\''),
                 'summary': summary,
@@ -156,22 +172,34 @@ def build_articles_block(articles: list[dict]) -> str:
         lines.append(f'【主题：{topic}】共 {len(group)} 篇')
         for i, a in enumerate(group):
             tags = a.get('tags') or []
-            tags_str = '、'.join(tags) if isinstance(tags, list) else str(tags)
+            tags_str = '、'.join(tags[:5]) if isinstance(tags, list) else str(tags)[:50]
             summary = (a.get('summary') or '(无摘要)').strip()
-            summary = re.sub(r'\n+', ' / ', summary)[:200]
-            lines.append(
-                f'  [{i+1}] 《{a.get("title","")}》'
-                f'（{a.get("source","")}，{a.get("date","")}，相关度:{a.get("relevance","中")}）'
-            )
-            if tags_str:
-                lines.append(f'      标签：{tags_str}')
-            lines.append(f'      摘要：{summary}')
+            if topic == FOCUS_TOPIC:
+                # AI 文章：给完整的正文内容，不截断
+                lines.append(
+                    f'  [{i+1}] 《{a.get("title","")}》'
+                    f'（{a.get("source","")}，相关度:{a.get("relevance","中")}）'
+                )
+                if tags_str:
+                    lines.append(f'      标签：{tags_str}')
+                lines.append(f'      正文内容：\n{summary}')
+                lines.append('')
+            else:
+                # 非 AI 文章：摘要截断到 300 字
+                summary = re.sub(r'\n+', ' / ', summary)[:300]
+                lines.append(
+                    f'  [{i+1}] 《{a.get("title","")}》'
+                    f'（{a.get("source","")}，相关度:{a.get("relevance","中")}）'
+                )
+                if tags_str:
+                    lines.append(f'      标签：{tags_str}')
+                lines.append(f'      摘要：{summary}')
         lines.append('')
     extra = [a for a in remaining if a.get('topic') not in ordered]
     if extra:
         lines.append(f'【主题：其他】共 {len(extra)} 篇')
         for a in extra:
-            summary = re.sub(r'\n+', ' / ', a.get('summary') or '')[:200]
+            summary = re.sub(r'\n+', ' / ', a.get('summary') or '')[:120]
             lines.append(f'  • 《{a.get("title","")}》（{a.get("source","")}）')
             lines.append(f'      摘要：{summary}')
     return '\n'.join(lines)
@@ -228,7 +256,7 @@ def generate_report(articles: list[dict], engine, date_label: str,
         try:
             ai_body = engine.chat(
                 REPORT_PROMPT.format(articles_block=articles_block),
-                max_tokens=4000,
+                max_tokens=8192,
             )
         except Exception as e:
             ai_body = f'> ⚠️ AI 调用失败：{e}\n\n已输出文章骨架，请检查模型连接或使用 --dry-run。\n'
