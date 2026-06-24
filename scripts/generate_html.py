@@ -631,8 +631,8 @@ def generate_html(date_str: str, topics: dict, action_suggestions_exist: bool, b
                            class="btn-read" onclick="markRead('{escape_html(art['rel_path'])}')">
                            📖 阅读
                         </a>
-                        <button class="btn-toggle" onclick="toggleRead('{escape_html(art['rel_path'])}')">
-                           <span class="toggle-label">✓ 标记已读</span>
+                        <button class="btn-toggle" onclick="event.stopPropagation();toggleRead('{escape_html(art['rel_path'])}')">
+                           <span class="toggle-label"></span>
                         </button>
                         <button class="btn-fav" onclick="toggleFav('{escape_html(art['rel_path'])}')" title="收藏">
                            ☆
@@ -853,6 +853,8 @@ body {{
 .card.read .btn-toggle {{ color: #6b8f5e; border-color: #6b8f5e30; }}
 .card.read .toggle-label::before {{ content: '↩ 标记未读'; }}
 .toggle-label::before {{ content: '✓ 标记已读'; }}
+.card.read {{ opacity: .6; }}
+.card.read:hover {{ opacity: .85; }}
 
 /* ---- Favorite ---- */
 .btn-fav {{
@@ -1239,8 +1241,13 @@ function exportFav() {{
         scrollTimer = setTimeout(() => sessionStorage.setItem(KEY, String(window.scrollY)), 150);
     }}, {{passive: true}});
 
-    // 点击文章链接时立即保存
+    // 点击卡片空白处切���已读/未读
     document.addEventListener('click', (e) => {{
+        const card = e.target.closest('.card');
+        if (card && !e.target.closest('a, button')) {{
+            const id = card.getAttribute('data-id');
+            if (id) toggleRead(id);
+        }}
         const link = e.target.closest('.card-title a, .btn-read');
         if (link) sessionStorage.setItem(KEY, String(window.scrollY));
     }});
