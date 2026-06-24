@@ -1,6 +1,7 @@
 node_modules/
 dist/
 output/
+!output/biz-daily/.template/
 logs/
 *.db
 *.decrypted.db

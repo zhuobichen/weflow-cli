@@ -1350,7 +1350,13 @@ def main():
     article_html_path = os.path.join(date_dir, 'article.html')
     if not os.path.exists(article_html_path):
         import shutil
-        template = os.path.join(SOURCE_ROOT, '2026-05-19', 'article.html')
+        # 优先使用永久模板（不会被日期覆盖）
+        template = os.path.join(SOURCE_ROOT, '.template', 'article.html')
+        # 兼容旧路径
+        if not os.path.exists(template):
+            template_old = os.path.join(SOURCE_ROOT, '2026-05-19', 'article.html')
+            if os.path.exists(template_old):
+                template = template_old
         if os.path.exists(template):
             shutil.copy2(template, article_html_path)
         else:
