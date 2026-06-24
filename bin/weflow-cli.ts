@@ -91,7 +91,7 @@ async function resolveTalker(input: string): Promise<string> {
 program
   .name('weflow-cli')
   .description('WeFlow CLI - 微信聊天记录命令行查询与导出工具')
-  .version('1.0.0')
+  .version('1.5.0')
 
 // ==================== init ====================
 program
@@ -1837,6 +1837,199 @@ program
       await runPython('scripts/extract_todos.py', ['remind'])
     })
 
+// ==================== daily ====================
+program
+  .command('daily')
+  .description('一键生成公众号日报（抓取 + AI 摘要 + HTML 阅读器 + 行动建议）')
+  .option('-d, --date <YYYY-MM-DD>', '日期')
+  .option('--api-key <key>', 'DeepSeek API key（或设环境变量 DEEPSEEK_API_KEY）')
+  .option('--skip-classify', '跳过后处理')
+  .action(async (opts) => {
+    const { execFile, spawn } = await import('child_process')
+    const { promisify } = await import('util')
+    const execFileAsync = promisify(execFile)
+    const { fileURLToPath } = await import('url')
+    const { dirname } = await import('path')
+    const __filename = fileURLToPath(import.meta.url)
+    const __dirname = dirname(__filename)
+    const pkgRoot = join(__dirname, '..')
+    const pipeline = join(pkgRoot, 'scripts', 'pipeline.py')
+
+    const date = opts.date || new Date().toISOString().slice(0, 10)
+    const apiKey = opts.apiKey || process.env.DEEPSEEK_API_KEY || ''
+    if (!apiKey) {
+      console.log(chalk.red('\n❌ 缺少 DeepSeek API key'))
+      console.log(chalk.gray('  用法: weflow-cli daily --api-key <key>'))
+      console.log(chalk.gray('  或设环境变量: set DEEPSEEK_API_KEY=<key>\n'))
+      process.exit(1)
+    }
+
+    console.log(chalk.cyan(`\n📰 正在生成 ${date} 公众号日报...\n`))
+    const args = [pipeline, '--date', date, '--api-key', apiKey, '--interest', 'AI', '--skip-wiki']
+    if (opts.skipClassify) args.push('--skip-classify')
+
+    const child = spawn('python', args, {
+      stdio: 'inherit',
+      env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
+    })
+    child.on('exit', (code) => {
+      if (code === 0) {
+        console.log(chalk.green(`\n✓ 日报已生成: output/biz-daily/${date}/`))
+        console.log(chalk.gray(`  HTML 阅读器: weflow-cli daily-server --date ${date}`))
+      } else {
+        process.exit(code || 1)
+      }
+    })
+  })
+
+// ==================== daily-server ====================
+program
+  .command('daily-server')
+  .description('启动本地日报阅读器（浏览器浏览 + 收藏 + 笔记）')
+  .option('-d, --date <YYYY-MM-DD>', '日期')
+  .option('-p, --port <n>', '端口', '8765')
+  .option('--open', '自动打开浏览器')
+  .action(async (opts) => {
+    const { spawn, exec } = await import('child_process')
+    const { fileURLToPath } = await import('url')
+    const { dirname } = await import('path')
+    const __filename = fileURLToPath(import.meta.url)
+    const __dirname = dirname(__filename)
+    const pkgRoot = join(__dirname, '..')
+    const favServer = join(pkgRoot, 'scripts', 'fav_server.py')
+
+    const date = opts.date || new Date().toISOString().slice(0, 10)
+    console.log(chalk.cyan(`⭐ 启动日报阅读器\n`))
+    console.log(chalk.gray(`  日期: ${date}`))
+    console.log(chalk.gray(`  地址: http://localhost:${opts.port}`))
+    console.log()
+
+    if (opts.open) {
+      exec(`start http://localhost:${opts.port}`)
+    }
+
+    const child = spawn('python', [favServer, '--date', date, '--port', String(opts.port)], {
+      stdio: 'inherit',
+      env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
+    })
+    process.on('SIGINT', () => child.kill())
+  })
+
+// ==================== Interactive Menu (no arguments) ====================
+program
+  .command('mcp-config')
+  .description('输出 MCP Server 配置，粘贴到 .mcp.json 即可让 AI 操作本工具')
+  .option('--port <n>', 'MCP Server 端口', '0')
+  .option('-o, --output <file>', '写入文件', '')
+  .action(async (opts) => {
+    const { writeFileSync } = await import('fs')
+    const config = {
+      mcpServers: {
+        weflow: {
+          command: 'npx',
+          args: ['tsx', 'mcp-server/index.ts'],
+          cwd: '${workspaceFolder}',
+        },
+      },
+    }
+    const json = JSON.stringify(config, null, 2)
+    if (opts.output) {
+      writeFileSync(opts.output, json, 'utf-8')
+      console.log(chalk.green(`✓ 已写入 ${opts.output}`))
+      console.log(chalk.gray('AI 助手现在可以使用以下工具：'))
+    } else {
+      console.log(json)
+    }
+    console.log(chalk.cyan('\n可用的 MCP 工具：'))
+    console.log(chalk.white('  wechat.search_articles  ') + chalk.gray('搜索知识库文章'))
+    console.log(chalk.white('  wechat.get_daily         ') + chalk.gray('获取公众号日报'))
+    console.log(chalk.white('  wechat.get_review        ') + chalk.gray('获取 AI 学习日报'))
+    console.log(chalk.white('  wechat.get_stats         ') + chalk.gray('知识库统计'))
+    console.log(chalk.white('  wechat.get_concepts      ') + chalk.gray('概念图谱'))
+    console.log()
+    if (opts.output) {
+      console.log(chalk.gray(`配置已写入 ${opts.output}，重启 AI 编辑器即可生效`))
+    } else {
+      console.log(chalk.gray('复制以上 JSON 到你的 .mcp.json 文件即可'))
+    }
+  })
+
+// ==================== check ====================
+program
+  .command('check')
+  .description('检查运行环境（Python、pip 依赖、数据库配置）')
+  .action(async () => {
+    console.log(chalk.cyan('🔍 WeFlow CLI 环境检查\n'))
+
+    // 1. Node.js
+    console.log(chalk.white('Node.js:'), chalk.green(`v${process.versions.node}`))
+
+    // 2. Python
+    const { execSync } = await import('child_process')
+    let pythonOk = false
+    try {
+      const pyVer = execSync('python --version 2>&1 || python3 --version 2>&1', { encoding: 'utf-8', timeout: 5000 }).trim()
+      console.log(chalk.white('Python: '), chalk.green(pyVer))
+      pythonOk = true
+    } catch {
+      console.log(chalk.white('Python: '), chalk.red('✗ 未找到'))
+    }
+
+    // 3. Pip dependencies
+    if (pythonOk) {
+      const deps = ['sqlcipher3', 'html2text', 'zstandard', 'cryptography']
+      console.log(chalk.white('\nPython 依赖:'))
+      let allOk = true
+      for (const dep of deps) {
+        try {
+          execSync(`python -c "import ${dep}"`, { timeout: 5000 })
+          console.log(`  ${dep.padEnd(20)} ${chalk.green('✓')}`)
+        } catch {
+          console.log(`  ${dep.padEnd(20)} ${chalk.red('✗ 缺失')}`)
+          allOk = false
+        }
+      }
+      if (!allOk) {
+        console.log(chalk.yellow('\n⚠️  运行以下命令安装缺失依赖：'))
+        console.log(chalk.gray('  pip install sqlcipher3 html2text zstandard cryptography'))
+      }
+      // 可选依赖
+      const optDeps = ['scrapling']
+      console.log(chalk.white('\n可选依赖（提升抓取成功率）:'))
+      for (const dep of optDeps) {
+        try {
+          execSync(`python -c "import ${dep}"`, { timeout: 5000 })
+          console.log(`  ${dep.padEnd(20)} ${chalk.green('✓')}`)
+        } catch {
+          console.log(`  ${dep.padEnd(20)} ${chalk.gray('○ (npm install scrapling)')}`)
+        }
+      }
+    }
+
+    // 4. Config
+    console.log(chalk.white('\n配置状态:'))
+    const configured = configService.isConfigured()
+    const hasKey = !!configService.get('ntKey') || !!configService.get('decryptKey')
+    if (configured && hasKey) {
+      console.log(chalk.green('  ✓ 已初始化 — 可以运行 weflow-cli'))
+    } else {
+      console.log(chalk.yellow('  ○ 未初始化 — 运行 weflow-cli init'))
+    }
+
+    // 5. Database
+    const ntDb = configService.get('ntDbPath')
+    if (ntDb && existsSync(ntDb)) {
+      const stat = (await import('fs')).statSync(ntDb)
+      const mb = (stat.size / 1024 / 1024).toFixed(0)
+      console.log(chalk.white(`  消息数据库: ${ntDb} (${mb}MB)`))
+    }
+    const bizDb = (configService as any).get?.('bizKey')
+    if (bizDb) {
+      console.log(chalk.green('  ✓ 公众号数据库密钥已配置'))
+    }
+    console.log()
+  })
+
 // ==================== Interactive Menu (no arguments) ====================
 async function showInteractiveMenu() {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1878,9 +2071,8 @@ async function showInteractiveMenu() {
   choices.push({ name: '  生成聊天月报', value: 'report' })
 
   choices.push(new inquirer.Separator('  📰 公众号日报'))
-  choices.push({ name: '  生成今日日报', value: 'biz-daily' })
-  choices.push({ name: '  查看行动建议', value: 'action-suggest' })
-  choices.push({ name: '  ⭐ 启动收藏服务器', value: 'fav-server' })
+  choices.push({ name: '  生成今日日报', value: 'daily' })
+  choices.push({ name: '  启动阅读器', value: 'daily-server' })
 
   choices.push(new inquirer.Separator('  💬 微信消息'))
   choices.push({
@@ -1918,7 +2110,7 @@ async function showInteractiveMenu() {
   choices.push({ name: '  重新初始化', value: 'init' })
 
   // 显示状态摘要
-  console.log(chalk.cyan('\n🚀 WeFlow CLI v1.1.0\n'))
+  console.log(chalk.cyan('\n🚀 WeFlow CLI v1.5.0\n'))
   const statusParts: string[] = []
   statusParts.push(hasNtKey ? chalk.green('✓ 数据库') : chalk.yellow('○ 数据库'))
   statusParts.push(hasLogin ? chalk.green('✓ 消息通道') : chalk.gray('○ 消息通道'))
@@ -2004,13 +2196,33 @@ async function showInteractiveMenu() {
     case 'report':
       await runCmd('report', {})
       break
-    case 'biz-daily':
-      await runPython('biz_daily.py', '生成今日日报')
+    case 'daily': {
+      const apiKey = process.env.DEEPSEEK_API_KEY || ''
+      if (!apiKey) {
+        console.log(chalk.red('\n❌ 缺少 DeepSeek API key'))
+        console.log(chalk.gray('  设置环境变量: set DEEPSEEK_API_KEY=<key>'))
+        break
+      }
+      const now = new Date()
+      const yyyy = now.getFullYear()
+      const mm = String(now.getMonth() + 1).padStart(2, '0')
+      const dd = String(now.getDate()).padStart(2, '0')
+      const dateStr = `${yyyy}-${mm}-${dd}`
+      const { spawn } = await import('child_process')
+      const { fileURLToPath } = await import('url')
+      const { dirname } = await import('path')
+      const fn = fileURLToPath(import.meta.url)
+      const pkgs = join(dirname(fn), '..')
+      const pipeline = join(pkgs, 'scripts', 'pipeline.py')
+      console.log(chalk.cyan(`\n📰 正在生成 ${dateStr} 公众号日报...\n`))
+      const child = spawn('python', [pipeline, '--date', dateStr, '--api-key', apiKey, '--interest', 'AI', '--skip-wiki'], {
+        stdio: 'inherit',
+        env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
+      })
+      await new Promise<void>((resolve) => child.on('exit', () => resolve()))
       break
-    case 'action-suggest':
-      await runPython('classify_daily.py', '生成行动建议')
-      break
-    case 'fav-server': {
+    }
+    case 'daily-server': {
       const now = new Date()
       const yyyy = now.getFullYear()
       const mm = String(now.getMonth() + 1).padStart(2, '0')

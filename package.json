@@ -1,7 +1,7 @@
 {
   "name": "weflow-cli",
-  "version": "1.4.0",
-  "description": "WeFlow CLI - 微信聊天记录命令行查询与导出工具",
+  "version": "1.5.0",
+  "description": "让 AI 读懂你的微信 — 公众号日报·聊天导出·知识库搜索·MCP Server",
   "type": "module",
   "bin": {
     "weflow-cli": "./cli.cjs"
@@ -9,10 +9,30 @@
   "files": [
     "cli.cjs",
     "dist/",
-    "scripts/",
+    "scripts/**/*.py",
+    "mcp-server/",
+    "bin/",
+    "src/",
+    "resources/",
     "README.md",
     "LICENSE"
   ],
+  "keywords": [
+    "wechat",
+    "weixin",
+    "mcp",
+    "rss",
+    "daily",
+    "公众号",
+    "聊天记录",
+    "ai",
+    "deepseek",
+    "claude"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/zhuobichen/weflow-cli"
+  },
   "scripts": {
     "build": "tsc",
     "dev": "npx tsx bin/weflow-cli.ts",

@@ -1,0 +1,112 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  npm-publish:
+    runs-on: ubuntu-latest
+    if: "!contains(github.ref, '-')"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: 'https://registry.npmjs.org'
+      - run: npm ci
+      - run: npm run build
+      - run: npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+      - run: npm run build
+
+      - name: Create portable package
+        run: |
+          TAG=${GITHUB_REF#refs/tags/}
+          PKG="weflow-cli-${TAG}-portable"
+          mkdir -p "$PKG/scripts" "$PKG/mcp-server" "$PKG/output"
+
+          # Core files
+          cp cli.cjs "$PKG/"
+          cp -r dist "$PKG/"
+          cp -r scripts "$PKG/"
+          cp -r mcp-server "$PKG/"
+          cp package.json README.md LICENSE "$PKG/"
+
+          # MCP config template
+          cat > "$PKG/.mcp.json" << 'EOF'
+{
+  "mcpServers": {
+    "weflow": {
+      "command": "npx",
+      "args": ["tsx", "mcp-server/index.ts"],
+      "cwd": "\${workspaceFolder}"
+    }
+  }
+}
+EOF
+
+          # Windows batch launcher
+          cat > "$PKG/启动阅读器.bat" << 'BAT'
+@echo off
+echo ⭐ WeFlow CLI 阅读器
+echo.
+set /p DATE="日期 (YYYY-MM-DD): "
+set /p PORT="端口 (默认 8765): "
+if "%PORT%"=="" set PORT=8765
+python scripts/fav_server.py --date %DATE% --port %PORT%
+start http://localhost:%PORT%
+pause
+BAT
+
+          # Setup script
+          cat > "$PKG/setup.bat" << 'BAT'
+@echo off
+echo 🔧 安装 WeFlow CLI 依赖...
+echo.
+echo Python 依赖:
+pip install sqlcipher3 html2text zstandard cryptography
+echo.
+echo Node.js 依赖:
+npm install
+echo.
+echo ✓ 安装完成！运行 weflow-cli init 开始
+pause
+BAT
+
+          # README for portable
+          cat > "$PKG/README_PORTABLE.md" << 'EOF'
+# WeFlow CLI 便携版
+
+无需安装 Node.js / Python 开发环境，解压即用。
+
+## 使用
+
+1. 运行 `setup.bat` 安装依赖
+2. 运行 `weflow-cli init` 初始化微信密钥
+3. 运行 `weflow-cli mcp-config -o .mcp.json` 配置 MCP
+4. 运行 `weflow-cli daily --api-key <key>` 生成日报
+
+## 启动阅读器
+
+双击 `启动阅读器.bat`
+EOF
+
+          tar -czf "${PKG}.tar.gz" "$PKG"
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: weflow-cli-*.tar.gz
+          generate_release_notes: true

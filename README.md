@@ -1,187 +1,149 @@
-<img src="./logo.png" width="305" align=right />
 
 <div align="center">
 
-<h1>WeFlow CLI <img src="./weflow-cli图标.png" width="80" valign="middle" /></h1>
+<h1>WeFlow CLI</h1>
 
-*本地命令行工具 — 解密微信数据库、导出聊天记录、抓取公众号文章并用 AI 整理为分类日报*
+**让 AI 读懂你的微信 — 一键生成公众号日报、导出聊天记录**
 
-> 飘飘乎如遗世独立，羽化而登仙
-
-![Version](https://img.shields.io/badge/version-1.4.0-blue)
+[![npm](https://img.shields.io/npm/v/weflow-cli)](https://www.npmjs.com/package/weflow-cli)
 ![Node](https://img.shields.io/badge/node-18+-green)
 ![Python](https://img.shields.io/badge/python-3.10+-blue)
 ![License](https://img.shields.io/badge/license-MIT-yellow)
 
 </div>
 
-<br clear="all">
+---
+
+## 一分钟上手
+
+```bash
+# 1. 安装
+npm install -g weflow-cli
+
+# 2. 初始化（自动提取微信密钥）
+weflow-cli init
+
+# 3. 让 AI 接管
+weflow-cli mcp-config > .mcp.json
+
+# 4. 生成今日公众号日报
+weflow-cli daily --api-key <你的DeepSeek密钥>
+```
+
+重启 AI 编辑器后，你的 AI 助手就可以自动搜索、浏览、分析你的微信知识库。
 
 ---
 
-## 目录
+## 你能做什么
 
-- [✨ 近期更新](#-近期更新)
-- [Feature](#feature)
-- [Quick Start](#quick-start)
-- [Command Reference](#command-reference)
-- [Architecture](#architecture)
-- [问题反馈](#问题反馈)
-- [Thanks](#thanks)
-- [License](#license)
-
----
-
-## ✨ 近期更新
-
-<details open>
-<summary>v1.4.0 — 图片本地化 + 远程保底（点击展开）</summary>
-
-- ✨ **图片本地化** — 公众号文章图片自动下载到 `images/` 目录，微信 CDN 不再丢图
-- ✨ **远程优先 + 本地保底** — HTML 阅读器优先加载远程图片，失败时自动切换本地备份
-- 🔧 **图片 fallback 机制** — `generate_html.py` 添加 `onerror` 事件，CDN 不可用时无缝降级
-- 🔧 **LICENSE 文件** — 补充 MIT 许可证文件
-
-</details>
-
-<details>
-<summary>v1.3.1 — 消息无限制 + 图片完整提取 + CDN 代理（点击展开）</summary>
-
-- ✨ **去掉消息长度限制** — 导出/查询默认拉取全部消息（limit=0），不再截断
-- ✨ **公众号图片完整提取** — `data-src` 懒加载图片识别，图片数量提升 3-4 倍
-- ✨ **公众号封面图嵌入** — 解析公众号消息 XML 提取 `thumburl`，远程下载 base64 嵌入 HTML
-- ✨ **CDN 图片代理** — `fav_server.py` 新增 `/proxy` 端点，绕过微信防盗链 Referer 检查
-- 🔧 **阅读器图片修复** — `article.html` 自动重写 mmbiz 图片 URL 走本地代理
-
-</details>
-
-<details>
-<summary>v1.3.0 — 本地阅读器 + 知识管道 + MCP Server（点击展开）</summary>
-
-- ✨ **本地阅读器** — `fav_server.py` 驱动，浏览器阅读、收藏同步、已读追踪、划词 AI 解释
-- ✨ **HTML 日报** — `generate_html.py` 自动生成分类展示页面，localStorage + 服务端双持久化
-- ✨ **MCP Server** — 公众号文章抓取/搜索/发布、概念图谱、学习日报、知识库统计
-- ✨ **Obsidian 集成** — vault 搜索/RAG/反向链接、阅读笔记创建、知识管道 (pipeline)
-- ✨ **微信读书集成** — 书架同步、笔记划线、书评浏览、阅读统计
-- 🔧 **支付通知过滤** — 自动过滤微信支付/扣费/续费等非文章消息
-- 🔧 **TLS 兼容** — 修复 weread.qq.com TLS 1.3 → 1.2 降级
-
-</details>
-
-[完整变更记录 →](https://github.com/zhuobichen/weflow-cli/commits/master)
-
----
-
-## Feature
-
-| 分类 | 功能 |
+| 场景 | 操作 |
 |------|------|
-| 💬 **聊天** | 解密 3.x/4.x 数据库 · 导出 JSON/TXT/MD/HTML/Excel · 图片 base64 内嵌 · 公众号封面图嵌入 · 联系人昵称映射 |
-| 📰 **日报** | 自动抓取公众号文章 · DeepSeek V4 摘要+分类 · 图片本地化 · 远程优先+本地保底 · 本地阅读器 · 收藏/已读同步 |
-| 🧠 **知识** | Obsidian vault RAG · 语义搜索 · 微信读书同步 · 概念 Wiki 编译 |
-| 🔌 **MCP** | 微信公众号抓取/发布 · 知识库搜索 · 学习日报 · Claude Code 集成 |
-| 🔒 **隐私** | 密钥 AES-256-GCM 加密绑定单机 · 纯本地运行 · 零网络上传 |
+| 📰 **公众号日报** | 每天自动抓取所有公众号推送 → AI 分类·摘要·行动建议 |
+| 🔍 **知识库搜索** | 搜索所有历史文章（支持 MCP，AI 直接调用） |
+| 💬 **聊天记录导出** | 导出任意会话为 HTML/JSON/TXT/Excel |
+| 📊 **统计报告** | 聊天月报、年度数字生活报告、待办提取 |
+| 📖 **微信读书** | 书架同步、笔记划线、阅读统计、书评浏览 |
+| 🧠 **Obsidian 集成** | RAG 问答、语义搜索、知识管道 |
 
 ---
 
-## Quick Start
-
-> 前置：Node.js 18+ / Python 3.10+ / 微信已登录
-
-**1. 安装**
+## 环境检查
 
 ```bash
-git clone https://github.com/zhuobichen/weflow-cli.git
-cd weflow-cli
-npm install && npm run build
-pip install sqlcipher3 zstandard scrapling html2text
+weflow-cli check    # 一键检测 Python、依赖、数据库
 ```
-
-**2. 初始化密钥**
-
-```bash
-npm run dev -- init
-```
-
-**3. 开始使用**
-
-```bash
-npm run dev -- sessions              # 聊天列表
-npm run dev -- messages <昵称>       # 查看消息
-npm run dev -- export <昵称> html    # 导出 HTML
-```
-
-**4. 公众号日报**
-
-```bash
-python scripts/biz_daily.py --date YYYY-MM-DD           # 抓取+AI摘要+图片本地化
-python scripts/generate_html.py --date YYYY-MM-DD       # 生成 HTML 页面
-python scripts/fav_server.py --date YYYY-MM-DD          # 启动阅读器 → http://localhost:8765
-```
-
-> ⚠️ **DeepSeek API key**：通过 `--api-key` 传入或设环境变量 `DEEPSEEK_API_KEY`
->
-> 💡 **图片说明**：文章图片自动下载到 `images/` 目录作为保底，HTML 阅读器优先加载远程图片，失败时自动切换本地备份
 
 ---
 
-## Command Reference
+## 公众号日报流水线
 
-### CLI 命令（TypeScript）
+```bash
+# 生成今日日报（抓取 + AI 摘要 + 行动建议 + HTML 阅读器）
+weflow-cli daily --api-key <key>
 
-| 命令 | 说明 |
+# 仅抓取某天
+weflow-cli daily --date 2026-06-20 --api-key <key>
+
+# 启动本地阅读器（浏览器浏览 + 收藏 + 笔记）
+weflow-cli daily-server --date 2026-06-20
+```
+
+---
+
+## MCP Server — 让 AI 直接操作
+
+```bash
+# 输出 MCP 配置
+weflow-cli mcp-config           # 打印 JSON
+weflow-cli mcp-config -o .mcp.json  # 写入文件
+```
+
+重启编辑器后，AI 自动获得以下工具：
+
+| 工具 | 用途 |
 |------|------|
-| `npm run dev -- init` | 自动检测微信数据目录并提取密钥 |
-| `npm run dev -- sessions` | 查看所有聊天会话（含昵称） |
-| `npm run dev -- messages <昵称\|wxid\|序号>` | 查看聊天记录 |
-| `npm run dev -- export <昵称> <json\|html\|txt\|excel>` | 导出聊天记录（默认全部消息，无长度限制） |
-| `npm run dev -- contacts [-k 关键词]` | 查看联系人列表 |
-| `npm run dev -- whitelist add\|rm\|clear` | 白名单管理 |
-| `npm run dev -- report --month <YYYY-MM> --talker <昵称>` | 生成聊天月报（AI 分析） |
-
-### Python 脚本
-
-| 命令 | 说明 |
-|------|------|
-| `python scripts/biz_daily.py --date YYYY-MM-DD` | 抓取公众号 + AI 摘要分类 + 图片本地化 |
-| `python scripts/generate_html.py --date YYYY-MM-DD` | 生成日报 HTML 页面 |
-| `python scripts/fav_server.py --date YYYY-MM-DD` | 启动本地阅读器 |
-| `python scripts/classify_daily.py --interest AI` | 后处理：广告清洗 + 深度摘要 |
-| `python scripts/pipeline.py --date YYYY-MM-DD` | 完整知识管道（日报→Wiki→Review） |
+| `wechat.search_articles` | 按关键词/主题/日期搜索知识库 |
+| `wechat.get_daily` | 获取某天的公众号日报 |
+| `wechat.get_review` | 获取 AI 学习日报 |
+| `wechat.get_stats` | 知识库统计概览 |
+| `wechat.get_concepts` | 概念图谱查询 |
 
 ---
 
-## Architecture
+## 命令速查
 
-<img src="./weflow-cli架构图.png" width="100%" alt="weflow-cli 架构图" />
+```bash
+# 初始化
+weflow-cli init               # 自动检测微信 + 提取密钥
+weflow-cli check              # 环境检查
 
-详见 [ARCHITECTURE.md](./ARCHITECTURE.md)
+# MCP
+weflow-cli mcp-config         # 输出 MCP 配置
+
+# 公众号日报
+weflow-cli daily              # 今天
+weflow-cli daily --date D     # 指定日期
+weflow-cli daily-server       # 启动阅读器
+weflow-cli daily-server --open # 启动并自动打开浏览器
+
+# 聊天
+weflow-cli sessions           # 会话列表
+weflow-cli messages <昵称>    # 查看消息
+weflow-cli export <昵称> html # 导出 HTML
+
+# 报告
+weflow-cli report             # 聊天月报
+weflow-cli annual-report      # 年度报告
+
+# 微信读书
+weflow-cli weread shelf       # 书架
+weflow-cli weread stats       # 阅读统计
+weflow-cli weread notes       # 笔记划线
+weflow-cli weread search <书名>
+```
 
 ---
 
-## 问题反馈
+## 常见问题
 
-- **[GitHub Issues](https://github.com/zhuobichen/weflow-cli/issues)** — Bug 报告 / 功能请求
+**Q: 需要哪些前置环境？**
+A: Node.js 18+、Python 3.10+、微信桌面版已登录。运行 `weflow-cli check` 检查。
 
-提交时建议附上：操作命令、错误截图、微信版本和操作系统。
+**Q: 会泄露隐私吗？**
+A: 不会。所有数据纯本地处理，密钥 AES-256-GCM 加密绑定单机。公众号文章仅本地索引。
+
+**Q: 图片不显示？**
+A: 文章图片自动下载到 `images/` 目录，HTML 阅读器通过本地服务器代理加载，绕过微信防盗链。
+
+**Q: 如何让 AI 自动操作？**
+A: `weflow-cli mcp-config -o .mcp.json`，重启 AI 编辑器即可。
 
 ---
 
 ## Thanks
 
-| 项目 | 用途 |
-|------|------|
-| [WeFlow](https://github.com/hicccc77/WeFlow) | 原始桌面应用，设计灵感与原生库来源 |
-| [sqlcipher3](https://pypi.org/project/sqlcipher3/) | Python SQLCipher 绑定，NT 数据库解密 |
-| [DeepSeek](https://deepseek.com/) | AI 摘要与主题分类引擎 |
-| [Scrapling](https://github.com/D4Vinci/Scrapling) | 公众号文章反反爬抓取 |
-| [koffi](https://koffi.dev/) | 高性能 Node.js FFI，微信进程密钥提取 |
-| [ExcelJS](https://github.com/exceljs/exceljs) | Excel 导出引擎 |
+- [WeFlow](https://github.com/hicccc77/WeFlow) — 原始桌面应用
+- [DeepSeek](https://deepseek.com/) — AI 摘要引擎
+- [sqlcipher3](https://pypi.org/project/sqlcipher3/) — 数据库解密
 
----
-
-## License
-
-MIT License. See [LICENSE](./LICENSE) for details.
-
-> 本工具仅供学习研究。请勿用于非法获取、泄露他人隐私信息等行为。
+MIT License · [GitHub](https://github.com/zhuobichen/weflow-cli)
