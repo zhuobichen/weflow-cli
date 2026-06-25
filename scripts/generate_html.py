@@ -6,7 +6,7 @@
   python scripts/generate_html.py --date 2026-05-18
   python scripts/generate_html.py --date 2026-05-18 --output custom.html
 """
-import sys, os, json, re
+import sys, os, json, re, shutil
 from pathlib import Path
 from datetime import datetime
 
@@ -867,8 +867,10 @@ def generate_html(date_str: str, topics: dict, action_suggestions_exist: bool, b
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>公众号日报 — {date_str}</title>
+<link rel="stylesheet" href="index.css">
 <style>
 * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+:root {{
 --bg: #f5f0e8;
     --bg-card: #fefcf8;
     --bg-soft: #faf6ef;
@@ -1569,7 +1571,9 @@ function initKeyboard() {{
     function focusCard(cds) {{
         cds.forEach((c, i) => {{
             c.style.outline = i === focused ? '2px solid var(--accent)' : '';
-            if (i === focused) c.scrollIntoView({{block:'nearest',behavior:'smooth'}});
+            c.style.transform = i === focused ? 'scale(1.01)' : '';
+            c.style.boxShadow = i === focused ? '0 4px 20px var(--accent-glow)' : '';
+            if (i === focused) c.scrollIntoView({{block:'center',behavior:'smooth'}});
         }});
     }}
 }}
@@ -1646,12 +1650,16 @@ def main():
         generate_action_html(date_str, action_md_path, action_html_path)
         print(f'✓ 行动建议 HTML 生成完成: {action_html_path}')
 
-    # 生成 article.html — 从永久模板复制（暖色风格，含 AI 问答/收藏/笔记）
+    # 生成 article.html + 静态资源 — 从永久模板复制
     article_html_path = os.path.join(date_dir, 'article.html')
     template = os.path.join(SOURCE_ROOT, '.template', 'article.html')
     if os.path.exists(template):
-        import shutil
         shutil.copy2(template, article_html_path)
+        # 同时复制 index.css 等静态资源
+        for asset in ['index.css', 'marked.min.js']:
+            src = os.path.join(SOURCE_ROOT, '.template', asset)
+            if os.path.exists(src):
+                shutil.copy2(src, os.path.join(date_dir, asset))
     else:
         generate_article_viewer(article_html_path)
 
