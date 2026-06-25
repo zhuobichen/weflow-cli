@@ -28,7 +28,7 @@ def parse_frontmatter(text: str) -> dict:
     """解析 YAML frontmatter（简易版，兼容现有格式）。"""
     if not text.startswith('---'):
         return {}
-    end = text.find('---', 3)
+    end = text.find('\n---', 3)
     if end == -1:
         return {}
     fm_text = text[3:end].strip()
@@ -48,8 +48,8 @@ def parse_frontmatter(text: str) -> dict:
 def get_body_preview(text: str, max_chars=200) -> str:
     """提取正文预览（跳过 frontmatter 和标题行）。"""
     if text.startswith('---'):
-        end = text.find('---', 3)
-        text = text[end + 3:] if end != -1 else text
+        end = text.find('\n---', 3)
+        text = text[end + 4:] if end != -1 else text
     lines = text.strip().split('\n')
     body_lines = []
     for line in lines:
@@ -104,6 +104,209 @@ def collect_articles(date_dir: str) -> dict:
 
 def escape_html(text: str) -> str:
     return text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;').replace('"', '&quot;')
+
+
+def simple_markdown_to_html(md_text: str) -> str:
+    """轻量 Markdown 转 HTML：支持标题、加粗、列表、引用、复选框、链接、分隔线。"""
+    import re
+    lines = md_text.split('\n')
+    html_parts = []
+    in_list = False
+    in_ul = False
+    in_blockquote = False
+
+    def close_lists():
+        nonlocal in_list, in_ul
+        if in_list:
+            html_parts.append('</ol>')
+            in_list = False
+        if in_ul:
+            html_parts.append('</ul>')
+            in_ul = False
+
+    def close_blockquote():
+        nonlocal in_blockquote
+        if in_blockquote:
+            html_parts.append('</blockquote>')
+            in_blockquote = False
+
+    for line in lines:
+        stripped = line.strip()
+
+        # 空行
+        if not stripped:
+            close_lists()
+            close_blockquote()
+            continue
+
+        # 分隔线
+        if re.match(r'^---+$', stripped):
+            close_lists()
+            close_blockquote()
+            html_parts.append('<hr>')
+            continue
+
+        # 标题
+        h_match = re.match(r'^(#{1,4})\s+(.+)$', stripped)
+        if h_match:
+            close_lists()
+            close_blockquote()
+            level = len(h_match.group(1))
+            text = h_match.group(2)
+            text = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', text)
+            html_parts.append(f'<h{level}>{text}</h{level}>')
+            continue
+
+        # 引用
+        if stripped.startswith('> '):
+            close_lists()
+            if not in_blockquote:
+                html_parts.append('<blockquote>')
+                in_blockquote = True
+            text = stripped[2:]
+            text = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', text)
+            text = re.sub(r'\[(.+?)\]\((.+?)\)', r'<a href="\2">\1</a>', text)
+            html_parts.append(f'<p>{text}</p>')
+            continue
+        else:
+            close_blockquote()
+
+        # 有序列表
+        ol_match = re.match(r'^(\d+)\.\s+(.+)$', stripped)
+        if ol_match:
+            close_blockquote()
+            if in_ul:
+                html_parts.append('</ul>')
+                in_ul = False
+            if not in_list:
+                html_parts.append('<ol>')
+                in_list = True
+            text = ol_match.group(2)
+            text = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', text)
+            text = re.sub(r'\[(.+?)\]\((.+?)\)', r'<a href="\2">\1</a>', text)
+            # 复选框
+            text = re.sub(r'^\[ \]\s*', '<input type="checkbox" disabled> ', text)
+            text = re.sub(r'^\[x\]\s*', '<input type="checkbox" checked disabled> ', text, flags=re.IGNORECASE)
+            html_parts.append(f'<li>{text}</li>')
+            continue
+
+        # 无序列表
+        ul_match = re.match(r'^[-*•]\s+(.+)$', stripped)
+        if ul_match:
+            close_blockquote()
+            if in_list:
+                html_parts.append('</ol>')
+                in_list = False
+            if not in_ul:
+                html_parts.append('<ul>')
+                in_ul = True
+            text = ul_match.group(1)
+            text = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', text)
+            text = re.sub(r'\[(.+?)\]\((.+?)\)', r'<a href="\2">\1</a>', text)
+            text = re.sub(r'^\[ \]\s*', '<input type="checkbox" disabled> ', text)
+            text = re.sub(r'^\[x\]\s*', '<input type="checkbox" checked disabled> ', text, flags=re.IGNORECASE)
+            html_parts.append(f'<li>{text}</li>')
+            continue
+
+        # 普通段落
+        close_lists()
+        close_blockquote()
+        text = stripped
+        text = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', text)
+        text = re.sub(r'\[(.+?)\]\((.+?)\)', r'<a href="\2">\1</a>', text)
+        html_parts.append(f'<p>{text}</p>')
+
+    close_lists()
+    close_blockquote()
+    return '\n'.join(html_parts)
+
+
+def generate_action_html(date_str: str, md_path: str, out_path: str):
+    """生成行动建议 HTML 页面，风格与 index.html 一致。"""
+    with open(md_path, 'r', encoding='utf-8') as f:
+        md_content = f.read()
+    content_html = simple_markdown_to_html(md_content)
+
+    html = f'''<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>行动建议 — {date_str}</title>
+<style>
+* {{ margin: 0; padding: 0; box-sizing: border-box; }}
+body {{
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: #f5f0e8; color: #3c3a38; line-height: 1.75;
+    min-height: 100vh; -webkit-font-smoothing: antialiased;
+}}
+.page {{ max-width: 780px; margin: 0 auto; padding: 32px 24px 60px; }}
+
+/* ---- Header ---- */
+.header {{ text-align: center; margin-bottom: 36px; padding-top: 12px; position: relative; }}
+.header::after {{
+    content: ''; position: absolute; bottom: -12px; left: 50%; transform: translateX(-50%);
+    width: 50px; height: 2px; background: linear-gradient(90deg, #8b6914, #c8963e); border-radius: 2px;
+}}
+.header h1 {{
+    font-size: 26px; font-weight: 800; color: #4a3728;
+    display: inline-flex; align-items: center; gap: 10px;
+}}
+.back-link {{
+    display: inline-block; margin-top: 16px;
+    font-size: 14px; color: #8b7355; text-decoration: none;
+    padding: 7px 18px; border-radius: 20px;
+    background: #faf6ef; border: 1px solid #d4c5a060;
+    transition: all .25s;
+}}
+.back-link:hover {{ color: #8b6914; border-color: #c8963e50; background: #faf6ef; }}
+
+/* ---- Content ---- */
+.content {{
+    background: #fefcf8; border-radius: 14px; padding: 32px 36px;
+    border: 1px solid #d4c5a0; margin-top: 8px;
+}}
+.content h1 {{ font-size: 22px; font-weight: 700; color: #4a3728; margin: 28px 0 14px; padding-bottom: 8px; border-bottom: 1px solid #d4c5a0; }}
+.content h1:first-child {{ margin-top: 0; }}
+.content h2 {{ font-size: 19px; font-weight: 700; color: #5a4a2a; margin: 24px 0 12px; }}
+.content h3 {{ font-size: 17px; font-weight: 600; color: #6b5535; margin: 20px 0 10px; }}
+.content h4 {{ font-size: 15px; font-weight: 600; color: #7a6545; margin: 16px 0 8px; }}
+.content p {{ margin: 10px 0; font-size: 15px; color: #4a4035; }}
+.content strong {{ color: #4a3728; font-weight: 700; }}
+.content a {{ color: #8b6914; text-decoration: none; border-bottom: 1px solid #c8963e40; transition: all .2s; }}
+.content a:hover {{ border-bottom-color: #c8963e; }}
+.content ul, .content ol {{ margin: 12px 0; padding-left: 28px; }}
+.content li {{ margin: 8px 0; font-size: 15px; color: #4a4035; }}
+.content li input[type="checkbox"] {{ margin-right: 8px; accent-color: #8b6914; }}
+.content blockquote {{
+    border-left: 3px solid #c8963e; padding: 10px 18px; margin: 16px 0;
+    background: #faf6ef; border-radius: 0 10px 10px 0; color: #6b5535;
+}}
+.content blockquote p {{ margin: 4px 0; color: #6b5535; }}
+.content hr {{ border: none; border-top: 1px solid #d4c5a0; margin: 28px 0; }}
+.content code {{ background: #f0e8d5; padding: 2px 7px; border-radius: 5px; font-size: 14px; color: #8b6914; }}
+
+@media (max-width: 640px) {{
+    .page {{ padding: 20px 14px 40px; }}
+    .content {{ padding: 20px 18px; border-radius: 10px; }}
+    .header h1 {{ font-size: 22px; }}
+}}
+</style>
+</head>
+<body>
+<div class="page">
+    <div class="header">
+        <h1>📋 行动建议 — {date_str}</h1>
+        <div><a href="./index.html" class="back-link">← 返回日报</a></div>
+    </div>
+    <div class="content">
+        {content_html}
+    </div>
+</div>
+</body>
+</html>'''
+    with open(out_path, 'w', encoding='utf-8') as f:
+        f.write(html)
 
 
 def generate_article_viewer(out_path: str):
@@ -164,14 +367,7 @@ body {
     transition: all .2s; white-space: nowrap;
 }
 .btn-back:hover { color: #e2e8f0; border-color: #475569; }
-.article-source { color: #818cf8; font-size: 13px; font-weight: 600; }
-.article-meta { color: #64748b; font-size: 12px; margin-left: auto; }
-.mode-badge { font-size: 11px; padding: 2px 10px; border-radius: 10px; font-weight: 600; }
-.mode-badge.html { background: #10b98120; color: #34d399; border: 1px solid #10b98140; }
-.view-switch { display: inline-flex; background: #1e293b; border-radius: 8px; overflow: hidden; border: 1px solid #334155; }
-.view-switch a { padding: 4px 12px; font-size: 12px; color: #64748b; text-decoration: none; transition: all .2s; }
-.view-switch a.active { background: #334155; color: #e2e8f0; }
-.view-switch a:hover:not(.active) { color: #94a3b8; }
+.article-source { color: #818cf8; font-size: 13px; font-weight: 600; margin-left: auto; }
 .article-header { margin-bottom: 32px; padding-bottom: 20px; border-bottom: 1px solid #1e293b; }
 .article-header h1 { font-size: 26px; font-weight: 700; line-height: 1.4; margin-bottom: 12px; color: #f1f5f9; }
 .article-header .meta-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; font-size: 13px; color: #64748b; }
@@ -317,14 +513,8 @@ body {
     const tagsHtml = tags.length ? '<div class="tags-row">' + tags.map(t => '<span class="tag">' + t + '</span>').join('') + '</div>' : '';
     document.getElementById('app').innerHTML =
       '<div class="top-bar">' +
-        '<a href="./" class="btn-back">\u2190 \u8fd4\u56de\u5217\u8868</a>' +
+        '<a href="./index.html" class="btn-back">\u2190 \u8fd4\u56de\u65e5\u62a5</a>' +
         '<span class="article-source">' + (source || '') + '</span>' +
-        '<span class="article-meta">\u9605\u8bfb\u6a21\u5f0f</span>' +
-        '<span class="mode-badge html">\ud83c\udfa8 HTML</span>' +
-        '<div class="view-switch">' +
-          '<a href="' + file + '">\ud83d\udcdd MD</a>' +
-          '<a href="article.html?file=' + encodeURIComponent(file) + '" class="active">\ud83c\udfa8 HTML</a>' +
-        '</div>' +
       '</div>' +
       '<div class="article-header">' +
         '<h1>' + title + '</h1>' +
@@ -340,7 +530,7 @@ body {
       '<button class="btn-notes-toggle" id="btn-notes-toggle" onclick="toggleNotes()" title="\u7b14\u8bb0">\ud83d\udcdd<span class="badge" id="notes-badge" style="display:none">0</span></button>';
   } catch(e) {
     document.getElementById('app').innerHTML =
-      '<div class="error-box">\u274c \u52a0\u8f7d\u5931\u8d25: ' + e.message + '<br><br><a href="./" class="btn-back">\u2190 \u8fd4\u56de\u5217\u8868</a></div>';
+      '<div class="error-box">\u274c \u52a0\u8f7d\u5931\u8d25: ' + e.message + '<br><br><a href="./index.html" class="btn-back">\u2190 \u8fd4\u56de\u65e5\u62a5</a></div>';
   }
 })();
 
@@ -627,16 +817,20 @@ def generate_html(date_str: str, topics: dict, action_suggestions_exist: bool, b
                     <div class="card-tags">{tags_html}</div>
                     <p class="card-preview">{escape_html(art['preview'])}</p>
                     <div class="card-actions">
-                        <a href="{escape_html(art['rel_path'])}"
-                           class="btn-read" onclick="markRead('{escape_html(art['rel_path'])}')">
-                           📖 阅读
-                        </a>
-                        <button class="btn-toggle" onclick="event.stopPropagation();toggleRead('{escape_html(art['rel_path'])}')">
-                           <span class="toggle-label"></span>
-                        </button>
-                        <button class="btn-fav" onclick="toggleFav('{escape_html(art['rel_path'])}')" title="收藏">
-                           ☆
-                        </button>
+                        <div class="card-actions-left">
+                            <a href="{escape_html(art['rel_path'])}"
+                               class="btn-read" onclick="markRead('{escape_html(art['rel_path'])}')">
+                               📖 阅读全文 <span class="arrow">→</span>
+                            </a>
+                            <button class="btn-toggle" onclick="event.stopPropagation();toggleRead('{escape_html(art['rel_path'])}')">
+                               <span class="toggle-label"></span>
+                            </button>
+                        </div>
+                        <div class="card-actions-right">
+                            <button class="btn-fav" onclick="toggleFav('{escape_html(art['rel_path'])}')" title="收藏">
+                               ☆
+                            </button>
+                        </div>
                     </div>
                 </article>''')
         sections_html = '\n'.join(cards)
@@ -654,7 +848,7 @@ def generate_html(date_str: str, topics: dict, action_suggestions_exist: bool, b
     action_link = ''
     if action_suggestions_exist:
         action_link = '''
-        <a href="./行动建议.md" target="_blank" class="action-link">📋 行动建议</a>
+        <a href="./行动建议.html" class="action-link">📋 行动建议</a>
         '''
 
     briefing_html = ''
@@ -680,101 +874,121 @@ body {{
     min-height: 100vh;
     -webkit-font-smoothing: antialiased;
 }}
-.container {{ max-width: 1400px; margin: 0 auto; padding: 28px 32px; }}
+.container {{ max-width: 1100px; margin: 0 auto; padding: 24px 28px 40px; }}
 
 /* ---- Header ---- */
 .header {{
     text-align: center;
-    padding: 44px 20px 28px;
-    margin-bottom: 24px;
+    padding: 36px 20px 32px;
+    margin-bottom: 20px;
     position: relative;
 }}
 .header::after {{
     content: '';
     position: absolute;
     bottom: 0; left: 50%; transform: translateX(-50%);
-    width: 60px; height: 3px;
+    width: 48px; height: 3px;
     background: linear-gradient(90deg, #8b6914, #c8963e, #d4a853);
     border-radius: 2px;
 }}
 .header h1 {{
-    font-size: 28px; font-weight: 800; letter-spacing: -.3px;
+    font-size: 26px; font-weight: 800; letter-spacing: -.3px;
     color: #4a3728;
 }}
 .header .meta {{
-    margin-top: 8px; color: #8b7355; font-size: 14px;
-    display: flex; align-items: center; justify-content: center; gap: 14px; flex-wrap: wrap;
+    margin-top: 12px; color: #8b7355; font-size: 14px;
+    display: flex; align-items: center; justify-content: center; gap: 16px; flex-wrap: wrap;
 }}
 .action-link {{
     color: #8b6914; text-decoration: none; font-weight: 600;
-    padding: 5px 14px; border: 1px solid #c8963e40; border-radius: 20px;
+    padding: 6px 16px; border: 1px solid #c8963e40; border-radius: 20px;
     font-size: 13px; transition: all .25s; background: #faf6ef;
+    display: inline-flex; align-items: center; gap: 5px;
 }}
-.action-link:hover {{ background: #c8963e15; border-color: #c8963e70; }}
+.action-link:hover {{ background: #c8963e15; border-color: #c8963e70; transform: translateY(-1px); }}
 
-/* ---- Stats Bar ---- */
+/* ---- Search ---- */
+.search-box {{
+    width: 100%; max-width: 520px; margin: 0 auto 18px; display: block;
+    padding: 12px 20px; border-radius: 14px; border: 1px solid #d4c5a0;
+    background: #fefcf8; color: #3c3a38; font-size: 14px; outline: none;
+    transition: all .25s; font-family: inherit;
+    box-shadow: 0 1px 3px #00000008;
+}}
+.search-box:focus {{ border-color: #c8963e; box-shadow: 0 0 0 3px #c8963e15, 0 2px 8px #0000000a; }}
+.search-box::placeholder {{ color: #b8a080; }}
+
+/* ---- Toolbar: Stats + Tabs ---- */
+.toolbar {{
+    display: flex; align-items: center; gap: 12px;
+    flex-wrap: wrap; margin-bottom: 24px;
+}}
 .stats-bar {{
-    display: flex; align-items: center; justify-content: center; gap: 10px;
-    flex-wrap: wrap; margin-bottom: 22px; padding: 10px 22px;
+    display: flex; align-items: center; gap: 12px;
+    flex-wrap: wrap; padding: 8px 16px;
     background: #faf6ef; border: 1px solid #d4c5a060; border-radius: 12px;
     font-size: 13px; color: #8b7355;
+    box-shadow: 0 1px 2px #00000006;
 }}
 .stats-bar strong {{ color: #3c3a38; font-weight: 700; }}
 .stats-group {{
     display: flex; align-items: center; gap: 8px;
 }}
+.stats-divider {{ width: 1px; height: 18px; background: #d4c5a080; }}
 .btn-clear {{
     background: #f0e8d5; color: #5c4a32; border: 1px solid #d4c5a0;
-    padding: 5px 14px; border-radius: 8px; cursor: pointer;
+    padding: 5px 13px; border-radius: 8px; cursor: pointer;
     font-size: 12px; font-weight: 500; transition: all .2s;
+    white-space: nowrap;
 }}
-.btn-clear:hover {{ background: #e8dcc0; border-color: #c8963e; color: #3c3a38; }}
+.btn-clear:hover {{ background: #e8dcc0; border-color: #c8963e; color: #3c3a38; transform: translateY(-1px); }}
 .btn-clear.active-mode {{
     background: #8b6914 !important; border-color: #8b6914 !important; color: #fff !important;
 }}
 
 /* ---- Tabs ---- */
 .tabs {{
-    display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 24px;
-    position: sticky; top: 12px; z-index: 10; padding: 6px;
-    background: #faf6eff2; backdrop-filter: blur(12px);
-    border: 1px solid #d4c5a060; border-radius: 12px;
+    display: flex; gap: 4px; flex-wrap: wrap; flex: 1; min-width: 280px;
+    padding: 5px;
+    background: #faf6ef; border: 1px solid #d4c5a060; border-radius: 12px;
+    box-shadow: 0 1px 2px #00000006;
 }}
 .tab-btn {{
     background: transparent; color: #8b7355; border: none;
-    padding: 9px 18px; border-radius: 10px; cursor: pointer;
+    padding: 8px 16px; border-radius: 9px; cursor: pointer;
     font-size: 14px; font-weight: 500; transition: all .2s;
+    white-space: nowrap;
 }}
 .tab-btn:hover {{ color: #3c3a38; background: #f0e8d5; }}
 .tab-btn.active {{
     color: #2a2018; background: #dcc89a;
     box-shadow: 0 1px 4px #00000018, inset 0 1px 0 #fff8;
     font-weight: 700;
-    border: 1px solid #c8963e30;
 }}
 .tab-btn .count {{
-    background: #d4c5a040; padding: 2px 8px; border-radius: 8px;
-    font-size: 12px; margin-left: 5px; font-weight: 600;
+    background: #d4c5a040; padding: 1px 7px; border-radius: 7px;
+    font-size: 11px; margin-left: 4px; font-weight: 600;
 }}
-.tab-btn.active .count {{ background: #c8963e20; color: #8b6914; }}
+.tab-btn.active .count {{ background: #c8963e25; color: #8b6914; }}
 
 /* ---- Topic Sections ---- */
 .topic-section {{ display: none; }}
-.topic-section.active {{ display: block; }}
+.topic-section.active {{ display: block; animation: fadeIn .3s ease; }}
+@keyframes fadeIn {{ from {{ opacity: 0; transform: translateY(6px); }} to {{ opacity: 1; transform: translateY(0); }} }}
 .topic-heading {{
-    font-size: 18px; font-weight: 700; margin-bottom: 16px;
+    font-size: 17px; font-weight: 700; margin-bottom: 14px; margin-top: 4px;
     display: flex; align-items: center; gap: 10px; color: #4a3728;
 }}
 .topic-heading::after {{
-    content: ''; flex: 1; height: 1px; background: #d4c5a0; margin-left: 8px;
+    content: ''; flex: 1; height: 1px; background: linear-gradient(90deg, #d4c5a0, transparent); margin-left: 4px;
 }}
-.topic-heading .count {{ font-size: 13px; color: #8b7355; font-weight: 400; }}
+.topic-heading .count {{ font-size: 12px; color: #96876a; font-weight: 400; background: #f0e8d5; padding: 2px 10px; border-radius: 10px; }}
 
 /* ---- Cards ---- */
-.cards-grid {{ display: flex; flex-direction: column; gap: 10px; }}
+.cards-grid {{ display: flex; flex-direction: column; gap: 8px; }}
 .card {{
-    background: #fefcf8; border-radius: 12px; padding: 20px 24px;
-    border: 1px solid #d4c5a0; transition: all .25s ease;
+    background: #fefcf8; border-radius: 12px; padding: 18px 22px;
+    border: 1px solid #e0d5be; transition: all .25s ease;
     position: relative; overflow: hidden;
 }}
 .card::before {{
@@ -782,118 +996,136 @@ body {{
     background: transparent; transition: background .3s; border-radius: 12px 0 0 12px;
 }}
 .card:hover {{
-    border-color: #c8963e50; background: #fffdf7;
-    transform: translateY(-1px); box-shadow: 0 3px 16px #3c3a3810;
+    border-color: #c8963e60; background: #fffdf7;
+    transform: translateY(-2px); box-shadow: 0 6px 20px #3c3a380c;
 }}
 .card:hover::before {{ background: #c8963e; }}
 .card.read {{
-    opacity: 0.55; background: #f5f0e8; border-color: #d4c5a030;
+    opacity: 0.5; background: #f8f3ea; border-color: #d4c5a040;
 }}
-.card.read:hover {{ opacity: 0.7; border-color: #d4c5a060; transform: none; box-shadow: none; }}
+.card.read:hover {{ opacity: 0.65; border-color: #d4c5a070; transform: none; box-shadow: none; }}
 .card.read:hover::before {{ background: #b8a080; }}
-.card.faved {{ border-color: #c8963e40; background: #fffcf5; }}
+.card.faved {{ border-color: #c8963e50; background: #fffcf3; box-shadow: 0 2px 8px #c8963e08; }}
 
-.card-header {{ margin-bottom: 8px; }}
+.card-header {{ margin-bottom: 6px; }}
 .card-title-row {{ display: flex; align-items: flex-start; gap: 10px; }}
 .unread-dot {{
-    width: 9px; height: 9px; border-radius: 50%;
-    background: #c8963e; flex-shrink: 0; margin-top: 5px; transition: all .3s;
-    box-shadow: 0 0 6px #c8963e40;
+    width: 8px; height: 8px; border-radius: 50%;
+    background: #c8963e; flex-shrink: 0; margin-top: 7px; transition: all .3s;
+    box-shadow: 0 0 0 3px #c8963e15;
 }}
-.card.read .unread-dot {{ background: #b8a080; box-shadow: none; }}
+.card.read .unread-dot {{ background: #c8b898; box-shadow: none; }}
 .card-title {{
-    font-size: 18px; font-weight: 700; flex: 1; line-height: 1.4; letter-spacing: -.3px;
+    font-size: 16px; font-weight: 700; flex: 1; line-height: 1.5; letter-spacing: -.2px;
 }}
 .card-title a {{ color: #2a2018; text-decoration: none; transition: color .2s; }}
-.card-title a:hover {{ color: #8b6914; text-decoration: underline; text-underline-offset: 3px; }}
-.card.read .card-title a {{ color: #8b7355; }}
+.card-title a:hover {{ color: #8b6914; }}
+.card.read .card-title a {{ color: #96876a; }}
 
-.card-meta {{ display: flex; align-items: center; gap: 8px; margin-top: 6px; font-size: 13px; color: #8b7355; font-weight: 500; }}
+.card-meta {{ display: flex; align-items: center; gap: 8px; margin-top: 4px; font-size: 12px; color: #96876a; font-weight: 500; }}
 .card-meta .source {{
-    color: #6b4c1e; font-weight: 600;
+    color: #8b6914; font-weight: 600;
+    background: #c8963e10; padding: 1px 8px; border-radius: 4px;
 }}
 
 .relevance {{
-    font-size: 10px; padding: 3px 10px; border-radius: 12px; font-weight: 700;
-    flex-shrink: 0; letter-spacing: .3px;
+    font-size: 10px; padding: 2px 8px; border-radius: 10px; font-weight: 700;
+    flex-shrink: 0; letter-spacing: .3px; text-transform: uppercase;
 }}
-.relevance.high {{ background: #dc5b5b15; color: #b04444; border: 1px solid #dc5b5b30; }}
-.relevance.mid {{ background: #c8963e15; color: #8b6914; border: 1px solid #c8963e40; }}
+.relevance.high {{ background: #dc5b5b12; color: #b04444; border: 1px solid #dc5b5b25; }}
+.relevance.mid {{ background: #c8963e12; color: #8b6914; border: 1px solid #c8963e30; }}
 
-.card-tags {{ display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }}
+.card-tags {{ display: flex; gap: 5px; flex-wrap: wrap; margin: 8px 0 6px; }}
 .tag {{
-    font-size: 11px; padding: 3px 10px; background: #f0e8d5; border-radius: 6px;
-    color: #8b7355; font-weight: 500; letter-spacing: .2px;
+    font-size: 11px; padding: 2px 9px; background: #f0e8d5; border-radius: 5px;
+    color: #8b7355; font-weight: 500; letter-spacing: .1px;
 }}
 .tag-more {{
-    background: #ede0c8; color: #96876a; font-weight: 600; cursor: default;
+    background: #e8dcc0; color: #96876a; font-weight: 600; cursor: default;
 }}
 
 .card-preview {{
-    font-size: 13px; color: #a0987a; line-height: 1.65; margin-bottom: 12px;
+    font-size: 13px; color: #a0987a; line-height: 1.7; margin-bottom: 10px;
     display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
 }}
 
 /* ---- Card Actions ---- */
-.card-actions {{ display: flex; gap: 8px; align-items: center; justify-content: flex-end; }}
+.card-actions {{ display: flex; gap: 8px; align-items: center; justify-content: space-between; }}
+.card-actions-left {{ display: flex; gap: 6px; align-items: center; }}
+.card-actions-right {{ display: flex; gap: 6px; align-items: center; }}
 .btn-read {{
-    font-size: 13px; color: #fff; text-decoration: none;
-    padding: 6px 18px; border: none; border-radius: 7px;
+    font-size: 12px; color: #fff; text-decoration: none;
+    padding: 6px 16px; border: none; border-radius: 8px;
     transition: all .2s; font-weight: 600;
     background: linear-gradient(135deg, #8b6914, #a07828);
-    box-shadow: 0 1px 3px #8b691420;
+    box-shadow: 0 2px 6px #8b691420;
 }}
-.btn-read:hover {{ background: linear-gradient(135deg, #6b4c1e, #8b6914); box-shadow: 0 2px 8px #8b691430; color: #fff; }}
+.btn-read:hover {{ background: linear-gradient(135deg, #6b4c1e, #8b6914); box-shadow: 0 3px 10px #8b691430; color: #fff; transform: translateY(-1px); }}
+.btn-read .arrow {{ display: inline-block; transition: transform .2s; }}
+.btn-read:hover .arrow {{ transform: translateX(3px); }}
 .btn-toggle {{
-    font-size: 12px; color: #8b7355; background: none; border: 1px solid #d4c5a0;
-    padding: 5px 14px; border-radius: 7px; cursor: pointer;
+    font-size: 11px; color: #96876a; background: none; border: 1px solid #e0d5be;
+    padding: 5px 12px; border-radius: 7px; cursor: pointer;
     transition: all .2s; font-weight: 500;
 }}
-.btn-toggle:hover {{ color: #3c3a38; border-color: #b8a080; }}
+.btn-toggle:hover {{ color: #5c4a32; border-color: #c8b898; background: #faf6ef; }}
 .card.read .btn-toggle {{ color: #6b8f5e; border-color: #6b8f5e30; }}
+.card.read .btn-toggle:hover {{ background: #6b8f5e08; border-color: #6b8f5e50; }}
 .card.read .toggle-label::before {{ content: '↩ 标记未读'; }}
 .toggle-label::before {{ content: '✓ 标记已读'; }}
-.card.read {{ opacity: .6; }}
-.card.read:hover {{ opacity: .85; }}
 
 /* ---- Favorite ---- */
 .btn-fav {{
-    font-size: 14px; background: none; border: 1px solid #d4c5a0;
-    padding: 4px 10px; border-radius: 7px; cursor: pointer;
-    transition: all .2s; color: #8b7355; line-height: 1;
+    font-size: 13px; background: none; border: 1px solid #e0d5be;
+    padding: 4px 8px; border-radius: 7px; cursor: pointer;
+    transition: all .2s; color: #96876a; line-height: 1;
 }}
-.btn-fav:hover {{ color: #c8963e; border-color: #c8963e60; }}
+.btn-fav:hover {{ color: #c8963e; border-color: #c8963e60; background: #c8963e08; }}
 .btn-fav.faved {{ color: #c8963e; border-color: #c8963e50; background: #c8963e10; }}
 .fav-empty {{
-    text-align: center; padding: 60px 20px; color: #96876a;
-    font-size: 15px; line-height: 2;
+    text-align: center; padding: 60px 20px; color: #b8a080;
+    font-size: 14px; line-height: 2.2;
+    background: #faf6ef; border-radius: 12px; border: 1px dashed #d4c5a0;
 }}
 
-/* ---- Search ---- */
-.search-box {{
-    width: 100%; max-width: 480px; margin: 0 auto 20px; display: block;
-    padding: 11px 18px; border-radius: 12px; border: 1px solid #d4c5a0;
-    background: #fdfaf5; color: #3c3a38; font-size: 14px; outline: none;
-    transition: all .25s; font-family: inherit;
+/* ---- Briefing ---- */
+.briefing {{
+    background: linear-gradient(135deg, #faf6ef, #fefcf8);
+    border: 1px solid #d4c5a0; border-radius: 14px;
+    padding: 18px 22px; margin-bottom: 20px;
+    border-left: 4px solid #c8963e;
 }}
-.search-box:focus {{ border-color: #c8963e; box-shadow: 0 0 0 3px #c8963e15; }}
-.search-box::placeholder {{ color: #b8a080; }}
+.briefing-title {{
+    font-size: 14px; font-weight: 700; color: #8b6914; margin-bottom: 8px;
+    display: flex; align-items: center; gap: 6px;
+}}
+.briefing-text {{
+    font-size: 14px; color: #5c4a32; line-height: 1.8;
+}}
 
 /* ---- Footer ---- */
 .footer {{
-    text-align: center; padding: 32px 20px; color: #b8a080;
-    font-size: 12px; margin-top: 24px; border-top: 1px solid #d4c5a050;
+    text-align: center; padding: 32px 20px 8px; color: #c0b090;
+    font-size: 12px; margin-top: 28px;
 }}
 
 /* ---- Responsive ---- */
-@media (max-width: 640px) {{
-    .container {{ padding: 14px; }}
-    .header {{ padding: 28px 14px 22px; }}
-    .header h1 {{ font-size: 22px; }}
-    .card {{ padding: 14px 16px; }}
+@media (max-width: 768px) {{
+    .container {{ padding: 16px 14px 30px; }}
+    .header {{ padding: 24px 14px 24px; margin-bottom: 16px; }}
+    .header h1 {{ font-size: 21px; }}
+    .card {{ padding: 14px 16px; border-radius: 10px; }}
+    .card-title {{ font-size: 15px; }}
+    .tabs {{ min-width: 100%; }}
+    .stats-bar {{ width: 100%; justify-content: center; }}
+    .card-actions {{ flex-direction: column; align-items: stretch; gap: 8px; }}
+    .card-actions-left, .card-actions-right {{ justify-content: center; }}
+    .btn-read {{ text-align: center; }}
+}}
+@media (max-width: 480px) {{
     .tabs {{ gap: 2px; padding: 4px; }}
-    .tab-btn {{ padding: 7px 11px; font-size: 13px; }}
-    .card-title {{ font-size: 14px; }}
+    .tab-btn {{ padding: 7px 10px; font-size: 13px; }}
+    .briefing {{ padding: 14px 16px; }}
 }}
 </style>
 </head>
@@ -901,40 +1133,41 @@ body {{
 <div class="container">
 
 <div class="header">
-    <h1>📋 公众号日报 — {date_str}</h1>
+    <h1>📰 公众号日报 — {date_str}</h1>
     <div class="meta">
-        <span>共 <strong>{total}</strong> 篇文章 {', '.join(f'{TOPIC_LABELS[t][2]} {len(topics[t])}' for t in TOPIC_ORDER if t in topics)}</span>
+        <span>共 <strong>{total}</strong> 篇文章 · {', '.join(f'{TOPIC_LABELS[t][2]} {len(topics[t])}' for t in TOPIC_ORDER if t in topics)}</span>
         {action_link}
-        <span style="font-size:12px;color:#b8a080;display:flex;align-items:center;gap:6px">
-          <button class="btn-clear" id="btn-mode-md" onclick="setViewMode('md')" style="font-size:11px;padding:3px 10px">📝</button>
-          <button class="btn-clear" id="btn-mode-html" onclick="setViewMode('html')" style="font-size:11px;padding:3px 10px">🎨</button>
-          <button class="btn-clear" onclick="exportFav()" id="btn-export-fav" style="font-size:11px;padding:3px 10px">📥</button>
-        </span>
     </div>
 </div>
 
-<div class="stats-bar">
-    <span class="stats-group">
-        <span>📊 <strong id="unread-count">-</strong> 篇未读 / {total} 篇</span>
-        <button class="btn-clear" id="btn-filter-unread" onclick="toggleUnreadFilter()" style="font-weight:600">👁 仅看未读</button>
-    </span>
-    <span class="stats-group">
-        <button class="btn-clear" onclick="markAllRead()">✅ 全部标为已读</button>
-        <button class="btn-clear" onclick="clearAll()">🔄 重置</button>
-    </span>
-    <span class="stats-group">
-        <span id="sync-indicator" style="display:none;font-size:12px;color:#6b8f5e;font-weight:600">🟢 已同步</span>
-    </span>
+{briefing_html}
 
 <input type="text" class="search-box" placeholder="🔍 搜索文章标题、来源、标签..." oninput="doSearch(this.value)">
 
-<nav class="tabs">
+<div class="toolbar">
+    <div class="stats-bar">
+        <span class="stats-group">
+            <span>📊 <strong id="unread-count">-</strong>/{total} 未读</span>
+        </span>
+        <span class="stats-divider"></span>
+        <span class="stats-group">
+            <button class="btn-clear" id="btn-filter-unread" onclick="toggleUnreadFilter()">👁 仅未读</button>
+            <button class="btn-clear" onclick="markAllRead()">✅ 全部已读</button>
+            <button class="btn-clear" onclick="clearAll()">🔄 重置</button>
+        </span>
+        <span class="stats-group" style="margin-left:auto">
+            <button class="btn-clear" onclick="exportFav()" id="btn-export-fav" title="导出收藏">⭐ 收藏</button>
+            <span id="sync-indicator" style="display:none;font-size:12px;color:#6b8f5e;font-weight:600">🟢 已同步</span>
+        </span>
+    </div>
+    <nav class="tabs">
     {''.join(nav_items)}
-            <button class="tab-btn" data-topic="收藏"
-                    style="--accent: #fbbf24" onclick="switchTab('收藏')">
-                ⭐ 收藏 <span class="count" id="fav-count">0</span>
-            </button>
-</nav>
+        <button class="tab-btn" data-topic="收藏"
+                style="--accent: #fbbf24" onclick="switchTab('收藏')">
+            ⭐ 收藏 <span class="count" id="fav-count">0</span>
+        </button>
+    </nav>
+</div>
 
             <section class="topic-section" id="section-收藏" data-topic="收藏">
                 <h2 class="topic-heading" style="--accent: #fbbf24">
@@ -1137,14 +1370,6 @@ function renderFavSection() {{
     container.innerHTML = html || '<div class="fav-empty">⭐ 暂无收藏文章</div>';
 }}
 
-const VIEW_MODE_KEY = 'weflow_vmode_{date_str}';
-function getViewMode() {{
-    return localStorage.getItem(VIEW_MODE_KEY) || 'html';
-}}
-function setViewMode(mode) {{
-    localStorage.setItem(VIEW_MODE_KEY, mode);
-    applyViewMode();
-}}
 const UNREAD_KEY = 'weflow_unread_{date_str}';
 let unreadFilterOn = sessionStorage.getItem(UNREAD_KEY) === '1';
 function toggleUnreadFilter() {{
@@ -1154,10 +1379,10 @@ function toggleUnreadFilter() {{
     if (btn) {{
         if (unreadFilterOn) {{
             btn.classList.add('active-mode');
-            btn.textContent = '👁 仅看未读 ✓';
+            btn.textContent = '👁 仅未读 ✓';
         }} else {{
             btn.classList.remove('active-mode');
-            btn.textContent = '👁 仅看未读';
+            btn.textContent = '👁 仅未读';
         }}
     }}
     applyUnreadFilter();
@@ -1170,29 +1395,13 @@ function applyUnreadFilter() {{
 }}
 
 function applyViewMode() {{
-    const mode = getViewMode();
-    const btnMd = document.getElementById('btn-mode-md');
-    const btnHtml = document.getElementById('btn-mode-html');
-    if (btnMd && btnHtml) {{
-        btnMd.classList.toggle('active-mode', mode === 'md');
-        btnHtml.classList.toggle('active-mode', mode === 'html');
-    }}
-    // Update all article title links and read buttons
+    // 默认 HTML 渲染模式，所有链接指向 article.html
     document.querySelectorAll('.card-title a, .btn-read').forEach(a => {{
         const card = a.closest('.card');
         if (!card) return;
         const id = card.getAttribute('data-id');
         if (!id) return;
-        if (mode === 'html') {{
-            const newHref = 'article.html?file=' + encodeURIComponent(id) + '&date={date_str}';
-            if (a.getAttribute('data-md-href') === null) {{
-                a.setAttribute('data-md-href', a.getAttribute('href') || '');
-            }}
-            a.setAttribute('href', newHref);
-        }} else {{
-            const mdHref = a.getAttribute('data-md-href');
-            if (mdHref) a.setAttribute('href', mdHref);
-        }}
+        a.setAttribute('href', 'article.html?file=' + encodeURIComponent(id) + '&date={date_str}');
     }});
 }}
 
@@ -1346,21 +1555,21 @@ def main():
     with open(out_path, 'w', encoding='utf-8') as f:
         f.write(html)
 
-    # 同时生成 article.html（Markdown 渲染阅读器）
+    # 生成行动建议 HTML
+    action_md_path = os.path.join(date_dir, '行动建议.md')
+    action_html_path = os.path.join(date_dir, '行动建议.html')
+    if os.path.exists(action_md_path):
+        generate_action_html(date_str, action_md_path, action_html_path)
+        print(f'✓ 行动建议 HTML 生成完成: {action_html_path}')
+
+    # 生成 article.html — 从永久模板复制（暖色风格，含 AI 问答/收藏/笔记）
     article_html_path = os.path.join(date_dir, 'article.html')
-    if not os.path.exists(article_html_path):
+    template = os.path.join(SOURCE_ROOT, '.template', 'article.html')
+    if os.path.exists(template):
         import shutil
-        # 优先使用永久模板（不会被日期覆盖）
-        template = os.path.join(SOURCE_ROOT, '.template', 'article.html')
-        # 兼容旧路径
-        if not os.path.exists(template):
-            template_old = os.path.join(SOURCE_ROOT, '2026-05-19', 'article.html')
-            if os.path.exists(template_old):
-                template = template_old
-        if os.path.exists(template):
-            shutil.copy2(template, article_html_path)
-        else:
-            generate_article_viewer(article_html_path)
+        shutil.copy2(template, article_html_path)
+    else:
+        generate_article_viewer(article_html_path)
 
     # 注入本地图片映射，优先用本地图片避免代理延迟
     image_map_path = os.path.join(date_dir, '.image_map.json')
@@ -1370,7 +1579,9 @@ def main():
         if img_map and os.path.exists(article_html_path):
             with open(article_html_path, 'r', encoding='utf-8') as f:
                 article_html = f.read()
-            img_map_js = '<script>window._IMG_MAP=' + json.dumps(img_map, ensure_ascii=False) + ';</script>'
+            # Escape < in JSON to prevent XSS via </script> injection
+            img_map_json = json.dumps(img_map, ensure_ascii=False).replace('<', '\\u003c')
+            img_map_js = '<script>window._IMG_MAP=' + img_map_json + ';</script>'
             # 注入到 </head> 之前
             article_html = article_html.replace('</head>', img_map_js + '\n</head>', 1)
             with open(article_html_path, 'w', encoding='utf-8') as f:
