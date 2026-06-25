@@ -867,7 +867,6 @@ def generate_html(date_str: str, topics: dict, action_suggestions_exist: bool, b
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>公众号日报 — {date_str}</title>
-<link rel="stylesheet" href="index.css">
 <style>
 * {{ margin: 0; padding: 0; box-sizing: border-box; }}
 :root {{
@@ -1179,7 +1178,7 @@ body {{
 <div class="container">
 
 <div class="header">
-    <button id="theme-toggle" title="切换暗色" style="position:fixed;top:12px;right:16px;z-index:100;background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:6px 10px;cursor:pointer;font-size:16px;">🌙</button>
+    <button id="theme-toggle" title="切换暗色" style="position:absolute;top:0;right:0;background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:6px 10px;cursor:pointer;font-size:16px;box-shadow:var(--shadow-sm);transition:all var(--transition);z-index:5;">🌙</button>
     <h1>📰 公众号日报 — {date_str}</h1>
     <div class="meta">
         <span>共 <strong>{total}</strong> 篇文章 · {', '.join(f'{TOPIC_LABELS[t][2]} {len(topics[t])}' for t in TOPIC_ORDER if t in topics)}</span>
@@ -1545,7 +1544,7 @@ function initDarkMode() {{
     toggle.addEventListener('click', () => {{
         const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
         document.documentElement.setAttribute('data-theme', isDark ? '' : 'dark');
-        toggle.textContent = isDark ? '\u2600\ufe0f' : '\U0001f319';
+        toggle.textContent = isDark ? '\U0001f319' : '\u2600\ufe0f';
         localStorage.setItem('theme', isDark ? 'light' : 'dark');
     }});
     const saved = localStorage.getItem('theme');
@@ -1650,16 +1649,11 @@ def main():
         generate_action_html(date_str, action_md_path, action_html_path)
         print(f'✓ 行动建议 HTML 生成完成: {action_html_path}')
 
-    # 生成 article.html + 静态资源 — 从永久模板复制
+    # 生成 article.html — 从永久模板复制
     article_html_path = os.path.join(date_dir, 'article.html')
     template = os.path.join(SOURCE_ROOT, '.template', 'article.html')
     if os.path.exists(template):
         shutil.copy2(template, article_html_path)
-        # 同时复制 index.css 等静态资源
-        for asset in ['index.css', 'marked.min.js']:
-            src = os.path.join(SOURCE_ROOT, '.template', asset)
-            if os.path.exists(src):
-                shutil.copy2(src, os.path.join(date_dir, asset))
     else:
         generate_article_viewer(article_html_path)
 
