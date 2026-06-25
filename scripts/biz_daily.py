@@ -937,7 +937,8 @@ def main():
                 if isinstance(art, dict) and art.get('url') and art['url'] in written_urls:
                     fp = hashlib.sha256(art['url'].encode()).hexdigest()[:16]
                     processed[fp] = art.get('title', '')[:50]
-    _save_state(state_file, processed)
+    with open(state_file, 'w', encoding='utf-8') as f:
+        json.dump(processed, f, ensure_ascii=False, indent=2)
 
 
 if __name__ == '__main__':

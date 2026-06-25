@@ -898,7 +898,7 @@ body {{
     min-height: 100vh;
     -webkit-font-smoothing: antialiased;
 }}
-.container {{ max-width: 1140px; margin: 0 auto; padding: 28px 28px 48px; }}
+.container {{ max-width: 1300px; margin: 0 auto; padding: 28px 28px 48px; }}
 
 /* ---- Header ---- */
 .header {{
