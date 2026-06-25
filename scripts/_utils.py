@@ -266,6 +266,12 @@ def call_deepseek(prompt: str, api_key: str, max_tokens=2000, timeout=60) -> str
     return DeepSeekEngine(api_key, timeout=timeout).chat(prompt, max_tokens=max_tokens)
 
 
+def call_ai(prompt: str, engine_type: str = 'local', api_key: str = '', max_tokens=2000) -> str:
+    """通用 AI 调用：支持 local/deepseek/claude/ollama 引擎。"""
+    engine = create_engine(engine_type, api_key)
+    return engine.chat(prompt, max_tokens=max_tokens)
+
+
 # ======================================================================
 # 缓存机制 — 避免重跑 pipeline 时重复调用 API
 # ======================================================================

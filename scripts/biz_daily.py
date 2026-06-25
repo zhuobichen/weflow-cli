@@ -394,7 +394,8 @@ def main():
     parser.add_argument('--date', help='日期 YYYY-MM-DD, 默认今天')
     parser.add_argument('--dry-run', action='store_true', help='仅预览，不抓取')
     parser.add_argument('--limit', type=int, default=0, help='最多处理篇数 (0=不限制)')
-    parser.add_argument('--api-key', help='DeepSeek API key (或设环境变量 DEEPSEEK_API_KEY)')
+    parser.add_argument('--api-key', help='AI API key (或设环境变量 DEEPSEEK_API_KEY)')
+    parser.add_argument('--engine', default='deepseek', help='AI 引擎: local/deepseek/claude/ollama')
     args = parser.parse_args()
 
     # Date
@@ -411,11 +412,16 @@ def main():
     config = load_config()
     keys = get_db_keys(config)
 
-    # API key
+    # API key — only required for cloud engines
+    engine = args.engine or 'deepseek'
     api_key = args.api_key or os.environ.get('DEEPSEEK_API_KEY', '') or config.get('deepseekApiKey', '')
-    if not args.dry_run and not api_key:
-        print('[ERROR] 缺少 DeepSeek API key。请通过 --api-key、环境变量 DEEPSEEK_API_KEY 或 ~/.weflow-cli/config.json 中的 deepseekApiKey 提供')
+    if not args.dry_run and engine in ('deepseek', 'claude') and not api_key:
+        print(f'[ERROR] --engine {engine} 需要 API key。请通过 --api-key、环境变量或配置文件提供')
         sys.exit(1)
+    # Auto-detect local engine if no api_key and engine is deepseek
+    if not api_key and engine == 'deepseek':
+        engine = 'local'
+        print(f'  无 API key，切换到本地引擎')
 
     print(f'=== 公众号日报 {date_str} ===')
     print(f'Biz DB: {keys["biz_db"]}')
@@ -536,16 +542,17 @@ def main():
         elif a.get('local_text'):
             print(f'  无URL, 使用本地缓存')
 
-    # ====== Phase 2: DeepSeek summary + topic classification ======
-    if api_key:
-        print(f'\n=== Phase 2: AI 摘要 + 主题分类 ===\n')
+    # ====== Phase 2: AI summary + topic classification ======
+    if api_key or engine != 'deepseek':
+        print(f'\n=== Phase 2: AI 摘要 + 主题分类 (engine={engine}) ===\n')
+        from _utils import call_ai
         for i, a in enumerate(articles):
             t, n, ti = a['time'], a['account_name'], a['title']
             content = a.get('fetched_md') or a.get('local_text', '')
             if content and len(content.strip()) > 50:
                 try:
                     prompt = TOPIC_PROMPT + f'\n\n标题：{a["title"]}\n来源：{a["account_name"]}\n\n内容：\n{content[:4000]}'
-                    response = call_deepseek(prompt, api_key, max_tokens=600)
+                    response = call_ai(prompt, engine, api_key, max_tokens=600)
 
                     # Parse response: 【主题】xxx 【相关度】xxx 【标签】xxx 【摘要】xxx 【概念】xxx
                     topic_match = re.search(r'【主题】\s*(.+)', response)
@@ -841,17 +848,8 @@ def main():
 
 请直接输出简报内容（不要标题）。"""
                 # Use call_ai to support local/deepseek/claude engines
-                from _utils import call_ai, create_engine
-                engine_type = 'deepseek'
-                if not api_key:
-                    try:
-                        from _utils import load_config, detect_local_engine
-                        cfg = load_config()
-                        local_engine = detect_local_engine()
-                        if local_engine:
-                            engine_type = local_engine
-                    except Exception:
-                        pass
+                from _utils import call_ai
+                engine_type = 'deepseek' if api_key else 'local'
                 briefing = call_ai(briefing_prompt, engine_type, api_key, max_tokens=500).strip()
                 if briefing:
                     print(f'\n  ✓ 简报生成完成')
@@ -915,14 +913,31 @@ def main():
         if count:
             print(f'  {t}/: {count} 篇')
 
-    # Save run state for incremental dedup
+    # Save run state for incremental dedup (atomically)
+    # Only mark articles that were actually written to disk
+    written_urls = set()
+    for topic in TOPICS:
+        topic_dir = out_dir / topic
+        if not topic_dir.is_dir():
+            continue
+        for md_file in topic_dir.glob('*.md'):
+            try:
+                content = md_file.read_text(encoding='utf-8')
+                for line in content.split('\n'):
+                    if line.strip().startswith('url:'):
+                        url = line.split(':', 1)[1].strip().strip('"').strip("'")
+                        if url:
+                            written_urls.add(url)
+                        break
+            except Exception:
+                pass
     for a in topic_groups.values():
-        for art in a:
-            fp = hashlib.sha256(art.get('url', '').encode()).hexdigest()[:16]
-            if art.get('url'):
-                processed[fp] = art['title'][:50]
-    with open(state_file, 'w', encoding='utf-8') as f:
-        json.dump(processed, f, ensure_ascii=False, indent=2)
+        if isinstance(a, list):
+            for art in a:
+                if isinstance(art, dict) and art.get('url') and art['url'] in written_urls:
+                    fp = hashlib.sha256(art['url'].encode()).hexdigest()[:16]
+                    processed[fp] = art.get('title', '')[:50]
+    _save_state(state_file, processed)
 
 
 if __name__ == '__main__':

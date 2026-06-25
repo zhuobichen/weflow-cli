@@ -66,7 +66,7 @@ def main():
     started = time.time()
 
     # Step 1: biz_daily
-    step1_args = [os.path.join(SCRIPTS_DIR, 'biz_daily.py')]
+    step1_args = [os.path.join(SCRIPTS_DIR, 'biz_daily.py'), '--engine', args.engine]
     if api_key:
         step1_args += ['--api-key', api_key]
     if args.date:
@@ -78,12 +78,15 @@ def main():
     if not args.skip_classify:
         step2_args = [
             os.path.join(SCRIPTS_DIR, 'classify_daily.py'),
-            '--api-key', api_key if api_key else 'local',
-            '--interest', args.interest,
+            '--engine', args.engine,
         ]
+        if api_key:
+            step2_args += ['--api-key', api_key]
+        step2_args += ['--interest', args.interest]
         if args.date:
             step2_args.insert(1, args.date)
-        run_step('classify_daily — 后处理', step2_args)
+        if not run_step('classify_daily — 后处理', step2_args):
+            print('[WARN] classify_daily 失败，继续后续步骤')
 
     # Step 3: Vault sync（可选）
     if not args.skip_vault:
