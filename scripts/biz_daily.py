@@ -787,7 +787,7 @@ def main():
 
     # Generate AI briefing from all article files on disk
     briefing = ''
-    if api_key and all_articles:
+    if all_articles:
         topic_counts = {}
         for a in all_articles:
             t = a['topic']
@@ -821,7 +821,7 @@ def main():
                                 break
                     if summary:
                         highlights.append(f"[{topic}] {title} | {summary}")
-                except:
+                except Exception:
                     pass
             if len(highlights) >= 25:
                 break
@@ -840,13 +840,46 @@ def main():
 {highlight_text}
 
 请直接输出简报内容（不要标题）。"""
-                briefing = call_deepseek(briefing_prompt, api_key, max_tokens=500, timeout=90).strip()
+                # Use call_ai to support local/deepseek/claude engines
+                from _utils import call_ai, create_engine
+                engine_type = 'deepseek'
+                if not api_key:
+                    try:
+                        from _utils import load_config, detect_local_engine
+                        cfg = load_config()
+                        local_engine = detect_local_engine()
+                        if local_engine:
+                            engine_type = local_engine
+                    except Exception:
+                        pass
+                briefing = call_ai(briefing_prompt, engine_type, api_key, max_tokens=500).strip()
                 if briefing:
                     print(f'\n  ✓ 简报生成完成')
                 else:
-                    print(f'\n  [WARN] 简报 API 返回空，跳过')
+                    print(f'\n  [WARN] 简报 API 返回空，使用摘要拼接')
+                    briefing = ''
             except Exception as e:
-                print(f'\n  [WARN] 简报生成失败: {e}')
+                print(f'\n  [WARN] 简报生成失败: {e}，使用摘要拼接')
+                briefing = ''
+
+        # Fallback: build briefing from highlights if AI failed
+        if not briefing and highlights:
+            topic_groups = {}
+            for h in highlights[:15]:
+                parts = h.split(' | ', 1)
+                title_part = parts[0].replace('[', '').replace(']', ' - ')
+                summary_part = parts[1] if len(parts) > 1 else ''
+                topic = h.split(']')[0].replace('[', '')
+                if topic not in topic_groups:
+                    topic_groups[topic] = []
+                if len(topic_groups[topic]) < 3:
+                    topic_groups[topic].append(f"{title_part.split(' - ', 1)[-1]}：{summary_part[:60]}")
+            parts = []
+            for topic in TOPICS:
+                if topic in topic_groups:
+                    items = topic_groups[topic]
+                    parts.append(f"{topic}：{'；'.join(items)}")
+            briefing = '今日共收录' + str(len(all_articles)) + '篇文章。' + '。'.join(parts) if parts else f'今日共收录{len(all_articles)}篇文章，涵盖{topic_summary}。'
 
     index_lines = [
         f'# 公众号日报 — {date_str}',
