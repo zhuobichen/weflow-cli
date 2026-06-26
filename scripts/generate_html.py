@@ -800,7 +800,7 @@ def generate_html(date_str: str, topics: dict, action_suggestions_exist: bool, b
                 relevance_badge = '<span class="relevance mid">中相关</span>'
 
             cards.append(f'''
-                <article class="card" data-id="{escape_html(art['rel_path'])}" data-topic="{topic}">
+                <article class="card" data-id="{escape_html(art['rel_path'])}" data-topic="{topic}" onclick="if(!event.target.closest('button,a')){{var a=this.querySelector('a[href]');if(a)a.click()}}" style="cursor:pointer">
                     <div class="card-header">
                         <div class="card-title-row">
                             <span class="unread-dot" id="dot-{escape_html(art['rel_path']).replace('/', '_').replace('.', '_')}"></span>
