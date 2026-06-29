@@ -13,7 +13,7 @@ import { chatService } from '../src/services/chatService.js'
 import { exportService } from '../src/services/exportService.js'
 import { resolveTalker as resolveTalkerCore } from '../src/utils/talkerUtils.js'
 import { WechatMessageService } from '../src/services/wechatMessageService.js'
-import { whitelistService } from '../src/services/whitelistService.js'
+import { whitelistService, MAX_TEXT_LENGTH } from '../src/services/whitelistService.js'
 import type { ChatSession } from '../src/types.js'
 
 const program = new Command()
@@ -622,15 +622,22 @@ const whitelistCmd = program
 
 whitelistCmd
   .action(() => {
-    const list = whitelistService.getList()
-    if (list.length === 0) {
+    const entries = whitelistService.getWhitelistEntries()
+    if (entries.length === 0) {
       console.log(chalk.gray('白名单为空'))
       console.log(chalk.gray('使用 weflow-cli whitelist add <昵称> 添加'))
       return
     }
-    console.log(chalk.cyan(`白名单 (${list.length}):\n`))
-    for (let i = 0; i < list.length; i++) {
-      console.log(`  ${String(i + 1).padStart(2)}. ${list[i]}`)
+    console.log(chalk.cyan(`白名单 (${entries.length}):\n`))
+    console.log(chalk.gray('序号  wxid                          昵称              添加时间'))
+    console.log(chalk.gray('─'.repeat(80)))
+    for (let i = 0; i < entries.length; i++) {
+      const e = entries[i]
+      const num = String(i + 1).padStart(2)
+      const id = (e.wxid || '').padEnd(28)
+      const name = (e.displayName || '').slice(0, 16).padEnd(16)
+      const ts = e.addedAt ? new Date(e.addedAt).toLocaleString('zh-CN') : '-'
+      console.log(`${num}  ${id} ${name} ${ts}`)
     }
   })
 
@@ -690,16 +697,17 @@ whitelistCmd
     }])
     if (q2 !== '确认') { console.log(chalk.gray('已取消')); return }
 
-    whitelistService.addDirect(wxid)
-    console.log(chalk.green(`\n✓ 已添加 "${displayName}" 到白名单`))
+    whitelistService.addDirect(wxid, displayName)
+    console.log(chalk.green(`\n✓ 已添加 "${displayName}" (${wxid}) 到白名单`))
   })
 
 whitelistCmd
   .command('rm <wxid>')
   .description('移除白名单中的 wxid')
   .action((wxid: string) => {
+    const name = whitelistService.lookupName(wxid)
     if (whitelistService.remove(wxid)) {
-      console.log(chalk.green(`✓ 已移除: ${wxid}`))
+      console.log(chalk.green(`✓ 已移除: ${name} (${wxid})`))
     } else {
       console.log(chalk.yellow(`未找到: ${wxid}`))
     }
@@ -728,22 +736,30 @@ const blacklistCmd = program
 
 blacklistCmd
   .action(() => {
-    const list = whitelistService.getBlacklist()
-    if (list.length === 0) {
+    const entries = whitelistService.getBlacklistEntries()
+    if (entries.length === 0) {
       console.log(chalk.gray('黑名单为空'))
       console.log(chalk.gray('使用 weflow-cli blacklist add <昵称/wxid> 添加'))
       return
     }
-    console.log(chalk.red(`黑名单 (${list.length}):\n`))
-    for (let i = 0; i < list.length; i++) {
-      console.log(`  ${String(i + 1).padStart(2)}. ${list[i]}`)
+    console.log(chalk.red(`黑名单 (${entries.length}):\n`))
+    console.log(chalk.gray('序号  wxid                          昵称              添加时间'))
+    console.log(chalk.gray('─'.repeat(80)))
+    for (let i = 0; i < entries.length; i++) {
+      const e = entries[i]
+      const num = String(i + 1).padStart(2)
+      const id = (e.wxid || '').padEnd(28)
+      const name = (e.displayName || '').slice(0, 16).padEnd(16)
+      const ts = e.addedAt ? new Date(e.addedAt).toLocaleString('zh-CN') : '-'
+      console.log(`${num}  ${id} ${name} ${ts}`)
     }
   })
 
 blacklistCmd
   .command('add <target>')
   .description('添加到黑名单 (自动从白名单移除)')
-  .action(async (target: string) => {
+  .option('-r, --reason <text>', '拉黑原因 (可选)')
+  .action(async (target: string, opts) => {
     let wxid: string
     let displayName = target
     if (target.startsWith('wxid_') || target.includes('@chatroom') || target.includes('@openim')) {
@@ -768,6 +784,7 @@ blacklistCmd
     console.log(chalk.cyan(`\n⚠️  即将拉黑以下联系人:`))
     console.log(chalk.white(`  昵称: ${displayName}`))
     console.log(chalk.gray(`  wxid: ${wxid}`))
+    if (opts.reason) console.log(chalk.gray(`  原因: ${opts.reason}`))
     console.log(chalk.yellow(`  拉黑后, 该联系人绝对禁止收发消息 (即使误加白名单也拦截)\n`))
 
     const { q1 } = await inquirer.prompt([{
@@ -778,7 +795,7 @@ blacklistCmd
     }])
     if (!q1) { console.log(chalk.gray('已取消')); return }
 
-    whitelistService.blockDirect(wxid)
+    whitelistService.blockDirect(wxid, displayName, opts.reason)
     console.log(chalk.green(`\n✓ 已拉黑 "${displayName}" (${wxid})`))
   })
 
@@ -786,8 +803,9 @@ blacklistCmd
   .command('rm <wxid>')
   .description('从黑名单移除')
   .action((wxid: string) => {
+    const name = whitelistService.lookupName(wxid)
     if (whitelistService.unblock(wxid)) {
-      console.log(chalk.green(`✓ 已从黑名单移除: ${wxid}`))
+      console.log(chalk.green(`✓ 已从黑名单移除: ${name} (${wxid})`))
     } else {
       console.log(chalk.yellow(`未在黑名单中找到: ${wxid}`))
     }
@@ -806,6 +824,97 @@ blacklistCmd
     if (confirm) {
       whitelistService.clearBlacklist()
       console.log(chalk.green('✓ 黑名单已清空'))
+    }
+  })
+
+// ==================== audit (发送审计日志) ====================
+const auditCmd = program
+  .command('audit')
+  .description('发送审计日志查询 (记录所有 send 尝试)')
+
+auditCmd
+  .command('list')
+  .description('查看最近发送记录 (默认最近 20 条)')
+  .option('-n, --limit <number>', '最大条数', '20')
+  .option('--all', '显示全部 (含失败)')
+  .option('--failed', '只看失败')
+  .option('--target <wxid>', '按目标 wxid 过滤')
+  .action((opts) => {
+    const filter = (e: any) => {
+      if (opts.target && e.targetWxid !== opts.target) return false
+      if (opts.failed && e.success) return false
+      if (!opts.all && !opts.failed && !e.success) {
+        // 默认不显示被拦截的 (黑名单/速率/长度), 仅显示实际发送失败
+        if (e.error && (e.error.includes('blacklist') || e.error.includes('rate') || e.error.includes('too long'))) return false
+      }
+      return true
+    }
+    const entries = whitelistService.readAudit(parseInt(opts.limit), filter)
+    const logPath = join(homedir(), '.weflow-cli', 'audit-send.log')
+    if (entries.length === 0) {
+      console.log(chalk.gray('无审计记录'))
+      console.log(chalk.gray(`日志文件: ${logPath}`))
+      return
+    }
+
+    console.log(chalk.cyan(`发送审计 (最近 ${entries.length} 条):\n`))
+    for (const e of entries) {
+      const time = new Date(e.timestamp).toLocaleString('zh-CN')
+      const status = e.success ? chalk.green('✓') : chalk.red('✗')
+      const name = e.targetName || e.targetWxid
+      const err = e.error ? chalk.gray(` [${e.error}]`) : ''
+      console.log(`${status} ${chalk.gray(`[${time}]`)} ${chalk.blue(name)} (${e.targetWxid}) <${e.kind}> ${chalk.gray(e.preview || '')}${err}`)
+    }
+    console.log(chalk.gray(`\n日志文件: ${logPath}`))
+  })
+
+auditCmd
+  .command('stats')
+  .description('审计统计 (成功/失败次数, 热门目标)')
+  .action(() => {
+    const entries = whitelistService.readAudit()
+    if (entries.length === 0) {
+      console.log(chalk.gray('无审计记录'))
+      return
+    }
+    const success = entries.filter(e => e.success).length
+    const failed = entries.length - success
+    const byTarget = new Map<string, number>()
+    for (const e of entries) {
+      const key = e.targetName || e.targetWxid
+      byTarget.set(key, (byTarget.get(key) || 0) + 1)
+    }
+    const top = [...byTarget.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10)
+
+    console.log(chalk.cyan('发送审计统计:\n'))
+    console.log(`  总记录: ${entries.length}`)
+    console.log(`  ${chalk.green('成功')}: ${success}  ${chalk.red('失败')}: ${failed}`)
+    const sizeKB = (whitelistService.auditSize() / 1024).toFixed(1)
+    console.log(chalk.gray(`  日志大小: ${sizeKB} KB\n`))
+    console.log(chalk.cyan('热门目标 (Top 10):'))
+    for (const [name, n] of top) {
+      console.log(`  ${String(n).padStart(4)}  ${name}`)
+    }
+  })
+
+auditCmd
+  .command('clear')
+  .description('清空审计日志')
+  .action(async () => {
+    const { confirm } = await inquirer.prompt([{
+      type: 'confirm',
+      name: 'confirm',
+      message: '确定要清空所有审计记录吗？',
+      default: false,
+    }])
+    if (confirm) {
+      try {
+        const { writeFileSync } = await import('fs')
+        writeFileSync(join(homedir(), '.weflow-cli', 'audit-send.log'), '', 'utf8')
+        console.log(chalk.green('✓ 审计日志已清空'))
+      } catch (e: any) {
+        console.log(chalk.red(`✗ 清空失败: ${e.message}`))
+      }
     }
   })
 
@@ -939,6 +1048,10 @@ program
   .description('发送文本消息给指定联系人')
   .option('--image <path>', '发图片')
   .option('--file <path>', '发文件')
+  .option('--dry-run', '仅预览不实际发送')
+  .option('--yes', '跳过二次确认 (危险, 仅脚本使用)')
+  .option('--rate-window <ms>', '速率窗口毫秒', '60000')
+  .option('--rate-max <n>', '窗口内最大发送条数', '10')
   .action(async (target: string, message: string, opts) => {
     // Resolve target
     let wxid: string
@@ -949,13 +1062,32 @@ program
       process.exit(1)
     }
 
-    // 解析 displayName 用于二次确认
-    let displayName = wxid
-    try {
-      const sessions = await chatService.listSessions(undefined, 200)
-      const match = sessions.find(s => s.username === wxid)
-      if (match?.displayName) displayName = match.displayName
-    } catch {}
+    // 解析 displayName 用于二次确认 (优先用名单里存的)
+    let displayName = whitelistService.lookupName(wxid)
+    if (displayName === wxid) {
+      try {
+        const sessions = await chatService.listSessions(undefined, 200)
+        const match = sessions.find(s => s.username === wxid)
+        if (match?.displayName) displayName = match.displayName
+      } catch {}
+    }
+
+    // 类型与预览
+    const kind: 'text' | 'image' | 'file' = opts.image ? 'image' : opts.file ? 'file' : 'text'
+    const preview = kind === 'text'
+      ? message.slice(0, 80) + (message.length > 80 ? '...' : '')
+      : `[${kind}] ${opts.image || opts.file}`
+
+    // 文本长度限制 (仅文本)
+    if (kind === 'text' && message.length > MAX_TEXT_LENGTH) {
+      console.log(chalk.red(`\n❌ 文本过长 (${message.length} 字符), 上限 ${MAX_TEXT_LENGTH}`))
+      console.log(chalk.gray('  过长内容请拆分多条或使用 --file 发送文件\n'))
+      whitelistService.auditSend({
+        timestamp: Date.now(), action: 'send', targetWxid: wxid, targetName: displayName,
+        kind, success: false, preview, error: `text too long (${message.length})`,
+      })
+      process.exit(1)
+    }
 
     // 黑名单优先拦截
     if (whitelistService.isBlocked(wxid)) {
@@ -963,14 +1095,8 @@ program
       console.log(chalk.gray(`  wxid: ${wxid}`))
       console.log(chalk.gray(`  解除: weflow-cli blacklist rm ${wxid}\n`))
       whitelistService.auditSend({
-        timestamp: Date.now(),
-        action: 'send',
-        targetWxid: wxid,
-        targetName: displayName,
-        kind: opts.image ? 'image' : opts.file ? 'file' : 'text',
-        success: false,
-        preview: (message || opts.image || opts.file || '').slice(0, 80),
-        error: 'blocked by blacklist',
+        timestamp: Date.now(), action: 'send', targetWxid: wxid, targetName: displayName,
+        kind, success: false, preview, error: 'blocked by blacklist',
       })
       process.exit(1)
     }
@@ -983,27 +1109,44 @@ program
       process.exit(1)
     }
 
-    // 二次确认 — 同时显示 wxid + displayName + 消息预览
-    const kind: 'text' | 'image' | 'file' = opts.image ? 'image' : opts.file ? 'file' : 'text'
-    const preview = kind === 'text'
-      ? message.slice(0, 80) + (message.length > 80 ? '...' : '')
-      : `[${kind}] ${opts.image || opts.file}`
+    // 速率限制 (dry-run 不计入, 不检查也行, 但保持一致检查)
+    const windowMs = parseInt(opts.rateWindow)
+    const max = parseInt(opts.rateMax)
+    const rate = whitelistService.checkRateLimit(windowMs, max)
+    if (!rate.allowed) {
+      console.log(chalk.red(`\n❌ 触发速率限制: 最近 ${rate.windowMs / 1000}s 内已发送 ${rate.count} 条 (上限 ${rate.max})`))
+      console.log(chalk.gray('  请稍后再试, 或调整 --rate-window / --rate-max\n'))
+      whitelistService.auditSend({
+        timestamp: Date.now(), action: 'send', targetWxid: wxid, targetName: displayName,
+        kind, success: false, preview, error: `rate limited (${rate.count}/${rate.max})`,
+      })
+      process.exit(1)
+    }
 
+    // 二次确认 — 同时显示 wxid + displayName + 消息预览
     console.log(chalk.cyan('\n⚠️  即将发送:'))
     console.log(chalk.white(`  目标: ${displayName}`))
     console.log(chalk.gray(`  wxid: ${wxid}`))
     console.log(chalk.gray(`  类型: ${kind}`))
-    console.log(chalk.gray(`  预览: ${preview}\n`))
+    console.log(chalk.gray(`  预览: ${preview}`))
+    console.log(chalk.gray(`  速率: ${rate.count}/${rate.max} (窗口 ${rate.windowMs / 1000}s)\n`))
 
-    const { confirm } = await inquirer.prompt([{
-      type: 'confirm',
-      name: 'confirm',
-      message: `确认发送给 ${chalk.cyan(displayName)} (${wxid})？`,
-      default: false,
-    }])
-    if (!confirm) {
-      console.log(chalk.gray('已取消'))
+    if (opts.dryRun) {
+      console.log(chalk.yellow('⚠️  --dry-run 模式, 不实际发送'))
       return
+    }
+
+    if (!opts.yes) {
+      const { confirm } = await inquirer.prompt([{
+        type: 'confirm',
+        name: 'confirm',
+        message: `确认发送给 ${chalk.cyan(displayName)} (${wxid})？`,
+        default: false,
+      }])
+      if (!confirm) {
+        console.log(chalk.gray('已取消'))
+        return
+      }
     }
 
     // Login check

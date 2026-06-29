@@ -31,6 +31,10 @@ interface CliConfig {
   whitelist: string[]
   // 黑名单 (绝对禁止收发)
   blacklist: string[]
+  /** 白名单带昵称: {wxid, displayName, addedAt}[] */
+  whitelistEntries: ListEntry[]
+  /** 黑名单带昵称: {wxid, displayName, addedAt, reason?}[] */
+  blacklistEntries: ListEntry[]
   // Vault & Pipeline
   vaultRepo: string
   aiEngine: string
@@ -38,6 +42,13 @@ interface CliConfig {
   wereadApiKey: string
   // AI 引擎 API Key
   deepseekApiKey: string
+}
+
+export interface ListEntry {
+  wxid: string
+  displayName?: string
+  addedAt?: number
+  reason?: string
 }
 
 /** 需要加密存储的字段 */
@@ -50,7 +61,7 @@ const CONFIG_DIR = join(homedir(), '.weflow-cli')
 const CONFIG_FILE = join(CONFIG_DIR, 'config.json')
 
 export class ConfigService {
-  private config: CliConfig = { dbPath: '', wxid: '', decryptKey: '', decryptKey3x: '', dataVersion: '', dbPath3x: '', ntDbPath: '', ntKey: '', ntSalt: '', contactDbPath: '', contactKey: '', contactSalt: '', wechatOcToken: '', wechatOcAccountId: '', wechatOcBaseUrl: '', wechatOcSyncBuf: '', wechatOcContextTokens: '', whitelist: [], blacklist: [], vaultRepo: '', aiEngine: 'deepseek', wereadApiKey: '', deepseekApiKey: '' }
+  private config: CliConfig = { dbPath: '', wxid: '', decryptKey: '', decryptKey3x: '', dataVersion: '', dbPath3x: '', ntDbPath: '', ntKey: '', ntSalt: '', contactDbPath: '', contactKey: '', contactSalt: '', wechatOcToken: '', wechatOcAccountId: '', wechatOcBaseUrl: '', wechatOcSyncBuf: '', wechatOcContextTokens: '', whitelist: [], blacklist: [], whitelistEntries: [], blacklistEntries: [], vaultRepo: '', aiEngine: 'deepseek', wereadApiKey: '', deepseekApiKey: '' }
 
   constructor() {
     this.load()
@@ -60,6 +71,15 @@ export class ConfigService {
     try {
       if (existsSync(CONFIG_FILE)) {
         const data = JSON.parse(readFileSync(CONFIG_FILE, 'utf8'))
+        const whitelist = Array.isArray(data.whitelist) ? data.whitelist : []
+        const blacklist = Array.isArray(data.blacklist) ? data.blacklist : []
+        // entries 优先; 缺失时从旧 string[] 迁移
+        const whitelistEntries: ListEntry[] = Array.isArray(data.whitelistEntries)
+          ? data.whitelistEntries
+          : whitelist.map((wxid: string) => ({ wxid }))
+        const blacklistEntries: ListEntry[] = Array.isArray(data.blacklistEntries)
+          ? data.blacklistEntries
+          : blacklist.map((wxid: string) => ({ wxid }))
         this.config = {
           dbPath: data.dbPath || '',
           wxid: data.wxid || '',
@@ -78,8 +98,10 @@ export class ConfigService {
           wechatOcBaseUrl: data.wechatOcBaseUrl || '',
           wechatOcSyncBuf: data.wechatOcSyncBuf || '',
           wechatOcContextTokens: data.wechatOcContextTokens || '',
-          whitelist: Array.isArray(data.whitelist) ? data.whitelist : [],
-          blacklist: Array.isArray(data.blacklist) ? data.blacklist : [],
+          whitelist,
+          blacklist,
+          whitelistEntries,
+          blacklistEntries,
           vaultRepo: data.vaultRepo || '',
           aiEngine: data.aiEngine || 'deepseek',
           wereadApiKey: data.wereadApiKey || '',
@@ -151,12 +173,33 @@ export class ConfigService {
     this.save()
   }
 
+  getWhitelistEntries(): ListEntry[] {
+    return this.config.whitelistEntries || []
+  }
+
+  setWhitelistEntries(entries: ListEntry[]): void {
+    this.config.whitelistEntries = entries
+    // 同步 string[] 视图, 供旧代码使用
+    this.config.whitelist = entries.map(e => e.wxid)
+    this.save()
+  }
+
   getBlacklist(): string[] {
     return this.config.blacklist || []
   }
 
   setBlacklist(list: string[]): void {
     this.config.blacklist = list
+    this.save()
+  }
+
+  getBlacklistEntries(): ListEntry[] {
+    return this.config.blacklistEntries || []
+  }
+
+  setBlacklistEntries(entries: ListEntry[]): void {
+    this.config.blacklistEntries = entries
+    this.config.blacklist = entries.map(e => e.wxid)
     this.save()
   }
 
@@ -198,7 +241,7 @@ export class ConfigService {
   }
 
   clear(): void {
-    this.config = { dbPath: '', wxid: '', decryptKey: '', decryptKey3x: '', dataVersion: '', dbPath3x: '', ntDbPath: '', ntKey: '', ntSalt: '', contactDbPath: '', contactKey: '', contactSalt: '', wechatOcToken: '', wechatOcAccountId: '', wechatOcBaseUrl: '', wechatOcSyncBuf: '', wechatOcContextTokens: '', whitelist: [], blacklist: [], vaultRepo: '', aiEngine: 'deepseek', wereadApiKey: '', deepseekApiKey: '' }
+    this.config = { dbPath: '', wxid: '', decryptKey: '', decryptKey3x: '', dataVersion: '', dbPath3x: '', ntDbPath: '', ntKey: '', ntSalt: '', contactDbPath: '', contactKey: '', contactSalt: '', wechatOcToken: '', wechatOcAccountId: '', wechatOcBaseUrl: '', wechatOcSyncBuf: '', wechatOcContextTokens: '', whitelist: [], blacklist: [], whitelistEntries: [], blacklistEntries: [], vaultRepo: '', aiEngine: 'deepseek', wereadApiKey: '', deepseekApiKey: '' }
     this.save()
   }
 
