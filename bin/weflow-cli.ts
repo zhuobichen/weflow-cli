@@ -610,6 +610,8 @@ program
     configService.set('wechatOcToken', '')
     configService.set('wechatOcAccountId', '')
     configService.set('wechatOcSyncBuf', '')
+    // 登出后历史 context_token 失效, 一并清空
+    configService.setContextTokens({})
     console.log(chalk.green('✓ 已退出登录'))
   })
 
@@ -656,6 +658,13 @@ whitelistCmd
     // 检查是否已在名单中
     if (whitelistService.isAllowed(wxid)) {
       console.log(chalk.yellow(`"${displayName}" (${wxid}) 已在白名单中`))
+      return
+    }
+
+    // 黑名单中的目标禁止加入白名单
+    if (whitelistService.isBlocked(wxid)) {
+      console.log(chalk.red(`\n❌ "${displayName}" (${wxid}) 在黑名单中, 禁止加入白名单`))
+      console.log(chalk.gray(`  先解除: weflow-cli blacklist rm ${wxid}\n`))
       return
     }
 
@@ -712,6 +721,218 @@ whitelistCmd
     }
   })
 
+// ==================== blacklist ====================
+const blacklistCmd = program
+  .command('blacklist')
+  .description('黑名单管理 (绝对禁止收发, 优先级高于白名单; 不传参数显示列表)')
+
+blacklistCmd
+  .action(() => {
+    const list = whitelistService.getBlacklist()
+    if (list.length === 0) {
+      console.log(chalk.gray('黑名单为空'))
+      console.log(chalk.gray('使用 weflow-cli blacklist add <昵称/wxid> 添加'))
+      return
+    }
+    console.log(chalk.red(`黑名单 (${list.length}):\n`))
+    for (let i = 0; i < list.length; i++) {
+      console.log(`  ${String(i + 1).padStart(2)}. ${list[i]}`)
+    }
+  })
+
+blacklistCmd
+  .command('add <target>')
+  .description('添加到黑名单 (自动从白名单移除)')
+  .action(async (target: string) => {
+    let wxid: string
+    let displayName = target
+    if (target.startsWith('wxid_') || target.includes('@chatroom') || target.includes('@openim')) {
+      wxid = target
+    } else {
+      try {
+        wxid = await resolveTalker(target)
+        const sessions = await chatService.listSessions(undefined, 50)
+        const match = sessions.find(s => s.username === wxid)
+        if (match) displayName = match.displayName || target
+      } catch (e: any) {
+        console.log(chalk.red(`✗ ${e.message}`))
+        return
+      }
+    }
+
+    if (whitelistService.isBlocked(wxid)) {
+      console.log(chalk.yellow(`"${displayName}" (${wxid}) 已在黑名单中`))
+      return
+    }
+
+    console.log(chalk.cyan(`\n⚠️  即将拉黑以下联系人:`))
+    console.log(chalk.white(`  昵称: ${displayName}`))
+    console.log(chalk.gray(`  wxid: ${wxid}`))
+    console.log(chalk.yellow(`  拉黑后, 该联系人绝对禁止收发消息 (即使误加白名单也拦截)\n`))
+
+    const { q1 } = await inquirer.prompt([{
+      type: 'confirm',
+      name: 'q1',
+      message: `确认拉黑 "${displayName}"？`,
+      default: false,
+    }])
+    if (!q1) { console.log(chalk.gray('已取消')); return }
+
+    whitelistService.blockDirect(wxid)
+    console.log(chalk.green(`\n✓ 已拉黑 "${displayName}" (${wxid})`))
+  })
+
+blacklistCmd
+  .command('rm <wxid>')
+  .description('从黑名单移除')
+  .action((wxid: string) => {
+    if (whitelistService.unblock(wxid)) {
+      console.log(chalk.green(`✓ 已从黑名单移除: ${wxid}`))
+    } else {
+      console.log(chalk.yellow(`未在黑名单中找到: ${wxid}`))
+    }
+  })
+
+blacklistCmd
+  .command('clear')
+  .description('清空黑名单')
+  .action(async () => {
+    const { confirm } = await inquirer.prompt([{
+      type: 'confirm',
+      name: 'confirm',
+      message: '确定要清空所有黑名单吗？',
+      default: false,
+    }])
+    if (confirm) {
+      whitelistService.clearBlacklist()
+      console.log(chalk.green('✓ 黑名单已清空'))
+    }
+  })
+
+// ==================== sns (朋友圈本地缓存) ====================
+const snsCmd = program
+  .command('sns')
+  .description('朋友圈本地缓存查询 (仅 4.x WCDB API 连接可用)')
+
+snsCmd
+  .command('timeline')
+  .description('查看朋友圈时间线 (本地已缓存的动态)')
+  .option('-u, --user <wxid>', '过滤指定 wxid (可多次使用)', (v: string, acc: string[]) => { acc.push(v); return acc }, [] as string[])
+  .option('-k, --keyword <kw>', '内容关键词')
+  .option('-n, --limit <number>', '最大数量', '20')
+  .option('-o, --offset <number>', '偏移量', '0')
+  .option('--start <timestamp>', '开始时间戳 (秒)')
+  .option('--end <timestamp>', '结束时间戳 (秒)')
+  .action(async (opts) => {
+    if (!configService.isConfigured()) {
+      console.log(chalk.red('\n❌ 还没配置\n  运行: weflow-cli init\n'))
+      process.exit(1)
+    }
+
+    // 先建立连接 (chatService 内部首次调用会自动 connect)
+    const conn = await chatService.connect()
+    if (!conn.success) {
+      console.log(chalk.red(`\n❌ 数据库连接失败: ${conn.error}\n`))
+      process.exit(1)
+    }
+    if (!chatService.isSnsSupported()) {
+      console.log(chalk.red('\n❌ 当前数据通道不支持朋友圈查询'))
+      console.log(chalk.gray('  朋友圈仅支持 4.x + WCDB API 连接 (NT / rawSqlite / 3.x 不可用)'))
+      console.log(chalk.gray('  提示: 在微信客户端打开朋友圈让数据落盘后再查询\n'))
+      process.exit(1)
+    }
+
+    const usernames = Array.isArray(opts.user) ? opts.user : (opts.user ? [opts.user] : undefined)
+    const result = await chatService.getSnsTimeline({
+      limit: parseInt(opts.limit),
+      offset: parseInt(opts.offset),
+      usernames,
+      keyword: opts.keyword,
+      startTime: opts.start ? parseInt(opts.start) : undefined,
+      endTime: opts.end ? parseInt(opts.end) : undefined,
+    })
+
+    if (!result.success || !result.timeline || result.timeline.length === 0) {
+      console.log(chalk.gray(`未找到朋友圈动态${result.error ? `: ${result.error}` : ''}`))
+      console.log(chalk.gray('提示: 在微信客户端打开朋友圈让数据落盘后再查询'))
+      return
+    }
+
+    console.log(chalk.cyan(`朋友圈时间线 (${result.timeline.length} 条):\n`))
+    for (const item of result.timeline) {
+      const ts = item.create_time || item.createTime || item.timestamp
+      const time = ts ? new Date(Number(ts) * 1000).toLocaleString('zh-CN') : '未知时间'
+      const author = item.username || item.user_name || item.wxid || '未知'
+      const content = (item.content || item.text || '').replace(/\n/g, ' ').slice(0, 80)
+      console.log(chalk.gray(`[${time}]`) + ` ${chalk.blue(author)}: ${content}`)
+    }
+  })
+
+snsCmd
+  .command('users')
+  .description('列出本地缓存中有朋友圈动态的 wxid')
+  .action(async () => {
+    if (!configService.isConfigured()) {
+      console.log(chalk.red('\n❌ 还没配置\n  运行: weflow-cli init\n'))
+      process.exit(1)
+    }
+    const conn = await chatService.connect()
+    if (!conn.success) {
+      console.log(chalk.red(`\n❌ 数据库连接失败: ${conn.error}\n`))
+      process.exit(1)
+    }
+    if (!chatService.isSnsSupported()) {
+      console.log(chalk.red('\n❌ 当前数据通道不支持朋友圈查询\n'))
+      process.exit(1)
+    }
+
+    const result = await chatService.getSnsUsernames()
+    if (!result.success || !result.usernames || result.usernames.length === 0) {
+      console.log(chalk.gray('本地缓存中无朋友圈动态'))
+      return
+    }
+
+    console.log(chalk.cyan(`朋友圈用户 (${result.usernames.length}):\n`))
+    for (let i = 0; i < result.usernames.length; i++) {
+      console.log(`  ${String(i + 1).padStart(3)}. ${result.usernames[i]}`)
+    }
+  })
+
+snsCmd
+  .command('stats')
+  .description('朋友圈本地缓存统计')
+  .action(async () => {
+    if (!configService.isConfigured()) {
+      console.log(chalk.red('\n❌ 还没配置\n  运行: weflow-cli init\n'))
+      process.exit(1)
+    }
+    const conn = await chatService.connect()
+    if (!conn.success) {
+      console.log(chalk.red(`\n❌ 数据库连接失败: ${conn.error}\n`))
+      process.exit(1)
+    }
+    if (!chatService.isSnsSupported()) {
+      console.log(chalk.red('\n❌ 当前数据通道不支持朋友圈查询\n'))
+      process.exit(1)
+    }
+
+    const myWxid = configService.get('wxid') || undefined
+    const result = await chatService.getSnsExportStats(myWxid)
+    if (!result.success || !result.data) {
+      console.log(chalk.gray(`获取统计失败${result.error ? `: ${result.error}` : ''}`))
+      return
+    }
+
+    const d = result.data
+    console.log(chalk.cyan('朋友圈本地缓存统计:\n'))
+    console.log(`  本地缓存动态总数: ${d.totalPosts}`)
+    console.log(`  涉及好友数:       ${d.totalFriends}`)
+    if (d.myPosts !== null) {
+      console.log(`  我的动态数:       ${d.myPosts}`)
+    }
+    console.log(chalk.gray('\n注: 仅统计本地缓存，需在微信客户端打开朋友圈让数据落盘'))
+  })
+
 // ==================== send ====================
 program
   .command('send <target> <message>')
@@ -728,6 +949,32 @@ program
       process.exit(1)
     }
 
+    // 解析 displayName 用于二次确认
+    let displayName = wxid
+    try {
+      const sessions = await chatService.listSessions(undefined, 200)
+      const match = sessions.find(s => s.username === wxid)
+      if (match?.displayName) displayName = match.displayName
+    } catch {}
+
+    // 黑名单优先拦截
+    if (whitelistService.isBlocked(wxid)) {
+      console.log(chalk.red('\n❌ 目标在黑名单中，绝对禁止发送'))
+      console.log(chalk.gray(`  wxid: ${wxid}`))
+      console.log(chalk.gray(`  解除: weflow-cli blacklist rm ${wxid}\n`))
+      whitelistService.auditSend({
+        timestamp: Date.now(),
+        action: 'send',
+        targetWxid: wxid,
+        targetName: displayName,
+        kind: opts.image ? 'image' : opts.file ? 'file' : 'text',
+        success: false,
+        preview: (message || opts.image || opts.file || '').slice(0, 80),
+        error: 'blocked by blacklist',
+      })
+      process.exit(1)
+    }
+
     // Whitelist check
     if (!whitelistService.isAllowed(wxid)) {
       console.log(chalk.red('\n❌ 目标不在白名单中，拒绝发送'))
@@ -736,11 +983,22 @@ program
       process.exit(1)
     }
 
-    // 二次确认
+    // 二次确认 — 同时显示 wxid + displayName + 消息预览
+    const kind: 'text' | 'image' | 'file' = opts.image ? 'image' : opts.file ? 'file' : 'text'
+    const preview = kind === 'text'
+      ? message.slice(0, 80) + (message.length > 80 ? '...' : '')
+      : `[${kind}] ${opts.image || opts.file}`
+
+    console.log(chalk.cyan('\n⚠️  即将发送:'))
+    console.log(chalk.white(`  目标: ${displayName}`))
+    console.log(chalk.gray(`  wxid: ${wxid}`))
+    console.log(chalk.gray(`  类型: ${kind}`))
+    console.log(chalk.gray(`  预览: ${preview}\n`))
+
     const { confirm } = await inquirer.prompt([{
       type: 'confirm',
       name: 'confirm',
-      message: `确认发送给 ${chalk.cyan(target)}？`,
+      message: `确认发送给 ${chalk.cyan(displayName)} (${wxid})？`,
       default: false,
     }])
     if (!confirm) {
@@ -759,18 +1017,43 @@ program
     const service = new WechatMessageService({ token })
 
     let success = false
-    if (opts.image) {
-      success = await service.sendImage(wxid, opts.image)
-    } else if (opts.file) {
-      success = await service.sendFile(wxid, opts.file)
-    } else {
-      success = await service.sendText(wxid, message)
+    let errorMsg: string | undefined
+    try {
+      if (opts.image) {
+        success = await service.sendImage(wxid, opts.image)
+      } else if (opts.file) {
+        success = await service.sendFile(wxid, opts.file)
+      } else {
+        success = await service.sendText(wxid, message)
+      }
+    } catch (e: any) {
+      errorMsg = e?.message || String(e)
     }
+
+    if (!success && !errorMsg) {
+      // 检查是否因缺少 context_token
+      const hasToken = !!(configService.getContextTokens()[wxid])
+      errorMsg = hasToken
+        ? '发送失败 (接口返回错误, 可能 token 过期)'
+        : '缺少 context_token — 需先收到对方一条消息 (或运行 weflow-cli listen 等待对方消息)'
+    }
+
+    // 审计日志
+    whitelistService.auditSend({
+      timestamp: Date.now(),
+      action: 'send',
+      targetWxid: wxid,
+      targetName: displayName,
+      kind,
+      success,
+      preview,
+      error: success ? undefined : errorMsg,
+    })
 
     if (success) {
       console.log(chalk.green('✓ 发送成功'))
     } else {
-      console.log(chalk.red('✗ 发送失败 — 可能需要先收到对方一条消息 (获取 context_token)'))
+      console.log(chalk.red(`✗ 发送失败 — ${errorMsg}`))
     }
   })
 
@@ -796,6 +1079,10 @@ program
       process.exit(1)
     }
     console.log(chalk.gray(`当前白名单: ${wl.join(', ')}`))
+    const bl = whitelistService.getBlacklist()
+    if (bl.length > 0) {
+      console.log(chalk.gray(`当前黑名单: ${bl.join(', ')} (绝对拦截)`))
+    }
 
     const service = new WechatMessageService({ token })
     console.log(chalk.cyan('\n开始监听消息... (Ctrl+C 退出)\n'))

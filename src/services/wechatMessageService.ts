@@ -35,6 +35,18 @@ export class WechatMessageService {
       apiTimeoutMs: config.apiTimeoutMs,
       token: config.token,
     })
+    // 加载持久化的 context_token, 让一次性 send 命令也能复用历史 token
+    if (config.contextTokens && typeof config.contextTokens === 'object') {
+      for (const [wxid, token] of Object.entries(config.contextTokens)) {
+        if (wxid && token) this.contextTokens.set(wxid, token)
+      }
+    } else {
+      // 未显式传入时, 从 configService 读取 (覆盖常见的一次性 send 场景)
+      const persisted = configService.getContextTokens()
+      for (const [wxid, token] of Object.entries(persisted)) {
+        if (wxid && token) this.contextTokens.set(wxid, token)
+      }
+    }
   }
 
   // ====== Login ======
@@ -332,6 +344,8 @@ export class WechatMessageService {
     // Store context token for future replies
     if (msg.context_token) {
       this.contextTokens.set(fromUserId, msg.context_token)
+      // 持久化, 让后续一次性 send 命令也能复用
+      try { configService.upsertContextToken(fromUserId, msg.context_token) } catch {}
     }
 
     const components: WechatMessageComponent[] = []

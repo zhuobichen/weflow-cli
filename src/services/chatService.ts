@@ -291,6 +291,52 @@ export class ChatService {
     this.activeVersion = null
     this.useRawSqlite4x = false
   }
+
+  // ====== SNS (朋友圈本地缓存查询) ======
+  // 仅 4.x + WCDB API 路径可用; NT / rawSqlite / 3.x 无朋友圈接口
+
+  /** 当前连接是否支持朋友圈查询 */
+  isSnsSupported(): boolean {
+    return !!this.connected
+      && this.activeVersion === '4.x'
+      && !this.useRawSqlite4x
+      && !this.ntCore
+  }
+
+  async getSnsTimeline(opts: {
+    limit?: number
+    offset?: number
+    usernames?: string[]
+    keyword?: string
+    startTime?: number
+    endTime?: number
+  } = {}): Promise<{ success: boolean; timeline?: any[]; error?: string }> {
+    if (!this.isSnsSupported()) {
+      return { success: false, error: '当前数据通道不支持朋友圈查询 (需 4.x WCDB API 连接)' }
+    }
+    return wcdbCore.getSnsTimeline(
+      opts.limit ?? 20,
+      opts.offset ?? 0,
+      opts.usernames,
+      opts.keyword,
+      opts.startTime,
+      opts.endTime,
+    )
+  }
+
+  async getSnsUsernames(): Promise<{ success: boolean; usernames?: string[]; error?: string }> {
+    if (!this.isSnsSupported()) {
+      return { success: false, error: '当前数据通道不支持朋友圈查询 (需 4.x WCDB API 连接)' }
+    }
+    return wcdbCore.getSnsUsernames()
+  }
+
+  async getSnsExportStats(myWxid?: string): Promise<{ success: boolean; data?: { totalPosts: number; totalFriends: number; myPosts: number | null }; error?: string }> {
+    if (!this.isSnsSupported()) {
+      return { success: false, error: '当前数据通道不支持朋友圈查询 (需 4.x WCDB API 连接)' }
+    }
+    return wcdbCore.getSnsExportStats(myWxid)
+  }
 }
 
 export const chatService = new ChatService()
