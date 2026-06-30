@@ -42,6 +42,53 @@ python scripts/fav_server.py --date YYYY-MM-DD --port 8765  # 启动阅读器
 - `generate_html.py` 从模板复制 `article.html`，不会修改模板
 - 模板修改需要手动替换后重新生成，**绝对不要**删除 `.template/` 目录
 
+### 🐛 Pipeline 故障排查
+
+**文章多（>50 篇）时 exit code 127**
+
+根因：Claude Code 后台任务系统有超时限制，`biz_daily.py` 抓取 80+ 篇文章耗时 20 分钟，任务管理器会提前杀进程。
+
+解决方案：
+```bash
+# 用 nohup 绕过超时限制
+cd E:/CodeProject/weflow-cli
+nohup python -u scripts/biz_daily.py --date YYYY-MM-DD --api-key <key> > /tmp/biz.log 2>&1 &
+
+# 随时查看进度
+tail -5 /tmp/biz.log
+```
+
+**全部分类为"学术"**
+
+根因：`pipeline.py` 的 `--engine` 参数默认值曾为 `local`，覆盖了 `biz_daily.py`/`classify_daily.py` 自身的 `deepseek` 默认值，导致所有文章走 keyword fallback 全归学术。
+
+解决方案：
+```bash
+# 必须显式指定 --engine deepseek
+python scripts/pipeline.py --api-key <key> --engine deepseek --date YYYY-MM-DD
+```
+
+已在 `32f569b` 提交中修复（默认引擎改为 `deepseek`）。
+
+**article.html 是暗色而非暖色**
+
+根因：模板被覆盖为内置 `generate_article_viewer()` 生成的暗色版本（~50KB）。正常模板应该是 ~350KB 暖色版。
+
+解决方案：
+```bash
+# 从 git 恢复模板
+git checkout HEAD -- output/biz-daily/.template/article.html
+# 重新生成
+rm -f output/biz-daily/YYYY-MM-DD/article.html
+python scripts/generate_html.py --date YYYY-MM-DD
+```
+
+**index.html 链接不渲染（打开是原始 Markdown）**
+
+根因：卡片链接是 `href="AI/xxx.md"` 而非 `href="article.html?file=AI/xxx.md"`，浏览器直接展示 .md 源码。
+
+解决方案：在 `generate_html.py` 中确保 href 格式为 `article.html?file={quote(art['rel_path'])}`（URL 编码中文文件名）。
+
 ## MCP Server
 
 ```json

@@ -36,9 +36,9 @@ def main():
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')
     import argparse
     parser = argparse.ArgumentParser(description='端到端公众号日报流水线')
-    parser.add_argument('--api-key', help='云端 API key（--engine 为 deepseek/claude 时需要）')
-    parser.add_argument('--engine', default='local',
-                        help='AI 引擎: local(自动检测·默认) / deepseek / claude / ollama')
+    parser.add_argument('--api-key', help='DeepSeek API key（也可通过环境变量 DEEPSEEK_API_KEY 或 ~/.weflow-cli/config.json 提供）')
+    parser.add_argument('--engine', default='deepseek',
+                        help='AI 引擎: deepseek(默认) / claude / ollama / local')
     parser.add_argument('--date', help='日期 YYYY-MM-DD')
     parser.add_argument('--interest', default='AI', help='兴趣主题（默认 AI）')
     parser.add_argument('--wiki-limit', type=int, default=20, help='概念编译数量（默认 20）')

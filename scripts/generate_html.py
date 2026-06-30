@@ -249,12 +249,12 @@ body {{
     width: 50px; height: 2px; background: linear-gradient(90deg, #8b6914, #c8963e); border-radius: 2px;
 }}
 .header h1 {{
-    font-size: 26px; font-weight: 800; color: var(--text-title);
+    font-size: 30px; font-weight: 800; color: var(--text-title);
     display: inline-flex; align-items: center; gap: 10px;
 }}
 .back-link {{
     display: inline-block; margin-top: 16px;
-    font-size: 14px; color: var(--text-muted); text-decoration: none;
+    font-size: 18px; color: var(--text-muted); text-decoration: none;
     padding: 7px 18px; border-radius: 20px;
     background: var(--bg-soft); border: 1px solid #d4c5a060;
     transition: all .25s;
@@ -266,17 +266,17 @@ body {{
     background: var(--bg-card); border-radius: 14px; padding: 32px 36px;
     border: 1px solid #d4c5a0; margin-top: 8px;
 }}
-.content h1 {{ font-size: 22px; font-weight: 700; color: var(--text-title); margin: 28px 0 14px; padding-bottom: 8px; border-bottom: 1px solid #d4c5a0; }}
+.content h1 {{ font-size: 26px; font-weight: 700; color: var(--text-title); margin: 28px 0 14px; padding-bottom: 8px; border-bottom: 1px solid #d4c5a0; }}
 .content h1:first-child {{ margin-top: 0; }}
-.content h2 {{ font-size: 19px; font-weight: 700; color: #5a4a2a; margin: 24px 0 12px; }}
-.content h3 {{ font-size: 17px; font-weight: 600; color: #6b5535; margin: 20px 0 10px; }}
-.content h4 {{ font-size: 15px; font-weight: 600; color: #7a6545; margin: 16px 0 8px; }}
-.content p {{ margin: 10px 0; font-size: 15px; color: #4a4035; }}
+.content h2 {{ font-size: 23px; font-weight: 700; color: #5a4a2a; margin: 24px 0 12px; }}
+.content h3 {{ font-size: 21px; font-weight: 600; color: #6b5535; margin: 20px 0 10px; }}
+.content h4 {{ font-size: 19px; font-weight: 600; color: #7a6545; margin: 16px 0 8px; }}
+.content p {{ margin: 10px 0; font-size: 19px; color: #4a4035; }}
 .content strong {{ color: var(--text-title); font-weight: 700; }}
 .content a {{ color: var(--accent); text-decoration: none; border-bottom: 1px solid #c8963e40; transition: all .2s; }}
 .content a:hover {{ border-bottom-color: #c8963e; }}
 .content ul, .content ol {{ margin: 12px 0; padding-left: 28px; }}
-.content li {{ margin: 8px 0; font-size: 15px; color: #4a4035; }}
+.content li {{ margin: 8px 0; font-size: 19px; color: #4a4035; }}
 .content li input[type="checkbox"] {{ margin-right: 8px; accent-color: var(--accent); }}
 .content blockquote {{
     border-left: 3px solid #c8963e; padding: 10px 18px; margin: 16px 0;
@@ -284,12 +284,12 @@ body {{
 }}
 .content blockquote p {{ margin: 4px 0; color: #6b5535; }}
 .content hr {{ border: none; border-top: 1px solid #d4c5a0; margin: 28px 0; }}
-.content code {{ background: #f0e8d5; padding: 2px 7px; border-radius: 5px; font-size: 14px; color: var(--accent); }}
+.content code {{ background: #f0e8d5; padding: 2px 7px; border-radius: 5px; font-size: 18px; color: var(--accent); }}
 
 @media (max-width: 640px) {{
     .page {{ padding: 20px 14px 40px; }}
     .content {{ padding: 20px 18px; border-radius: 10px; }}
-    .header h1 {{ font-size: 22px; }}
+    .header h1 {{ font-size: 26px; }}
 }}
 </style>
 </head>
@@ -364,22 +364,22 @@ body {
     position: sticky; top: 0; background: var(--bg); z-index: 10; flex-wrap: wrap;
 }
 .btn-back {
-    color: var(--text-muted); text-decoration: none; font-size: 14px;
+    color: var(--text-muted); text-decoration: none; font-size: 18px;
     padding: 6px 14px; border: 1px solid #d4c5a0; border-radius: 8px;
     transition: all .2s; white-space: nowrap; background: var(--bg-soft);
 }
 .btn-back:hover { color: var(--text-title); border-color: #c8963e; background: var(--bg-card); }
-.article-source { color: var(--accent); font-size: 13px; font-weight: 600; margin-left: auto; background: #c8963e10; padding: 2px 10px; border-radius: 6px; }
+.article-source { color: var(--accent); font-size: 17px; font-weight: 600; margin-left: auto; background: #c8963e10; padding: 2px 10px; border-radius: 6px; }
 .article-header { margin-bottom: 32px; padding-bottom: 20px; border-bottom: 1px solid #d4c5a0; }
-.article-header h1 { font-size: 26px; font-weight: 700; line-height: 1.4; margin-bottom: 12px; color: var(--text-title); }
-.article-header .meta-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; font-size: 13px; color: #96876a; }
-.article-header .source-tag { background: #c8963e15; color: var(--accent); padding: 2px 10px; border-radius: 6px; font-size: 12px; }
+.article-header h1 { font-size: 30px; font-weight: 700; line-height: 1.4; margin-bottom: 12px; color: var(--text-title); }
+.article-header .meta-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; font-size: 17px; color: #96876a; }
+.article-header .source-tag { background: #c8963e15; color: var(--accent); padding: 2px 10px; border-radius: 6px; font-size: 16px; }
 .tags-row { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
-.tag { font-size: 11px; padding: 2px 8px; background: #f0e8d5; border-radius: 6px; color: var(--text-muted); }
-.article-body { font-size: 16px; color: #4a4035; }
-.article-body h2 { font-size: 22px; font-weight: 700; margin: 32px 0 16px; color: var(--text-title); border-bottom: 1px solid #d4c5a0; padding-bottom: 8px; }
-.article-body h3 { font-size: 18px; font-weight: 600; margin: 24px 0 12px; color: #5a4a2a; }
-.article-body h4 { font-size: 16px; font-weight: 600; margin: 20px 0 8px; color: #6b5535; }
+.tag { font-size: 15px; padding: 2px 8px; background: #f0e8d5; border-radius: 6px; color: var(--text-muted); }
+.article-body { font-size: 20px; color: #4a4035; }
+.article-body h2 { font-size: 26px; font-weight: 700; margin: 32px 0 16px; color: var(--text-title); border-bottom: 1px solid #d4c5a0; padding-bottom: 8px; }
+.article-body h3 { font-size: 22px; font-weight: 600; margin: 24px 0 12px; color: #5a4a2a; }
+.article-body h4 { font-size: 20px; font-weight: 600; margin: 20px 0 8px; color: #6b5535; }
 .article-body p { margin: 12px 0; }
 .article-body strong { color: var(--text-title); font-weight: 700; }
 .article-body a { color: var(--accent); text-decoration: none; border-bottom: 1px solid #c8963e40; }
@@ -387,37 +387,37 @@ body {
 .article-body img { max-width: 100%; height: auto; border-radius: 8px; margin: 16px 0; border: 1px solid #e0d5be; }
 .article-body blockquote { border-left: 3px solid #c8963e; padding: 8px 16px; margin: 16px 0; background: var(--bg-soft); border-radius: 0 8px 8px 0; color: #6b5535; }
 .article-body blockquote p { margin: 4px 0; }
-.article-body code { background: #f0e8d5; padding: 2px 6px; border-radius: 4px; font-size: 14px; color: var(--accent); }
-.article-body pre { background: var(--bg-soft); border: 1px solid #d4c5a0; border-radius: 10px; padding: 16px; overflow-x: auto; margin: 16px 0; font-size: 13px; line-height: 1.7; }
+.article-body code { background: #f0e8d5; padding: 2px 6px; border-radius: 4px; font-size: 18px; color: var(--accent); }
+.article-body pre { background: var(--bg-soft); border: 1px solid #d4c5a0; border-radius: 10px; padding: 16px; overflow-x: auto; margin: 16px 0; font-size: 17px; line-height: 1.7; }
 .article-body pre code { background: none; padding: 0; color: #4a4035; }
 .article-body ul, .article-body ol { margin: 12px 0; padding-left: 24px; }
 .article-body li { margin: 6px 0; color: #4a4035; }
 .article-body hr { border: none; border-top: 1px solid #d4c5a0; margin: 24px 0; }
-.article-body table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 14px; }
+.article-body table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 18px; }
 .article-body th { background: #f0e8d5; padding: 10px 14px; text-align: left; color: var(--text-title); font-weight: 600; border-bottom: 2px solid #d4c5a0; }
 .article-body td { padding: 8px 14px; border-bottom: 1px solid #e0d5be; color: #5c4a32; }
-.loading { text-align: center; padding: 80px 20px; color: #96876a; font-size: 16px; }
+.loading { text-align: center; padding: 80px 20px; color: #96876a; font-size: 20px; }
 .error-box { background: #dc5b5b10; border: 1px solid #dc5b5b30; border-radius: 12px; padding: 20px; text-align: center; color: #b04444; margin: 40px 0; }
 @media (max-width: 768px) {
     .container { padding: 16px 14px; flex-direction: column; }
-    .article-header h1 { font-size: 20px; }
-    .article-body { font-size: 15px; }
+    .article-header h1 { font-size: 24px; }
+    .article-body { font-size: 19px; }
 }
 /* ---- Highlight & Notes ---- */
 .article-body mark.hl { background: #fef08a; color: var(--text-title); padding: 1px 0; border-radius: 2px; cursor: pointer; transition: all .2s; }
 .article-body mark.hl:hover { background: #fde047; }
 .article-body mark.hl.active { background: #fbbf24; box-shadow: 0 0 0 2px #fbbf2440; }
 .selection-popup { position: absolute; z-index: 1000; background: var(--bg-card); border: 1px solid #c8963e; border-radius: 10px; padding: 6px 10px; display: none; box-shadow: 0 8px 24px #3c3a3820; }
-.selection-popup button { background: #8b6914; color: #fff; border: none; padding: 6px 14px; border-radius: 7px; cursor: pointer; font-size: 13px; font-weight: 600; white-space: nowrap; }
+.selection-popup button { background: #8b6914; color: #fff; border: none; padding: 6px 14px; border-radius: 7px; cursor: pointer; font-size: 17px; font-weight: 600; white-space: nowrap; }
 .selection-popup button:hover { background: #6b4c1e; }
 .note-modal-overlay { position: fixed; inset: 0; background: #3c3a3840; z-index: 2000; display: flex; align-items: center; justify-content: center; }
 .note-modal { background: var(--bg-card); border: 1px solid #d4c5a0; border-radius: 14px; padding: 24px; width: 90%; max-width: 480px; box-shadow: 0 16px 48px #3c3a3830; }
-.note-modal h3 { color: var(--text-title); font-size: 16px; margin-bottom: 12px; }
-.note-modal .hl-text { background: var(--bg-soft); border: 1px solid #d4c5a0; border-radius: 8px; padding: 10px 14px; color: #6b5535; font-size: 13px; margin-bottom: 14px; max-height: 100px; overflow-y: auto; line-height: 1.6; }
-.note-modal textarea { width: 100%; height: 80px; background: var(--bg-soft); border: 1px solid #d4c5a0; border-radius: 8px; color: var(--text); padding: 10px 14px; font-size: 13px; resize: vertical; font-family: inherit; outline: none; }
+.note-modal h3 { color: var(--text-title); font-size: 20px; margin-bottom: 12px; }
+.note-modal .hl-text { background: var(--bg-soft); border: 1px solid #d4c5a0; border-radius: 8px; padding: 10px 14px; color: #6b5535; font-size: 17px; margin-bottom: 14px; max-height: 100px; overflow-y: auto; line-height: 1.6; }
+.note-modal textarea { width: 100%; height: 80px; background: var(--bg-soft); border: 1px solid #d4c5a0; border-radius: 8px; color: var(--text); padding: 10px 14px; font-size: 17px; resize: vertical; font-family: inherit; outline: none; }
 .note-modal textarea:focus { border-color: #c8963e; }
 .note-modal .btn-row { display: flex; gap: 8px; justify-content: flex-end; margin-top: 14px; }
-.note-modal .btn-row button { padding: 7px 18px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; border: none; }
+.note-modal .btn-row button { padding: 7px 18px; border-radius: 8px; font-size: 17px; font-weight: 600; cursor: pointer; border: none; }
 .note-modal .btn-save { background: #8b6914; color: #fff; }
 .note-modal .btn-save:hover { background: #6b4c1e; }
 .note-modal .btn-cancel { background: #f0e8d5; color: var(--text-muted); }
@@ -425,19 +425,19 @@ body {
 .notes-sidebar { position: fixed; right: 0; top: 0; width: 340px; height: 100vh; background: var(--bg-card); border-left: 1px solid #d4c5a0; z-index: 500; overflow-y: auto; transform: translateX(100%); transition: transform .3s ease; }
 .notes-sidebar.open { transform: translateX(0); }
 .notes-sidebar-header { padding: 16px 20px; border-bottom: 1px solid #d4c5a0; display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; background: var(--bg-card); z-index: 2; }
-.notes-sidebar-header h3 { color: var(--text-title); font-size: 15px; font-weight: 700; }
-.notes-sidebar-header button { background: none; border: none; color: #96876a; font-size: 18px; cursor: pointer; }
+.notes-sidebar-header h3 { color: var(--text-title); font-size: 19px; font-weight: 700; }
+.notes-sidebar-header button { background: none; border: none; color: #96876a; font-size: 22px; cursor: pointer; }
 .notes-sidebar-header button:hover { color: var(--text-title); }
 .note-item { padding: 14px 20px; border-bottom: 1px solid #e0d5be; }
-.note-item .hl-text { color: var(--accent); font-size: 13px; line-height: 1.6; margin-bottom: 8px; border-left: 3px solid #c8963e; padding-left: 10px; }
-.note-item .hl-note { color: #4a4035; font-size: 13px; line-height: 1.6; margin-bottom: 6px; }
-.note-item .hl-meta { color: #b8a080; font-size: 11px; display: flex; align-items: center; gap: 10px; }
-.note-item .hl-meta button { background: none; border: none; color: #dc5b5b; font-size: 11px; cursor: pointer; }
+.note-item .hl-text { color: var(--accent); font-size: 17px; line-height: 1.6; margin-bottom: 8px; border-left: 3px solid #c8963e; padding-left: 10px; }
+.note-item .hl-note { color: #4a4035; font-size: 17px; line-height: 1.6; margin-bottom: 6px; }
+.note-item .hl-meta { color: #b8a080; font-size: 15px; display: flex; align-items: center; gap: 10px; }
+.note-item .hl-meta button { background: none; border: none; color: #dc5b5b; font-size: 15px; cursor: pointer; }
 .note-item .hl-meta button:hover { color: #b04444; }
-.notes-sidebar .empty { text-align: center; padding: 60px 20px; color: #b8a080; font-size: 14px; line-height: 2; }
-.btn-notes-toggle { position: fixed; right: 16px; bottom: 24px; z-index: 501; background: #8b6914; color: #fff; border: none; width: 44px; height: 44px; border-radius: 12px; font-size: 18px; cursor: pointer; box-shadow: 0 4px 16px #8b691430; transition: all .2s; display: flex; align-items: center; justify-content: center; }
+.notes-sidebar .empty { text-align: center; padding: 60px 20px; color: #b8a080; font-size: 18px; line-height: 2; }
+.btn-notes-toggle { position: fixed; right: 16px; bottom: 24px; z-index: 501; background: #8b6914; color: #fff; border: none; width: 44px; height: 44px; border-radius: 12px; font-size: 22px; cursor: pointer; box-shadow: 0 4px 16px #8b691430; transition: all .2s; display: flex; align-items: center; justify-content: center; }
 .btn-notes-toggle:hover { background: #6b4c1e; transform: scale(1.05); }
-.btn-notes-toggle .badge { position: absolute; top: -4px; right: -4px; background: #ef4444; color: #fff; font-size: 10px; width: 18px; height: 18px; border-radius: 9px; display: flex; align-items: center; justify-content: center; font-weight: 700; }
+.btn-notes-toggle .badge { position: absolute; top: -4px; right: -4px; background: #ef4444; color: #fff; font-size: 14px; width: 18px; height: 18px; border-radius: 9px; display: flex; align-items: center; justify-content: center; font-weight: 700; }
 @media (max-width: 768px) { .notes-sidebar { width: 100%; } }
 </style>
 </head>
@@ -524,7 +524,7 @@ body {
         tagsHtml +
       '</div>' +
       '<div class="article-body">' + htmlContent + '</div>' +
-      '<div style="text-align:center;padding:40px;color:#475569;font-size:12px;">\u2014 END \u2014</div>' +
+      '<div style="text-align:center;padding:40px;color:#475569;font-size: 16px;">\u2014 END \u2014</div>' +
       '<div class="notes-sidebar" id="notes-sidebar">' +
         '<div class="notes-sidebar-header"><h3>\ud83d\udcdd \u7b14\u8bb0</h3><button onclick="toggleNotes()">\u2715</button></div>' +
         '<div id="notes-list"><div class="empty">\u9009\u4e2d\u6587\u5b57\u540e\u70b9\u51fb\u201c\u6807\u8bb0\u7b14\u8bb0\u201d\u5373\u53ef\u6dfb\u52a0</div></div>' +
@@ -800,7 +800,7 @@ def generate_html(date_str: str, topics: dict, action_suggestions_exist: bool, b
                 relevance_badge = '<span class="relevance mid">中相关</span>'
 
             cards.append(f'''
-                <article class="card" data-id="{escape_html(art['rel_path'])}" data-topic="{topic}">
+                <article class="card" data-id="{escape_html(art['rel_path'])}" data-topic="{topic}" onclick="if(!event.target.closest('button,a')){{var a=this.querySelector('a[href]');if(a)a.click()}}" style="cursor:pointer">
                     <div class="card-header">
                         <div class="card-title-row">
                             <span class="unread-dot" id="dot-{escape_html(art['rel_path']).replace('/', '_').replace('.', '_')}"></span>
@@ -867,7 +867,6 @@ def generate_html(date_str: str, topics: dict, action_suggestions_exist: bool, b
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>公众号日报 — {date_str}</title>
-<link rel="stylesheet" href="index.css">
 <style>
 * {{ margin: 0; padding: 0; box-sizing: border-box; }}
 :root {{
@@ -925,20 +924,20 @@ body {{
     border-radius: 2px;
 }}
 .header h1 {{
-    font-size: 28px; font-weight: 800; letter-spacing: -.5px;
+    font-size: 32px; font-weight: 800; letter-spacing: -.5px;
     color: var(--text-title);
     background: linear-gradient(135deg, #4a3728, #6b5535);
     -webkit-background-clip: text; -webkit-text-fill-color: transparent;
     background-clip: text;
 }}
 .header .meta {{
-    margin-top: 14px; color: var(--text-muted); font-size: 14px;
+    margin-top: 14px; color: var(--text-muted); font-size: 18px;
     display: flex; align-items: center; justify-content: center; gap: 16px; flex-wrap: wrap;
 }}
 .action-link {{
     color: var(--accent); text-decoration: none; font-weight: 600;
     padding: 7px 18px; border: 1px solid #c8963e40; border-radius: 22px;
-    font-size: 13px; transition: all var(--transition); background: var(--bg-soft);
+    font-size: 17px; transition: all var(--transition); background: var(--bg-soft);
     display: inline-flex; align-items: center; gap: 5px;
     box-shadow: var(--shadow-sm);
 }}
@@ -948,7 +947,7 @@ body {{
 .search-box {{
     width: 100%; max-width: 560px; margin: 0 auto 20px; display: block;
     padding: 14px 22px; border-radius: var(--radius); border: 1px solid var(--border);
-    background: var(--bg-card); color: var(--text); font-size: 14px; outline: none;
+    background: var(--bg-card); color: var(--text); font-size: 18px; outline: none;
     transition: all var(--transition); font-family: inherit;
     box-shadow: var(--shadow-sm);
 }}
@@ -964,7 +963,7 @@ body {{
     display: flex; align-items: center; gap: 10px;
     flex-wrap: wrap; padding: 8px 16px;
     background: var(--bg-soft); border: 1px solid var(--border-soft); border-radius: var(--radius-sm);
-    font-size: 13px; color: var(--text-muted);
+    font-size: 17px; color: var(--text-muted);
     box-shadow: var(--shadow-sm);
 }}
 .stats-bar strong {{ color: var(--text); font-weight: 700; }}
@@ -973,7 +972,7 @@ body {{
 .btn-clear {{
     background: #f0e8d5; color: #5c4a32; border: 1px solid var(--border);
     padding: 5px 13px; border-radius: 8px; cursor: pointer;
-    font-size: 12px; font-weight: 500; transition: all var(--transition);
+    font-size: 16px; font-weight: 500; transition: all var(--transition);
     white-space: nowrap;
 }}
 .btn-clear:hover {{ background: #e8dcc0; border-color: var(--accent-light); color: var(--text); transform: translateY(-1px); }}
@@ -991,7 +990,7 @@ body {{
 .tab-btn {{
     background: transparent; color: var(--text-muted); border: none;
     padding: 8px 16px; border-radius: 9px; cursor: pointer;
-    font-size: 14px; font-weight: 500; transition: all var(--transition);
+    font-size: 18px; font-weight: 500; transition: all var(--transition);
     white-space: nowrap;
 }}
 .tab-btn:hover {{ color: var(--text); background: #f0e8d5; }}
@@ -1002,7 +1001,7 @@ body {{
 }}
 .tab-btn .count {{
     background: #d4c5a040; padding: 1px 7px; border-radius: 7px;
-    font-size: 11px; margin-left: 4px; font-weight: 600;
+    font-size: 15px; margin-left: 4px; font-weight: 600;
 }}
 .tab-btn.active .count {{ background: var(--accent-glow); color: var(--accent); }}
 
@@ -1011,13 +1010,13 @@ body {{
 .topic-section.active {{ display: block; animation: fadeIn .35s cubic-bezier(.4,0,.2,1); }}
 @keyframes fadeIn {{ from {{ opacity: 0; transform: translateY(8px); }} to {{ opacity: 1; transform: translateY(0); }} }}
 .topic-heading {{
-    font-size: 18px; font-weight: 700; margin-bottom: 16px; margin-top: 4px;
+    font-size: 22px; font-weight: 700; margin-bottom: 16px; margin-top: 4px;
     display: flex; align-items: center; gap: 10px; color: var(--text-title);
 }}
 .topic-heading::after {{
     content: ''; flex: 1; height: 1px; background: linear-gradient(90deg, #d4c5a0, transparent); margin-left: 4px;
 }}
-.topic-heading .count {{ font-size: 12px; color: var(--text-muted); font-weight: 400; background: #f0e8d5; padding: 2px 10px; border-radius: 10px; }}
+.topic-heading .count {{ font-size: 16px; color: var(--text-muted); font-weight: 400; background: #f0e8d5; padding: 2px 10px; border-radius: 10px; }}
 
 /* ---- Cards ---- */
 .cards-grid {{ display: flex; flex-direction: column; gap: 10px; }}
@@ -1038,7 +1037,8 @@ body {{
 .card.read {{
     opacity: 0.48; background: #f8f3ea; border-color: #d4c5a040;
 }}
-.card.read:hover {{ opacity: 0.68; border-color: #d4c5a070; transform: none; box-shadow: none; }}
+
+
 .card.read:hover::before {{ background: #b8a080; }}
 .card.faved {{ border-color: #c8963e50; background: #fffcf3; box-shadow: 0 2px 12px #c8963e0a; }}
 
@@ -1053,20 +1053,20 @@ body {{
 @keyframes pulse {{ 0%, 100% {{ box-shadow: 0 0 0 3px var(--accent-glow); }} 50% {{ box-shadow: 0 0 0 5px #c8963e10; }} }}
 .card.read .unread-dot {{ background: #c8b898; box-shadow: none; animation: none; }}
 .card-title {{
-    font-size: 16px; font-weight: 700; flex: 1; line-height: 1.5; letter-spacing: -.2px;
+    font-size: 20px; font-weight: 700; flex: 1; line-height: 1.5; letter-spacing: -.2px;
 }}
 .card-title a {{ color: var(--text-title); text-decoration: none; transition: color .2s; }}
 .card-title a:hover {{ color: var(--accent); }}
 .card.read .card-title a {{ color: var(--text-muted); }}
 
-.card-meta {{ display: flex; align-items: center; gap: 8px; margin-top: 5px; font-size: 12px; color: var(--text-muted); font-weight: 500; }}
+.card-meta {{ display: flex; align-items: center; gap: 8px; margin-top: 5px; font-size: 16px; color: var(--text-muted); font-weight: 500; }}
 .card-meta .source {{
     color: var(--accent); font-weight: 600;
     background: var(--accent-glow); padding: 1px 8px; border-radius: 4px;
 }}
 
 .relevance {{
-    font-size: 10px; padding: 2px 8px; border-radius: 10px; font-weight: 700;
+    font-size: 14px; padding: 2px 8px; border-radius: 10px; font-weight: 700;
     flex-shrink: 0; letter-spacing: .3px; text-transform: uppercase;
 }}
 .relevance.high {{ background: #dc5b5b12; color: #b04444; border: 1px solid #dc5b5b25; }}
@@ -1074,7 +1074,7 @@ body {{
 
 .card-tags {{ display: flex; gap: 5px; flex-wrap: wrap; margin: 8px 0 6px; }}
 .tag {{
-    font-size: 11px; padding: 2px 9px; background: #f0e8d5; border-radius: 5px;
+    font-size: 15px; padding: 2px 9px; background: #f0e8d5; border-radius: 5px;
     color: var(--text-muted); font-weight: 500; letter-spacing: .1px;
     transition: all .15s;
 }}
@@ -1084,7 +1084,7 @@ body {{
 }}
 
 .card-preview {{
-    font-size: 13px; color: #a0987a; line-height: 1.7; margin-bottom: 12px;
+    font-size: 17px; color: #a0987a; line-height: 1.7; margin-bottom: 12px;
     display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
 }}
 
@@ -1093,7 +1093,7 @@ body {{
 .card-actions-left {{ display: flex; gap: 6px; align-items: center; }}
 .card-actions-right {{ display: flex; gap: 6px; align-items: center; }}
 .btn-read {{
-    font-size: 12px; color: #fff; text-decoration: none;
+    font-size: 16px; color: #fff; text-decoration: none;
     padding: 7px 18px; border: none; border-radius: 8px;
     transition: all var(--transition); font-weight: 600;
     background: linear-gradient(135deg, var(--accent), #a07828);
@@ -1103,7 +1103,7 @@ body {{
 .btn-read .arrow {{ display: inline-block; transition: transform .2s; }}
 .btn-read:hover .arrow {{ transform: translateX(3px); }}
 .btn-toggle {{
-    font-size: 11px; color: var(--text-muted); background: none; border: 1px solid var(--border);
+    font-size: 15px; color: var(--text-muted); background: none; border: 1px solid var(--border);
     padding: 5px 12px; border-radius: 7px; cursor: pointer;
     transition: all var(--transition); font-weight: 500;
 }}
@@ -1115,7 +1115,7 @@ body {{
 
 /* ---- Favorite ---- */
 .btn-fav {{
-    font-size: 13px; background: none; border: 1px solid var(--border);
+    font-size: 17px; background: none; border: 1px solid var(--border);
     padding: 4px 8px; border-radius: 7px; cursor: pointer;
     transition: all var(--transition); color: var(--text-muted); line-height: 1;
 }}
@@ -1123,7 +1123,7 @@ body {{
 .btn-fav.faved {{ color: var(--accent-light); border-color: #c8963e50; background: #c8963e10; }}
 .fav-empty {{
     text-align: center; padding: 64px 20px; color: var(--text-faint);
-    font-size: 14px; line-height: 2.2;
+    font-size: 18px; line-height: 2.2;
     background: var(--bg-soft); border-radius: var(--radius); border: 1px dashed #d4c5a0;
 }}
 
@@ -1136,17 +1136,17 @@ body {{
     box-shadow: var(--shadow-sm);
 }}
 .briefing-title {{
-    font-size: 14px; font-weight: 700; color: var(--accent); margin-bottom: 8px;
+    font-size: 18px; font-weight: 700; color: var(--accent); margin-bottom: 8px;
     display: flex; align-items: center; gap: 6px;
 }}
 .briefing-text {{
-    font-size: 14px; color: #5c4a32; line-height: 1.8;
+    font-size: 18px; color: #5c4a32; line-height: 1.8;
 }}
 
 /* ---- Footer ---- */
 .footer {{
     text-align: center; padding: 36px 20px 8px; color: var(--text-faint);
-    font-size: 12px; margin-top: 32px;
+    font-size: 16px; margin-top: 32px;
 }}
 
 /* ---- Scrollbar ---- */
@@ -1159,9 +1159,9 @@ body {{
 @media (max-width: 768px) {{
     .container {{ padding: 16px 14px 32px; }}
     .header {{ padding: 28px 14px 24px; margin-bottom: 16px; }}
-    .header h1 {{ font-size: 22px; }}
+    .header h1 {{ font-size: 26px; }}
     .card {{ padding: 14px 16px; border-radius: var(--radius-sm); }}
-    .card-title {{ font-size: 15px; }}
+    .card-title {{ font-size: 19px; }}
     .tabs {{ min-width: 100%; }}
     .stats-bar {{ width: 100%; justify-content: center; }}
     .card-actions {{ flex-direction: column; align-items: stretch; gap: 8px; }}
@@ -1170,7 +1170,7 @@ body {{
 }}
 @media (max-width: 480px) {{
     .tabs {{ gap: 2px; padding: 4px; }}
-    .tab-btn {{ padding: 7px 10px; font-size: 13px; }}
+    .tab-btn {{ padding: 7px 10px; font-size: 17px; }}
     .briefing {{ padding: 14px 16px; }}
 }}
 </style>
@@ -1179,8 +1179,8 @@ body {{
 <div class="container">
 
 <div class="header">
-    <button id="theme-toggle" title="切换暗色" style="position:fixed;top:12px;right:16px;z-index:100;background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:6px 10px;cursor:pointer;font-size:16px;">🌙</button>
-    <h1>📰 公众号日报 — {date_str}</h1>
+    <button id="theme-toggle" title="切换暗色" style="position:absolute;top:0;right:0;background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:6px 10px;cursor:pointer;font-size: 20px;box-shadow:var(--shadow-sm);transition:all var(--transition);z-index:5;">🌙</button>
+    <h1>公众号日报 — {date_str}</h1>
     <div class="meta">
         <span>共 <strong>{total}</strong> 篇文章 · {', '.join(f'{TOPIC_LABELS[t][2]} {len(topics[t])}' for t in TOPIC_ORDER if t in topics)}</span>
         {action_link}
@@ -1204,7 +1204,7 @@ body {{
         </span>
         <span class="stats-group" style="margin-left:auto">
             <button class="btn-clear" onclick="exportFav()" id="btn-export-fav" title="导出收藏">⭐ 收藏</button>
-            <span id="sync-indicator" style="display:none;font-size:12px;color:#6b8f5e;font-weight:600">🟢 已同步</span>
+            <span id="sync-indicator" style="display:none;font-size: 16px;color:#6b8f5e;font-weight:600">🟢 已同步</span>
         </span>
     </div>
     <nav class="tabs">
@@ -1497,13 +1497,8 @@ function exportFav() {{
         scrollTimer = setTimeout(() => sessionStorage.setItem(KEY, String(window.scrollY)), 150);
     }}, {{passive: true}});
 
-    // 点击卡片空白处切���已读/未读
+    // 点击文章链接时立即保存
     document.addEventListener('click', (e) => {{
-        const card = e.target.closest('.card');
-        if (card && !e.target.closest('a, button')) {{
-            const id = card.getAttribute('data-id');
-            if (id) toggleRead(id);
-        }}
         const link = e.target.closest('.card-title a, .btn-read');
         if (link) sessionStorage.setItem(KEY, String(window.scrollY));
     }});
@@ -1545,7 +1540,7 @@ function initDarkMode() {{
     toggle.addEventListener('click', () => {{
         const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
         document.documentElement.setAttribute('data-theme', isDark ? '' : 'dark');
-        toggle.textContent = isDark ? '\u2600\ufe0f' : '\U0001f319';
+        toggle.textContent = isDark ? '\U0001f319' : '\u2600\ufe0f';
         localStorage.setItem('theme', isDark ? 'light' : 'dark');
     }});
     const saved = localStorage.getItem('theme');
@@ -1650,16 +1645,11 @@ def main():
         generate_action_html(date_str, action_md_path, action_html_path)
         print(f'✓ 行动建议 HTML 生成完成: {action_html_path}')
 
-    # 生成 article.html + 静态资源 — 从永久模板复制
+    # 生成 article.html — 从永久模板复制
     article_html_path = os.path.join(date_dir, 'article.html')
     template = os.path.join(SOURCE_ROOT, '.template', 'article.html')
     if os.path.exists(template):
         shutil.copy2(template, article_html_path)
-        # 同时复制 index.css 等静态资源
-        for asset in ['index.css', 'marked.min.js']:
-            src = os.path.join(SOURCE_ROOT, '.template', asset)
-            if os.path.exists(src):
-                shutil.copy2(src, os.path.join(date_dir, asset))
     else:
         generate_article_viewer(article_html_path)
 

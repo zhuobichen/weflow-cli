@@ -218,11 +218,12 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC
     }
     const tagsHtml = tags.length ? '<div class="tags-row">' + tags.map(t => '<span class="tag">' + t + '</span>').join('') + '</div>' : '';
     document.getElementById('app').innerHTML =
-      '<div class="top-bar"><button id="theme-toggle-article" title="暗色" style="background:none;border:1px solid var(--border);border-radius:6px;padding:4px 8px;cursor:pointer;font-size:14px;margin-right:auto;">🌙</button><a href="./" class="btn-back">← 返回列表</a><span class="article-source">' + (source || '') + '</span><span class="article-meta">阅读模式</span><button class="btn-fav-article" id="btn-fav-article" onclick="toggleFavArticle()" title="收藏">☆</button></div>' +
+      '<div class="top-bar"><a href="./" class="btn-back">← 返回列表</a><span class="article-source">' + (source || '') + '</span><span class="article-meta">阅读模式</span><button id="theme-toggle-article" title="暗色切换" style="background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:6px 10px;cursor:pointer;font-size:16px;box-shadow:var(--shadow-sm);transition:all var(--transition);">🌙</button><button class="btn-fav-article" id="btn-fav-article" onclick="toggleFavArticle()" title="收藏">☆</button></div>' +
       '<div class="article-header"><h1>' + title + '</h1><div class="meta-row">' + (source ? '<span class="source-tag">' + source + '</span>' : '') + '</div>' + tagsHtml + '</div>' +
       '<div class="article-body">' + htmlContent + '</div><div style="text-align:center;padding:40px;color:#b8a080;font-size:12px;">— END —</div>';
     window._highlightFile = file;
     initAI();
+    initArticleTheme();
   } catch(e) {
     document.getElementById('app').innerHTML = '<div class="error-box">❌ 加载失败: ' + e.message + '<br><br><a href="./" class="btn-back">← 返回列表</a></div>';
   }
@@ -692,20 +693,22 @@ function clearHistory() {
 </script>
 
 <script>
-(function(){
+function initArticleTheme() {
   var t = document.getElementById('theme-toggle-article');
   if (!t) return;
+  if (t._themeBound) return;
+  t._themeBound = true;
   t.addEventListener('click', function(){
     var d = document.documentElement.getAttribute('data-theme') === 'dark';
     document.documentElement.setAttribute('data-theme', d ? '' : 'dark');
-    t.textContent = d ? String.fromCodePoint(0x1F319) : String.fromCodePoint(0x2600)+String.fromCodePoint(0xFE0F);
+    t.textContent = d ? '\u{1F319}' : '\u2600\uFE0F';
     localStorage.setItem('theme', d ? 'light' : 'dark');
   });
   if (localStorage.getItem('theme') === 'dark') {
     document.documentElement.setAttribute('data-theme', 'dark');
-    t.textContent = String.fromCodePoint(0x2600)+String.fromCodePoint(0xFE0F);
+    t.textContent = '\u2600\uFE0F';
   }
-})();
+}
 </script>
 </body>
 </html>
