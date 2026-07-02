@@ -98,8 +98,12 @@ export class NtCore {
       const lines = stdout.split('\n').filter((l: string) => l.trim())
       for (let i = lines.length - 1; i >= 0; i--) {
         const trimmed = lines[i].trim()
-        if (trimmed.startsWith('{')) {
-          return JSON.parse(trimmed)
+        if (trimmed.startsWith('{"')) {
+          try {
+            return JSON.parse(trimmed)
+          } catch {
+            // Try next line
+          }
         }
       }
       return { error: 'No valid JSON output from Python script' }
@@ -133,8 +137,9 @@ export class NtCore {
       const lines = stdout.split('\n').filter((l: string) => l.trim())
       for (let i = lines.length - 1; i >= 0; i--) {
         const trimmed = lines[i].trim()
-        if (trimmed.startsWith('{')) {
-          const result = JSON.parse(trimmed)
+        if (trimmed.startsWith('{"')) {
+          let result: any
+          try { result = JSON.parse(trimmed) } catch { continue }
           if (result.error) {
             return { success: false, error: result.error }
           }
@@ -220,5 +225,56 @@ export class NtCore {
       return { success: false, error: result.error }
     }
     return { success: true, contacts: result.contacts || [] }
+  }
+
+  // ====== SNS (朋友圈) ======
+
+  /** 查询 SNS 朋友圈时间线 */
+  async getSnsTimeline(snsDbPath: string, snsKey: string, snsSalt: string, opts: {
+    limit?: number; offset?: number; usernames?: string[];
+    keyword?: string; startTime?: number; endTime?: number;
+  } = {}): Promise<{ success: boolean; timeline?: any[]; error?: string }> {
+    const args: string[] = [
+      'sns-timeline',
+      '--db', snsDbPath,
+      '--key', snsKey,
+      '--salt', snsSalt,
+      '--limit', String(opts.limit ?? 20),
+      '--offset', String(opts.offset ?? 0),
+    ]
+    if (opts.usernames?.length) args.push('--usernames', JSON.stringify(opts.usernames))
+    if (opts.keyword) args.push('--keyword', opts.keyword)
+    if (opts.startTime) args.push('--start-time', String(opts.startTime))
+    if (opts.endTime) args.push('--end-time', String(opts.endTime))
+    const result = await this.callPython(args)
+    if (result.error) return { success: false, error: result.error }
+    return { success: true, timeline: result.timeline || [] }
+  }
+
+  /** 获取朋友圈中有动态的用户列表 */
+  async getSnsUsernames(snsDbPath: string, snsKey: string, snsSalt: string): Promise<{ success: boolean; usernames?: string[]; error?: string }> {
+    const args: string[] = [
+      'sns-usernames',
+      '--db', snsDbPath,
+      '--key', snsKey,
+      '--salt', snsSalt,
+    ]
+    const result = await this.callPython(args)
+    if (result.error) return { success: false, error: result.error }
+    return { success: true, usernames: result.usernames || [] }
+  }
+
+  /** 获取朋友圈统计信息 */
+  async getSnsExportStats(snsDbPath: string, snsKey: string, snsSalt: string, myWxid?: string): Promise<{ success: boolean; data?: { totalPosts: number; totalFriends: number; myPosts: number | null }; error?: string }> {
+    const args: string[] = [
+      'sns-stats',
+      '--db', snsDbPath,
+      '--key', snsKey,
+      '--salt', snsSalt,
+    ]
+    if (myWxid) args.push('--my-wxid', myWxid)
+    const result = await this.callPython(args)
+    if (result.error) return { success: false, error: result.error }
+    return { success: true, data: result.data }
   }
 }

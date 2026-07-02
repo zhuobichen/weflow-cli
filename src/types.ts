@@ -138,4 +138,10 @@ export interface ConfigData {
   contactKey?: string
   /** NT 格式: contact.db 32位十六进制盐值 */
   contactSalt?: string
+  /** NT 格式: sns.db 路径 */
+  snsDbPath?: string
+  /** NT 格式: sns.db 64位十六进制密钥 */
+  snsKey?: string
+  /** NT 格式: sns.db 32位十六进制盐值 */
+  snsSalt?: string
 }

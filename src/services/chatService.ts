@@ -293,14 +293,21 @@ export class ChatService {
   }
 
   // ====== SNS (朋友圈本地缓存查询) ======
-  // 仅 4.x + WCDB API 路径可用; NT / rawSqlite / 3.x 无朋友圈接口
+  // 4.x 支持两条路径: WCDB API 或 NT (Python sqlcipher3)
 
   /** 当前连接是否支持朋友圈查询 */
   isSnsSupported(): boolean {
-    return !!this.connected
-      && this.activeVersion === '4.x'
-      && !this.useRawSqlite4x
-      && !this.ntCore
+    if (!this.connected || this.activeVersion !== '4.x') return false
+    // 路径 1: WCDB API (传统 4.x)
+    if (!this.useRawSqlite4x && !this.ntCore) return true
+    // 路径 2: NT + sns config 已配置
+    if (this.ntCore) {
+      const snsPath = configService.get('snsDbPath')
+      const snsKey = configService.get('snsKey')
+      const snsSalt = configService.get('snsSalt')
+      return !!(snsPath && snsKey && snsSalt)
+    }
+    return false
   }
 
   async getSnsTimeline(opts: {
@@ -312,8 +319,16 @@ export class ChatService {
     endTime?: number
   } = {}): Promise<{ success: boolean; timeline?: any[]; error?: string }> {
     if (!this.isSnsSupported()) {
-      return { success: false, error: '当前数据通道不支持朋友圈查询 (需 4.x WCDB API 连接)' }
+      return { success: false, error: '当前数据通道不支持朋友圈查询 (需 4.x WCDB 或 NT+sns 配置)' }
     }
+    // NT 路径
+    if (this.ntCore) {
+      const snsPath = configService.get('snsDbPath')
+      const snsKey = configService.get('snsKey')
+      const snsSalt = configService.get('snsSalt')
+      return this.ntCore.getSnsTimeline(snsPath, snsKey, snsSalt, opts)
+    }
+    // WCDB 路径
     return wcdbCore.getSnsTimeline(
       opts.limit ?? 20,
       opts.offset ?? 0,
@@ -326,14 +341,26 @@ export class ChatService {
 
   async getSnsUsernames(): Promise<{ success: boolean; usernames?: string[]; error?: string }> {
     if (!this.isSnsSupported()) {
-      return { success: false, error: '当前数据通道不支持朋友圈查询 (需 4.x WCDB API 连接)' }
+      return { success: false, error: '当前数据通道不支持朋友圈查询 (需 4.x WCDB 或 NT+sns 配置)' }
+    }
+    if (this.ntCore) {
+      const snsPath = configService.get('snsDbPath')
+      const snsKey = configService.get('snsKey')
+      const snsSalt = configService.get('snsSalt')
+      return this.ntCore.getSnsUsernames(snsPath, snsKey, snsSalt)
     }
     return wcdbCore.getSnsUsernames()
   }
 
   async getSnsExportStats(myWxid?: string): Promise<{ success: boolean; data?: { totalPosts: number; totalFriends: number; myPosts: number | null }; error?: string }> {
     if (!this.isSnsSupported()) {
-      return { success: false, error: '当前数据通道不支持朋友圈查询 (需 4.x WCDB API 连接)' }
+      return { success: false, error: '当前数据通道不支持朋友圈查询 (需 4.x WCDB 或 NT+sns 配置)' }
+    }
+    if (this.ntCore) {
+      const snsPath = configService.get('snsDbPath')
+      const snsKey = configService.get('snsKey')
+      const snsSalt = configService.get('snsSalt')
+      return this.ntCore.getSnsExportStats(snsPath, snsKey, snsSalt, myWxid)
     }
     return wcdbCore.getSnsExportStats(myWxid)
   }

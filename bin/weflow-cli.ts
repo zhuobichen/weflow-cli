@@ -258,14 +258,33 @@ program
               console.log(chalk.green(`  ✓ 联系人数据库: ${contactDb.name} (${(contactDb.size / 1024 / 1024).toFixed(1)}MB)`))
             }
 
+            // 检查 sns.db (朋友圈) 是否已匹配
+            const snsDb = ntResult.matched.find((db: any) => db.name === 'sns/sns.db')
+            if (snsDb) {
+              configService.set('snsDbPath', snsDb.path)
+              configService.set('snsKey', snsDb.key)
+              configService.set('snsSalt', snsDb.salt)
+              console.log(chalk.green(`  ✓ 朋友圈数据库: ${snsDb.name} (${(snsDb.size / 1024 / 1024).toFixed(1)}MB)`))
+            }
+
             // 显示所有匹配的数据库
             for (const db of ntResult.matched) {
-              const marker = db === primaryDb || db === contactDb ? chalk.green('  → ') : '     '
+              const marker = db === primaryDb || db === contactDb || db === snsDb ? chalk.green('  → ') : '     '
               console.log(chalk.gray(`${marker}${db.name} (${(db.size / 1024 / 1024).toFixed(1)}MB)`))
             }
           }
         } else {
           console.log(chalk.gray(`  NT 数据库扫描: ${ntResult.error || '未找到匹配的数据库'}`))
+          // 即使密钥未匹配，仍尝试自动发现 sns.db 路径和盐值
+          if (ntResult.databases && ntResult.databases.length > 0) {
+            const snsDb = ntResult.databases.find((db: any) => db.name === 'sns/sns.db')
+            if (snsDb) {
+              configService.set('snsDbPath', snsDb.path)
+              configService.set('snsSalt', snsDb.salt)
+              console.log(chalk.yellow(`  ⚠ 发现朋友圈数据库: ${snsDb.name} (${(snsDb.size / 1024 / 1024).toFixed(1)}MB)`))
+              console.log(chalk.gray('    密钥未匹配，请运行: weflow-cli sns capture-key'))
+            }
+          }
           console.log(chalk.gray('  提示: 可以稍后运行 weflow-cli init 重新扫描'))
         }
       } else if (detected.path.toLowerCase().includes('xwechat_files')) {
@@ -921,7 +940,7 @@ auditCmd
 // ==================== sns (朋友圈本地缓存) ====================
 const snsCmd = program
   .command('sns')
-  .description('朋友圈本地缓存查询 (仅 4.x WCDB API 连接可用)')
+  .description('朋友圈本地缓存查询 (4.x WCDB / NT 连接均支持)')
 
 snsCmd
   .command('timeline')
@@ -946,7 +965,8 @@ snsCmd
     }
     if (!chatService.isSnsSupported()) {
       console.log(chalk.red('\n❌ 当前数据通道不支持朋友圈查询'))
-      console.log(chalk.gray('  朋友圈仅支持 4.x + WCDB API 连接 (NT / rawSqlite / 3.x 不可用)'))
+      console.log(chalk.gray('  支持: 4.x + WCDB API, 或 NT 连接 + sns.db 密钥'))
+      console.log(chalk.gray('  NT 用户请先运行: weflow-cli sns capture-key'))
       console.log(chalk.gray('  提示: 在微信客户端打开朋友圈让数据落盘后再查询\n'))
       process.exit(1)
     }
@@ -971,7 +991,7 @@ snsCmd
     for (const item of result.timeline) {
       const ts = item.create_time || item.createTime || item.timestamp
       const time = ts ? new Date(Number(ts) * 1000).toLocaleString('zh-CN') : '未知时间'
-      const author = item.username || item.user_name || item.wxid || '未知'
+      const author = item.username || item.user_name || item.wxid || item.nickname || '未知'
       const content = (item.content || item.text || '').replace(/\n/g, ' ').slice(0, 80)
       console.log(chalk.gray(`[${time}]`) + ` ${chalk.blue(author)}: ${content}`)
     }
@@ -1040,6 +1060,82 @@ snsCmd
       console.log(`  我的动态数:       ${d.myPosts}`)
     }
     console.log(chalk.gray('\n注: 仅统计本地缓存，需在微信客户端打开朋友圈让数据落盘'))
+  })
+
+snsCmd
+  .command('capture-key')
+  .description('从微信进程捕获 sns.db 解密密钥 (需打开微信朋友圈触发)')
+  .action(async () => {
+    console.log(chalk.cyan('\n🔑 捕获 sns.db 解密密钥\n'))
+    console.log(chalk.yellow('准备工作:'))
+    console.log('  1. 确保微信 4.x (Weixin.exe) 已登录运行')
+    console.log('  2. 确保当前终端以管理员身份运行')
+    console.log('  3. 准备好点击微信中的"朋友圈"标签\n')
+
+    const { confirm } = await inquirer.prompt([{
+      type: 'confirm',
+      name: 'confirm',
+      message: '准备好了吗？点击确认后请立即打开微信朋友圈',
+      default: true,
+    }])
+    if (!confirm) {
+      console.log(chalk.gray('已取消'))
+      return
+    }
+
+    // Check sns.db path
+    let snsPath = configService.get('snsDbPath')
+    if (!snsPath) {
+      // Auto-detect
+      try {
+        const ntResult = await NtCore.scan()
+        if (ntResult.databases) {
+          const snsDb = ntResult.databases.find((db: any) => db.name === 'sns/sns.db')
+          if (snsDb) {
+            snsPath = snsDb.path
+            configService.set('snsDbPath', snsDb.path)
+            configService.set('snsSalt', snsDb.salt)
+            console.log(chalk.green(`✓ 自动发现 sns.db: ${snsDb.path}`))
+            console.log(chalk.gray(`  盐值: ${snsDb.salt}`))
+          }
+        }
+      } catch (e) {
+        // Ignore scan errors
+      }
+    }
+    if (!snsPath) {
+      console.log(chalk.red('\n❌ 未找到 sns.db 路径，请手动设置:'))
+      console.log(chalk.gray('  weflow-cli config set snsDbPath <path>'))
+      console.log(chalk.gray('  weflow-cli config set snsSalt <32位hex>'))
+      return
+    }
+
+    console.log(chalk.cyan('\n正在 Hook 微信进程...'))
+    console.log(chalk.yellow('⚠  请立即在微信中打开"朋友圈"标签！(30 秒内)\n'))
+
+    try {
+      const result = await keyService.captureSnsKey(30000, snsPath, (msg) => {
+        console.log(chalk.gray(`  ${msg}`))
+      })
+
+      if (result.success && result.key) {
+        configService.set('snsKey', result.key)
+        console.log(chalk.green(`\n✓ 成功捕获 sns.db 密钥!`))
+        console.log(chalk.white(`  密钥: ${result.key.slice(0, 8)}...${result.key.slice(-8)}`))
+        console.log(chalk.cyan('\n现在可以使用朋友圈功能:'))
+        console.log(chalk.gray('  weflow-cli sns timeline'))
+        console.log(chalk.gray('  weflow-cli sns users'))
+        console.log(chalk.gray('  weflow-cli sns stats'))
+      } else {
+        console.log(chalk.red(`\n❌ 捕获失败: ${result.error || '超时'}`))
+        console.log(chalk.gray('提示:'))
+        console.log(chalk.gray('  1. 确保在 30 秒内打开了朋友圈'))
+        console.log(chalk.gray('  2. 如果有多个 wxid 目录，请手动设置 snsDbPath'))
+        console.log(chalk.gray('  3. 或手动设置密钥: weflow-cli config set snsKey <64位hex>'))
+      }
+    } catch (e: any) {
+      console.log(chalk.red(`\n❌ 错误: ${e.message}`))
+    }
   })
 
 // ==================== send ====================

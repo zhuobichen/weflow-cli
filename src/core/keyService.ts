@@ -5,6 +5,7 @@ import { promisify } from 'util'
 import { createRequire } from 'module'
 import os from 'os'
 import type { DbKeyResult } from '../types.js'
+import { configService } from '../services/configService.js'
 
 const require = createRequire(import.meta.url)
 const execFileAsync = promisify(execFile)
@@ -307,6 +308,81 @@ export class KeyService {
     }
 
     return { success: false, error: '获取密钥超时，请确保微信已登录', logs }
+  }
+
+  /**
+   * 捕获 sns.db 解密密钥。通过 Hook 微信数据库打开操作，
+   * 捕获 sns.db 被访问时的密钥并测试匹配。
+   */
+  async captureSnsKey(
+    timeoutMs = 30000,
+    snsDbPath: string,
+    onStatus?: (message: string) => void
+  ): Promise<DbKeyResult> {
+    const pid = await this.findWeChatPid()
+    if (!pid) {
+      return { success: false, error: '未找到微信进程 (Weixin.exe)，请确保微信已登录' }
+    }
+
+    const ok = this.initHook(pid)
+    if (!ok) {
+      const error = this.getLastErrorMsg ? this.decodeCString(this.getLastErrorMsg()) : ''
+      if (error) return { success: false, error }
+      return { success: false, error: '初始化 Hook 失败，请以管理员身份运行' }
+    }
+
+    onStatus?.(`已 Hook 微信进程 (PID: ${pid})，等待数据库访问...`)
+
+    const keyBuffer = Buffer.alloc(128)
+    const capturedKeys = new Set<string>()
+    const start = Date.now()
+
+    try {
+      while (Date.now() - start < timeoutMs) {
+        const pollResult = this.pollKeyData(keyBuffer, keyBuffer.length)
+        if (pollResult) {
+          const key = this.decodeUtf8(keyBuffer)
+          if (key.length === 64 && !capturedKeys.has(key)) {
+            capturedKeys.add(key)
+            onStatus?.(`捕获到密钥: ${key.slice(0, 8)}...${key.slice(-8)}，测试 sns.db...`)
+
+            // Test against sns.db using Python
+            const snsSalt = configService.get('snsSalt')
+            try {
+              const scriptPath = join(process.cwd(), 'scripts', 'nt_decrypt.py')
+              const cmd = `python "${scriptPath}" sns-stats --db "${snsDbPath}" --key ${key} --salt ${snsSalt || '00000000000000000000000000000000'}`
+              const stdout = execSync(cmd, {
+                timeout: 15000, encoding: 'utf8',
+                env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
+              })
+
+              const lines = stdout.trim().split('\n')
+              const result = JSON.parse(lines[lines.length - 1] || '{}')
+              if (result.success) {
+                return { success: true, key }
+              }
+            } catch {
+              // Test fails for this key, continue polling
+            }
+          }
+        }
+
+        // Read status
+        for (let i = 0; i < 2; i++) {
+          const statusBuffer = Buffer.alloc(256)
+          const levelOut = [0]
+          if (!this.getStatusMessage(statusBuffer, statusBuffer.length, levelOut)) break
+          const msg = this.decodeUtf8(statusBuffer)
+          if (msg) onStatus?.(msg)
+        }
+
+        await new Promise(resolve => setTimeout(resolve, 200))
+      }
+    } finally {
+      try { this.cleanupHook() } catch { }
+    }
+
+    return { success: false, error: `超时 (${timeoutMs / 1000}s)，未捕获到 sns.db 的密钥。请确保在微信中打开了朋友圈` }
   }
 
   /**

@@ -819,20 +819,16 @@ def generate_html(date_str: str, topics: dict, action_suggestions_exist: bool, b
                     <div class="card-tags">{tags_html}</div>
                     <p class="card-preview">{escape_html(art['preview'])}</p>
                     <div class="card-actions">
-                        <div class="card-actions-left">
-                            <a href="{escape_html(art['rel_path'])}"
-                               class="btn-read" onclick="markRead('{escape_html(art['rel_path'])}')">
-                               📖 阅读全文 <span class="arrow">→</span>
-                            </a>
-                            <button class="btn-toggle" onclick="event.stopPropagation();toggleRead('{escape_html(art['rel_path'])}')">
-                               <span class="toggle-label"></span>
-                            </button>
-                        </div>
-                        <div class="card-actions-right">
-                            <button class="btn-fav" onclick="toggleFav('{escape_html(art['rel_path'])}')" title="收藏">
-                               ☆
-                            </button>
-                        </div>
+                        <a href="{escape_html(art['rel_path'])}"
+                           class="btn-read" onclick="markRead('{escape_html(art['rel_path'])}')">
+                           📖 阅读全文 <span class="arrow">→</span>
+                        </a>
+                        <button class="btn-toggle" onclick="event.stopPropagation();toggleRead('{escape_html(art['rel_path'])}')">
+                           <span class="toggle-label"></span>
+                        </button>
+                        <button class="btn-fav" onclick="event.stopPropagation();toggleFav('{escape_html(art['rel_path'])}')" title="收藏">
+                           <span class="fav-label"></span>
+                        </button>
                     </div>
                 </article>''')
         sections_html = '\n'.join(cards)
@@ -1089,12 +1085,10 @@ body {{
 }}
 
 /* ---- Card Actions ---- */
-.card-actions {{ display: flex; gap: 8px; align-items: center; justify-content: space-between; }}
-.card-actions-left {{ display: flex; gap: 6px; align-items: center; }}
-.card-actions-right {{ display: flex; gap: 6px; align-items: center; }}
+.card-actions {{ display: flex; gap: 10px; align-items: center; justify-content: flex-start; flex-wrap: wrap; }}
 .btn-read {{
     font-size: 16px; color: #fff; text-decoration: none;
-    padding: 7px 18px; border: none; border-radius: 8px;
+    padding: 8px 20px; border: none; border-radius: 8px;
     transition: all var(--transition); font-weight: 600;
     background: linear-gradient(135deg, var(--accent), #a07828);
     box-shadow: 0 2px 8px #8b691420;
@@ -1103,24 +1097,26 @@ body {{
 .btn-read .arrow {{ display: inline-block; transition: transform .2s; }}
 .btn-read:hover .arrow {{ transform: translateX(3px); }}
 .btn-toggle {{
-    font-size: 15px; color: var(--text-muted); background: none; border: 1px solid var(--border);
-    padding: 5px 12px; border-radius: 7px; cursor: pointer;
-    transition: all var(--transition); font-weight: 500;
+    font-size: 16px; color: var(--text-muted); background: var(--bg-card); border: 1px solid var(--border);
+    padding: 8px 20px; border-radius: 8px; cursor: pointer;
+    transition: all var(--transition); font-weight: 600; white-space: nowrap;
 }}
-.btn-toggle:hover {{ color: #5c4a32; border-color: #c8b898; background: var(--bg-soft); }}
-.card.read .btn-toggle {{ color: #6b8f5e; border-color: #6b8f5e30; }}
-.card.read .btn-toggle:hover {{ background: #6b8f5e08; border-color: #6b8f5e50; }}
-.card.read .toggle-label::before {{ content: '↩ 标记未读'; }}
+.btn-toggle:hover {{ color: #5c4a32; border-color: #c8b898; background: var(--bg-soft); transform: translateY(-1px); }}
+.card.read .btn-toggle {{ color: #6b8f5e; border-color: #6b8f5e40; }}
+.card.read .btn-toggle:hover {{ background: #6b8f5e08; border-color: #6b8f5e60; }}
+.card.read .toggle-label::before {{ content: '↩ 取消已读'; }}
 .toggle-label::before {{ content: '✓ 标记已读'; }}
 
 /* ---- Favorite ---- */
 .btn-fav {{
-    font-size: 17px; background: none; border: 1px solid var(--border);
-    padding: 4px 8px; border-radius: 7px; cursor: pointer;
-    transition: all var(--transition); color: var(--text-muted); line-height: 1;
+    font-size: 16px; background: var(--bg-card); border: 1px solid var(--border);
+    padding: 8px 20px; border-radius: 8px; cursor: pointer;
+    transition: all var(--transition); color: var(--text-muted); font-weight: 600; white-space: nowrap;
 }}
-.btn-fav:hover {{ color: var(--accent-light); border-color: #c8963e60; background: var(--accent-glow); transform: scale(1.1); }}
+.btn-fav:hover {{ color: var(--accent-light); border-color: #c8963e60; background: var(--accent-glow); transform: translateY(-1px); }}
 .btn-fav.faved {{ color: var(--accent-light); border-color: #c8963e50; background: #c8963e10; }}
+.fav-label::before {{ content: '☆ 收藏'; }}
+.btn-fav.faved .fav-label::before {{ content: '★ 已收藏'; }}
 .fav-empty {{
     text-align: center; padding: 64px 20px; color: var(--text-faint);
     font-size: 18px; line-height: 2.2;
@@ -1165,8 +1161,7 @@ body {{
     .tabs {{ min-width: 100%; }}
     .stats-bar {{ width: 100%; justify-content: center; }}
     .card-actions {{ flex-direction: column; align-items: stretch; gap: 8px; }}
-    .card-actions-left, .card-actions-right {{ justify-content: center; }}
-    .btn-read {{ text-align: center; }}
+    .btn-read, .btn-toggle, .btn-fav {{ text-align: center; }}
 }}
 @media (max-width: 480px) {{
     .tabs {{ gap: 2px; padding: 4px; }}
@@ -1385,11 +1380,9 @@ function applyFavState() {{
         const id = card.getAttribute('data-id');
         if (favs.includes(id)) {{
             btn.classList.add('faved');
-            btn.innerHTML = '★';
             card.classList.add('faved');
         }} else {{
             btn.classList.remove('faved');
-            btn.innerHTML = '☆';
             card.classList.remove('faved');
         }}
     }});

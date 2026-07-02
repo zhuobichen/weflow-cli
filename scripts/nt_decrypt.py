@@ -439,6 +439,223 @@ def get_contacts(conn, limit=200):
         return {"error": str(e)}
 
 
+# ========== SNS (朋友圈) Queries ==========
+
+def parse_sns_content(content_str):
+    """Parse SNS content XML/Protobuf text to extract title, description, media etc."""
+    result = {
+        'content': '',
+        'create_time': 0,
+        'username': '',
+        'object_id': '',
+        'media_count': 0,
+    }
+    if not content_str:
+        return result
+
+    import re
+
+    # Extract createTime
+    m = re.search(r'<createTime>(\d+)</createTime>', content_str)
+    if m:
+        result['create_time'] = int(m.group(1))
+
+    # Extract username
+    m = re.search(r'<username>([^<]+)</username>', content_str)
+    if m:
+        result['username'] = m.group(1)
+
+    # Extract id
+    m = re.search(r'<id>(\d+)</id>', content_str)
+    if m:
+        result['object_id'] = m.group(1)
+
+    # Extract contentDesc (main text)
+    m = re.search(r'<contentDesc>([^<]*)</contentDesc>', content_str)
+    if m:
+        result['content'] = m.group(1)
+
+    # Extract contentDesc CDATA
+    m = re.search(r'<contentDesc>\s*<!\[CDATA\[(.*?)\]\]>\s*</contentDesc>', content_str, re.DOTALL)
+    if m:
+        result['content'] = m.group(1).strip()
+
+    # Extract title if present
+    m = re.search(r'<title>([^<]*)</title>', content_str)
+    if m:
+        title = m.group(1)
+        if title and not result['content']:
+            result['content'] = title
+        elif title:
+            result['content'] = title + '\n' + result['content']
+
+    # Count media (ContentObject tags)
+    result['media_count'] = len(re.findall(r'<ContentObject[ >]', content_str))
+
+    return result
+
+
+def get_sns_timeline(cursor, limit=20, offset=0, usernames=None, keyword=None,
+                     start_time=None, end_time=None):
+    """Query SNS timeline posts from SnsTimeLine table."""
+    # Check if SnsTimeLine exists, fall back to SnsTopItem_1
+    tables = [r[0] for r in cursor.execute(
+        "SELECT name FROM sqlite_master WHERE type='table';").fetchall()]
+
+    table = 'SnsTimeLine' if 'SnsTimeLine' in tables else None
+    if not table:
+        table = 'SnsTopItem_1' if 'SnsTopItem_1' in tables else None
+    if not table:
+        return {'success': False, 'error': 'No SNS table found'}
+
+    conditions = []
+    params = []
+
+    if table == 'SnsTimeLine':
+        if usernames:
+            placeholders = ','.join(['?' for _ in usernames])
+            conditions.append(f'user_name IN ({placeholders})')
+            params.extend(usernames)
+        if keyword:
+            conditions.append('content LIKE ?')
+            params.append(f'%{keyword}%')
+        if start_time:
+            conditions.append("CAST(substr(content, instr(content, '<createTime>') + 12, 10) AS INTEGER) >= ?")
+            params.append(start_time)
+        if end_time:
+            conditions.append("CAST(substr(content, instr(content, '<createTime>') + 12, 10) AS INTEGER) <= ?")
+            params.append(end_time)
+    elif table == 'SnsTopItem_1':
+        uname_col = 'username' if 'username' in [r[1] for r in cursor.execute(f'PRAGMA table_info([{table}]);').fetchall()] else 'user_name'
+        if usernames:
+            placeholders = ','.join(['?' for _ in usernames])
+            conditions.append(f'{uname_col} IN ({placeholders})')
+            params.extend(usernames)
+        if keyword:
+            conditions.append('summary LIKE ?')
+            params.append(f'%{keyword}%')
+        if start_time:
+            conditions.append('create_time >= ?')
+            params.append(start_time)
+        if end_time:
+            conditions.append('create_time <= ?')
+            params.append(end_time)
+
+    where = ' AND '.join(conditions) if conditions else '1=1'
+    order = 'tid DESC' if table == 'SnsTimeLine' else 'create_time DESC'
+
+    try:
+        cols = [r[1] for r in cursor.execute(f'PRAGMA table_info([{table}]);').fetchall()]
+        # Only select known text columns to avoid binary decode errors
+        text_cols = [c for c in cols if c in ('tid', 'user_name', 'content', 'username', 'summary',
+                                               'create_time', 'last_read_time', 'is_read',
+                                               'from_username', 'from_nickname', 'to_username',
+                                               'to_nickname', 'comment_id', 'feed_id',
+                                               'createTime', 'userName')]
+        if not text_cols:
+            text_cols = ['*']
+        select_str = ', '.join(text_cols)
+        rows = cursor.execute(
+            f'SELECT {select_str} FROM [{table}] WHERE {where} ORDER BY {order} LIMIT ? OFFSET ?',
+            params + [limit, offset]
+        ).fetchall()
+
+        timeline = []
+
+        for row in rows:
+            item = dict(zip(text_cols, row))
+
+            if table == 'SnsTimeLine':
+                # Parse XML content
+                content_str = item.get('content', '') or ''
+                parsed = parse_sns_content(content_str)
+                create_time = parsed['create_time'] or 0
+                username = parsed['username'] or item.get('user_name', '')
+                text = parsed['content'] or ''
+                media_count = parsed['media_count']
+            else:
+                create_time = item.get('create_time', 0) or 0
+                username = item.get('username', '') or item.get('user_name', '')
+                text = item.get('summary', '') or ''
+                media_count = 0
+
+            timeline.append({
+                'create_time': create_time,
+                'username': username,
+                'content': text,
+                'media_count': media_count,
+                'table': table,
+            })
+
+        return {'success': True, 'timeline': timeline, 'table': table}
+    except Exception as e:
+        return {'success': False, 'error': str(e)}
+
+
+def get_sns_usernames(cursor):
+    """Get unique usernames from SnsTopItem_1."""
+    tables = [r[0] for r in cursor.execute(
+        "SELECT name FROM sqlite_master WHERE type='table';").fetchall()]
+
+    # Prefer SnsTopItem_1 for user listing (larger)
+    table = 'SnsTopItem_1' if 'SnsTopItem_1' in tables else ('SnsTimeLine' if 'SnsTimeLine' in tables else None)
+    if not table:
+        return {'success': False, 'error': 'No SNS table found'}
+
+    # Discover username column
+    cols = [r[1] for r in cursor.execute(f'PRAGMA table_info([{table}]);').fetchall()]
+    uname_col = 'username' if 'username' in cols else 'user_name'
+
+    try:
+        rows = cursor.execute(
+            f'SELECT [{uname_col}], COUNT(*) as cnt FROM [{table}] GROUP BY [{uname_col}] ORDER BY cnt DESC'
+        ).fetchall()
+        usernames = [r[0] for r in rows if r[0]]
+        counts = {r[0]: r[1] for r in rows if r[0]}
+        return {'success': True, 'usernames': usernames, 'counts': counts}
+    except Exception as e:
+        return {'success': False, 'error': str(e)}
+
+
+def get_sns_stats(cursor, my_wxid=None):
+    """Get SNS statistics from SnsTopItem_1."""
+    tables = [r[0] for r in cursor.execute(
+        "SELECT name FROM sqlite_master WHERE type='table';").fetchall()]
+
+    table = 'SnsTopItem_1' if 'SnsTopItem_1' in tables else ('SnsTimeLine' if 'SnsTimeLine' in tables else None)
+    if not table:
+        return {'success': False, 'error': 'No SNS table found'}
+
+    try:
+        total = cursor.execute(f'SELECT COUNT(*) FROM [{table}]').fetchone()[0]
+
+        cols = [r[1] for r in cursor.execute(f'PRAGMA table_info([{table}]);').fetchall()]
+        uname_col = 'username' if 'username' in cols else 'user_name'
+
+        total_friends = 0
+        if uname_col:
+            total_friends = cursor.execute(
+                f'SELECT COUNT(DISTINCT [{uname_col}]) FROM [{table}] WHERE [{uname_col}] IS NOT NULL'
+            ).fetchone()[0]
+
+        my_posts = None
+        if my_wxid and uname_col:
+            my_posts = cursor.execute(
+                f'SELECT COUNT(*) FROM [{table}] WHERE [{uname_col}] = ?',
+                (my_wxid,)).fetchone()[0]
+
+        return {
+            'success': True,
+            'data': {
+                'totalPosts': total,
+                'totalFriends': total_friends,
+                'myPosts': my_posts,
+            }
+        }
+    except Exception as e:
+        return {'success': False, 'error': str(e)}
+
+
 # ========== Main CLI ==========
 
 def main():
@@ -483,6 +700,31 @@ def main():
     contacts_parser.add_argument('--contact-db', help='Path to contact.db for display names')
     contacts_parser.add_argument('--contact-key', help='Contact DB key hex (64 chars)')
     contacts_parser.add_argument('--contact-salt', help='Contact DB salt hex (32 chars)')
+
+    # sns-timeline command
+    sns_tl_parser = sub.add_parser('sns-timeline', help='Get SNS/Moments timeline')
+    sns_tl_parser.add_argument('--db', required=True, help='Path to sns.db')
+    sns_tl_parser.add_argument('--key', required=True, help='Key hex (64 chars)')
+    sns_tl_parser.add_argument('--salt', required=True, help='Salt hex (32 chars)')
+    sns_tl_parser.add_argument('--limit', type=int, default=20)
+    sns_tl_parser.add_argument('--offset', type=int, default=0)
+    sns_tl_parser.add_argument('--usernames', help='JSON array of usernames to filter')
+    sns_tl_parser.add_argument('--keyword', help='Search keyword')
+    sns_tl_parser.add_argument('--start-time', type=int, help='Start timestamp')
+    sns_tl_parser.add_argument('--end-time', type=int, help='End timestamp')
+
+    # sns-usernames command
+    sns_un_parser = sub.add_parser('sns-usernames', help='List usernames with SNS posts')
+    sns_un_parser.add_argument('--db', required=True, help='Path to sns.db')
+    sns_un_parser.add_argument('--key', required=True, help='Key hex (64 chars)')
+    sns_un_parser.add_argument('--salt', required=True, help='Salt hex (32 chars)')
+
+    # sns-stats command
+    sns_stats_parser = sub.add_parser('sns-stats', help='SNS statistics')
+    sns_stats_parser.add_argument('--db', required=True, help='Path to sns.db')
+    sns_stats_parser.add_argument('--key', required=True, help='Key hex (64 chars)')
+    sns_stats_parser.add_argument('--salt', required=True, help='Salt hex (32 chars)')
+    sns_stats_parser.add_argument('--my-wxid', help='Account owner wxid for my-posts count')
 
     args = parser.parse_args()
 
@@ -552,6 +794,31 @@ def main():
                     if kw in (c.get('username', '') + c.get('displayName', '') + c.get('remark', '') + c.get('nickname', '')).lower()
                 ]
         print(json.dumps(result, ensure_ascii=True))
+        conn.close()
+
+    elif args.command == 'sns-timeline':
+        conn, _ = connect_nt_db(args.db, args.key, args.salt)
+        usernames = None
+        if args.usernames:
+            try:
+                usernames = json.loads(args.usernames)
+            except: pass
+        result = get_sns_timeline(conn.cursor(), args.limit, args.offset,
+                                   usernames, args.keyword,
+                                   args.start_time, args.end_time)
+        print(json.dumps(result, ensure_ascii=True, default=str))
+        conn.close()
+
+    elif args.command == 'sns-usernames':
+        conn, _ = connect_nt_db(args.db, args.key, args.salt)
+        result = get_sns_usernames(conn.cursor())
+        print(json.dumps(result, ensure_ascii=True, default=str))
+        conn.close()
+
+    elif args.command == 'sns-stats':
+        conn, _ = connect_nt_db(args.db, args.key, args.salt)
+        result = get_sns_stats(conn.cursor(), args.my_wxid)
+        print(json.dumps(result, ensure_ascii=True, default=str))
         conn.close()
 
     else:
