@@ -89,6 +89,19 @@ python scripts/generate_html.py --date YYYY-MM-DD
 
 解决方案：在 `generate_html.py` 中确保 href 格式为 `article.html?file={quote(art['rel_path'])}`（URL 编码中文文件名）。
 
+### 🐛 消息收发(send/listen)报 "缺少 context_token"
+
+根因：`weflow-cli send`/`listen` 基于 OC Bot 通道（ilink/bot），与个人微信消息流隔离。
+Bot 账号（如 `b6903209e131@im.bot`）和个人微信号（如 `wxid_xxx`）是不同的消息系统，
+普通微信好友发来的消息不会经过 OC 通道。
+
+解决方案：
+- 目前 OC Bot 通道仅支持 Bot-to-Bot 或 Bot-to-自定义应用通信
+- 向个人微信好友发消息需要在微信客户端直接操作
+- 如需 CLI 控制，需探索 ilink 直接消息 API（非 Bot 模式）
+
+详见 [[oc-channel-limitation]]
+
 ## MCP Server
 
 ```json
