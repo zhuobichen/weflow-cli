@@ -90,36 +90,40 @@ def _guess_topic(article: dict) -> str:
     return '新闻'
 
 
-TOPIC_PROMPT = f"""对文章分类、摘要、打标签，并评估与读者的相关度。
+TOPIC_PROMPT = f"""对文章分类、深度摘要、打标签，并评估与读者的相关度。
 
 【读者定位】环境科学研究生，研究方向是计算机与环境的交叉领域（环境模型、大气污染模拟、遥感反演、环境大数据分析、LCA等），关注AI工具如何提升科研效率。
 
-【主题】必须且只能是：{' / '.join(TOPICS)} 中的一个词，不要写其他任何文字。
+【主题】必须且只能是：{' / '.join(TOPICS)} 中的一个词。
 
 判断规则：
-- AI：涉及AI大模型/Agent/编程/开源/科技产品/工具教程 → 归AI
-- 投资：涉及股票基金/融资/经济分析/商业市场 → 归投资
-- 新闻：时事政策/社会热点/娱乐圈/招聘促销/会议通知 → 归新闻
-- 文学：散文小说/美食旅游/生活随笔/历史文化 → 归文学
-- 学术：环境/气候/地理/海洋/生态/化学/材料/生物医学等领域的科研论文、期刊文章、实验室成果、学术会议报告、高校研究进展 → 归学术
+- AI：AI大模型/Agent/编程/开源/科技产品/工具教程
+- 投资：股票基金/融资/经济分析/商业市场
+- 新闻：时事政策/社会热点/娱乐/招聘促销/会议通知
+- 文学：散文小说/美食旅游/生活随笔/历史文化
+- 学术：科研论文/期刊文章/实验室成果/学术会议/高校研究（环境/气候/地理/海洋/生态/化学/材料/生物医学等）
 
-【相关度】判断这篇文章对上述读者的实用价值：
+【相关度】对上述读者的实用价值：
 - 高：可直接用于科研（新工具/新方法/数据源/代码库）
-- 中：有启发性，需转化后使用（思路/趋势/跨领域技术）
-- 低：信息性阅读，无直接行动价值（纯新闻/娱乐/文学）
+- 中：有启发性（思路/趋势/跨领域技术）
+- 低：信息性阅读（纯新闻/娱乐/文学）
 
-**关键**：
-- 【主题】这一行只写一个词：AI 或 学术 或 新闻 或 文学 或 投资
-- 【相关度】只写：高 / 中 / 低
+**分类关键**：
+- 【主题】只写一个词（AI/学术/新闻/文学/投资），不要写其他文字
+- 【相关度】只写一个词（高/中/低）
 - 科研论文、期刊文章优先归学术；AI技术/工具/产品归AI
-- 不确定时选最可能的分类
+
+**摘要要求**：
+- 【摘要】写一段完整的深度摘要（150-300字），不要只写一两句
+- 格式：【核心观点】一句话概括中心思想。【关键细节】列出3-5个具体要点（工具/方法/数据/结论/人物/事件等），每个要点一句话
+- 摘要不需要包含分类/相关度/标签信息，那些由上面的字段处理
 
 返回格式（严格）：
 【主题】AI
 【相关度】高
 【标签】tag1, tag2, tag3
-【摘要】2-4句中文总结
-【概念】概念名|说明, 概念名|说明"""
+【摘要】【核心观点】一句话。【关键细节】1. 要点一；2. 要点二；3. 要点三
+【概念】概念名|一句话说明, 概念名|一句话说明"""
 
 # ====== Helpers ======
 
@@ -143,14 +147,15 @@ def get_db_keys(config):
 
     # biz_message_0.db (separate key from message/contact db)
     biz_db = os.path.join(msg_dir, 'biz_message_0.db')
-    # Try config first, then fallback to known key from scan
+    # Try config first, then fallback to known key
     biz_key_enc = config.get('bizKey', '')
     biz_salt = config.get('bizSalt', '')
     if biz_key_enc and biz_salt:
         biz_key = decrypt_lock(biz_key_enc)
     else:
-        print('[ERROR] 缺少 biz_message_0.db 密钥，请运行: python scripts/nt_decrypt.py scan --json')
-        sys.exit(1)
+        # Hardcoded fallback key (see git history: commit 0bf7158)
+        biz_key = '1c0451540217eb0373eb9242f61c173f8f7b3a4f29e922a9623ed59a3f90630e'
+        biz_salt = '0478298c58563d07e3fa53b45f13d593'
 
     return {
         'biz_db': biz_db, 'biz_key': biz_key, 'biz_salt': biz_salt,
@@ -552,14 +557,14 @@ def main():
             if content and len(content.strip()) > 50:
                 try:
                     prompt = TOPIC_PROMPT + f'\n\n标题：{a["title"]}\n来源：{a["account_name"]}\n\n内容：\n{content[:4000]}'
-                    response = call_ai(prompt, engine, api_key, max_tokens=600)
+                    response = call_ai(prompt, engine, api_key, max_tokens=2000)
 
                     # Parse response: 【主题】xxx 【相关度】xxx 【标签】xxx 【摘要】xxx 【概念】xxx
                     topic_match = re.search(r'【主题】\s*(.+)', response)
                     relevance_match = re.search(r'【相关度】\s*(.+)', response)
                     tags_match = re.search(r'【标签】\s*(.+)', response)
-                    # Stop summary at next 【tag or end
-                    summary_match = re.search(r'【摘要】\s*(.+?)(?=\n【|$)', response, re.DOTALL)
+                    # Capture summary - stop at next top-level 【tag (主题/相关度/标签/概念) or end
+                    summary_match = re.search(r'【摘要】\s*(.+?)(?=\n【(?:主题|相关度|标签|概念)】|$)', response, re.DOTALL)
                     concepts_match = re.search(r'【概念】\s*(.+)', response, re.DOTALL)
 
                     if topic_match:
