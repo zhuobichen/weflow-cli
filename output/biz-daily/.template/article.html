@@ -213,15 +213,29 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC
       htmlContent = htmlContent.replace(/src="(https?:\/\/[^"]*\.qpic\.cn\/[^"]+)"/g, function(match, url) {
         // 还原 marked.js 的 HTML 转义
         var realUrl = url.replace(/&amp;/g, '&');
-        return 'src="/proxy?url=' + encodeURIComponent(realUrl) + '"';
+        return 'src="/proxy?url=' + encodeURIComponent(realUrl) + '" loading="lazy"';
       });
     }
+    // 点击返回列表时取消所有未完成的图片加载，避免卡住
+    var pendingImgs = [];
+    var backHandler = function(e) {
+      pendingImgs.forEach(function(img) { try { img.src = ''; } catch(ee){} });
+      pendingImgs = [];
+    };
+    document.addEventListener('beforeunload', backHandler);
+    document.addEventListener('pagehide', backHandler);
+
     const tagsHtml = tags.length ? '<div class="tags-row">' + tags.map(t => '<span class="tag">' + t + '</span>').join('') + '</div>' : '';
     document.getElementById('app').innerHTML =
-      '<div class="top-bar"><a href="./" class="btn-back">← 返回列表</a><span class="article-source">' + (source || '') + '</span><span class="article-meta">阅读模式</span><button id="theme-toggle-article" title="暗色切换" style="background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:6px 10px;cursor:pointer;font-size:16px;box-shadow:var(--shadow-sm);transition:all var(--transition);">🌙</button><button class="btn-fav-article" id="btn-fav-article" onclick="toggleFavArticle()" title="收藏">☆</button></div>' +
+      '<div class="top-bar"><a href="./" class="btn-back" onclick="backHandler()">← 返回列表</a><span class="article-source">' + (source || '') + '</span><span class="article-meta">阅读模式</span><button id="theme-toggle-article" title="暗色切换" style="background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:6px 10px;cursor:pointer;font-size:16px;box-shadow:var(--shadow-sm);transition:all var(--transition);">🌙</button><button class="btn-fav-article" id="btn-fav-article" onclick="toggleFavArticle()" title="收藏">☆</button></div>' +
       '<div class="article-header"><h1>' + title + '</h1><div class="meta-row">' + (source ? '<span class="source-tag">' + source + '</span>' : '') + '</div>' + tagsHtml + '</div>' +
       '<div class="article-body">' + htmlContent + '</div><div style="text-align:center;padding:40px;color:#b8a080;font-size:12px;">— END —</div>';
+    // 收集所有图片，点击返回时清空src取消请求
     window._highlightFile = file;
+    setTimeout(function() {
+      var imgs = document.querySelectorAll('.article-body img');
+      pendingImgs = Array.from(imgs);
+    }, 100);
     initAI();
     initArticleTheme();
   } catch(e) {

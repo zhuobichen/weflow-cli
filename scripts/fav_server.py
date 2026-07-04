@@ -9,14 +9,20 @@
 打开 http://localhost:8765 即可使用，点击 ☆ 收藏按钮实时写入磁盘。
 """
 
-import sys, os, json
+import sys, os, json, hashlib, shutil
 from pathlib import Path
 from http.server import HTTPServer, SimpleHTTPRequestHandler
+from socketserver import ThreadingMixIn
 import urllib.request
 
 SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(SCRIPTS_DIR)
 SOURCE_ROOT = os.path.join(PROJECT_ROOT, 'output', 'biz-daily')
+
+
+class ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
+    """多线程 HTTP 服务器，避免图片代理阻塞其他请求。"""
+    daemon_threads = True  # 线程随主进程退出
 
 
 class FavHandler(SimpleHTTPRequestHandler):
@@ -86,8 +92,8 @@ class FavHandler(SimpleHTTPRequestHandler):
             pass
 
     def _handle_proxy(self):
-        """代理微信CDN图片，绕过防盗链Referer检查。"""
-        from urllib.parse import unquote
+        """代理微信CDN图片，绕过防盗链Referer检查（带本地缓存）。"""
+        from urllib.parse import unquote, urlparse
         qs = self.path.split('?', 1)[1] if '?' in self.path else ''
         url = ''
         for p in qs.split('&'):
@@ -97,18 +103,57 @@ class FavHandler(SimpleHTTPRequestHandler):
         if not url or not url.startswith(('http://', 'https://')):
             self.send_error(400, 'Missing url')
             return
+
+        # 本地缓存：URL 的 MD5 作为文件名
+        cache_dir = os.path.join(self.date_dir, '.img_cache')
+        os.makedirs(cache_dir, exist_ok=True)
+        cache_key = hashlib.md5(url.encode()).hexdigest()
+        cache_file = os.path.join(cache_dir, cache_key)
+
+        # 尝试从缓存读取
+        if os.path.isfile(cache_file):
+            try:
+                with open(cache_file, 'rb') as f:
+                    data = f.read()
+                ext = os.path.splitext(urlparse(url).path)[1].lower()
+                mime_map = {'.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+                            '.gif': 'image/gif', '.webp': 'image/webp', '.svg': 'image/svg+xml'}
+                content_type = mime_map.get(ext, 'image/jpeg')
+                self.send_response(200)
+                self.send_header('Content-Type', content_type)
+                self.send_header('Content-Length', len(data))
+                self.send_header('Cache-Control', 'public, max-age=86400')
+                self.send_header('X-Cache', 'HIT')
+                self.end_headers()
+                self.wfile.write(data)
+                return
+            except:
+                pass  # cache miss, re-fetch
+
         try:
             req = urllib.request.Request(url, headers={
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
                 'Referer': 'https://mp.weixin.qq.com/',
                 'Accept': 'image/webp,image/apng,image/*,*/*;q=0.8',
             })
-            with urllib.request.urlopen(req, timeout=15) as resp:
+            with urllib.request.urlopen(req, timeout=8) as resp:
                 data = resp.read(10 * 1024 * 1024)  # max 10MB
                 content_type = resp.headers.get('Content-Type', 'image/jpeg')
+
+            # 写入缓存
+            try:
+                tmp = cache_file + '.tmp'
+                with open(tmp, 'wb') as f:
+                    f.write(data)
+                shutil.move(tmp, cache_file)
+            except:
+                pass
+
             self.send_response(200)
             self.send_header('Content-Type', content_type)
             self.send_header('Content-Length', len(data))
+            self.send_header('Cache-Control', 'public, max-age=86400')
+            self.send_header('X-Cache', 'MISS')
             self.send_header('Cache-Control', 'public, max-age=86400')
             self.send_header('Access-Control-Allow-Origin', '*')
             self.end_headers()
@@ -374,7 +419,7 @@ def main():
     # 切换到日报目录以提供静态文件服务
     os.chdir(date_dir)
 
-    server = HTTPServer(('0.0.0.0', args.port), FavHandler)
+    server = ThreadingHTTPServer(('0.0.0.0', args.port), FavHandler)
     print(f'⭐ 收藏服务器已启动')
     print(f'   打开: http://localhost:{args.port}')
     print(f'   日期: {args.date}')
