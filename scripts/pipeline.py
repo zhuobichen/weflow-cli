@@ -25,7 +25,7 @@ def run_step(name: str, args: list[str]) -> bool:
     print(f'\n{"="*50}')
     print(f'  Step: {name}')
     print(f'{"="*50}')
-    result = subprocess.run([PYTHON] + args, cwd=os.path.dirname(SCRIPTS_DIR))
+    result = subprocess.run([PYTHON, '-u'] + args, cwd=os.path.dirname(SCRIPTS_DIR))
     if result.returncode != 0:
         print(f'\n[FAIL] {name} 失败 (exit={result.returncode})')
         return False
