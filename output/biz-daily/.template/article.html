@@ -305,8 +305,11 @@ function initAI() {
       if (sp) {
         const r = sp.getBoundingClientRect();
         notePanel.style.display = 'block';
-        notePanel.style.left = Math.min(r.left, window.innerWidth - 320) + 'px';
-        notePanel.style.top = (r.bottom + 8 + window.scrollY) + 'px';
+        let left = Math.max(8, Math.min(r.left, window.innerWidth - 308));
+        let top = r.bottom + 6;
+        if (top + 100 > window.innerHeight) { top = r.top - 100 - 6; if (top < 8) top = 8; }
+        notePanel.style.left = left + 'px';
+        notePanel.style.top = top + 'px';
       }
       document.getElementById('hl-note-text').focus();
     }
@@ -368,7 +371,7 @@ function initAI() {
 
   const notePanel = document.createElement('div');
   notePanel.style.cssText = 'position:fixed;z-index:9999;display:none;background:#fefcf8;border:2px solid #c8963e;border-radius:12px;padding:12px;box-shadow:0 4px 20px #00000020;width:300px;';
-  notePanel.innerHTML = '<textarea id="hl-note-text" placeholder="写下想法..." style="width:100%;height:60px;border:1px solid #d4c5a0;border-radius:8px;padding:8px;font-size:13px;font-family:inherit;resize:none;background:#faf6ef;color:#3c3a38;outline:none"></textarea><div style="display:flex;gap:8px;margin-top:8px;justify-content:flex-end"><button id="hl-note-save" style="background:#8b6914;color:#fff;border:none;border-radius:6px;padding:5px 14px;cursor:pointer;font-size:12px;font-weight:600">保存</button><button id="hl-note-cancel" style="background:none;border:1px solid #d4c5a0;border-radius:6px;padding:5px 14px;cursor:pointer;font-size:12px;color:#8b7355">取消</button></div>';
+  notePanel.innerHTML = '<textarea id="hl-note-text" placeholder="写下想法..." style="width:100%;height:60px;border:1px solid #d4c5a0;border-radius:8px;padding:8px;font-size:13px;font-family:inherit;resize:none;background:#faf6ef;color:#3c3a38;outline:none"></textarea><div style="display:flex;gap:8px;margin-top:8px;align-items:center"><button id="hl-note-delete" style="background:none;border:1px solid #d4c5a0;border-radius:6px;padding:5px 10px;cursor:pointer;font-size:12px;color:#b85c3a;white-space:nowrap" title="删除这条划线">🗑 删除</button><span style="flex:1"></span><button id="hl-note-save" style="background:#8b6914;color:#fff;border:none;border-radius:6px;padding:5px 14px;cursor:pointer;font-size:12px;font-weight:600">保存</button><button id="hl-note-cancel" style="background:none;border:1px solid #d4c5a0;border-radius:6px;padding:5px 14px;cursor:pointer;font-size:12px;color:#8b7355">取消</button></div>';
   notePanel.id = 'hl-note-panel';
   document.body.appendChild(notePanel);
 
@@ -381,6 +384,33 @@ function initAI() {
     notePanel.style.display = 'none';
   });
   document.getElementById('hl-note-cancel').addEventListener('click', () => { notePanel.style.display = 'none'; });
+  document.getElementById('hl-note-delete').addEventListener('click', () => {
+    if (!currentHLId) return;
+    if (!confirm('确定删除这条划线及笔记？')) return;
+    removeHighlight(currentHLId);
+    notePanel.style.display = 'none';
+    currentHLId = null;
+  });
+
+  // 删除划线：移除 DOM 高亮 + localStorage + 服务端
+  function removeHighlight(hid) {
+    // 移除 DOM 中的高亮 span
+    document.querySelectorAll('.user-highlight').forEach(el => {
+      if ((el.getAttribute('data-hl-group') || el.id.replace(/_\d+$/, '')) === hid) {
+        const parent = el.parentNode;
+        while (el.firstChild) { parent.insertBefore(el.firstChild, el); }
+        parent.removeChild(el);
+        parent.normalize();
+      }
+    });
+    // 从 highlights 数组中移除
+    highlights = highlights.filter(h => h.id !== hid);
+    saveHL();
+    updateHLStyles();
+    deleteOnServer(hid);
+    // 关闭面板（如果还开着）
+    if (currentHLId === hid) { notePanel.style.display = 'none'; currentHLId = null; }
+  }
 
   function updateHLStyles() {
     highlights.forEach(hl => {
@@ -444,9 +474,12 @@ function initAI() {
     document.getElementById('hl-note-text').value = hl?.note || '';
     const r = span.getBoundingClientRect();
     notePanel.style.display = 'block';
-    // 面板贴近划线句子下方
-    notePanel.style.left = Math.max(8, Math.min(r.left, window.innerWidth - 312)) + 'px';
-    notePanel.style.top = (r.bottom + 4) + 'px';
+    // 面板贴近划线：优先放下方，空间不足时放上方
+    let left = Math.max(8, Math.min(r.left, window.innerWidth - 308));
+    let top = r.bottom + 6;
+    if (top + 100 > window.innerHeight) { top = r.top - 100 - 6; if (top < 8) top = 8; }
+    notePanel.style.left = left + 'px';
+    notePanel.style.top = top + 'px';
     document.getElementById('hl-note-text').focus();
   }
 
@@ -673,14 +706,16 @@ function clearHistory() {
     var hl = readHL();
     hl = hl.filter(function(h){ return h.id !== hid; });
     localStorage.setItem(getHLKey(), JSON.stringify(hl));
-    // Remove visual highlight from DOM
-    var el = document.getElementById(hid);
-    if (el && el.classList.contains('user-highlight')) {
-      var parent = el.parentNode;
-      while (el.firstChild) { parent.insertBefore(el.firstChild, el); }
-      parent.removeChild(el);
-      parent.normalize();
-    }
+    // Remove ALL visual highlight fragments from DOM (handles multi-fragment spans)
+    document.querySelectorAll('.user-highlight').forEach(function(el) {
+      var gid = el.getAttribute('data-hl-group') || el.id.replace(/_\d+$/, '');
+      if (gid === hid) {
+        var parent = el.parentNode;
+        while (el.firstChild) { parent.insertBefore(el.firstChild, el); }
+        parent.removeChild(el);
+        parent.normalize();
+      }
+    });
     // Also remove from server
     var NOTES_SYNC_API2 = (location.hostname==='localhost'||location.hostname==='127.0.0.1') ? '/api/notes' : null;
     if (NOTES_SYNC_API2) {
