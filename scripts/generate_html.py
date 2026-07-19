@@ -11,7 +11,26 @@ from pathlib import Path
 from datetime import datetime
 
 SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
-SOURCE_ROOT = os.path.join(os.path.dirname(SCRIPTS_DIR), 'output', 'biz-daily')
+PROJECT_ROOT = os.path.dirname(SCRIPTS_DIR)
+SOURCE_ROOT = os.path.join(PROJECT_ROOT, 'output', 'biz-daily')
+
+
+def _inline_marked_js(html_path: str):
+    """Replace CDN marked.js with local inline copy to eliminate network dependency."""
+    marked_js_path = os.path.join(PROJECT_ROOT, 'resources', 'js', 'marked.min.js')
+    if not os.path.exists(marked_js_path):
+        print(f'  [WARN] marked.js not found: {marked_js_path}')
+        return
+    with open(marked_js_path, 'r', encoding='utf-8') as f:
+        marked_js = f.read()
+    with open(html_path, 'r', encoding='utf-8') as f:
+        html = f.read()
+    cdn_tag = '<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>'
+    inline_tag = '<script>' + marked_js + '</script>'
+    if cdn_tag in html:
+        html = html.replace(cdn_tag, inline_tag, 1)
+        with open(html_path, 'w', encoding='utf-8') as f:
+            f.write(html)
 
 TOPIC_LABELS = {
     'AI': ('AI', '#8b5cf6', '🤖'),
@@ -1645,6 +1664,7 @@ def main():
         shutil.copy2(template, article_html_path)
     else:
         generate_article_viewer(article_html_path)
+    _inline_marked_js(article_html_path)
 
     # 注入本地图片映射，优先用本地图片避免代理延迟
     image_map_path = os.path.join(date_dir, '.image_map.json')
