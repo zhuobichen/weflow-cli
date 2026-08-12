@@ -1,0 +1,4 @@
+# Optional dependencies for legacy WeChat 3.x key extraction.
+# Install the base requirements first.
+psutil
+pywxdump

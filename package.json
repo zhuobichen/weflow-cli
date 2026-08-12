@@ -14,7 +14,15 @@
     "bin/",
     "src/",
     "resources/",
+    "docs/images/",
+    "docs/*.md",
     "README.md",
+    "OPERATIONS.md",
+    "ARCHITECTURE.md",
+    "CONTRIBUTING.md",
+    "SECURITY.md",
+    "CHANGELOG.md",
+    "requirements*.txt",
     "LICENSE"
   ],
   "keywords": [

@@ -1,0 +1,9 @@
+# Required by `weflow-cli check` and the standard Windows 4.x workflow.
+sqlcipher3
+pymem
+cryptography
+html2text
+zstandard
+scrapling
+numpy
+pycryptodome

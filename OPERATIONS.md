@@ -15,7 +15,7 @@
 | 微信 | 4.x（Weixin.exe） | `tasklist \| grep -i weixin` |
 
 ```bash
-pip install sqlcipher3 pymem
+python -m pip install -r requirements.txt
 ```
 
 ---
@@ -96,8 +96,8 @@ weflow-cli config set contactSalt <contact.db的salt>
 | `WCDB 初始化失败: -1006` | 方案 1-3 都失败，WCDB 不可用 | 检查/重新扫描 NT 密钥（第四节） |
 | `未找到会话` / `未找到联系人` | 数据库连接失败 | `config show` 检查密钥状态 |
 | `获取密钥超时` | init 时微信已登录，Hook 装不上 | 用 `dbkey` 代替 init（方式 B） |
-| `需要 sqlcipher3` | Python 缺依赖 | `pip install sqlcipher3 pymem` |
-| `Weixin.exe 未运行` | pymem 未装或微信没启动 | `pip install pymem`，确认微信在运行 |
+| `需要 sqlcipher3` | Python 缺依赖 | `python -m pip install -r requirements.txt` |
+| `Weixin.exe 未运行` | pymem 未装或微信没启动 | 安装 `requirements.txt` 后确认微信在运行 |
 | `Python not found` | PATH 中没有 python | 安装 Python 并添加到 PATH |
 
 ---
@@ -115,11 +115,8 @@ which python
 # 诊断：检查依赖
 python -c "import sqlcipher3, pymem; print('OK')"
 
-# 如果 import 失败，在当前 python 安装
-pip install sqlcipher3 pymem
-
-# 更可靠的做法：确认 python 和 pip 是同一个环境
-python -m pip install sqlcipher3 pymem
+# 在当前 Python 环境安装统一依赖
+python -m pip install -r requirements.txt
 ```
 
 ---

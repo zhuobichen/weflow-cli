@@ -23,7 +23,13 @@ npm install
 ## 第二步：安装 Python 依赖
 
 ```bash
-pip install sqlcipher3 requests beautifulsoup4 markdownify cryptography
+python -m pip install -r requirements.txt
+```
+
+微信 3.x 密钥提取仅在需要时额外安装：
+
+```bash
+python -m pip install -r requirements-3x.txt
 ```
 
 > ⚠️ `sqlcipher3` 是 C 扩展，如果 `pip install` 编译失败，尝试：
@@ -180,7 +186,7 @@ for k in ['ntKey', 'ntSalt', 'contactKey', 'contactSalt', 'bizKey', 'bizSalt']:
 微信没有安装到默认路径，或者微信数据目录在其他盘。手动指定：
 
 ```bash
-npm run dev -- config set dbPath "你的微信数据目录路径"
+npm run dev -- init --path "你的微信数据目录、账号目录或 db_storage 目录"
 ```
 
 ### 2. `wx_key.dll` 加载失败 / 密钥提取失败
