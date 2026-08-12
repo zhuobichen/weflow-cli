@@ -1,4 +1,4 @@
-import { join, basename } from 'path'
+import { join, basename, dirname } from 'path'
 import { existsSync, readdirSync, statSync, readFileSync } from 'fs'
 import { homedir } from 'os'
 import { createDecipheriv } from 'crypto'
@@ -12,6 +12,26 @@ export interface WxidInfo {
 }
 
 export class DbPathService {
+  /**
+   * Validate a user-selected WeChat data location. WeChat's picker may expose
+   * either the data root, an account folder, or that account's db_storage.
+   */
+  resolveDataRoot(inputPath: string): string | null {
+    const rootPath = expandHomePath(inputPath)
+    if (!rootPath || !existsSync(rootPath)) return null
+
+    if (basename(rootPath).toLowerCase() === 'db_storage') {
+      const accountPath = dirname(rootPath)
+      return this.isAccountDir(accountPath) ? accountPath : null
+    }
+
+    if (this.isAccountDir(rootPath) || this.findAccountDirs(rootPath).length > 0) {
+      return rootPath
+    }
+
+    return null
+  }
+
   private readVarint(buf: Buffer, offset: number): { value: number, length: number } {
     let value = 0;
     let length = 0;
@@ -120,17 +140,9 @@ export class DbPathService {
       }
 
       for (const path of possiblePaths) {
-        if (!existsSync(path)) continue
-
-        // 检查是否有有效的账号目录，或本身就是账号目录
-        const accounts = this.findAccountDirs(path)
-        if (accounts.length > 0) {
-          return { success: true, path }
-        }
-
-        // 如果该目录本身就是账号目录（直接包含 db_storage 等）
-        if (this.isAccountDir(path)) {
-          return { success: true, path }
+        const dataRoot = this.resolveDataRoot(path)
+        if (dataRoot) {
+          return { success: true, path: dataRoot }
         }
       }
 

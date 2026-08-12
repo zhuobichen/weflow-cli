@@ -97,7 +97,8 @@ program
 program
   .command('init')
   .description('自动检测微信数据目录并提取解密密钥')
-  .action(async () => {
+  .option('-p, --path <path>', '微信数据目录、账号目录或 db_storage 目录')
+  .action(async (opts) => {
     console.log(chalk.cyan('🔧 WeFlow CLI 初始化\n'))
 
     // Step 0: 检测微信版本
@@ -161,7 +162,13 @@ program
     } else {
       // ====== 4.x 初始化 (原有逻辑) ======
       console.log(chalk.yellow('\n步骤 1/3: 检测微信数据目录...'))
-      const detected = await dbPathService.autoDetect()
+      const configuredPath = opts.path || configService.get('dbPath')
+      const configuredDataRoot = configuredPath
+        ? dbPathService.resolveDataRoot(configuredPath)
+        : null
+      const detected = configuredDataRoot
+        ? { success: true, path: configuredDataRoot }
+        : await dbPathService.autoDetect()
       if (!detected.success || !detected.path) {
         console.log(chalk.red('✗ 未检测到微信数据目录'))
         console.log(chalk.gray('  请确保微信 4.x 已安装并登录过'))
