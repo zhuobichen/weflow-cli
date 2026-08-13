@@ -1,13 +1,17 @@
 name: Release
 
 on:
-  push:
-    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '版本标签（如 v1.0.0）'
+        required: true
+        default: 'v0.0.0'
 
 jobs:
   npm-publish:
     runs-on: ubuntu-latest
-    if: "!contains(github.ref, '-')"
+    if: "!contains(github.event.inputs.tag, '-')"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -34,7 +38,7 @@ jobs:
 
       - name: Create portable package
         run: |
-          TAG=${GITHUB_REF#refs/tags/}
+          TAG=${{ github.event.inputs.tag }}
           PKG="weflow-cli-${TAG}-portable"
           mkdir -p "$PKG/scripts" "$PKG/mcp-server" "$PKG/output" "$PKG/docs/images"
 
