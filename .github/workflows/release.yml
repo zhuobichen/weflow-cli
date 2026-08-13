@@ -5,13 +5,13 @@ on:
     inputs:
       tag:
         description: '版本标签（如 v1.0.0）'
-        required: true
+        required: false
         default: 'v0.0.0'
 
 jobs:
   npm-publish:
     runs-on: ubuntu-latest
-    if: "!contains(github.event.inputs.tag, '-')"
+    if: "github.event_name == 'workflow_dispatch' && !contains(github.event.inputs.tag, '-')"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -25,6 +25,7 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
   release:
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     permissions:
       contents: write
