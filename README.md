@@ -1,12 +1,10 @@
 <div align="center">
 
-<img src="./logo.png" width="280" alt="WeFlow CLI logo" />
-
-# 𝗪𝗲𝗙𝗹𝗼𝘄 𝗖𝗟𝗜
+<h1><img src="./logo.png" width="96" valign="middle" alt="WeFlow CLI logo" /> 𝗪𝗲𝗙𝗹𝗼𝘄 𝗖𝗟𝗜</h1>
 
 **简体中文** · [English](./README.en.md)
 
-<img src="./docs/images/poem-calligraphy.jpg" width="560" alt="今人不见古时月，今月曾经照古人" />
+*今人不见古时月，今月曾经照古人*
 
 > 让聊天记录、公众号阅读和个人知识工作流回到你的本地电脑。
 
