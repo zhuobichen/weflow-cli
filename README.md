@@ -1,15 +1,23 @@
-<img src="./logo.png" width="280" align="right" alt="WeFlow CLI logo" />
+<div align="center">
 
-# WeFlow CLI
+<h1>𝗪𝗲𝗙𝗹𝗼𝘄 𝗖𝗟𝗜 <img src="./logo.png" width="280" valign="middle" alt="WeFlow CLI logo" /></h1>
+
+**简体中文** · [English](./README.en.md)
+
+*今人不见古时月，今月曾经照古人*
+
+> 夫天地者，万物之逆旅也；光阴者，百代之过客也。
 
 > 让聊天记录、公众号阅读和个人知识工作流回到你的本地电脑。
-
-WeFlow CLI 是面向 Windows 微信用户的本地优先工具：连接微信数据目录，查询和导出聊天记录；把公众号文章整理成可浏览的日报；并可将知识库能力接入 MCP 兼容的 AI 编辑器。
 
 [![npm](https://img.shields.io/npm/v/weflow-cli)](https://www.npmjs.com/package/weflow-cli)
 [![Node.js](https://img.shields.io/badge/Node.js-18%2B-339933)](https://nodejs.org/)
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-f4b400)](./LICENSE)
+
+</div>
+
+WeFlow CLI 是面向 Windows 微信用户的本地优先工具：连接微信数据目录，查询和导出聊天记录；把公众号文章整理成可浏览的日报；并可将知识库能力接入 MCP 兼容的 AI 编辑器。
 
 > 本项目仅限于处理你有权访问的数据。请遵守适用法律、微信规则和他人的隐私边界。
 
