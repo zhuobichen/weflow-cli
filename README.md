@@ -1,6 +1,6 @@
 <div align="center">
 
-<h1><img src="./logo.png" width="96" valign="middle" alt="WeFlow CLI logo" /> 𝗪𝗲𝗙𝗹𝗼𝘄 𝗖𝗟𝗜</h1>
+<h1>𝗪𝗲𝗙𝗹𝗼𝘄 𝗖𝗟𝗜 <img src="./logo.png" width="280" valign="middle" alt="WeFlow CLI logo" /></h1>
 
 **简体中文** · [English](./README.en.md)
 
