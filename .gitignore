@@ -17,7 +17,6 @@ tmp_*
 msg.txt
 .env
 .claude/
-.mcp.json
 *.md
 !README.md
 !ARCHITECTURE.md

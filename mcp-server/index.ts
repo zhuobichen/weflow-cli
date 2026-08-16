@@ -12,7 +12,8 @@ import {
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js'
 import { readFileSync, readdirSync, existsSync, statSync, writeFileSync, mkdirSync } from 'fs'
-import { join, resolve } from 'path'
+import { join, resolve, dirname } from 'path'
+import { fileURLToPath } from 'url'
 import { deflateSync } from 'zlib'
 
 // ---- 微信公众号文章抓取 ----
@@ -201,7 +202,7 @@ async function createWeChatDraft(token: string, articles: Array<{
   return data.media_id
 }
 
-const PKG_ROOT = resolve(join(import.meta.dirname || '.', '..'))
+const PKG_ROOT = resolve(join(dirname(fileURLToPath(import.meta.url)), '..'))
 const BIZ_DAILY = join(PKG_ROOT, 'output', 'biz-daily')
 const VAULT_WIKI = join(PKG_ROOT, 'output', 'wechat-vault', 'Wiki', 'Concepts')
 const VAULT_INDEX = join(PKG_ROOT, 'output', 'wechat-vault', 'Wiki', '00-Overview.md')
