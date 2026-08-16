@@ -17,6 +17,7 @@
     "docs/images/",
     "docs/*.md",
     "README.md",
+    "README.en.md",
     "OPERATIONS.md",
     "ARCHITECTURE.md",
     "CONTRIBUTING.md",
