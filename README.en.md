@@ -6,6 +6,8 @@
 
 *"People today have never seen the moon of ancient times, yet today's moon once shone upon the people of old." — Li Bai*
 
+> *"Heaven and earth are the inn of all things; time, a passing traveler through a hundred generations." — Li Bai*
+
 > Bring your chat history, official-account reading, and personal knowledge workflows back to your own computer.
 
 [![npm](https://img.shields.io/npm/v/weflow-cli)](https://www.npmjs.com/package/weflow-cli)

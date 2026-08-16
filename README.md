@@ -6,6 +6,8 @@
 
 *今人不见古时月，今月曾经照古人*
 
+> 夫天地者，万物之逆旅也；光阴者，百代之过客也。
+
 > 让聊天记录、公众号阅读和个人知识工作流回到你的本地电脑。
 
 [![npm](https://img.shields.io/npm/v/weflow-cli)](https://www.npmjs.com/package/weflow-cli)
