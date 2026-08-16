@@ -19,6 +19,7 @@ msg.txt
 .claude/
 *.md
 !README.md
+!README.en.md
 !ARCHITECTURE.md
 !CLAUDE.md
 !OPERATIONS.md
