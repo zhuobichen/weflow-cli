@@ -1,6 +1,6 @@
 <img src="./logo.png" width="280" align="right" alt="WeFlow CLI logo" />
 
-# WeFlow CLI
+# 𝗪𝗲𝗙𝗹𝗼𝘄 𝗖𝗟𝗜
 
 > 让聊天记录、公众号阅读和个人知识工作流回到你的本地电脑。
 
