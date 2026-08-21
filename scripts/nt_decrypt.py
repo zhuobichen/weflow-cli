@@ -36,13 +36,18 @@ class MEMORY_BASIC_INFORMATION(ctypes.Structure):
         ('Type', wintypes.DWORD),
     ]
 
-kernel32 = ctypes.windll.kernel32
-ReadProcessMemory = kernel32.ReadProcessMemory
-ReadProcessMemory.argtypes = [wintypes.HANDLE, wintypes.LPCVOID, wintypes.LPVOID, ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t)]
-ReadProcessMemory.restype = wintypes.BOOL
-VirtualQueryEx = kernel32.VirtualQueryEx
-VirtualQueryEx.argtypes = [wintypes.HANDLE, wintypes.LPCVOID, ctypes.c_void_p, ctypes.c_size_t]
-VirtualQueryEx.restype = ctypes.c_size_t
+IS_WINDOWS = os.name == 'nt'
+
+if IS_WINDOWS:
+    kernel32 = ctypes.windll.kernel32
+    ReadProcessMemory = kernel32.ReadProcessMemory
+    ReadProcessMemory.argtypes = [wintypes.HANDLE, wintypes.LPCVOID, wintypes.LPVOID, ctypes.c_size_t, ctypes.POINTER(c_size_t)]
+    ReadProcessMemory.restype = wintypes.BOOL
+    VirtualQueryEx = kernel32.VirtualQueryEx
+    VirtualQueryEx.argtypes = [wintypes.HANDLE, wintypes.LPCVOID, ctypes.c_void_p, ctypes.c_size_t]
+    VirtualQueryEx.restype = ctypes.c_size_t
+else:
+    kernel32 = None
 
 
 def find_weixin_pid():
@@ -65,6 +70,8 @@ def find_weixin_pid():
 
 def scan_memory_keys(pid):
     """Scan process memory for x'<64hex_key><32hex_salt>' patterns."""
+    if not IS_WINDOWS:
+        return []
     hProcess = kernel32.OpenProcess(PROCESS_VM_READ | PROCESS_QUERY_INFORMATION, False, pid)
     if not hProcess:
         return []
