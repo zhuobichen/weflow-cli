@@ -15,6 +15,8 @@ import { TOOL_DEFS, executeTool } from './assistantTools.js'
 import { appendLog } from './assistantDaemon.js'
 
 const MAX_TOOL_ROUNDS = 6
+/** 每日 LLM 处理上限 (护栏: 防 bug 死循环/异常流量烧钱; 0 = 不限制) */
+const DAILY_LIMIT = 100
 
 const BASE_PROMPT = `你是"第二大脑", 运行在用户自己的电脑上, 通过微信与用户对话。
 你可以调用工具查询用户本地微信数据(会话/聊天记录/收藏), 以及读写关于用户的长期记忆。
@@ -37,6 +39,11 @@ export class AssistantService {
   private svc: WechatMessageService | null = null
   private memory = new AssistantMemory()
   private running = false
+  /** 消息串行队列: 保证 handleMessage 不并发交错 (记忆窗口一致性) */
+  private queue: Promise<void> = Promise.resolve()
+  /** 每日用量计数 (内存态, 重启重置 — 配额护栏防烧钱, 无需持久精确) */
+  private dailyCount = 0
+  private dailyDate = new Date().toDateString()
 
   private engineConfig(): { url: string; model: string; key: string | null; local: boolean } {
     const engine = String(configService.get('aiEngine') || 'deepseek')
@@ -54,10 +61,23 @@ export class AssistantService {
     return { url: 'https://api.deepseek.com/v1', model: 'deepseek-chat', key: configService.get('deepseekApiKey'), local: false }
   }
 
+  /** 访问控制: assistantWhitelist 空 = 放行所有人; 非空 = 仅名单内 @im.wechat ID */
+  private isAllowed(userId: string): boolean {
+    const list = String(configService.get('assistantWhitelist') || '')
+      .split(/[,;\s]+/).map(s => s.trim()).filter(Boolean)
+    return list.length === 0 || list.includes(userId)
+  }
+
+  private dailyQuotaLeft(): number {
+    const today = new Date().toDateString()
+    if (today !== this.dailyDate) { this.dailyDate = today; this.dailyCount = 0 }
+    return DAILY_LIMIT - this.dailyCount
+  }
+
   /** 底层 LLM 调用 (含出境审计) */
   private async callLLM(messages: ApiMessage[], tools?: any[], maxTokens = 800): Promise<any> {
-    const { url, model, key } = this.engineConfig()
-    if (!key && !this.engineConfig().local) {
+    const { url, model, key, local } = this.engineConfig()
+    if (!key && !local) {
       throw new Error('未配置 LLM (config set deepseekApiKey 或切换 ollama)')
     }
     const body: Record<string, unknown> = { model, messages, max_tokens: maxTokens, temperature: 0.4 }
@@ -73,7 +93,7 @@ export class AssistantService {
       signal: AbortSignal.timeout(120_000),
     })
     privacyGate.audit('CLOUD_CALL', JSON.stringify(body).length,
-      this.engineConfig().local ? 'local' : `${url.split('//')[1].split('/')[0]}`)
+      local ? 'local' : `${url.split('//')[1].split('/')[0]}`)
     if (!res.ok) {
       const t = await res.text().catch(() => '')
       throw new Error(`LLM ${res.status}: ${t.slice(0, 120)}`)
@@ -123,6 +143,7 @@ export class AssistantService {
       lines.push(`长期事实: ${facts.length} 条`)
       if (facts.length) lines.push(facts.slice(-5).map(f => `· ${f.content}`).join('\n'))
       lines.push(`隐私模式: ${privacyGate.mode()}${privacyGate.isLocalInference() ? ' (本地推理, 不出境)' : ''}`)
+      lines.push(`今日用量: ${this.dailyCount}/${DAILY_LIMIT}`)
       return lines.join('\n')
     }
 
@@ -185,16 +206,39 @@ export class AssistantService {
     onLog?.(`助手已启动 (bot: ${configService.get('wechatOcAccountId')}, ` +
       `引擎: ${local ? '本地' : '云端'}, 记忆用户数: ${this.memory.userCount()})`)
 
-    this.svc.onMessage(async (msg) => {
-      onLog?.(`[${new Date().toLocaleTimeString('zh-CN')}] ${msg.fromUserId.slice(0, 12)}…: ${msg.messageStr.slice(0, 40)}`)
-      try {
-        const reply = await this.handleMessage(msg.fromUserId, msg.messageStr, msg.messageKind)
-        const ok = await this.svc!.sendText(msg.fromUserId, reply)
-        onLog?.(`  → ${ok ? `已回复 (${reply.length}字)` : '回复失败'}`)
-      } catch (e: any) {
-        onLog?.(`  → 处理异常: ${e.message}`)
-        appendLog(`[${new Date().toLocaleTimeString('zh-CN')}] 异常: ${e.message}`)
-      }
+    this.svc.onMessage((msg) => {
+      // 串行入队: 并发到达的消息按顺序处理, 记忆窗口不交错
+      this.queue = this.queue.then(async () => {
+        if (!this.running) return
+        const uid = msg.fromUserId
+
+        if (!this.isAllowed(uid)) {
+          privacyGate.audit('DENY_NOT_WHITELISTED', 0, uid.slice(0, 12))
+          onLog?.(`  → 拒绝: ${uid.slice(0, 12)}… 不在白名单 (未回复, 不耗 LLM)`)
+          return
+        }
+        if (msg.messageKind !== 'text') {
+          onLog?.(`  → 忽略非文本消息 (${msg.messageKind})`)
+          return
+        }
+        if (this.dailyQuotaLeft() <= 0) {
+          privacyGate.audit('DENY_DAILY_LIMIT', this.dailyCount)
+          appendLog(`[配额] 今日 ${DAILY_LIMIT} 条上限已用尽, 拒绝: ${msg.messageStr.slice(0, 30)}`)
+          await this.svc!.sendText(uid, '今日额度已用完, 明天再来吧').catch(() => {})
+          return
+        }
+
+        onLog?.(`[${new Date().toLocaleTimeString('zh-CN')}] ${uid.slice(0, 12)}…: ${msg.messageStr.slice(0, 40)}`)
+        try {
+          const reply = await this.handleMessage(uid, msg.messageStr, msg.messageKind)
+          this.dailyCount++
+          const ok = await this.svc!.sendText(uid, reply)
+          onLog?.(`  → ${ok ? `已回复 (${reply.length}字, 今日 ${this.dailyCount}/${DAILY_LIMIT})` : '回复失败'}`)
+        } catch (e: any) {
+          onLog?.(`  → 处理异常: ${e.message}`)
+          appendLog(`[${new Date().toLocaleTimeString('zh-CN')}] 异常: ${e.message}`)
+        }
+      }).catch((e: any) => appendLog(`队列异常: ${e.message}`))
     })
 
     await this.svc.startPolling()

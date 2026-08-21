@@ -193,6 +193,12 @@ weflow-cli assistant start     # 后台守护进程常驻
 
 运行机制：守护进程通过微信官方 Bot 通道（iLink）长轮询收发消息，Agent 循环、三层记忆（工作窗口 / 滚动摘要 / 长期事实）、数据库查询全部在本机执行；仅最终提问与回复文本会发送给所配置的 LLM，工具输出中的电话/邮箱/链接等 PII 默认自动脱敏（`config set assistantPrivacy strict` 可加强，`ollama` 本地引擎则完全不出网）。会话 24 小时未活跃需重新扫码，单窗口内主动回复有官方条数限制。
 
+成本护栏：内置每日 100 条处理上限（防异常流量烧钱，微信内发「记忆」可查用量）；可配置白名单限制谁能触发 AI 调用：
+
+```powershell
+weflow-cli config set assistantWhitelist "你的@im.wechat ID"   # 留空 = 允许所有人
+```
+
 常用管理命令：`weflow-cli assistant status` / `log` / `stop`；微信内发送「帮助」查看助手指令。
 
 ## 常用命令

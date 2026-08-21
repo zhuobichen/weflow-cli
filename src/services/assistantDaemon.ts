@@ -3,7 +3,7 @@
  * pid 文件: ~/.weflow-cli/assistant.pid, 日志: ~/.weflow-cli/assistant.log
  */
 import { join } from 'path'
-import { existsSync, readFileSync, writeFileSync, rmSync, mkdirSync, appendFileSync } from 'fs'
+import { existsSync, readFileSync, writeFileSync, rmSync, mkdirSync, appendFileSync, statSync } from 'fs'
 import os from 'os'
 import { spawn, type ChildProcess } from 'child_process'
 import { fileURLToPath } from 'url'
@@ -32,6 +32,19 @@ export function appendLog(line: string): void {
     if (!existsSync(DIR)) mkdirSync(DIR, { recursive: true })
     appendFileSync(LOG_FILE, line + '\n', 'utf8')
   } catch { /* 日志失败不阻断 */ }
+}
+
+/** 日志轮转: 超过 1MB 保留尾部 256KB, 防止常驻进程日志无限增长 */
+export function rotateLogIfNeeded(): void {
+  try {
+    if (!existsSync(LOG_FILE)) return
+    if (statSync(LOG_FILE).size < 1024 * 1024) return
+    const buf = readFileSync(LOG_FILE)
+    const tail = buf.subarray(Math.max(0, buf.length - 256 * 1024))
+    const cut = tail.indexOf('\n') // 对齐到行首
+    writeFileSync(LOG_FILE, `--- rotated at ${new Date().toLocaleString('zh-CN')} ---\n` + tail.subarray(cut + 1))
+    appendLog(`[轮转] 日志已截断 (原 ${statSync(LOG_FILE).size} 字节)`)
+  } catch { /* 轮转失败不阻断 */ }
 }
 
 export function tailLog(n = 20): string {

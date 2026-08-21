@@ -155,6 +155,12 @@ Then just talk to ClawBot on your phone. The assistant queries local chats and f
 
 How it works: the daemon long-polls WeChat's official bot channel (iLink); the agent loop, three-tier memory (working window / rolling summary / long-term facts), and all database queries run on your machine. Only the final question and reply texts go to the configured LLM; phone numbers, emails, and links in tool output are redacted by default (`config set assistantPrivacy strict` for stronger masking; a local `ollama` engine keeps everything offline). Sessions expire after 24h of inactivity, and proactive replies per window are capped by official limits.
 
+Cost guardrails: a built-in daily cap of 100 processed messages (send "记忆" in WeChat to check usage), plus an optional whitelist so only you can trigger AI calls:
+
+```powershell
+weflow-cli config set assistantWhitelist "your-@im.wechat-ID"   # empty = allow everyone
+```
+
 Management: `weflow-cli assistant status` / `log` / `stop`; send "帮助" in WeChat for in-chat commands.
 
 ## Common Commands
