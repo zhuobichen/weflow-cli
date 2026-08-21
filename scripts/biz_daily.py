@@ -145,17 +145,29 @@ def get_db_keys(config):
     contact_salt = config.get('contactSalt', '')
     contact_key = decrypt_lock(contact_key_enc) if contact_key_enc else ''
 
-    # biz_message_0.db (separate key from message/contact db)
+    # biz_message_0.db (每库独立密钥)
     biz_db = os.path.join(msg_dir, 'biz_message_0.db')
-    # Try config first, then fallback to known key
     biz_key_enc = config.get('bizKey', '')
     biz_salt = config.get('bizSalt', '')
     if biz_key_enc and biz_salt:
         biz_key = decrypt_lock(biz_key_enc)
     else:
-        # Hardcoded fallback key (see git history: commit 0bf7158)
-        biz_key = '1c0451540217eb0373eb9242f61c173f8f7b3a4f29e922a9623ed59a3f90630e'
-        biz_salt = '0478298c58563d07e3fa53b45f13d593'
+        # 从全库共用 passphrase 派生 (微信 4.x: PBKDF2-HMAC-SHA512, 256000 轮, 32 字节)
+        pass_enc = config.get('favPassphrase', '')
+        passphrase = decrypt_lock(pass_enc) if pass_enc else ''
+        biz_key = ''
+        if passphrase and os.path.exists(biz_db):
+            with open(biz_db, 'rb') as fh:
+                biz_salt = fh.read(16).hex()
+            biz_key = hashlib.pbkdf2_hmac(
+                'sha512', bytes.fromhex(passphrase),
+                bytes.fromhex(biz_salt), 256000, dklen=32
+            ).hex()
+        if not biz_key:
+            raise SystemExit(
+                '缺少公众号数据库密钥: 请运行 weflow-cli fav set-key --passphrase <64位hex> '
+                '配置全库 passphrase (自动派生各库密钥), 或 weflow-cli config set bizKey <raw key>'
+            )
 
     return {
         'biz_db': biz_db, 'biz_key': biz_key, 'biz_salt': biz_salt,

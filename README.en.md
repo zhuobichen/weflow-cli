@@ -13,13 +13,50 @@
 [![npm](https://img.shields.io/npm/v/weflow-cli)](https://www.npmjs.com/package/weflow-cli)
 [![Node.js](https://img.shields.io/badge/Node.js-18%2B-339933)](https://nodejs.org/)
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB)](https://www.python.org/)
+[![WeChat](https://img.shields.io/badge/WeChat-4.1.12.26%20verified-07C160?logo=wechat&logoColor=white)](https://github.com/zhuobichen/weflow-cli/releases)
+[![Local-first](https://img.shields.io/badge/100%25_local-zero%20telemetry-8A2BE2)](./SECURITY.md)
 [![License](https://img.shields.io/badge/License-MIT-f4b400)](./LICENSE)
 
 </div>
 
-WeFlow CLI is a local-first tool for Windows WeChat users: it connects to your WeChat data directory to query and export chat history, turns official-account articles into browsable daily digests, and exposes knowledge-base capabilities to MCP-compatible AI editors.
+**WeFlow CLI turns WeChat into your local second brain**: decrypt and query chat history with one command, export readable HTML; turn official-account articles into AI-digested daily reports; read your WeChat favorites; build a semantic-searchable knowledge base — and plug it all into MCP-compatible AI editors like Claude Code. Works on Windows and Linux.
+
+> 🔒 **Local-first**: runs entirely on your machine — zero telemetry, zero cloud reporting. Database keys are stored locally, encrypted with machine-bound AES-256-GCM. AI features only activate after you explicitly configure your own API key. See the [Security & Privacy statement](./SECURITY.md).
 
 > This project is intended only for data you are authorized to access. Please obey applicable laws, WeChat's terms, and the privacy of others.
+
+## At a Glance
+
+**WeChat favorites query** (real data, locally decrypted `favorite.db`, with type filter and keyword search):
+
+```text
+$ weflow-cli fav list -n 3
+
+收藏列表 (共 1042 条, 显示 3 条):
+
+[2026/8/21 19:42:42] [文章] “豆包型人格”爆火，可千万别学
+    来源: 中国研究生
+    https://mp.weixin.qq.com/s/eDk_kcyd8ltuqn6J3iReVg
+[2026/8/21 10:50:38] [文章] 爆火插件让DeepSeek V4 Pro 0813性能拉满，全面超越 Fable 5！
+    来源: 智猩猩AI
+    https://mp.weixin.qq.com/s/3GXFjmtUsq42sXJHJGgwyg
+[2026/8/21 10:47:21] [文章] 250年前，一个26岁年轻人写了一本小册子，至今仍在拷问每一个文明社会
+    来源: 悦读撷英
+    https://mp.weixin.qq.com/s/YIkB8TyyyimPP1hmgQQPZg
+```
+
+**The full workflow, one command per step**:
+
+```text
+weflow-cli sessions                    # list chat sessions
+weflow-cli messages "contact" -n 20    # query chat messages
+weflow-cli export "contact" html       # export HTML / Excel / Markdown / JSON
+weflow-cli fav list -t article -k AI   # favorites: type filter + keyword search
+weflow-cli daily --date 2026-08-21     # official-account digest + AI summary
+weflow-cli daily-server                # local reader http://localhost:8765
+weflow-cli chat "How does RAG work?"   # knowledge-base RAG Q&A
+weflow-cli mcp-config                  # one-shot MCP client integration
+```
 
 ## What You Can Do
 

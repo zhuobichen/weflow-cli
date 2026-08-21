@@ -13,13 +13,50 @@
 [![npm](https://img.shields.io/npm/v/weflow-cli)](https://www.npmjs.com/package/weflow-cli)
 [![Node.js](https://img.shields.io/badge/Node.js-18%2B-339933)](https://nodejs.org/)
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB)](https://www.python.org/)
+[![WeChat](https://img.shields.io/badge/WeChat-4.1.12.26%20verified-07C160?logo=wechat&logoColor=white)](https://github.com/zhuobichen/weflow-cli/releases)
+[![Local-first](https://img.shields.io/badge/100%25_local-zero%20telemetry-8A2BE2)](./SECURITY.md)
 [![License](https://img.shields.io/badge/License-MIT-f4b400)](./LICENSE)
 
 </div>
 
-WeFlow CLI 是面向 Windows 微信用户的本地优先工具：连接微信数据目录，查询和导出聊天记录；把公众号文章整理成可浏览的日报；并可将知识库能力接入 MCP 兼容的 AI 编辑器。
+**WeFlow CLI 把微信变成你的本地第二大脑**：一条命令解密查询聊天记录、导出可读 HTML；把公众号文章整理成带 AI 摘要的日报；读取微信收藏；构建可语义搜索的知识库；并通过 MCP 接入 Claude Code 等 AI 编辑器。支持 Windows 与 Linux。
+
+> 🔒 **本地优先**：完全在你的电脑上运行——零遥测、零云上报；数据库密钥以机器绑定的 AES-256-GCM 加密存储在本机。AI 功能仅在显式配置你自己的 API Key 后启用。详见[安全与隐私声明](./SECURITY.md)。
 
 > 本项目仅限于处理你有权访问的数据。请遵守适用法律、微信规则和他人的隐私边界。
+
+## 效果一览
+
+**微信收藏查询**（真实数据，本地解密 `favorite.db`，支持类型过滤与关键词搜索）：
+
+```text
+$ weflow-cli fav list -n 3
+
+收藏列表 (共 1042 条, 显示 3 条):
+
+[2026/8/21 19:42:42] [文章] “豆包型人格”爆火，可千万别学
+    来源: 中国研究生
+    https://mp.weixin.qq.com/s/eDk_kcyd8ltuqn6J3iReVg
+[2026/8/21 10:50:38] [文章] 爆火插件让DeepSeek V4 Pro 0813性能拉满，全面超越 Fable 5！
+    来源: 智猩猩AI
+    https://mp.weixin.qq.com/s/3GXFjmtUsq42sXJHJGgwyg
+[2026/8/21 10:47:21] [文章] 250年前，一个26岁年轻人写了一本小册子，至今仍在拷问每一个文明社会
+    来源: 悦读撷英
+    https://mp.weixin.qq.com/s/YIkB8TyyyimPP1hmgQQPZg
+```
+
+**完整工作流，一条命令一个环节**：
+
+```text
+weflow-cli sessions                    # 会话列表
+weflow-cli messages "联系人" -n 20      # 查询聊天消息
+weflow-cli export "联系人" html         # 导出 HTML / Excel / Markdown / JSON
+weflow-cli fav list -t article -k AI   # 微信收藏: 类型过滤 + 关键词搜索
+weflow-cli daily --date 2026-08-21     # 公众号日报 + AI 摘要与分类
+weflow-cli daily-server                # 本地阅读器 http://localhost:8765
+weflow-cli chat "RAG 的原理是什么?"     # 知识库 RAG 问答
+weflow-cli mcp-config                  # 一键接入 Claude Code 等 MCP 客户端
+```
 
 ## 平台支持
 
