@@ -1,8 +1,9 @@
-import { join } from 'path'
+import { join, dirname } from 'path'
 import { existsSync, copyFileSync, mkdirSync } from 'fs'
-import { execFile, execSync } from 'child_process'
+import { execFile } from 'child_process'
 import { promisify } from 'util'
 import { createRequire } from 'module'
+import { fileURLToPath } from 'url'
 import os from 'os'
 import type { DbKeyResult } from '../types.js'
 import { configService } from '../services/configService.js'
@@ -10,6 +11,14 @@ import { getPythonCommand } from '../utils/python.js'
 
 const require = createRequire(import.meta.url)
 const execFileAsync = promisify(execFile)
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = dirname(__filename)
+
+/** 基于模块位置定位包根目录（全局安装时 process.cwd() 不可靠） */
+function resolveScriptPath(scriptName: string): string {
+  // dist/src/core -> 包根
+  return join(__dirname, '..', '..', '..', 'scripts', scriptName)
+}
 
 export class KeyService {
   private koffi: any = null
@@ -37,10 +46,16 @@ export class KeyService {
       candidates.push(process.env.WX_KEY_DLL_PATH)
     }
 
+    // 基于模块位置定位（全局安装时 cwd 不是包根）
+    const pkgRoot = join(__dirname, '..', '..', '..')
+    candidates.push(join(pkgRoot, 'resources', 'key', 'win32', archDir, 'wx_key.dll'))
+    candidates.push(join(pkgRoot, 'resources', 'key', 'win32', 'x64', 'wx_key.dll'))
+    candidates.push(join(pkgRoot, 'resources', 'key', 'win32', 'wx_key.dll'))
+    candidates.push(join(pkgRoot, 'resources', 'wx_key.dll'))
+
+    // cwd 兜底（开发模式在项目根运行）
     const cwd = process.cwd()
     candidates.push(join(cwd, 'resources', 'key', 'win32', archDir, 'wx_key.dll'))
-    candidates.push(join(cwd, 'resources', 'key', 'win32', 'x64', 'wx_key.dll'))
-    candidates.push(join(cwd, 'resources', 'key', 'win32', 'wx_key.dll'))
     candidates.push(join(cwd, 'resources', 'wx_key.dll'))
 
     for (const path of candidates) {
@@ -320,6 +335,13 @@ export class KeyService {
     snsDbPath: string,
     onStatus?: (message: string) => void
   ): Promise<DbKeyResult> {
+    if (process.platform !== 'win32') {
+      return { success: false, error: '朋友圈密钥捕获仅支持 Windows（依赖进程 Hook）' }
+    }
+    if (!this.ensureLoaded()) {
+      return { success: false, error: 'wx_key.dll 未加载，请确保 resources/key/ 目录存在' }
+    }
+
     const pid = await this.findWeChatPid()
     if (!pid) {
       return { success: false, error: '未找到微信进程 (Weixin.exe)，请确保微信已登录' }
@@ -350,9 +372,13 @@ export class KeyService {
             // Test against sns.db using Python
             const snsSalt = configService.get('snsSalt')
             try {
-              const scriptPath = join(process.cwd(), 'scripts', 'nt_decrypt.py')
-              const cmd = `python "${scriptPath}" sns-stats --db "${snsDbPath}" --key ${key} --salt ${snsSalt || '00000000000000000000000000000000'}`
-              const stdout = execSync(cmd, {
+              const scriptPath = resolveScriptPath('nt_decrypt.py')
+              const { stdout } = await execFileAsync(getPythonCommand(), [
+                scriptPath, 'sns-stats',
+                '--db', snsDbPath,
+                '--key', key,
+                '--salt', snsSalt || '00000000000000000000000000000000',
+              ], {
                 timeout: 15000, encoding: 'utf8',
                 env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
               })
@@ -419,7 +445,7 @@ export class KeyService {
     onStatus?.(`找到 3.x 进程 (PID: ${pid})，正在通过内存搜索提取密钥...`)
 
     try {
-      const scriptPath = join(process.cwd(), 'scripts', 'extract_3x_key.py')
+      const scriptPath = resolveScriptPath('extract_3x_key.py')
 
       if (!existsSync(scriptPath)) {
         return { success: false, error: `Python 脚本不存在: ${scriptPath}` }

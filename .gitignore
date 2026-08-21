@@ -17,6 +17,10 @@ tmp_*
 msg.txt
 .env
 .claude/
+.codex/
+scripts/.portable_package/
+scripts/_test_*.py
+scripts/regen_wsl_keys.mjs
 *.md
 !README.md
 !ARCHITECTURE.md
