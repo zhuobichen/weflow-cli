@@ -7,9 +7,10 @@
  */
 import { execFile } from 'child_process'
 import { promisify } from 'util'
-import { existsSync } from 'fs'
+import { existsSync, openSync, readSync, closeSync } from 'fs'
 import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
+import crypto from 'crypto'
 import { configService } from '../services/configService.js'
 import { getPythonCommand } from '../utils/python.js'
 import type { ChatSession, Message, Contact } from '../types.js'
@@ -278,5 +279,54 @@ export class NtCore {
     const result = await this.callPython(args)
     if (result.error) return { success: false, error: result.error }
     return { success: true, data: result.data }
+  }
+
+  // ====== 收藏 (favorite.db) ======
+
+  /**
+   * 从全库共用 passphrase 派生某库的 raw key。
+   * 微信 4.x 各库密钥 = PBKDF2-HMAC-SHA512(passphrase, 库salt, 256000轮, 32字节)
+   */
+  static deriveRawKey(passphraseHex: string, saltHex: string): string {
+    const passphrase = Buffer.from(passphraseHex, 'hex')
+    const salt = Buffer.from(saltHex, 'hex')
+    return crypto.pbkdf2Sync(passphrase, salt, 256000, 32, 'sha512').toString('hex')
+  }
+
+  /** 读取数据库文件前 16 字节盐值 */
+  static readDbSalt(dbPath: string): string | null {
+    let fd: number
+    try {
+      fd = openSync(dbPath, 'r')
+    } catch {
+      return null
+    }
+    try {
+      const buf = Buffer.alloc(16)
+      const n = readSync(fd, buf, 0, 16, 0)
+      return n === 16 ? buf.toString('hex') : null
+    } catch {
+      return null
+    } finally {
+      closeSync(fd)
+    }
+  }
+
+  /** 查询收藏列表 (keyHex 为派生后的 raw key) */
+  async getFavorites(favDbPath: string, keyHex: string, opts: {
+    limit?: number; offset?: number; keyword?: string; favType?: number;
+  } = {}): Promise<{ success: boolean; favorites?: any[]; total?: number; error?: string }> {
+    const args: string[] = [
+      'fav-list',
+      '--db', favDbPath,
+      '--key', keyHex,
+      '--limit', String(opts.limit ?? 100),
+      '--offset', String(opts.offset ?? 0),
+    ]
+    if (opts.keyword) args.push('--keyword', opts.keyword)
+    if (opts.favType != null) args.push('--type', String(opts.favType))
+    const result = await this.callPython(args)
+    if (result.error) return { success: false, error: result.error }
+    return { success: true, favorites: result.favorites || [], total: result.total ?? 0 }
   }
 }

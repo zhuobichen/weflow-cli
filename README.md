@@ -68,6 +68,7 @@ sudo weflow-cli init
 | 个人知识库 | 同步微信读书笔记、构建 Obsidian Vault、语义搜索、RAG 问答和概念 Wiki。 |
 | AI 协作 | 通过 MCP 将文章抓取、知识库检索和日报能力交给 Claude Code 等兼容客户端。 |
 | 个人回顾 | 聊天月报、年度报告、待办提取与朋友圈本地缓存查询。 |
+| 微信收藏 | 读取微信"收藏"内容（公众号文章、文字、图片、视频、聊天记录），支持类型过滤、关键词搜索与 Markdown/JSON 导出。 |
 
 ## 三分钟上手
 
@@ -147,6 +148,7 @@ weflow-cli mcp-config > .mcp.json
 | 导出聊天记录 | `weflow-cli export <联系人> <json\|txt\|md\|html\|excel>` |
 | 公众号日报与阅读器 | `weflow-cli daily` · `weflow-cli daily-server` · `weflow-cli review` |
 | 朋友圈缓存 | `weflow-cli sns timeline` · `weflow-cli sns users` · `weflow-cli sns stats` |
+| 微信收藏 | `weflow-cli fav list` · `weflow-cli fav export markdown` · `weflow-cli fav set-key` |
 | 微信读书 | `weflow-cli weread shelf` · `notes` · `search` · `stats` |
 | 知识库 | `weflow-cli vault` · `weflow-cli wiki` · `weflow-cli search <query>` · `weflow-cli chat` |
 | 总结与任务 | `weflow-cli report` · `annual-report` · `todos` |

@@ -20,6 +20,9 @@ msg.txt
 .codex/
 scripts/.portable_package/
 scripts/_test_*.py
+scripts/_*.json
+scripts/_hook_*.py
+scan_out.*
 scripts/regen_wsl_keys.mjs
 *.md
 !README.md

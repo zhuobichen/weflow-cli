@@ -3,7 +3,7 @@ import { Command } from 'commander'
 import chalk from 'chalk'
 import inquirer from 'inquirer'
 import { join } from 'path'
-import { existsSync, readFileSync } from 'fs'
+import { existsSync, readFileSync, writeFileSync } from 'fs'
 import { homedir } from 'os'
 import { dbPathService } from '../src/core/dbPathService.js'
 import { keyService } from '../src/core/keyService.js'
@@ -1226,6 +1226,219 @@ snsCmd
     } catch (e: any) {
       console.log(chalk.red(`\n❌ 错误: ${e.message}`))
     }
+  })
+
+// ==================== fav (微信收藏) ====================
+
+const FAV_TYPE_IDS: Record<string, number> = {
+  text: 1, image: 2, video: 4, article: 5, chatrecord: 14,
+}
+const FAV_TYPE_LABELS: Record<string, string> = {
+  text: '文字', image: '图片', video: '视频', article: '文章', chatrecord: '聊天记录',
+}
+
+/** 从已配置的 NT 主库路径推导 favorite.db 路径 */
+function detectFavDbPath(): string | null {
+  const ntDbPath = configService.get('ntDbPath')
+  if (!ntDbPath) return null
+  const parts = ntDbPath.replace(/\\/g, '/').split('/')
+  const idx = parts.lastIndexOf('db_storage')
+  if (idx < 0) return null
+  const favPath = [...parts.slice(0, idx), 'db_storage', 'favorite', 'favorite.db'].join('/')
+  return existsSync(favPath) ? favPath : null
+}
+
+const favCmd = program
+  .command('fav')
+  .description('微信收藏内容查询 (4.x NT 连接)')
+
+favCmd
+  .command('list')
+  .description('列出收藏内容')
+  .option('-t, --type <type>', '类型过滤: text|image|video|article|chatrecord')
+  .option('-k, --keyword <kw>', '关键词搜索')
+  .option('-n, --limit <number>', '最大数量', '20')
+  .option('-o, --offset <number>', '偏移量', '0')
+  .option('--json', '输出 JSON 格式')
+  .action(async (opts) => {
+    if (!configService.isConfigured()) {
+      console.log(chalk.red('\n❌ 还没配置\n  运行: weflow-cli init\n'))
+      process.exit(1)
+    }
+
+    // 自动发现 favorite.db
+    if (!configService.get('favDbPath')) {
+      const favPath = detectFavDbPath()
+      if (favPath) {
+        configService.set('favDbPath', favPath)
+        console.log(chalk.green(`✓ 自动发现收藏数据库: ${favPath}\n`))
+      }
+    }
+
+    const conn = await chatService.connect()
+    if (!conn.success) {
+      console.log(chalk.red(`\n❌ 数据库连接失败: ${conn.error}\n`))
+      process.exit(1)
+    }
+    if (!chatService.isFavSupported()) {
+      console.log(chalk.red('\n❌ 当前数据通道不支持收藏查询 (需 4.x NT 连接)'))
+      console.log(chalk.gray('  请先配置收藏密钥: weflow-cli fav set-key <64位hex密钥>'))
+      console.log(chalk.gray('  或设置全库 passphrase: weflow-cli fav set-key --passphrase <64位hex>\n'))
+      process.exit(1)
+    }
+
+    let favType: number | undefined
+    if (opts.type) {
+      favType = FAV_TYPE_IDS[opts.type.toLowerCase()]
+      if (!favType) {
+        console.log(chalk.red(`❌ 未知类型: ${opts.type}`))
+        console.log(chalk.gray('  可选: text image video article chatrecord'))
+        process.exit(1)
+      }
+    }
+
+    const result = await chatService.getFavorites({
+      limit: parseInt(opts.limit),
+      offset: parseInt(opts.offset),
+      keyword: opts.keyword,
+      favType,
+    })
+
+    if (!result.success || !result.favorites || result.favorites.length === 0) {
+      console.log(chalk.gray(`未找到收藏内容${result.error ? `: ${result.error}` : ''}`))
+      return
+    }
+
+    if (opts.json) {
+      console.log(JSON.stringify(result, null, 2))
+      return
+    }
+
+    const total = result.total ?? result.favorites.length
+    console.log(chalk.cyan(`收藏列表 (共 ${total} 条, 显示 ${result.favorites.length} 条):\n`))
+    for (const item of result.favorites) {
+      const time = item.update_time
+        ? new Date(Number(item.update_time) * 1000).toLocaleString('zh-CN')
+        : '未知时间'
+      const typeLabel = FAV_TYPE_LABELS[item.type_name] || item.type_name
+      const title = (item.title || '(无标题)').replace(/\n/g, ' ').slice(0, 60)
+      console.log(chalk.gray(`[${time}]`) + ` ${chalk.blue(`[${typeLabel}]`)} ${title}`)
+      if (item.source_name) console.log(chalk.gray(`    来源: ${item.source_name}`))
+      if (item.link) console.log(chalk.gray(`    ${item.link.slice(0, 90)}`))
+    }
+  })
+
+favCmd
+  .command('export <format>')
+  .description('导出收藏内容 (markdown|json)')
+  .option('-t, --type <type>', '类型过滤: text|image|video|article|chatrecord')
+  .option('-k, --keyword <kw>', '关键词搜索')
+  .option('-n, --limit <number>', '最大数量', '1000')
+  .option('-o, --output <file>', '输出文件路径')
+  .action(async (format: string, opts) => {
+    if (format !== 'markdown' && format !== 'json') {
+      console.log(chalk.red('❌ 格式仅支持: markdown | json'))
+      process.exit(1)
+    }
+    if (!configService.isConfigured()) {
+      console.log(chalk.red('\n❌ 还没配置\n  运行: weflow-cli init\n'))
+      process.exit(1)
+    }
+
+    if (!configService.get('favDbPath')) {
+      const favPath = detectFavDbPath()
+      if (favPath) configService.set('favDbPath', favPath)
+    }
+
+    const conn = await chatService.connect()
+    if (!conn.success) {
+      console.log(chalk.red(`\n❌ 数据库连接失败: ${conn.error}\n`))
+      process.exit(1)
+    }
+    if (!chatService.isFavSupported()) {
+      console.log(chalk.red('\n❌ 当前数据通道不支持收藏查询 (需 4.x NT 连接)'))
+      console.log(chalk.gray('  请先配置收藏密钥: weflow-cli fav set-key <64位hex密钥>\n'))
+      process.exit(1)
+    }
+
+    let favType: number | undefined
+    if (opts.type) {
+      favType = FAV_TYPE_IDS[opts.type.toLowerCase()]
+      if (!favType) {
+        console.log(chalk.red(`❌ 未知类型: ${opts.type}`))
+        process.exit(1)
+      }
+    }
+
+    // 全量导出: limit 为 0 时取全部
+    const result = await chatService.getFavorites({
+      limit: parseInt(opts.limit),
+      offset: 0,
+      keyword: opts.keyword,
+      favType,
+    })
+    if (!result.success || !result.favorites) {
+      console.log(chalk.red(`导出失败: ${result.error || '无内容'}`))
+      process.exit(1)
+    }
+
+    const items = result.favorites
+    let content: string
+    if (format === 'json') {
+      content = JSON.stringify(items, null, 2)
+    } else {
+      const lines: string[] = ['# 微信收藏导出', '', `> 共 ${items.length} 条 · 导出时间 ${new Date().toLocaleString('zh-CN')}`, '']
+      for (const item of items) {
+        const time = item.update_time
+          ? new Date(Number(item.update_time) * 1000).toLocaleString('zh-CN')
+          : '未知时间'
+        const typeLabel = FAV_TYPE_LABELS[item.type_name] || item.type_name
+        lines.push(`## ${item.title || '(无标题)'}`)
+        lines.push('')
+        lines.push(`- 类型: ${typeLabel}`)
+        lines.push(`- 时间: ${time}`)
+        if (item.source_name) lines.push(`- 来源: ${item.source_name}`)
+        if (item.link) lines.push(`- 链接: <${item.link}>`)
+        if (item.desc) lines.push(`- 摘要: ${item.desc}`)
+        lines.push('')
+      }
+      content = lines.join('\n')
+    }
+
+    const outPath = opts.output || `favorites_${Date.now()}.${format === 'json' ? 'json' : 'md'}`
+    writeFileSync(outPath, content, 'utf8')
+    console.log(chalk.green(`✓ 已导出 ${items.length} 条收藏到 ${outPath}`))
+  })
+
+favCmd
+  .command('set-key <key>')
+  .description('设置收藏数据库密钥 (默认 raw key; --passphrase 表示全库共用 passphrase)')
+  .option('--passphrase', '输入的是全库共用 passphrase (自动派生 favorite.db 密钥)')
+  .action(async (key: string, opts) => {
+    if (!/^[0-9a-fA-F]{64}$/.test(key)) {
+      console.log(chalk.red('❌ 密钥格式错误: 需要 64 位十六进制字符串'))
+      process.exit(1)
+    }
+    if (opts.passphrase) {
+      configService.set('favPassphrase', key)
+      configService.set('favKey', '') // 清空旧 raw key, 下次查询时重新派生
+      console.log(chalk.green('✓ 已保存全库 passphrase'))
+    } else {
+      configService.set('favKey', key)
+      console.log(chalk.green('✓ 已保存 favorite.db raw key'))
+    }
+    if (!configService.get('favDbPath')) {
+      const favPath = detectFavDbPath()
+      if (favPath) {
+        configService.set('favDbPath', favPath)
+        console.log(chalk.green(`✓ 自动发现收藏数据库: ${favPath}`))
+      } else {
+        console.log(chalk.yellow('⚠ 未自动发现 favorite.db, 请手动设置: weflow-cli config set favDbPath <path>'))
+      }
+    }
+    console.log(chalk.cyan('\n现在可以使用收藏功能:'))
+    console.log(chalk.gray('  weflow-cli fav list'))
+    console.log(chalk.gray('  weflow-cli fav export markdown'))
   })
 
 // ==================== send ====================

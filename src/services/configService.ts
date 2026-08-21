@@ -46,6 +46,10 @@ interface CliConfig {
   snsDbPath: string
   snsKey: string
   snsSalt: string
+  // 收藏 (favorite.db)
+  favDbPath: string
+  favKey: string
+  favPassphrase: string
 }
 
 export interface ListEntry {
@@ -59,13 +63,14 @@ export interface ListEntry {
 const ENCRYPTED_KEYS: ReadonlySet<keyof CliConfig> = new Set([
   'decryptKey', 'decryptKey3x', 'ntKey', 'contactKey',
   'wechatOcToken', 'wereadApiKey', 'deepseekApiKey', 'snsKey',
+  'favKey', 'favPassphrase',
 ])
 
 const CONFIG_DIR = join(homedir(), '.weflow-cli')
 const CONFIG_FILE = join(CONFIG_DIR, 'config.json')
 
 export class ConfigService {
-  private config: CliConfig = { dbPath: '', wxid: '', decryptKey: '', decryptKey3x: '', dataVersion: '', dbPath3x: '', ntDbPath: '', ntKey: '', ntSalt: '', contactDbPath: '', contactKey: '', contactSalt: '', wechatOcToken: '', wechatOcAccountId: '', wechatOcBaseUrl: '', wechatOcSyncBuf: '', wechatOcContextTokens: '', whitelist: [], blacklist: [], whitelistEntries: [], blacklistEntries: [], vaultRepo: '', aiEngine: 'deepseek', wereadApiKey: '', deepseekApiKey: '', snsDbPath: '', snsKey: '', snsSalt: '' }
+  private config: CliConfig = { dbPath: '', wxid: '', decryptKey: '', decryptKey3x: '', dataVersion: '', dbPath3x: '', ntDbPath: '', ntKey: '', ntSalt: '', contactDbPath: '', contactKey: '', contactSalt: '', wechatOcToken: '', wechatOcAccountId: '', wechatOcBaseUrl: '', wechatOcSyncBuf: '', wechatOcContextTokens: '', whitelist: [], blacklist: [], whitelistEntries: [], blacklistEntries: [], vaultRepo: '', aiEngine: 'deepseek', wereadApiKey: '', deepseekApiKey: '', snsDbPath: '', snsKey: '', snsSalt: '', favDbPath: '', favKey: '', favPassphrase: '' }
 
   constructor() {
     this.load()
@@ -113,6 +118,9 @@ export class ConfigService {
           snsDbPath: data.snsDbPath || '',
           snsKey: data.snsKey || '',
           snsSalt: data.snsSalt || '',
+          favDbPath: data.favDbPath || '',
+          favKey: data.favKey || '',
+          favPassphrase: data.favPassphrase || '',
         }
       }
     } catch (e) {
@@ -251,7 +259,7 @@ export class ConfigService {
   }
 
   clear(): void {
-    this.config = { dbPath: '', wxid: '', decryptKey: '', decryptKey3x: '', dataVersion: '', dbPath3x: '', ntDbPath: '', ntKey: '', ntSalt: '', contactDbPath: '', contactKey: '', contactSalt: '', wechatOcToken: '', wechatOcAccountId: '', wechatOcBaseUrl: '', wechatOcSyncBuf: '', wechatOcContextTokens: '', whitelist: [], blacklist: [], whitelistEntries: [], blacklistEntries: [], vaultRepo: '', aiEngine: 'deepseek', wereadApiKey: '', deepseekApiKey: '', snsDbPath: '', snsKey: '', snsSalt: '' }
+    this.config = { dbPath: '', wxid: '', decryptKey: '', decryptKey3x: '', dataVersion: '', dbPath3x: '', ntDbPath: '', ntKey: '', ntSalt: '', contactDbPath: '', contactKey: '', contactSalt: '', wechatOcToken: '', wechatOcAccountId: '', wechatOcBaseUrl: '', wechatOcSyncBuf: '', wechatOcContextTokens: '', whitelist: [], blacklist: [], whitelistEntries: [], blacklistEntries: [], vaultRepo: '', aiEngine: 'deepseek', wereadApiKey: '', deepseekApiKey: '', snsDbPath: '', snsKey: '', snsSalt: '', favDbPath: '', favKey: '', favPassphrase: '' }
     this.save()
   }
 

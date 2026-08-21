@@ -326,6 +326,22 @@ def find_nt_databases(root=None):
             except:
                 pass
 
+        # Scan favorites (收藏) database
+        fav_db = os.path.join(xwechat, wxid_dir, 'db_storage', 'favorite', 'favorite.db')
+        if os.path.isfile(fav_db):
+            try:
+                with open(fav_db, 'rb') as fh:
+                    salt = fh.read(16)
+                databases.append({
+                    "path": fav_db,
+                    "name": "favorite/favorite.db",
+                    "salt": salt.hex(),
+                    "size": os.path.getsize(fav_db),
+                    "wxid": wxid_dir,
+                })
+            except:
+                pass
+
     return databases
 
 
@@ -407,6 +423,132 @@ def connect_nt_db(db_path, key_hex, salt_hex):
     c = conn.cursor()
     c.execute(f'PRAGMA key = "{raw_key}";')
     return conn, c
+
+
+def get_fav_schema(db_path, key_hex):
+    """Dump favorite.db schema + sample rows (key verification / exploration)."""
+    try:
+        with open(db_path, 'rb') as fh:
+            salt = fh.read(16).hex()
+        conn = sqlcipher.connect(db_path)
+        conn.execute(f'PRAGMA key = "x\'{key_hex}{salt}\'";')
+        tables = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
+        ).fetchall()
+        result = {"success": True, "tables": [t[0] for t in tables]}
+        if not tables:
+            result["error"] = "数据库为空或密钥错误"
+            result["success"] = False
+        conn.close()
+        return result
+    except Exception as e:
+        return {"success": False, "error": str(e).split('\n')[0][:200]}
+
+
+FAV_TYPE_NAMES = {
+    1: 'text',        # 文字
+    2: 'image',       # 图片
+    4: 'video',       # 视频
+    5: 'article',     # 公众号文章/网页链接
+    14: 'chatrecord', # 聊天记录
+}
+
+
+def parse_fav_content(content):
+    """Extract display fields (title/link/desc/source/cover) from favitem XML."""
+    out = {}
+    if not content:
+        return out
+    import xml.etree.ElementTree as ET
+    try:
+        root = ET.fromstring(content)
+    except ET.ParseError:
+        return out
+
+    def text(path):
+        el = root.find(path)
+        if el is not None and el.text and el.text.strip():
+            return el.text.strip()
+        return None
+
+    title = (text('weburlitem/pagetitle')
+             or text('datalist/dataitem/datatitle')
+             or text('title')
+             or text('desc'))
+    if title:
+        out['title'] = title
+    link = (text('weburlitem/clean_url')
+            or text('source/link')
+            or text('datalist/dataitem/stream_weburl'))
+    if link:
+        out['link'] = link
+    desc = text('weburlitem/pagedesc') or text('datalist/dataitem/datadesc')
+    if desc and desc != out.get('title'):
+        out['desc'] = desc
+    src = text('weburlitem/appmsgshareitem/srcdisplayname')
+    if src:
+        out['source_name'] = src
+    cover = (text('weburlitem/pagethumb_url')
+             or text('datalist/dataitem/dataext')
+             or text('datalist/dataitem/cdn_thumburl'))
+    if cover:
+        out['cover'] = cover
+    fmt = text('datalist/dataitem/datafmt')
+    if fmt:
+        out['format'] = fmt
+    return out
+
+
+def get_favorites(db_path, key_hex, limit=100, offset=0, keyword=None, fav_type=None):
+    """List favorite items from favorite.db with parsed content."""
+    try:
+        with open(db_path, 'rb') as fh:
+            salt = fh.read(16).hex()
+        conn = sqlcipher.connect(db_path)
+        conn.execute(f'PRAGMA key = "x\'{key_hex}{salt}\'";')
+        c = conn.cursor()
+
+        tables = [t[0] for t in c.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
+        if 'fav_db_item' not in tables:
+            conn.close()
+            return {"error": f"未找到 fav_db_item 表，现有表: {tables[:20]}"}
+
+        total = c.execute('SELECT count(*) FROM fav_db_item').fetchone()[0]
+
+        sql = ('SELECT local_id, server_id, type, update_time, fromusr, realchatname, content '
+               'FROM fav_db_item WHERE 1=1')
+        params = []
+        if fav_type is not None:
+            sql += ' AND type = ?'
+            params.append(fav_type)
+        if keyword:
+            sql += ' AND content LIKE ?'
+            params.append(f'%{keyword}%')
+        sql += ' ORDER BY update_time DESC LIMIT ? OFFSET ?'
+        params.extend([limit, offset])
+        rows = c.execute(sql, params).fetchall()
+        conn.close()
+
+        items = []
+        for local_id, server_id, ftype, update_time, fromusr, realchatname, content in rows:
+            ct = content if isinstance(content, str) else (
+                content.decode('utf-8', errors='replace') if content else '')
+            item = {
+                'local_id': local_id,
+                'server_id': server_id,
+                'type': ftype,
+                'type_name': FAV_TYPE_NAMES.get(ftype, 'type_%s' % ftype),
+                'update_time': update_time,
+                'from_user': fromusr,
+                'chat_name': realchatname or None,
+            }
+            item.update(parse_fav_content(ct))
+            items.append(item)
+        return {"favorites": items, "total": total, "count": len(items),
+                "limit": limit, "offset": offset}
+    except Exception as e:
+        return {"error": str(e).split('\n')[0][:200]}
 
 
 def get_sessions(conn):
@@ -867,6 +1009,21 @@ def main():
     sns_stats_parser.add_argument('--salt', required=True, help='Salt hex (32 chars)')
     sns_stats_parser.add_argument('--my-wxid', help='Account owner wxid for my-posts count')
 
+    # fav-schema command
+    fav_schema_parser = sub.add_parser('fav-schema', help='Dump favorite.db schema (key verification)')
+    fav_schema_parser.add_argument('--db', required=True, help='Path to favorite.db')
+    fav_schema_parser.add_argument('--key', required=True, help='Key hex (64 chars)')
+
+    # fav-list command
+    fav_list_parser = sub.add_parser('fav-list', help='List favorite items')
+    fav_list_parser.add_argument('--db', required=True, help='Path to favorite.db')
+    fav_list_parser.add_argument('--key', required=True, help='Key hex (64 chars)')
+    fav_list_parser.add_argument('--limit', type=int, default=100)
+    fav_list_parser.add_argument('--offset', type=int, default=0)
+    fav_list_parser.add_argument('--keyword', help='Search keyword')
+    fav_list_parser.add_argument('--type', type=int, dest='fav_type',
+                                 help='Filter by type: 1=text 2=image 4=video 5=article 14=chatrecord')
+
     args = parser.parse_args()
 
     if args.command == 'scan':
@@ -902,6 +1059,7 @@ def main():
                 print(f"  {db['name']} ({db['size']/1024/1024:.1f}MB) key={db['key'][:16]}... salt={db['salt'][:16]}...")
         else:
             print(json.dumps({"keys": keys, "databases": databases, "matched": matched}))
+        return
 
     # Build contact name map once if contact db provided
     contact_name_map = {}
@@ -970,6 +1128,15 @@ def main():
         result = get_sns_stats(conn.cursor(), args.my_wxid)
         print(json.dumps(result, ensure_ascii=True, default=str))
         conn.close()
+
+    elif args.command == 'fav-schema':
+        result = get_fav_schema(args.db, args.key)
+        print(json.dumps(result, ensure_ascii=True))
+
+    elif args.command == 'fav-list':
+        result = get_favorites(args.db, args.key, args.limit, args.offset,
+                               args.keyword, getattr(args, 'fav_type', None))
+        print(json.dumps(result, ensure_ascii=True, default=str))
 
     else:
         parser.print_help()

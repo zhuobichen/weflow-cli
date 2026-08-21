@@ -366,6 +366,43 @@ export class ChatService {
     }
     return wcdbCore.getSnsExportStats(myWxid)
   }
+
+  // ====== 收藏 (favorite.db, 仅 NT 路径) ======
+
+  /** 当前连接是否支持收藏查询 */
+  isFavSupported(): boolean {
+    if (!this.connected || this.activeVersion !== '4.x' || !this.ntCore) return false
+    const favPath = configService.get('favDbPath')
+    const favKey = configService.get('favKey')
+    const favPass = configService.get('favPassphrase')
+    return !!(favPath && (favKey || favPass))
+  }
+
+  /** 解析收藏密钥: 优先 favKey, 其次从 favPassphrase + 库 salt 派生 */
+  private resolveFavKey(): string | null {
+    const favKey = configService.get('favKey')
+    if (favKey) return favKey
+    const favPass = configService.get('favPassphrase')
+    const favPath = configService.get('favDbPath')
+    if (!favPass || !favPath) return null
+    const salt = NtCore.readDbSalt(favPath)
+    if (!salt) return null
+    const derived = NtCore.deriveRawKey(favPass, salt)
+    configService.set('favKey', derived)
+    return derived
+  }
+
+  async getFavorites(opts: {
+    limit?: number; offset?: number; keyword?: string; favType?: number;
+  } = {}): Promise<{ success: boolean; favorites?: any[]; total?: number; error?: string }> {
+    if (!this.isFavSupported()) {
+      return { success: false, error: '当前数据通道不支持收藏查询 (需 4.x NT 连接 + fav 配置)' }
+    }
+    const favPath = configService.get('favDbPath')
+    const favKey = this.resolveFavKey()
+    if (!favKey) return { success: false, error: '收藏密钥解析失败 (favKey/favPassphrase 配置无效)' }
+    return this.ntCore!.getFavorites(favPath, favKey, opts)
+  }
 }
 
 export const chatService = new ChatService()

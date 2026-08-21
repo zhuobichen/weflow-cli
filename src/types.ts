@@ -144,4 +144,10 @@ export interface ConfigData {
   snsKey?: string
   /** NT 格式: sns.db 32位十六进制盐值 */
   snsSalt?: string
+  /** NT 格式: favorite.db 路径 */
+  favDbPath?: string
+  /** NT 格式: favorite.db 64位十六进制密钥 (PBKDF2 派生 raw key) */
+  favKey?: string
+  /** NT 格式: 4.x 全库共用 passphrase 密钥 (64位hex, 用于派生各库 raw key) */
+  favPassphrase?: string
 }
