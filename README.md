@@ -26,12 +26,38 @@ WeFlow CLI 是面向 Windows 微信用户的本地优先工具：连接微信数
 | 能力 | Windows | macOS | Linux |
 | --- | --- | --- | --- |
 | 数据目录自动发现 | ✅ | ✅ | ✅ |
-| 密钥自动提取 | ✅ | ❌ 需手动提供 | ❌ 需手动提供 |
-| 聊天记录查询（NT / 已解密数据库） | ✅ | ✅ | ✅ 需手动配置密钥 |
+| 密钥自动提取 | ✅ 进程注入 | ❌ 需手动提供 | ✅ 内存扫描（需 root/CAP_SYS_PTRACE） |
+| 聊天记录查询（NT / 已解密数据库） | ✅ | ✅ | ✅ |
 | WCDB 数据服务（联系人昵称等） | ✅ | ⚠️ 依赖原生库 | ⚠️ 依赖原生库 |
 | 公众号日报 / 知识库 / MCP | ✅ | ✅ | ✅ |
 
-非 Windows 平台：密钥自动提取依赖 Windows 进程注入（仅 win32）。可在 Linux/macOS 上用第三方工具（如 wechat-dump-rs）从运行中的微信提取密钥后执行 `weflow-cli config set decryptKey <密钥>` 完成初始化。
+macOS：密钥自动提取依赖 Windows 进程注入（仅 win32），可用第三方工具（如 wechat-dump-rs）从运行中的微信提取密钥后执行 `weflow-cli config set decryptKey <密钥>` 完成初始化。
+
+### Linux 快速上手（微信 4.x Linux 原生版）
+
+```bash
+# 1. 安装 sqlcipher 开发库（编译 sqlcipher3 需要）
+sudo apt install libsqlcipher-dev
+
+# 2. 安装 Python 依赖
+pip3 install --user sqlcipher3 cryptography html2text zstandard
+
+# 3. 安装 CLI 并初始化
+npm install -g weflow-cli
+weflow-cli init    # 需微信已登录；内存扫描要求 root 或授权 python3
+```
+
+`weflow-cli init` 在 Linux 上通过扫描微信进程内存提取 NT 密钥。受 `ptrace_scope` 限制，需满足其一：
+
+```bash
+# 方案 A：授权 python3 读取进程内存（推荐，免 root 运行 CLI）
+sudo setcap cap_sys_ptrace=ep $(readlink -f $(which python3))
+
+# 方案 B：直接以 root 运行
+sudo weflow-cli init
+```
+
+无 root 权限安装 sqlcipher：下载 `libsqlcipher-dev` 与 `libsqlcipher0` deb 包，`dpkg -x` 解包到用户目录后，`CFLAGS=-I<解包目录>/usr/include LDFLAGS=-L<解包目录>/usr/lib/x86_64-linux-gnu pip3 install --user sqlcipher3`。
 
 ## 你可以做什么
 

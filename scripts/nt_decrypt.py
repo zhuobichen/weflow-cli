@@ -51,7 +51,9 @@ else:
 
 
 def find_weixin_pid():
-    """Find Weixin.exe process ID."""
+    """Find WeChat process ID (Windows: pymem; Linux: /proc scan)."""
+    if not IS_WINDOWS:
+        return find_weixin_pid_linux()
     try:
         import pymem, pymem.process
         for proc in pymem.process.list_processes():
@@ -68,13 +70,67 @@ def find_weixin_pid():
     return None
 
 
+_LINUX_WECHAT_COMMS = {'wechat', 'wechatappex', 'weixin'}
+_LINUX_EXE_PREFIX_DENY = ('python', 'bash', 'sh', 'zsh', 'node', 'perl', 'ruby', 'electron')
+
+
+def _is_linux_wechat_process(pid):
+    if pid == os.getpid():
+        return False
+    try:
+        with open(f'/proc/{pid}/comm') as f:
+            comm = f.read().strip().lower()
+        if comm in _LINUX_WECHAT_COMMS:
+            return True
+        try:
+            exe = os.path.realpath(os.readlink(f'/proc/{pid}/exe'))
+        except OSError:
+            return False
+        name = os.path.basename(exe).lower()
+        if any(name.startswith(p) for p in _LINUX_EXE_PREFIX_DENY):
+            return False
+        return 'wechat' in name or 'weixin' in name
+    except (PermissionError, FileNotFoundError, ProcessLookupError):
+        return False
+
+
+def find_weixin_pid_linux():
+    """Find Linux WeChat main process (largest RSS among candidates)."""
+    best = None
+    best_rss = -1
+    try:
+        pids = os.listdir('/proc')
+    except OSError:
+        return None
+    for pid_str in pids:
+        if not pid_str.isdigit():
+            continue
+        pid = int(pid_str)
+        if not _is_linux_wechat_process(pid):
+            continue
+        try:
+            with open(f'/proc/{pid}/statm') as f:
+                rss_kb = int(f.read().split()[1]) * 4
+        except (OSError, IndexError, ValueError):
+            rss_kb = 0
+        if rss_kb > best_rss:
+            best_rss = rss_kb
+            best = pid
+    return best
+
+
 def scan_memory_keys(pid):
-    """Scan process memory for x'<64hex_key><32hex_salt>' patterns."""
+    """Scan process memory for x'<64hex_key><32hex_salt>' patterns.
+
+    Returns (keys, error): keys is a list of {"key","salt"} dicts,
+    error is None on success or 'permission' / 'gone' / 'not_windows'.
+    """
     if not IS_WINDOWS:
-        return []
+        return scan_memory_keys_linux(pid)
+
     hProcess = kernel32.OpenProcess(PROCESS_VM_READ | PROCESS_QUERY_INFORMATION, False, pid)
     if not hProcess:
-        return []
+        return [], None
 
     pattern = re.compile(rb"x'([0-9a-fA-F]{64})([0-9a-fA-F]{32})'")
     keys_found = []
@@ -121,17 +177,94 @@ def scan_memory_keys(pid):
             seen.add(pair)
             unique_keys.append({"key": k, "salt": s})
 
-    return unique_keys
+    return unique_keys, None
+
+
+_LINUX_SKIP_MAPPINGS = {'[vdso]', '[vsyscall]', '[vvar]'}
+_LINUX_SKIP_PREFIXES = ('/usr/lib/', '/lib/', '/usr/share/')
+
+
+def scan_memory_keys_linux(pid):
+    """Scan /proc/<pid>/maps + /proc/<pid>/mem for the key pattern.
+
+    Requires root or CAP_SYS_PTRACE (or the target being a descendant
+    of this process when yama ptrace_scope=1).
+    """
+    regions = []
+    try:
+        with open(f'/proc/{pid}/maps') as f:
+            for line in f:
+                parts = line.split()
+                if len(parts) < 2 or 'r' not in parts[1]:
+                    continue
+                if len(parts) >= 6:
+                    name = parts[5]
+                    if name in _LINUX_SKIP_MAPPINGS:
+                        continue
+                    name_lower = name.lower()
+                    if name.startswith(_LINUX_SKIP_PREFIXES) and \
+                            'wcdb' not in name_lower and 'wechat' not in name_lower and 'weixin' not in name_lower:
+                        continue
+                try:
+                    start_s, end_s = parts[0].split('-')
+                    start = int(start_s, 16)
+                    size = int(end_s, 16) - start
+                except ValueError:
+                    continue
+                if 0 < size < 500 * 1024 * 1024:
+                    regions.append((start, size))
+    except PermissionError:
+        return [], 'permission'
+    except (FileNotFoundError, ProcessLookupError):
+        return [], 'gone'
+
+    pattern = re.compile(rb"x'([0-9a-fA-F]{64})([0-9a-fA-F]{32})'")
+    keys_found = []
+    try:
+        with open(f'/proc/{pid}/mem', 'rb') as mem:
+            for base, size in regions:
+                try:
+                    mem.seek(base)
+                    data = mem.read(size)
+                except (OSError, ValueError):
+                    continue
+                for m in pattern.finditer(data):
+                    keys_found.append((m.group(1).decode(), m.group(2).decode()))
+    except PermissionError:
+        return [], 'permission'
+    except (FileNotFoundError, ProcessLookupError):
+        return [], 'gone'
+
+    seen = set()
+    unique_keys = []
+    for k, s in keys_found:
+        pair = (k, s)
+        if pair not in seen:
+            seen.add(pair)
+            unique_keys.append({"key": k, "salt": s})
+
+    return unique_keys, None
 
 
 # ========== NT Database Discovery ==========
 
-def find_nt_databases():
+def find_nt_databases(root=None):
     """Find all NT-format databases under xwechat_files (message + contact)."""
-    candidates = [
-        os.path.expandvars(r'%USERPROFILE%\xwechat_files'),
-        os.path.expandvars(r'%USERPROFILE%\Documents\xwechat_files'),
-    ]
+    if root:
+        candidates = [root]
+    elif IS_WINDOWS:
+        candidates = [
+            os.path.expandvars(r'%USERPROFILE%\xwechat_files'),
+            os.path.expandvars(r'%USERPROFILE%\Documents\xwechat_files'),
+        ]
+    else:
+        home = os.path.expanduser('~')
+        candidates = [
+            os.path.join(home, '.local', 'share', 'xwechat_files'),
+            os.path.join(home, 'xwechat_files'),
+            os.path.join(home, 'Documents', 'xwechat_files'),
+            os.path.join(home, '文档', 'xwechat_files'),
+        ]
     xwechat = None
     for c in candidates:
         if os.path.isdir(c):
@@ -673,6 +806,7 @@ def main():
     # scan command
     scan_parser = sub.add_parser('scan', help='Scan memory for keys and match NT databases')
     scan_parser.add_argument('--json', action='store_true', help='Output as JSON')
+    scan_parser.add_argument('--root', help='xwechat_files root directory override')
 
     # sessions command
     sessions_parser = sub.add_parser('sessions', help='List chat sessions')
@@ -738,17 +872,26 @@ def main():
     if args.command == 'scan':
         pid = find_weixin_pid()
         if not pid:
-            print(json.dumps({"error": "Weixin.exe 未运行"}))
+            if IS_WINDOWS:
+                print(json.dumps({"error": "Weixin.exe 未运行"}))
+            else:
+                print(json.dumps({"error": "未检测到 Linux 微信进程，请确认微信已启动并登录"}))
             return
 
         if not args.json:
             print(f"扫描进程 PID {pid}...")
 
-        keys = scan_memory_keys(pid)
+        keys, scan_err = scan_memory_keys(pid)
+        if scan_err == 'permission':
+            print(json.dumps({"error": "PERMISSION_DENIED: 读取微信进程内存需要 root 或 CAP_SYS_PTRACE 权限。可使用 sudo 运行，或执行: sudo setcap cap_sys_ptrace=ep $(which python3)"}))
+            return
+        if scan_err == 'gone':
+            print(json.dumps({"error": "微信进程已退出，请重试"}))
+            return
         if not args.json:
             print(f"找到 {len(keys)} 个密钥")
 
-        databases = find_nt_databases()
+        databases = find_nt_databases(getattr(args, 'root', None))
         if not args.json:
             print(f"找到 {len(databases)} 个 NT 数据库")
 

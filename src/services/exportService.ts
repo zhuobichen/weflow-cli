@@ -5,6 +5,7 @@ import { promisify } from 'util'
 import { fileURLToPath } from 'url'
 import { chatService } from './chatService.js'
 import { configService } from './configService.js'
+import { getPythonCommand } from '../utils/python.js'
 import type { Message } from '../types.js'
 
 const execFileAsync = promisify(execFile)
@@ -101,7 +102,7 @@ export class ExportService {
       }
 
       console.log(`  Exporting HTML via Python...`)
-      const { stdout } = await execFileAsync('python', args, {
+      const { stdout } = await execFileAsync(getPythonCommand(), args, {
         timeout: 300_000,
         maxBuffer: 50 * 1024 * 1024,
       })

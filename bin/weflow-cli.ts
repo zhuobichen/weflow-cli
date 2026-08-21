@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+﻿#!/usr/bin/env node
 import { Command } from 'commander'
 import chalk from 'chalk'
 import inquirer from 'inquirer'
@@ -12,6 +12,7 @@ import { configService } from '../src/services/configService.js'
 import { chatService } from '../src/services/chatService.js'
 import { exportService } from '../src/services/exportService.js'
 import { resolveTalker as resolveTalkerCore } from '../src/utils/talkerUtils.js'
+import { getPythonCommand } from '../src/utils/python.js'
 import { WechatMessageService } from '../src/services/wechatMessageService.js'
 import { whitelistService, MAX_TEXT_LENGTH } from '../src/services/whitelistService.js'
 import type { ChatSession } from '../src/types.js'
@@ -202,13 +203,58 @@ program
       // 优先尝试从 WeFlow 配置读取
       console.log(chalk.gray('  尝试从 WeFlow 桌面版配置读取...'))
       let extractedKey = tryReadWeFlowKey()
+      let linuxNtKey = ''
 
       if (extractedKey) {
         console.log(chalk.green('  ✓ 从 WeFlow 配置读取到密钥'))
+      } else if (process.platform === 'linux') {
+        // Linux：/proc 内存扫描提取 NT 密钥（需 root 或 CAP_SYS_PTRACE）
+        console.log(chalk.gray('  Linux 模式：扫描微信进程内存提取 NT 密钥...'))
+        const ntScan = await NtCore.scan(detected.path)
+
+        if (ntScan.success && ntScan.matched && ntScan.matched.length > 0) {
+          console.log(chalk.green(`  ✓ 从内存中匹配到 ${ntScan.matched.length} 个数据库密钥`))
+          const primaryDb = ntScan.matched.find((db: any) => db.name === 'message/message_0.db')
+            || ntScan.matched.sort((a: any, b: any) => b.size - a.size)[0]
+          configService.set('ntDbPath', primaryDb.path)
+          configService.set('ntKey', primaryDb.key)
+          configService.set('ntSalt', primaryDb.salt)
+          console.log(chalk.green(`  ✓ 主数据库: ${primaryDb.name} (${(primaryDb.size / 1024 / 1024).toFixed(1)}MB)`))
+
+          const contactDb = ntScan.matched.find((db: any) => db.name === 'contact/contact.db')
+          if (contactDb) {
+            configService.set('contactDbPath', contactDb.path)
+            configService.set('contactKey', contactDb.key)
+            configService.set('contactSalt', contactDb.salt)
+            console.log(chalk.green(`  ✓ 联系人数据库: ${contactDb.name}`))
+          }
+          const snsDb = ntScan.matched.find((db: any) => db.name === 'sns/sns.db')
+          if (snsDb) {
+            configService.set('snsDbPath', snsDb.path)
+            configService.set('snsKey', snsDb.key)
+            configService.set('snsSalt', snsDb.salt)
+            console.log(chalk.green(`  ✓ 朋友圈数据库: ${snsDb.name}`))
+          }
+          linuxNtKey = primaryDb.key
+        } else {
+          const err = ntScan.error || '未匹配到数据库密钥'
+          console.log(chalk.red(`  ✗ ${err}`))
+          console.log(chalk.gray('\n  Linux 密钥提取方案：'))
+          if (err.includes('PERMISSION_DENIED')) {
+            console.log(chalk.gray('  1. 一次性授权（推荐）: sudo setcap cap_sys_ptrace=ep $(which python3)'))
+            console.log(chalk.gray('  2. 或用 sudo 运行: sudo weflow-cli init'))
+            console.log(chalk.gray('     （sudo 后需修复配置属主: sudo chown -R $(id -u):$(id -g) ~/.weflow-cli）'))
+          } else {
+            console.log(chalk.gray('  1. 确保微信已启动并完成登录（登录后才会在内存中缓存密钥）'))
+            console.log(chalk.gray('  2. 确保以 root 或 CAP_SYS_PTRACE 运行（sudo setcap cap_sys_ptrace=ep $(which python3)）'))
+            console.log(chalk.gray('  3. 或用第三方工具提取密钥后手动配置 weflow-cli config set ntKey <密钥>'))
+          }
+          process.exit(1)
+        }
       } else if (process.platform !== 'win32') {
-        // 非 Windows：自动 hook 不可用，引导手动提供密钥
-        console.log(chalk.yellow('  ⚠ 当前平台无法自动提取密钥（自动提取仅支持 Windows）'))
-        console.log(chalk.gray('\n  Linux/macOS 手动配置方式：'))
+        // macOS：自动提取不可用，引导手动提供密钥
+        console.log(chalk.yellow('  ⚠ 当前平台无法自动提取密钥（自动提取支持 Windows/Linux）'))
+        console.log(chalk.gray('\n  macOS 手动配置方式：'))
         console.log(chalk.gray('  1. 用第三方工具从运行中的微信进程提取密钥（如 wechat-dump-rs）'))
         console.log(chalk.gray('  2. 或从 Windows 机器上的 WeFlow 配置复制密钥'))
         console.log(chalk.gray('  3. 写入配置: weflow-cli config set decryptKey <64位密钥>'))
@@ -239,12 +285,17 @@ program
         }
       }
 
-      configService.set('decryptKey', extractedKey)
-      console.log(chalk.green('\n✓ 密钥获取成功!'))
+      if (extractedKey) {
+        configService.set('decryptKey', extractedKey)
+        console.log(chalk.green('\n✓ 密钥获取成功!'))
+      } else {
+        console.log(chalk.green('\n✓ NT 密钥配置完成!'))
+      }
 
       // Step 4: 尝试扫描 NT 格式数据库 (xwechat_files)
       // 即使检测到传统路径，也可能存在 NT 格式数据库
-      if (version) {
+      // Linux 分支已在步骤 3 完成配置，跳过
+      if (version && process.platform !== 'linux') {
         console.log(chalk.yellow('\n步骤 4/4: 扫描 NT 格式数据库...'))
         console.log(chalk.gray('  正在从微信内存中匹配数据库密钥...'))
 
@@ -303,7 +354,7 @@ program
           }
           console.log(chalk.gray('  提示: 可以稍后运行 weflow-cli init 重新扫描'))
         }
-      } else if (detected.path.toLowerCase().includes('xwechat_files')) {
+      } else if (detected.path.toLowerCase().includes('xwechat_files') && process.platform !== 'linux') {
         console.log(chalk.yellow('\n步骤 4/4: NT 格式数据库'))
         console.log(chalk.gray('  微信未运行，无法从内存中提取 NT 密钥'))
         console.log(chalk.gray('  请启动微信后运行: weflow-cli init'))
@@ -314,7 +365,8 @@ program
       console.log(chalk.cyan('=============================='))
       console.log(chalk.white(`数据目录: ${detected.path}`))
       console.log(chalk.white(`账号: ${selectedWxid.wxid}${selectedWxid.nickname ? ` (${selectedWxid.nickname})` : ''}`))
-      console.log(chalk.white(`密钥: ${extractedKey.slice(0, 8)}...${extractedKey.slice(-8)}`))
+      const displayKey = extractedKey || linuxNtKey
+      console.log(chalk.white(`密钥: ${displayKey.slice(0, 8)}...${displayKey.slice(-8)}`))
       const ntDbPath = configService.get('ntDbPath')
       if (ntDbPath) {
         console.log(chalk.white(`NT 数据库: ${ntDbPath}`))
@@ -532,6 +584,28 @@ program
   .action(async (opts) => {
     console.log(chalk.cyan('🔑 提取微信数据库密钥\n'))
     console.log(chalk.gray('请确保微信已登录且正在运行...\n'))
+
+    if (process.platform === 'linux') {
+      // Linux：/proc 内存扫描提取 NT 密钥
+      const { NtCore } = await import('../src/core/ntCore.js')
+      const result = await NtCore.scan()
+      if (result.success && result.matched && result.matched.length > 0) {
+        for (const db of result.matched) {
+          console.log(chalk.green(`✓ ${db.name} (${(db.size / 1024 / 1024).toFixed(1)}MB)`))
+          console.log(chalk.white(`  密钥: ${db.key}`))
+          console.log(chalk.white(`  盐值: ${db.salt}`))
+        }
+        console.log(chalk.gray('\n提示: 运行 weflow-cli init 可自动写入配置'))
+      } else if (result.error?.includes('PERMISSION_DENIED')) {
+        console.log(chalk.red('✗ 需要 root 或 CAP_SYS_PTRACE 权限'))
+        console.log(chalk.gray('  授权: sudo setcap cap_sys_ptrace=ep $(which python3)'))
+        process.exit(1)
+      } else {
+        console.log(chalk.red(`✗ ${result.error || '未匹配到密钥'}`))
+        process.exit(1)
+      }
+      return
+    }
 
     const version = await keyService.detectWeChatVersion()
     if (!version) {
@@ -1407,7 +1481,7 @@ program
 
     try {
       console.log(chalk.cyan('正在生成月报...\n'))
-      const { stdout } = await execFileAsync('python', args, {
+      const { stdout } = await execFileAsync(getPythonCommand(), args, {
         timeout: 600_000,
         maxBuffer: 50 * 1024 * 1024,
         env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
@@ -1578,7 +1652,7 @@ program
 
           try {
             console.log(chalk.cyan('正在编译概念图谱...\n'))
-            const { stdout } = await execFileAsync('python', args, {
+            const { stdout } = await execFileAsync(getPythonCommand(), args, {
               timeout: 300_000,
               maxBuffer: 10 * 1024 * 1024,
               env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
@@ -1618,7 +1692,7 @@ program
 
           try {
             console.log(chalk.cyan('\n启动端到端流水线...\n'))
-            const { stdout } = await execFileAsync('python', args, {
+            const { stdout } = await execFileAsync(getPythonCommand(), args, {
               timeout: 600_000,
               maxBuffer: 50 * 1024 * 1024,
               env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
@@ -1832,7 +1906,7 @@ program
       if (opts.month) { args.push('--month', opts.month) }
       if (opts.output) { args.push('--output', opts.output) }
       try {
-        const { stdout } = await execFileAsync('python', args, {
+        const { stdout } = await execFileAsync(getPythonCommand(), args, {
           timeout: 600_000, maxBuffer: 50 * 1024 * 1024,
           env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
         })
@@ -1863,7 +1937,7 @@ program
       if (opts.date) args.push('--date', opts.date)
       if (opts.apiKey) args.push('--api-key', opts.apiKey)
       try {
-        const { stdout } = await execFileAsync('python', args, {
+        const { stdout } = await execFileAsync(getPythonCommand(), args, {
           timeout: 120_000, maxBuffer: 10 * 1024 * 1024,
           env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
         })
@@ -1907,7 +1981,7 @@ program
         exec(`start http://localhost:${opts.port}`)
       }
 
-      const child = spawn('python', args, {
+      const child = spawn(getPythonCommand(), args, {
         stdio: 'inherit',
         env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
       })
@@ -2153,7 +2227,7 @@ program
     const { promisify } = await import('util')
     const execFileAsync = promisify(execFile)
     try {
-      const { stdout } = await execFileAsync('python', [script, ...args], {
+      const { stdout } = await execFileAsync(getPythonCommand(), [script, ...args], {
         timeout: 120_000, maxBuffer: 5 * 1024 * 1024,
         env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
       })
@@ -2189,7 +2263,7 @@ program
       const args: string[] = [script, 'search', query, '--top-k', opts.topK]
       if (opts.apiKey) args.push('--api-key', opts.apiKey)
       try {
-        const { stdout } = await execFileAsync('python', args, {
+        const { stdout } = await execFileAsync(getPythonCommand(), args, {
           timeout: 60_000, maxBuffer: 10 * 1024 * 1024,
           env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
         })
@@ -2219,7 +2293,7 @@ program
       if (opts.full) args.push('--full')
       if (opts.apiKey) args.push('--api-key', opts.apiKey)
       try {
-        const { stdout } = await execFileAsync('python', args, {
+        const { stdout } = await execFileAsync(getPythonCommand(), args, {
           timeout: 300_000, maxBuffer: 10 * 1024 * 1024,
           env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
         })
@@ -2256,7 +2330,7 @@ program
         if (opts.apiKey) args.push('--api-key', opts.apiKey)
         if (opts.json) args.push('--json')
         try {
-          const { stdout } = await execFileAsync('python', args, {
+          const { stdout } = await execFileAsync(getPythonCommand(), args, {
             timeout: 120_000, maxBuffer: 10 * 1024 * 1024,
             env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
           })
@@ -2270,7 +2344,7 @@ program
         args.push('--interactive', '--top-k', opts.topK)
         if (opts.talker) args.push('--talker', opts.talker)
         if (opts.apiKey) args.push('--api-key', opts.apiKey)
-        const child = spawn('python', args, {
+        const child = spawn(getPythonCommand(), args, {
           stdio: 'inherit',
           env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
         })
@@ -2293,7 +2367,7 @@ program
     const pkgRoot = join(__dirname, '..')
     const pyArgs = [join(pkgRoot, script), ...args]
     try {
-      const { stdout } = await execFileAsync('python', pyArgs, {
+      const { stdout } = await execFileAsync(getPythonCommand(), pyArgs, {
         timeout: 120_000, maxBuffer: 5 * 1024 * 1024,
         env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
       })
@@ -2410,7 +2484,7 @@ program
     const args = [pipeline, '--date', date, '--api-key', apiKey, '--interest', 'AI', '--skip-wiki']
     if (opts.skipClassify) args.push('--skip-classify')
 
-    const child = spawn('python', args, {
+    const child = spawn(getPythonCommand(), args, {
       stdio: 'inherit',
       env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
     })
@@ -2450,7 +2524,7 @@ program
       exec(`start http://localhost:${opts.port}`)
     }
 
-    const child = spawn('python', [favServer, '--date', date, '--port', String(opts.port)], {
+    const child = spawn(getPythonCommand(), [favServer, '--date', date, '--port', String(opts.port)], {
       stdio: 'inherit',
       env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
     })
@@ -2510,7 +2584,7 @@ program
     const { execSync } = await import('child_process')
     let pythonOk = false
     try {
-      const pyVer = execSync('python --version 2>&1 || python3 --version 2>&1', { encoding: 'utf-8', timeout: 5000 }).trim()
+      const pyVer = execSync(`${getPythonCommand()} --version 2>&1`, { encoding: 'utf-8', timeout: 5000 }).trim()
       console.log(chalk.white('Python: '), chalk.green(pyVer))
       pythonOk = true
     } catch {
@@ -2524,7 +2598,7 @@ program
       let allOk = true
       for (const dep of deps) {
         try {
-          execSync(`python -c "import ${dep}"`, { timeout: 5000 })
+          execSync(`${getPythonCommand()} -c "import ${dep}"`, { timeout: 5000 })
           console.log(`  ${dep.padEnd(20)} ${chalk.green('✓')}`)
         } catch {
           console.log(`  ${dep.padEnd(20)} ${chalk.red('✗ 缺失')}`)
@@ -2533,17 +2607,22 @@ program
       }
       if (!allOk) {
         console.log(chalk.yellow('\n⚠️  运行以下命令安装缺失依赖：'))
-        console.log(chalk.gray('  pip install sqlcipher3 html2text zstandard cryptography'))
+        if (process.platform === 'linux') {
+          console.log(chalk.gray('  pip3 install --user sqlcipher3 html2text zstandard cryptography'))
+          console.log(chalk.gray('  （sqlcipher3 编译需先: sudo apt install libsqlcipher-dev）'))
+        } else {
+          console.log(chalk.gray('  pip install sqlcipher3 html2text zstandard cryptography'))
+        }
       }
       // 可选依赖
       const optDeps = ['scrapling']
       console.log(chalk.white('\n可选依赖（提升抓取成功率）:'))
       for (const dep of optDeps) {
         try {
-          execSync(`python -c "import ${dep}"`, { timeout: 5000 })
+          execSync(`${getPythonCommand()} -c "import ${dep}"`, { timeout: 5000 })
           console.log(`  ${dep.padEnd(20)} ${chalk.green('✓')}`)
         } catch {
-          console.log(`  ${dep.padEnd(20)} ${chalk.gray('○ (npm install scrapling)')}`)
+          console.log(`  ${dep.padEnd(20)} ${chalk.gray('○ (pip install scrapling)')}`)
         }
       }
     }
@@ -2689,7 +2768,7 @@ async function showInteractiveMenu() {
     const script = join(pkgRoot, 'scripts', scriptName)
     console.log(chalk.cyan(`正在${label}...\n`))
     try {
-      const { stdout } = await execFileAsync('python', [script], {
+      const { stdout } = await execFileAsync(getPythonCommand(), [script], {
         timeout: 600_000, maxBuffer: 50 * 1024 * 1024,
         env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
       })
@@ -2757,7 +2836,7 @@ async function showInteractiveMenu() {
       const pkgs = join(dirname(fn), '..')
       const pipeline = join(pkgs, 'scripts', 'pipeline.py')
       console.log(chalk.cyan(`\n📰 正在生成 ${dateStr} 公众号日报...\n`))
-      const child = spawn('python', [pipeline, '--date', dateStr, '--api-key', apiKey, '--interest', 'AI', '--skip-wiki'], {
+      const child = spawn(getPythonCommand(), [pipeline, '--date', dateStr, '--api-key', apiKey, '--interest', 'AI', '--skip-wiki'], {
         stdio: 'inherit',
         env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
       })

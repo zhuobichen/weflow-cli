@@ -6,6 +6,7 @@ import { createRequire } from 'module'
 import os from 'os'
 import type { DbKeyResult } from '../types.js'
 import { configService } from '../services/configService.js'
+import { getPythonCommand } from '../utils/python.js'
 
 const require = createRequire(import.meta.url)
 const execFileAsync = promisify(execFile)
@@ -424,7 +425,7 @@ export class KeyService {
         return { success: false, error: `Python 脚本不存在: ${scriptPath}` }
       }
 
-      const { stdout } = await execFileAsync('python', [scriptPath], {
+      const { stdout } = await execFileAsync(getPythonCommand(), [scriptPath], {
         timeout: 120_000,
         maxBuffer: 1024 * 1024
       })

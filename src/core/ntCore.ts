@@ -5,33 +5,18 @@
  * SQLCipher 4 with plaintext_header_size=0. Decryption requires the
  * sqlcipher3 Python package. This module wraps scripts/nt_decrypt.py.
  */
-import { execFile, execFileSync } from 'child_process'
+import { execFile } from 'child_process'
 import { promisify } from 'util'
 import { existsSync } from 'fs'
 import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
 import { configService } from '../services/configService.js'
+import { getPythonCommand } from '../utils/python.js'
 import type { ChatSession, Message, Contact } from '../types.js'
 
 const execFileAsync = promisify(execFile)
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
-
-function resolvePythonCommand(): string {
-  // Windows 装的是 python.exe；Linux 发行版通常只有 python3
-  const candidates = process.platform === 'win32' ? ['python'] : ['python3', 'python']
-  for (const cmd of candidates) {
-    try {
-      execFileSync(cmd, ['--version'], { stdio: 'ignore', timeout: 5000 })
-      return cmd
-    } catch {
-      // try next
-    }
-  }
-  return 'python'
-}
-
-let pythonCommand: string | null = null
 
 export interface NtResult {
   success: boolean
@@ -104,8 +89,7 @@ export class NtCore {
 
   private async callPython(args: string[]): Promise<any> {
     try {
-      pythonCommand ??= resolvePythonCommand()
-      const { stdout } = await execFileAsync(pythonCommand, [this.scriptPath, ...args], {
+      const { stdout } = await execFileAsync(getPythonCommand(), [this.scriptPath, ...args], {
         timeout: 120_000,
         maxBuffer: 50 * 1024 * 1024,
         env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
@@ -140,11 +124,12 @@ export class NtCore {
    * Scan memory for NT keys and match to databases.
    * Requires WeChat to be running.
    */
-  static async scan(): Promise<NtScanResult> {
+  static async scan(root?: string): Promise<NtScanResult> {
     try {
       const pkgRoot = join(__dirname, '..', '..', '..')
       const scriptPath = join(pkgRoot, 'scripts', 'nt_decrypt.py')
-      const { stdout } = await execFileAsync(pythonCommand ?? (pythonCommand = resolvePythonCommand()), [scriptPath, 'scan', '--json'], {
+      const scanArgs = root ? ['scan', '--json', '--root', root] : ['scan', '--json']
+      const { stdout } = await execFileAsync(getPythonCommand(), [scriptPath, ...scanArgs], {
         timeout: 300_000,
         maxBuffer: 10 * 1024 * 1024,
         env: { ...process.env, PYTHONIOENCODING: 'utf-8' },

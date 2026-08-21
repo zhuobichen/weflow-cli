@@ -17,8 +17,22 @@ import { existsSync, readFileSync, readdirSync, unlinkSync, mkdirSync, writeFile
 import { join, basename, dirname } from 'path'
 import os from 'os'
 import { DatabaseSync } from 'node:sqlite'
-import lz4 from 'lz4'
+import { createRequire } from 'module'
 import type { ChatSession, Message, Contact } from '../types.js'
+
+const require = createRequire(import.meta.url)
+
+// lz4 是原生模块（仅 3.x WCDB 解压用），懒加载避免非 Windows 平台启动即崩溃
+let lz4Lazy: any = null
+function getLz4(): any {
+  if (lz4Lazy !== null) return lz4Lazy
+  try {
+    lz4Lazy = require('lz4')
+  } catch (e) {
+    lz4Lazy = undefined
+  }
+  return lz4Lazy
+}
 
 const PAGE_SIZE = 4096
 const KEY_SIZE = 32
@@ -549,6 +563,8 @@ export class SqlcipherCore {
     if (!buf) return null
 
     try {
+      const lz4 = getLz4()
+      if (!lz4) return null
       const maxSize = buf.length * 256
       const outBuf = Buffer.alloc(maxSize)
       const actualSize = lz4.decodeBlock(buf, outBuf)
