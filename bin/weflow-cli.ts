@@ -205,6 +205,15 @@ program
 
       if (extractedKey) {
         console.log(chalk.green('  ✓ 从 WeFlow 配置读取到密钥'))
+      } else if (process.platform !== 'win32') {
+        // 非 Windows：自动 hook 不可用，引导手动提供密钥
+        console.log(chalk.yellow('  ⚠ 当前平台无法自动提取密钥（自动提取仅支持 Windows）'))
+        console.log(chalk.gray('\n  Linux/macOS 手动配置方式：'))
+        console.log(chalk.gray('  1. 用第三方工具从运行中的微信进程提取密钥（如 wechat-dump-rs）'))
+        console.log(chalk.gray('  2. 或从 Windows 机器上的 WeFlow 配置复制密钥'))
+        console.log(chalk.gray('  3. 写入配置: weflow-cli config set decryptKey <64位密钥>'))
+        console.log(chalk.gray('  4. 数据目录与账号已完成配置，设置密钥后即可使用 sessions/messages 等命令'))
+        process.exit(1)
       } else {
         // 如果微信未运行，提示启动
         if (!version) {

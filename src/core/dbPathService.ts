@@ -130,6 +130,12 @@ export class DbPathService {
         }
         // macOS 旧路径兜底
         possiblePaths.push(join(home, 'Library', 'Containers', 'com.tencent.xinWeChat', 'Data', 'Documents', 'xwechat_files'))
+      } else if (process.platform === 'linux') {
+        // Linux 原生微信 4.x：数据结构与 Windows 相同（xwechat_files），XDG 文档目录随 locale 变化
+        possiblePaths.push(join(home, '.local', 'share', 'xwechat_files'))
+        possiblePaths.push(join(home, 'xwechat_files'))
+        possiblePaths.push(join(home, 'Documents', 'xwechat_files'))
+        possiblePaths.push(join(home, '文档', 'xwechat_files'))
       } else {
         // Windows: 优先检测 NT 格式 (xwechat_files)
         possiblePaths.push(join(home, 'xwechat_files'))
@@ -343,6 +349,16 @@ export class DbPathService {
       }
       // 旧版本路径兜底
       return join(home, 'Library', 'Containers', 'com.tencent.xinWeChat', 'Data', 'Documents', 'xwechat_files')
+    }
+    if (process.platform === 'linux') {
+      for (const p of [
+        join(home, '.local', 'share', 'xwechat_files'),
+        join(home, 'xwechat_files'),
+        join(home, 'Documents', 'xwechat_files'),
+        join(home, '文档', 'xwechat_files'),
+      ]) {
+        if (existsSync(p)) return p
+      }
     }
     // 优先返回 4.x 路径
     const xwechatPath = join(home, 'Documents', 'xwechat_files')
