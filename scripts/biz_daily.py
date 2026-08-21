@@ -27,7 +27,7 @@ from pathlib import Path
 
 # 公共工具
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _utils import call_deepseek, load_config, decrypt_lock, write_with_frontmatter, format_wikilinks
+from _utils import call_deepseek, load_config, decrypt_lock, get_api_key, write_with_frontmatter, format_wikilinks
 
 try:
     from sqlcipher3 import dbapi2 as sqlcipher
@@ -431,7 +431,7 @@ def main():
 
     # API key — only required for cloud engines
     engine = args.engine or 'deepseek'
-    api_key = args.api_key or os.environ.get('DEEPSEEK_API_KEY', '') or config.get('deepseekApiKey', '')
+    api_key = args.api_key or os.environ.get('DEEPSEEK_API_KEY', '') or get_api_key(config)
     if not args.dry_run and engine in ('deepseek', 'claude') and not api_key:
         print(f'[ERROR] --engine {engine} 需要 API key。请通过 --api-key、环境变量或配置文件提供')
         sys.exit(1)

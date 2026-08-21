@@ -237,6 +237,7 @@ def create_engine(engine_type: str, api_key: str = '') -> AIEngine:
     """工厂函数：根据类型创建 AI 引擎。
 
     引擎类型: local(自动检测) / deepseek / claude / ollama
+    配置 aiBaseUrl 时, deepseek 引擎走自定义 OpenAI 兼容端点 (中转站)。
     """
     t = engine_type.lower()
     if t == 'local':
@@ -251,6 +252,9 @@ def create_engine(engine_type: str, api_key: str = '') -> AIEngine:
             )
         return engine
     elif t == 'deepseek':
+        base_url, model = _custom_endpoint()
+        if base_url:
+            return AIEngine(api_key, base_url, model)
         return DeepSeekEngine(api_key)
     elif t == 'claude':
         return ClaudeEngine(api_key)
@@ -259,6 +263,18 @@ def create_engine(engine_type: str, api_key: str = '') -> AIEngine:
     raise ValueError(
         f'未知引擎: {engine_type}，可选: local / deepseek / claude / ollama'
     )
+
+
+def _custom_endpoint():
+    """读取 config.json 的 aiBaseUrl/aiModel; 未配置返回 (None, None)。"""
+    try:
+        with open(CONFIG_PATH, encoding='utf-8') as f:
+            cfg = json.load(f)
+        base_url = (cfg.get('aiBaseUrl') or '').strip().rstrip('/')
+        model = (cfg.get('aiModel') or '').strip() or 'deepseek-chat'
+        return (base_url or None), (model if base_url else None)
+    except Exception:
+        return None, None
 
 
 def call_deepseek(prompt: str, api_key: str, max_tokens=2000, timeout=60) -> str:
@@ -415,6 +431,13 @@ def get_db_config(config=None):
         'contact_key': decrypt_lock(config.get('contactKey', '')),
         'contact_salt': config.get('contactSalt', ''),
     }
+
+
+def get_api_key(config=None) -> str:
+    """读取 AI API key (自动解密 lock: 前缀)。"""
+    if config is None:
+        config = load_config()
+    return decrypt_lock(config.get('deepseekApiKey', ''))
 
 
 # ======================================================================

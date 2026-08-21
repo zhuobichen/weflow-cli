@@ -106,6 +106,7 @@ sudo weflow-cli init
 | AI 协作 | 通过 MCP 将文章抓取、知识库检索和日报能力交给 Claude Code 等兼容客户端。 |
 | 个人回顾 | 聊天月报、年度报告、待办提取与朋友圈本地缓存查询。 |
 | 微信收藏 | 读取微信"收藏"内容（公众号文章、文字、图片、视频、聊天记录），支持类型过滤、关键词搜索与 Markdown/JSON 导出。 |
+| 第二大脑 Agent | 在微信里和本地 AI 助手对话：自然语言查询聊天记录/收藏、三层记忆跨会话延续、守护进程常驻后台。 |
 
 ## 三分钟上手
 
@@ -175,6 +176,25 @@ weflow-cli mcp-config > .mcp.json
 
 将生成的配置放到所用 MCP 客户端的配置位置后重启客户端即可。MCP 的工具列表与配置方式见 `weflow-cli mcp-config` 输出。
 
+**在微信里挂一个本地 AI 助手（第二大脑）**
+
+```powershell
+weflow-cli config set deepseekApiKey "sk-..."   # 或任意 OpenAI 兼容端点: aiBaseUrl + aiModel
+weflow-cli login-wechat        # 扫码绑定消息通道 (微信里会出现 ClawBot 联系人)
+weflow-cli assistant start     # 后台守护进程常驻
+```
+
+之后在手机微信的 ClawBot 对话里直接说话，助手会自动查询本地聊天记录和收藏作答，并具备跨会话记忆：
+
+- 「我最近都在忙什么？」— 自动检索会话与聊天记录综合回答
+- 「总结我和 XX 的聊天」— 定向读取与某联系人的消息
+- 「收藏里有哪些关于 AI 的文章？」— 搜索微信收藏
+- 「记住：我的项目叫 weflow-cli」— 写入长期记忆
+
+运行机制：守护进程通过微信官方 Bot 通道（iLink）长轮询收发消息，Agent 循环、三层记忆（工作窗口 / 滚动摘要 / 长期事实）、数据库查询全部在本机执行；仅最终提问与回复文本会发送给所配置的 LLM，工具输出中的电话/邮箱/链接等 PII 默认自动脱敏（`config set assistantPrivacy strict` 可加强，`ollama` 本地引擎则完全不出网）。会话 24 小时未活跃需重新扫码，单窗口内主动回复有官方条数限制。
+
+常用管理命令：`weflow-cli assistant status` / `log` / `stop`；微信内发送「帮助」查看助手指令。
+
 ## 常用命令
 
 | 目标 | 命令 |
@@ -189,6 +209,7 @@ weflow-cli mcp-config > .mcp.json
 | 微信读书 | `weflow-cli weread shelf` · `notes` · `search` · `stats` |
 | 知识库 | `weflow-cli vault` · `weflow-cli wiki` · `weflow-cli search <query>` · `weflow-cli chat` |
 | 总结与任务 | `weflow-cli report` · `annual-report` · `todos` |
+| 第二大脑助手 | `weflow-cli assistant start` · `status` · `log` · `stop` |
 | AI 编辑器集成 | `weflow-cli mcp-config` |
 
 运行 `weflow-cli <命令> --help` 可以查看某个命令的完整参数。例如：

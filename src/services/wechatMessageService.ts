@@ -216,7 +216,10 @@ export class WechatMessageService {
       tokenRequired: true,
     })
 
-    return result.ret === 0 && result.errcode === 0
+    // 服务器成功时返回 message_id (不带 ret/errcode); 失败时返回非零 ret/errcode
+    const failed = (result.ret != null && result.ret !== 0) ||
+                   (result.errcode != null && result.errcode !== 0)
+    return !failed
   }
 
   async sendMedia(
@@ -308,7 +311,9 @@ export class WechatMessageService {
       tokenRequired: true,
     })
 
-    return result.ret === 0 && result.errcode === 0
+    const failed = (result.ret != null && result.ret !== 0) ||
+                   (result.errcode != null && result.errcode !== 0)
+    return !failed
   }
 
   async sendImage(userId: string, imagePath: string): Promise<boolean> {

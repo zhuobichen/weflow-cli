@@ -2711,6 +2711,72 @@ program
     })
   })
 
+// ==================== assistant (第二大脑持久化 Agent) ====================
+const assistantCmd = program
+  .command('assistant')
+  .description('第二大脑助手 — 微信里的持久化 AI Agent (常驻 + 记忆 + DeepSeek)')
+
+assistantCmd
+  .command('start')
+  .description('后台启动守护进程 (重启电脑前持续在线)')
+  .action(async () => {
+    const { startDaemon } = await import('../src/services/assistantDaemon.js')
+    const r = startDaemon()
+    if (r.started) {
+      console.log(chalk.green(`✓ 守护进程已启动 (pid ${r.pid})`))
+      console.log(chalk.gray('  在微信 ClawBot 对话里直接说话即可'))
+      console.log(chalk.gray('  日志: weflow-cli assistant log'))
+      console.log(chalk.gray('  停止: weflow-cli assistant stop'))
+    } else {
+      console.log(chalk.yellow(`⚠ ${r.error}`))
+    }
+  })
+
+assistantCmd
+  .command('stop')
+  .description('停止守护进程')
+  .action(async () => {
+    const { stopDaemon } = await import('../src/services/assistantDaemon.js')
+    const r = stopDaemon()
+    console.log(r.stopped ? chalk.green(`✓ ${r.message}`) : chalk.yellow(`⚠ ${r.message}`))
+  })
+
+assistantCmd
+  .command('status')
+  .description('查看运行状态')
+  .action(async () => {
+    const { isDaemonAlive, tailLog } = await import('../src/services/assistantDaemon.js')
+    const { alive, pid } = isDaemonAlive()
+    console.log(`守护进程: ${alive ? chalk.green(`运行中 (pid ${pid})`) : chalk.gray('未运行')}`)
+    const token = configService.get('wechatOcToken')
+    console.log(`消息通道: ${token ? chalk.green('已登录') : chalk.red('未登录 (先 login-wechat)')}`)
+    const aiKey = configService.get('deepseekApiKey')
+    console.log(`LLM 大脑: ${aiKey ? chalk.green('DeepSeek 已配置') : chalk.gray('未配置 (config set deepseekApiKey)')}`)
+    const { privacyGate } = await import('../src/services/assistantPrivacy.js')
+    console.log(`隐私模式: ${chalk.cyan(privacyGate.mode())}${privacyGate.isLocalInference() ? chalk.green(' (本地推理, 数据不出境)') : chalk.gray(' (工具结果脱敏后出境)')}`)
+    console.log(chalk.cyan('\n最近日志:'))
+    console.log(chalk.gray(tailLog(10)))
+  })
+
+assistantCmd
+  .command('log')
+  .description('查看守护进程日志 (最近 N 行)')
+  .option('-n, --lines <number>', '行数', '30')
+  .action(async (opts) => {
+    const { tailLog } = await import('../src/services/assistantDaemon.js')
+    console.log(tailLog(parseInt(opts.lines)))
+  })
+
+assistantCmd
+  .command('run')
+  .description('前台运行 (调试用; 常驻请用 start)')
+  .action(async () => {
+    const { AssistantService } = await import('../src/services/assistantService.js')
+    const assistant = new AssistantService()
+    console.log(chalk.cyan('第二大脑前台运行中... (Ctrl+C 退出)'))
+    await assistant.start((line) => console.log(chalk.gray(line)))
+  })
+
 // ==================== daily-server ====================
 program
   .command('daily-server')
@@ -2850,17 +2916,46 @@ program
       console.log(chalk.yellow('  ○ 未初始化 — 运行 weflow-cli init'))
     }
 
-    // 5. Database
-    const ntDb = configService.get('ntDbPath')
-    if (ntDb && existsSync(ntDb)) {
-      const stat = (await import('fs')).statSync(ntDb)
-      const mb = (stat.size / 1024 / 1024).toFixed(0)
-      console.log(chalk.white(`  消息数据库: ${ntDb} (${mb}MB)`))
+    // 5. Databases & extensions
+    const dbRows: Array<[string, string, boolean]> = [
+      ['消息数据库', configService.get('ntDbPath'), true],
+      ['朋友圈数据库', configService.get('snsDbPath'), true],
+      ['收藏数据库', configService.get('favDbPath'), true],
+    ]
+    for (const [label, path, keyRequired] of dbRows) {
+      if (path && existsSync(path)) {
+        const stat = (await import('fs')).statSync(path)
+        const mb = (stat.size / 1024 / 1024).toFixed(0)
+        console.log(chalk.white(`  ${label}: ${path} (${mb}MB)`))
+      } else {
+        const hint = keyRequired ? ' (可选, init 或 sns/fav 命令配置)' : ''
+        console.log(chalk.gray(`  ${label}: 未配置${hint}`))
+      }
     }
-    const bizDb = (configService as any).get?.('bizKey')
-    if (bizDb) {
-      console.log(chalk.green('  ✓ 公众号数据库密钥已配置'))
+
+    // 6. Assistant (第二大脑)
+    console.log(chalk.white('\n第二大脑 Agent:'))
+    const aiKey = configService.get('deepseekApiKey')
+    const aiBase = configService.get('aiBaseUrl')
+    const engine = String(configService.get('aiEngine') || 'deepseek')
+    if (['ollama', 'lmstudio'].includes(engine)) {
+      console.log(chalk.green(`  AI 引擎: ${engine} (本地推理, 数据不出网)`))
+    } else if (aiKey) {
+      console.log(chalk.green(`  AI 引擎: ${aiBase ? `自定义端点 (${configService.get('aiModel') || 'deepseek-chat'})` : 'DeepSeek'}`))
+    } else {
+      console.log(chalk.gray('  AI 引擎: 未配置 (config set deepseekApiKey <key>)'))
     }
+    const ocToken = configService.get('wechatOcToken')
+    console.log(ocToken
+      ? chalk.green('  消息通道: 已登录 (login-wechat)')
+      : chalk.gray('  消息通道: 未登录 (weflow-cli login-wechat)'))
+    try {
+      const { isDaemonAlive } = await import('../src/services/assistantDaemon.js')
+      const { alive, pid } = isDaemonAlive()
+      console.log(alive
+        ? chalk.green(`  守护进程: 运行中 (pid ${pid})`)
+        : chalk.gray('  守护进程: 未运行 (weflow-cli assistant start)'))
+    } catch { /* daemon 模块不可用时跳过 */ }
     console.log()
   })
 
@@ -2922,6 +3017,22 @@ async function showInteractiveMenu() {
     name: `  发送消息${!hasLogin ? chalk.gray(' (需先登录)') : ''}`,
     value: 'send',
     disabled: !hasLogin ? '请先扫码登录' : undefined,
+  })
+
+  const hasAiKey = !!configService.get('deepseekApiKey') || ['ollama', 'lmstudio'].includes(String(configService.get('aiEngine')))
+  choices.push(new inquirer.Separator('  🧠 第二大脑 Agent'))
+  choices.push({
+    name: `  启动微信 AI 助手${hasLogin && hasAiKey ? '' : chalk.gray(' (需登录+API key)')}`,
+    value: 'assistant-start',
+    disabled: hasLogin && hasAiKey ? undefined : '需要消息通道登录和 AI 引擎配置',
+  })
+  choices.push({
+    name: '  查看助手状态',
+    value: 'assistant-status',
+  })
+  choices.push({
+    name: '  停止助手',
+    value: 'assistant-stop',
   })
 
   choices.push(new inquirer.Separator('  📚 知识库'))
@@ -3031,10 +3142,12 @@ async function showInteractiveMenu() {
       await runCmd('report', {})
       break
     case 'daily': {
-      const apiKey = process.env.DEEPSEEK_API_KEY || ''
+      const configKey = String(configService.get('deepseekApiKey') || '')
+      const apiKey = process.env.DEEPSEEK_API_KEY || configKey
       if (!apiKey) {
         console.log(chalk.red('\n❌ 缺少 DeepSeek API key'))
         console.log(chalk.gray('  设置环境变量: set DEEPSEEK_API_KEY=<key>'))
+        console.log(chalk.gray('  或持久化配置: weflow-cli config set deepseekApiKey <key>'))
         break
       }
       const now = new Date()
@@ -3067,6 +3180,15 @@ async function showInteractiveMenu() {
     }
     case 'login-wechat':
       await runCmd('login-wechat', {})
+      break
+    case 'assistant-start':
+      await runSubCmd('assistant', 'start')
+      break
+    case 'assistant-status':
+      await runSubCmd('assistant', 'status')
+      break
+    case 'assistant-stop':
+      await runSubCmd('assistant', 'stop')
       break
     case 'listen':
       await runCmd('listen', {})

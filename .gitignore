@@ -20,6 +20,8 @@ msg.txt
 .codex/
 scripts/.portable_package/
 scripts/_test_*.py
+scripts/_test_*.mjs
+scripts/_brain_*.mjs
 scripts/_*.json
 scripts/_hook_*.py
 scan_out.*

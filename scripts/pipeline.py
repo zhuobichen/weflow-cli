@@ -51,13 +51,13 @@ def main():
     args = parser.parse_args()
 
     sys.path.insert(0, SCRIPTS_DIR)
-    from _utils import load_config
+    from _utils import load_config, get_api_key
     config = load_config()
 
     # api_key：本地/ollama 引擎不需要；云端需要
     api_key = args.api_key or ''
     if args.engine in ('deepseek', 'claude') and not api_key:
-        api_key = os.environ.get('DEEPSEEK_API_KEY', '') or config.get('deepseekApiKey', '')
+        api_key = os.environ.get('DEEPSEEK_API_KEY', '') or get_api_key(config)
         if not api_key:
             print(f'[ERROR] --engine {args.engine} 需要 API key。请通过 --api-key、'
                   f'环境变量 DEEPSEEK_API_KEY 或 ~/.weflow-cli/config.json 提供')

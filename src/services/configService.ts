@@ -1,5 +1,5 @@
 import { join } from 'path'
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs'
+import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync } from 'fs'
 import { homedir, hostname, userInfo } from 'os'
 import crypto from 'crypto'
 import { expandHomePath } from '../utils/pathUtils.js'
@@ -50,6 +50,15 @@ interface CliConfig {
   favDbPath: string
   favKey: string
   favPassphrase: string
+  // 第二大脑助手
+  /** 隐私模式: open | balanced | strict */
+  assistantPrivacy: string
+  /** 本地推理引擎模型名 (ollama/lmstudio) */
+  localModel: string
+  /** 自定义 AI 端点 (OpenAI 兼容中转站); 设置后云端引擎走此地址 */
+  aiBaseUrl: string
+  /** 自定义端点使用的模型名 */
+  aiModel: string
 }
 
 export interface ListEntry {
@@ -70,7 +79,10 @@ const CONFIG_DIR = join(homedir(), '.weflow-cli')
 const CONFIG_FILE = join(CONFIG_DIR, 'config.json')
 
 export class ConfigService {
-  private config: CliConfig = { dbPath: '', wxid: '', decryptKey: '', decryptKey3x: '', dataVersion: '', dbPath3x: '', ntDbPath: '', ntKey: '', ntSalt: '', contactDbPath: '', contactKey: '', contactSalt: '', wechatOcToken: '', wechatOcAccountId: '', wechatOcBaseUrl: '', wechatOcSyncBuf: '', wechatOcContextTokens: '', whitelist: [], blacklist: [], whitelistEntries: [], blacklistEntries: [], vaultRepo: '', aiEngine: 'deepseek', wereadApiKey: '', deepseekApiKey: '', snsDbPath: '', snsKey: '', snsSalt: '', favDbPath: '', favKey: '', favPassphrase: '' }
+  private config: CliConfig = { dbPath: '', wxid: '', decryptKey: '', decryptKey3x: '', dataVersion: '', dbPath3x: '', ntDbPath: '', ntKey: '', ntSalt: '', contactDbPath: '', contactKey: '', contactSalt: '', wechatOcToken: '', wechatOcAccountId: '', wechatOcBaseUrl: '', wechatOcSyncBuf: '', wechatOcContextTokens: '', whitelist: [], blacklist: [], whitelistEntries: [], blacklistEntries: [], vaultRepo: '', aiEngine: 'deepseek', wereadApiKey: '', deepseekApiKey: '', snsDbPath: '', snsKey: '', snsSalt: '', favDbPath: '', favKey: '', favPassphrase: '', assistantPrivacy: 'balanced', localModel: '', aiBaseUrl: '', aiModel: '' }
+
+  /** 本进程修改过、待回写的字段 (多进程并发写保护) */
+  private dirty = new Set<keyof CliConfig>()
 
   constructor() {
     this.load()
@@ -121,6 +133,10 @@ export class ConfigService {
           favDbPath: data.favDbPath || '',
           favKey: data.favKey || '',
           favPassphrase: data.favPassphrase || '',
+          assistantPrivacy: data.assistantPrivacy || 'balanced',
+          localModel: data.localModel || '',
+          aiBaseUrl: data.aiBaseUrl || '',
+          aiModel: data.aiModel || '',
         }
       }
     } catch (e) {
@@ -134,7 +150,24 @@ export class ConfigService {
       if (!existsSync(CONFIG_DIR)) {
         mkdirSync(CONFIG_DIR, { recursive: true })
       }
-      writeFileSync(CONFIG_FILE, JSON.stringify(this.config, null, 2), 'utf8')
+      // 多进程安全 (守护进程与 CLI 并发): 只回写本进程修改过的字段,
+      // 其余字段以磁盘最新值保留, 避免旧内存快照覆盖他人写入 (幽灵回写)。
+      let merged: Record<string, unknown> = { ...this.config }
+      try {
+        if (existsSync(CONFIG_FILE) && this.dirty.size > 0) {
+          const onDisk: Record<string, unknown> = JSON.parse(readFileSync(CONFIG_FILE, 'utf8'))
+          merged = { ...onDisk, ...this.config }
+          for (const key of Object.keys(onDisk)) {
+            if (this.dirty.has(key as keyof CliConfig)) continue
+            merged[key] = onDisk[key]
+          }
+        }
+      } catch { /* 磁盘副本不可读时退回整份写入 */ }
+      // 原子写入: 先写临时文件再改名, 防止进程中途被杀导致配置损坏
+      const tmpFile = CONFIG_FILE + '.tmp'
+      writeFileSync(tmpFile, JSON.stringify(merged, null, 2), 'utf8')
+      renameSync(tmpFile, CONFIG_FILE)
+      this.dirty.clear()
     } catch (e) {
       console.error('保存配置失败:', e)
     }
@@ -159,6 +192,7 @@ export class ConfigService {
     } else {
       this.config[key] = value
     }
+    this.dirty.add(key)
     this.save()
   }
 
@@ -188,6 +222,7 @@ export class ConfigService {
 
   setWhitelist(list: string[]): void {
     this.config.whitelist = list
+    this.dirty.add('whitelist')
     this.save()
   }
 
@@ -199,6 +234,8 @@ export class ConfigService {
     this.config.whitelistEntries = entries
     // 同步 string[] 视图, 供旧代码使用
     this.config.whitelist = entries.map(e => e.wxid)
+    this.dirty.add('whitelistEntries')
+    this.dirty.add('whitelist')
     this.save()
   }
 
@@ -208,6 +245,7 @@ export class ConfigService {
 
   setBlacklist(list: string[]): void {
     this.config.blacklist = list
+    this.dirty.add('blacklist')
     this.save()
   }
 
@@ -218,6 +256,8 @@ export class ConfigService {
   setBlacklistEntries(entries: ListEntry[]): void {
     this.config.blacklistEntries = entries
     this.config.blacklist = entries.map(e => e.wxid)
+    this.dirty.add('blacklistEntries')
+    this.dirty.add('blacklist')
     this.save()
   }
 
@@ -239,6 +279,7 @@ export class ConfigService {
   setContextTokens(tokens: Record<string, string>): void {
     const json = JSON.stringify(tokens || {})
     this.config.wechatOcContextTokens = json ? this.lockEncrypt(json) : ''
+    this.dirty.add('wechatOcContextTokens')
     this.save()
   }
 
@@ -259,7 +300,9 @@ export class ConfigService {
   }
 
   clear(): void {
-    this.config = { dbPath: '', wxid: '', decryptKey: '', decryptKey3x: '', dataVersion: '', dbPath3x: '', ntDbPath: '', ntKey: '', ntSalt: '', contactDbPath: '', contactKey: '', contactSalt: '', wechatOcToken: '', wechatOcAccountId: '', wechatOcBaseUrl: '', wechatOcSyncBuf: '', wechatOcContextTokens: '', whitelist: [], blacklist: [], whitelistEntries: [], blacklistEntries: [], vaultRepo: '', aiEngine: 'deepseek', wereadApiKey: '', deepseekApiKey: '', snsDbPath: '', snsKey: '', snsSalt: '', favDbPath: '', favKey: '', favPassphrase: '' }
+    this.config = { dbPath: '', wxid: '', decryptKey: '', decryptKey3x: '', dataVersion: '', dbPath3x: '', ntDbPath: '', ntKey: '', ntSalt: '', contactDbPath: '', contactKey: '', contactSalt: '', wechatOcToken: '', wechatOcAccountId: '', wechatOcBaseUrl: '', wechatOcSyncBuf: '', wechatOcContextTokens: '', whitelist: [], blacklist: [], whitelistEntries: [], blacklistEntries: [], vaultRepo: '', aiEngine: 'deepseek', wereadApiKey: '', deepseekApiKey: '', snsDbPath: '', snsKey: '', snsSalt: '', favDbPath: '', favKey: '', favPassphrase: '', assistantPrivacy: 'balanced', localModel: '', aiBaseUrl: '', aiModel: '' }
+    // clear 意图是全量重置: 所有字段标记为脏, 覆盖磁盘上的全部旧值
+    this.dirty = new Set(Object.keys(this.config) as (keyof CliConfig)[])
     this.save()
   }
 

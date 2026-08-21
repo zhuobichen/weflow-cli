@@ -67,6 +67,8 @@ weflow-cli mcp-config                  # one-shot MCP client integration
 | Personal knowledge base | Sync WeRead notes, build an Obsidian vault, semantic search, RAG Q&A, and a concept wiki. |
 | AI collaboration | Expose article crawling, knowledge-base retrieval, and digest capabilities to MCP-compatible clients such as Claude Code. |
 | Personal review | Monthly chat reports, annual reports, todo extraction, and local Moments cache queries. |
+| WeChat favorites | Read WeChat "Favorites" (official-account articles, text, images, videos, chat records) with type filters, keyword search, and Markdown/JSON export. |
+| Second-brain agent | Chat with a local AI assistant inside WeChat: natural-language queries over chats/favorites, three-tier memory across sessions, daemonized background service. |
 
 ## Quick Start in Three Minutes
 
@@ -136,6 +138,25 @@ weflow-cli mcp-config > .mcp.json
 
 Place the generated configuration wherever your MCP client expects it and restart the client. See `weflow-cli mcp-config` output for the tool list and configuration details.
 
+**Host a local AI assistant in WeChat (second brain)**
+
+```powershell
+weflow-cli config set deepseekApiKey "sk-..."   # or any OpenAI-compatible endpoint: aiBaseUrl + aiModel
+weflow-cli login-wechat        # scan the QR code to bind the messaging channel (a ClawBot contact appears in WeChat)
+weflow-cli assistant start     # run the agent as a background daemon
+```
+
+Then just talk to ClawBot on your phone. The assistant queries local chats and favorites to answer, with memory that survives across sessions:
+
+- "What have I been busy with lately?" — synthesizes recent sessions and messages
+- "Summarize my chats with XX" — pulls that thread's history
+- "Which AI articles do I have in favorites?" — searches WeChat favorites
+- "Remember: my project is called weflow-cli" — writes to long-term memory
+
+How it works: the daemon long-polls WeChat's official bot channel (iLink); the agent loop, three-tier memory (working window / rolling summary / long-term facts), and all database queries run on your machine. Only the final question and reply texts go to the configured LLM; phone numbers, emails, and links in tool output are redacted by default (`config set assistantPrivacy strict` for stronger masking; a local `ollama` engine keeps everything offline). Sessions expire after 24h of inactivity, and proactive replies per window are capped by official limits.
+
+Management: `weflow-cli assistant status` / `log` / `stop`; send "帮助" in WeChat for in-chat commands.
+
 ## Common Commands
 
 | Goal | Command |
@@ -146,9 +167,11 @@ Place the generated configuration wherever your MCP client expects it and restar
 | Export chat history | `weflow-cli export <contact> <json\|txt\|md\|html\|excel>` |
 | Digest & reader | `weflow-cli daily` · `weflow-cli daily-server` · `weflow-cli review` |
 | Moments cache | `weflow-cli sns timeline` · `weflow-cli sns users` · `weflow-cli sns stats` |
+| WeChat favorites | `weflow-cli fav list` · `weflow-cli fav export markdown` · `weflow-cli fav set-key` |
 | WeRead | `weflow-cli weread shelf` · `notes` · `search` · `stats` |
 | Knowledge base | `weflow-cli vault` · `weflow-cli wiki` · `weflow-cli search <query>` · `weflow-cli chat` |
 | Reports & tasks | `weflow-cli report` · `annual-report` · `todos` |
+| Second-brain assistant | `weflow-cli assistant start` · `status` · `log` · `stop` |
 | AI editor integration | `weflow-cli mcp-config` |
 
 Run `weflow-cli <command> --help` for the full options of any command. For example:
