@@ -65,10 +65,10 @@ weflow-cli mcp-config                  # one-shot MCP client integration
 | Chat history | Query sessions, contacts, and messages; export to JSON, TXT, Markdown, HTML, Excel. |
 | Official-account digest | Crawl articles, AI summarization and classification, generate a local reading page, keep favorites and read states. |
 | Personal knowledge base | Sync WeRead notes, build an Obsidian vault, semantic search, RAG Q&A, and a concept wiki. |
-| AI collaboration | Expose article crawling, knowledge-base retrieval, and digest capabilities to MCP-compatible clients such as Claude Code. |
+| AI collaboration | Expose article crawling, knowledge-base retrieval, digests, and local chat data (sessions/favorites/Moments/todos) to MCP-compatible clients — 22 tools sharing the same layer as the WeChat bot. |
 | Personal review | Monthly chat reports, annual reports, todo extraction, and local Moments cache queries. |
 | WeChat favorites | Read WeChat "Favorites" (official-account articles, text, images, videos, chat records) with type filters, keyword search, and Markdown/JSON export. |
-| Second-brain agent | Chat with a local AI assistant inside WeChat: natural-language queries over chats/favorites, three-tier memory across sessions, daemonized background service. |
+| Second-brain agent | Chat with a local AI assistant inside WeChat: natural-language queries over chats, favorites, Moments, digests, WeRead, todos, and the knowledge base; three-tier memory across sessions, daemonized background service. |
 
 ## Quick Start in Three Minutes
 
@@ -138,6 +138,8 @@ weflow-cli mcp-config > .mcp.json
 
 Place the generated configuration wherever your MCP client expects it and restart the client. See `weflow-cli mcp-config` output for the tool list and configuration details.
 
+Beyond the knowledge-base tools, the MCP server also exposes the full local WeChat data layer (sessions, chat history, favorite-article bodies, Moments, digests, WeRead, todos, knowledge base, and assistant memory) — 22 tools in total, sharing the same tool layer and long-term memory as the WeChat bot. See the [MCP Integration Guide](./docs/MCP.md) for the tool inventory and security boundaries.
+
 **Host a local AI assistant in WeChat (second brain)**
 
 ```powershell
@@ -151,6 +153,12 @@ Then just talk to ClawBot on your phone. The assistant queries local chats and f
 - "What have I been busy with lately?" — synthesizes recent sessions and messages
 - "Summarize my chats with XX" — pulls that thread's history
 - "Which AI articles do I have in favorites?" — searches WeChat favorites
+- "What does this favorited article say?" — fetches and summarizes the article body
+- "What's new on my Moments?" / "Who posts the most?" — Moments timeline and stats
+- "What did official accounts push today? Any AI ones?" — digest queries with topic/keyword filters
+- "What am I reading?" / "My notes on XX" — WeRead shelf and notebooks
+- "Any pending todos? Anything urgent?" — todo list sorted by urgency
+- "How does my knowledge base explain RAG?" — concept-wiki lookup
 - "Remember: my project is called weflow-cli" — writes to long-term memory
 
 How it works: the daemon long-polls WeChat's official bot channel (iLink); the agent loop, three-tier memory (working window / rolling summary / long-term facts), and all database queries run on your machine. Only the final question and reply texts go to the configured LLM; phone numbers, emails, and links in tool output are redacted by default (`config set assistantPrivacy strict` for stronger masking; a local `ollama` engine keeps everything offline). Sessions expire after 24h of inactivity, and proactive replies per window are capped by official limits.

@@ -111,6 +111,22 @@ function htmlToMarkdown(html: string): string {
   return md
 }
 import { formatWeChatArticle, listThemes } from '../src/services/wechat-formatter.js'
+import { TOOL_DEFS, executeTool } from '../src/services/assistantTools.js'
+import { AssistantMemory } from '../src/services/assistantMemory.js'
+
+// ---- 本地微信数据工具 (复用 assistant 工具层, 微信 bot / MCP server 同源) ----
+// MCP 无微信用户身份, 记忆固定挂 'mcp' 用户下; 与 assistant 守护进程共用同一持久化文件
+const mcpMemory = new AssistantMemory()
+const MCP_TOOL_CTX = { userId: 'mcp', memory: mcpMemory }
+
+/** assistant 工具 (OpenAI function 格式) → MCP 工具格式; get_stats 并入现有 wechat.get_stats */
+const ASSISTANT_TOOLS = TOOL_DEFS
+  .filter(t => t.function.name !== 'get_stats')
+  .map(t => ({
+    name: `wechat.${t.function.name}`,
+    description: t.function.description,
+    inputSchema: t.function.parameters,
+  }))
 
 // ---- 微信公众号 API 辅助 ----
 const WECHAT_APP_ID = process.env.WECHAT_APPID || ''
@@ -396,7 +412,7 @@ async function main() {
       },
       {
         name: 'wechat.get_stats',
-        description: '知识库统计概览',
+        description: '统计概览: 知识库文章/概念页 + 本地微信数据(会话数/收藏总数)',
         inputSchema: { type: 'object', properties: {} },
       },
       {
@@ -455,6 +471,8 @@ async function main() {
           required: ['url'],
         },
       },
+      // ---- 本地微信数据 (与 weflow-cli assistant / 微信 bot 共享工具层) ----
+      ...ASSISTANT_TOOLS,
     ],
   }))
 
@@ -627,6 +645,9 @@ async function main() {
             const m = idx.match(/共 (\d+) 个概念/)
             if (m) stats += `- 概念页: ${m[1]} 个\n`
           }
+          // 追加本地微信数据统计 (会话/收藏; 数据库未配置时返回提示)
+          const chatStats = await executeTool('get_stats', {}, MCP_TOOL_CTX)
+          stats += `\n## 本地微信数据\n\n${chatStats}\n`
           return { content: [{ type: 'text', text: stats }] }
         }
 
@@ -743,8 +764,14 @@ async function main() {
           }
         }
 
-        default:
+        default: {
+          // assistant 工具层统一分发 (wechat.list_sessions / wechat.get_messages / ...)
+          if (name.startsWith('wechat.')) {
+            const text = await executeTool(name.slice('wechat.'.length), args, MCP_TOOL_CTX)
+            return { content: [{ type: 'text', text }] }
+          }
           return { content: [{ type: 'text', text: `未知工具: ${name}` }] }
+        }
       }
     } catch (e: any) {
       return { content: [{ type: 'text', text: `错误: ${e.message}` }] }

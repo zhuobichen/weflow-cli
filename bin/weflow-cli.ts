@@ -2840,11 +2840,28 @@ program
       console.log(json)
     }
     console.log(chalk.cyan('\n可用的 MCP 工具：'))
-    console.log(chalk.white('  wechat.search_articles  ') + chalk.gray('搜索知识库文章'))
-    console.log(chalk.white('  wechat.get_daily         ') + chalk.gray('获取公众号日报'))
-    console.log(chalk.white('  wechat.get_review        ') + chalk.gray('获取 AI 学习日报'))
-    console.log(chalk.white('  wechat.get_stats         ') + chalk.gray('知识库统计'))
-    console.log(chalk.white('  wechat.get_concepts      ') + chalk.gray('概念图谱'))
+    const STATIC_TOOLS: Array<[string, string]> = [
+      ['wechat.search_articles', '搜索知识库文章'],
+      ['wechat.get_daily', '获取公众号日报(完整版)'],
+      ['wechat.get_review', '获取 AI 学习日报'],
+      ['wechat.get_stats', '统计概览(知识库+微信数据)'],
+      ['wechat.get_concepts', '概念图谱索引'],
+      ['wechat.get_concept', '读取概念 Wiki 页'],
+      ['wechat.format_article', 'Markdown 转公众号排版'],
+      ['wechat.list_themes', '排版主题列表'],
+      ['wechat.fetch_article', '抓取公众号文章'],
+      ['wechat.search_public', '搜索全网公众号文章'],
+      ['wechat.publish_article', '发布到公众号草稿箱'],
+    ]
+    const { TOOL_DEFS } = await import('../src/services/assistantTools.js')
+    const all = [
+      ...STATIC_TOOLS,
+      ...TOOL_DEFS.filter(t => t.function.name !== 'get_stats')
+        .map(t => [`wechat.${t.function.name}`, t.function.description.split(/[。(]/)[0]] as [string, string]),
+    ]
+    for (const [n, d] of all) {
+      console.log(chalk.white('  ' + n.padEnd(28)) + chalk.gray(d))
+    }
     console.log()
     if (opts.output) {
       console.log(chalk.gray(`配置已写入 ${opts.output}，重启 AI 编辑器即可生效`))

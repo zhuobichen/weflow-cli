@@ -6,7 +6,7 @@
  * 持久化: ~/.weflow-cli/assistant_memory.json
  */
 import { join } from 'path'
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs'
+import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync } from 'fs'
 import os from 'os'
 
 const MEMORY_FILE = join(os.homedir(), '.weflow-cli', 'assistant_memory.json')
@@ -31,20 +31,26 @@ export type LlmCaller = (messages: ChatTurn[], maxTokens?: number) => Promise<st
 
 export class AssistantMemory {
   private states: Record<string, UserMemory> = {}
+  /** 本进程修改过的用户 (save 时只回写这些用户, 其余保留磁盘最新值) */
+  private dirtyUsers = new Set<string>()
 
   constructor() { this.load() }
+
+  private normalize(s: any): UserMemory {
+    return {
+      working: Array.isArray(s.working) ? s.working : [],
+      summary: typeof s.summary === 'string' ? s.summary : '',
+      facts: Array.isArray(s.facts) ? s.facts : [],
+      turnCount: s.turnCount || 0,
+    }
+  }
 
   private load(): void {
     try {
       if (existsSync(MEMORY_FILE)) {
         const raw = JSON.parse(readFileSync(MEMORY_FILE, 'utf8'))
         for (const [uid, s] of Object.entries<any>(raw)) {
-          this.states[uid] = {
-            working: Array.isArray(s.working) ? s.working : [],
-            summary: typeof s.summary === 'string' ? s.summary : '',
-            facts: Array.isArray(s.facts) ? s.facts : [],
-            turnCount: s.turnCount || 0,
-          }
+          this.states[uid] = this.normalize(s)
         }
       }
     } catch { this.states = {} }
@@ -52,9 +58,28 @@ export class AssistantMemory {
 
   save(): void {
     try {
+      // 读改写合并: MCP server / assistant 守护进程并发写同一文件,
+      // 只回写本进程修改过的用户, 防止旧快照覆盖其他进程刚写入的数据 (同 configService 策略)
+      const merged: Record<string, UserMemory> = {}
+      try {
+        if (existsSync(MEMORY_FILE)) {
+          const disk = JSON.parse(readFileSync(MEMORY_FILE, 'utf8'))
+          for (const [uid, s] of Object.entries<any>(disk)) {
+            if (this.dirtyUsers.has(uid)) continue
+            merged[uid] = this.normalize(s)
+          }
+        }
+      } catch { /* 磁盘损坏 → 只落内存态 */ }
+      for (const uid of this.dirtyUsers) {
+        if (this.states[uid]) merged[uid] = this.states[uid]
+      }
       const dir = join(os.homedir(), '.weflow-cli')
       if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
-      writeFileSync(MEMORY_FILE, JSON.stringify(this.states), 'utf8')
+      const tmp = `${MEMORY_FILE}.tmp`
+      writeFileSync(tmp, JSON.stringify(merged), 'utf8')
+      renameSync(tmp, MEMORY_FILE)
+      this.states = merged
+      this.dirtyUsers.clear()
     } catch { /* 持久化失败不阻断对话 */ }
   }
 
@@ -67,10 +92,12 @@ export class AssistantMemory {
 
   reset(userId: string): void {
     delete this.states[userId]
+    this.dirtyUsers.add(userId)
     this.save()
   }
 
   addTurn(userId: string, role: 'user' | 'assistant', content: string): void {
+    this.dirtyUsers.add(userId)
     const s = this.state(userId)
     s.working.push({ role, content })
     if (role === 'user') s.turnCount++
@@ -89,6 +116,7 @@ export class AssistantMemory {
   async compressIfNeeded(userId: string, llm: LlmCaller): Promise<boolean> {
     const s = this.state(userId)
     if (s.working.length <= WORKING_MAX) return false
+    this.dirtyUsers.add(userId)
 
     const out = s.working.slice(0, Math.floor(s.working.length / 2))
     s.working = s.working.slice(out.length)
@@ -117,6 +145,7 @@ ${out.map(t => `${t.role === 'user' ? '用户' : '助手'}: ${t.content}`).join(
     if (s.turnCount === 0 || s.turnCount % FACT_EXTRACT_EVERY !== 0) return 0
     const recent = s.working.slice(-FACT_EXTRACT_EVERY)
     if (!recent.length) return 0
+    this.dirtyUsers.add(userId)
 
     try {
       const prompt = `从对话中提取关于用户的持久事实(背景/偏好/项目/人际关系/惯例)。每条不超过40字。只输出 JSON 字符串数组,最多3条,没有则输出 []。不要提取临时性内容。
@@ -153,6 +182,7 @@ ${recent.map(t => `${t.role === 'user' ? '用户' : '助手'}: ${t.content}`).jo
 
   /** L3 写入 (save_memory 工具用, 立即生效) */
   addFact(userId: string, content: string): boolean {
+    this.dirtyUsers.add(userId)
     const s = this.state(userId)
     if (s.facts.some(f => f.content.includes(content) || content.includes(f.content))) return false
     s.facts.push({ content, ts: Date.now() })
