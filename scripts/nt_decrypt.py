@@ -1014,6 +1014,11 @@ def main():
     fav_schema_parser.add_argument('--db', required=True, help='Path to favorite.db')
     fav_schema_parser.add_argument('--key', required=True, help='Key hex (64 chars)')
 
+    verify_parser = sub.add_parser('verify', help='Verify a key+salt can open a database')
+    verify_parser.add_argument('--db', required=True, help='Path to NT database')
+    verify_parser.add_argument('--key', required=True, help='Key hex (64 chars)')
+    verify_parser.add_argument('--salt', required=True, help='Salt hex (32 chars)')
+
     # fav-list command
     fav_list_parser = sub.add_parser('fav-list', help='List favorite items')
     fav_list_parser.add_argument('--db', required=True, help='Path to favorite.db')
@@ -1059,6 +1064,19 @@ def main():
                 print(f"  {db['name']} ({db['size']/1024/1024:.1f}MB) key={db['key'][:16]}... salt={db['salt'][:16]}...")
         else:
             print(json.dumps({"keys": keys, "databases": databases, "matched": matched}))
+        return
+
+    if args.command == 'verify':
+        # sqlcipher 打开+读 sqlite_master 才触发解密, 错误密钥在此报 "file is not a database"
+        try:
+            conn, _ = connect_nt_db(args.db, args.key, args.salt)
+            n = conn.execute(
+                "SELECT count(*) FROM sqlite_master WHERE type='table'"
+            ).fetchone()[0]
+            conn.close()
+            print(json.dumps({"success": n > 0, "tables": n}, ensure_ascii=True))
+        except Exception as e:
+            print(json.dumps({"success": False, "error": str(e).split('\n')[0][:200]}, ensure_ascii=True))
         return
 
     # Build contact name map once if contact db provided

@@ -47,7 +47,7 @@ weflow-cli dbkey --timeout 120000
 weflow-cli config set decryptKey <64位密钥>
 ```
 
-> **注意**：`dbkey` 只能提取主密钥。NT 数据库（`message_0.db`）还需要独立的 key + salt（见第四节）。
+> **注意**：`dbkey` 提取的是全库 passphrase。老版本微信 NT 库密钥还需内存扫描（见第四节）；较新版本（实测 4.1.12.55）则由 `init` 从 passphrase 自动派生（见第四 A 节）。
 
 ---
 
@@ -66,7 +66,7 @@ weflow-cli config set decryptKey <64位密钥>
 
 ---
 
-## 四、NT 密钥扫描
+## 四、NT 密钥扫描（老版本微信）
 
 NT 数据库（`message_0.db`、`contact.db`）有独立的 **key + salt**，和主解密密钥不同：
 
@@ -89,11 +89,43 @@ weflow-cli config set contactSalt <contact.db的salt>
 
 ---
 
+## 四 A、密钥派生模式（较新微信版本）
+
+较新的微信版本（实测 4.1.12.55；4.1.12.26 仍可内存扫描）进程内存中不再出现 `x'<key><salt>'` 文本，`scan` 会得到空的 `keys`/`matched`——这是版本变更，不是故障。各库密钥改为本地派生：
+
+```
+库密钥 = PBKDF2-HMAC-SHA512(全库 passphrase, 库文件前16字节, 256000轮, 32字节)
+```
+
+**`weflow-cli init` 已内置此逻辑**：DLL hook 拿到 passphrase 后，若内存扫描无结果，自动派生各库密钥并逐库用 sqlcipher 真实打开验证，通过才写入配置（聊天/联系人/朋友圈/收藏一并配置）。
+
+手动路径（适合 init 拿不到 hook 的场景）：
+
+```bash
+# 1. 用第三方工具拿到 64 位 hex 的全库 passphrase
+# 2. 写入配置
+weflow-cli fav set-key --passphrase <64位hex>
+# 3. 重新 init 自动派生（Linux/macOS 同样适用）
+weflow-cli init
+```
+
+验证单个密钥是否正确（init 内部也用这个）：
+
+```bash
+python scripts/nt_decrypt.py verify --db <库路径> --key <64位hex> --salt <32位hex>
+# {"success": true, "tables": 122}  密钥正确
+# {"success": false, "error": "file is not a database"}  密钥错误
+```
+
+---
+
 ## 五、常见错误速查
 
 | 错误信息 | 根因 | 解决方案 |
 |----------|------|----------|
-| `WCDB 初始化失败: -1006` | 方案 1-3 都失败，WCDB 不可用 | 检查/重新扫描 NT 密钥（第四节） |
+| `WCDB 初始化失败: -1006` | 方案 1-3 都失败，WCDB 不可用 | 检查/重新扫描 NT 密钥（第四节）；新版微信见第四 A 节 |
+| `scan` 输出的 `keys`/`matched` 为空 | 较新微信版本内存中无密钥文本 | 正常现象，`init` 会走派生模式（第四 A 节） |
+| 派生密钥验证失败 `file is not a database` | passphrase 不属于该账号 | 确认微信已登录目标账号后重新 `init` |
 | `未找到会话` / `未找到联系人` | 数据库连接失败 | `config show` 检查密钥状态 |
 | `获取密钥超时` | init 时微信已登录，Hook 装不上 | 用 `dbkey` 代替 init（方式 B） |
 | `需要 sqlcipher3` | Python 缺依赖 | `python -m pip install -r requirements.txt` |

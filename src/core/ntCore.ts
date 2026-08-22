@@ -164,6 +164,51 @@ export class NtCore {
     }
   }
 
+  /**
+   * 验证 key+salt 能否真实打开数据库 (读取 sqlite_master 触发解密)。
+   * cannotVerify=true 表示环境问题 (Python/sqlcipher3 缺失) 而非密钥错误。
+   */
+  static async verifyDbKey(dbPath: string, keyHex: string, saltHex: string): Promise<{
+    success: boolean
+    error?: string
+    tables?: number
+    cannotVerify?: boolean
+  }> {
+    const pkgRoot = join(__dirname, '..', '..', '..')
+    const scriptPath = join(pkgRoot, 'scripts', 'nt_decrypt.py')
+    let stdout = ''
+    try {
+      const r = await execFileAsync(getPythonCommand(), [scriptPath, 'verify', '--db', dbPath, '--key', keyHex, '--salt', saltHex], {
+        timeout: 60_000,
+        maxBuffer: 1024 * 1024,
+        env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
+        encoding: 'utf-8',
+      })
+      stdout = r.stdout
+    } catch (e: any) {
+      // 缺 sqlcipher3 等场景: 脚本打印 JSON 后 exit 1
+      stdout = e?.stdout || ''
+      if (!stdout.trim()) {
+        return { success: false, cannotVerify: true, error: `Python 调用失败: ${String(e?.message || e).split('\n')[0]}` }
+      }
+    }
+    const lines = stdout.split('\n').filter((l: string) => l.trim())
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const trimmed = lines[i].trim()
+      if (trimmed.startsWith('{"')) {
+        try {
+          const r = JSON.parse(trimmed)
+          if (r.success === undefined) {
+            // 只有 error 字段 = 环境问题 (如 "需要 sqlcipher3")
+            return { success: false, cannotVerify: true, error: r.error }
+          }
+          return { success: !!r.success, tables: r.tables, error: r.error }
+        } catch { /* try next line */ }
+      }
+    }
+    return { success: false, cannotVerify: true, error: 'verify 无有效输出' }
+  }
+
   async getSessions(keyword?: string): Promise<NtSessionsResult> {
     const args: string[] = [
       'sessions',

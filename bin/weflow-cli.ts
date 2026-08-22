@@ -15,6 +15,7 @@ import { resolveTalker as resolveTalkerCore } from '../src/utils/talkerUtils.js'
 import { getPythonCommand } from '../src/utils/python.js'
 import { WechatMessageService } from '../src/services/wechatMessageService.js'
 import { whitelistService, MAX_TEXT_LENGTH } from '../src/services/whitelistService.js'
+import { applyDerivedNtKeys, enableFavorites, detectFavDbPath } from '../src/services/initKeyService.js'
 import type { ChatSession } from '../src/types.js'
 
 const program = new Command()
@@ -88,6 +89,11 @@ async function resolveTalker(input: string): Promise<string> {
     process.exit(1)
   }
 }
+
+/**
+ * 较新微信版本派生模式: 内存中不再有 x'<key><salt>' 文本, 内存扫描匹配不到密钥。
+ * 各库密钥改为从全库 passphrase 派生, 逻辑见 src/services/initKeyService.ts。
+ */
 
 program
   .name('weflow-cli')
@@ -237,19 +243,33 @@ program
           }
           linuxNtKey = primaryDb.key
         } else {
-          const err = ntScan.error || '未匹配到数据库密钥'
-          console.log(chalk.red(`  ✗ ${err}`))
-          console.log(chalk.gray('\n  Linux 密钥提取方案：'))
-          if (err.includes('PERMISSION_DENIED')) {
-            console.log(chalk.gray('  1. 一次性授权（推荐）: sudo setcap cap_sys_ptrace=ep $(which python3)'))
-            console.log(chalk.gray('  2. 或用 sudo 运行: sudo weflow-cli init'))
-            console.log(chalk.gray('     （sudo 后需修复配置属主: sudo chown -R $(id -u):$(id -g) ~/.weflow-cli）'))
-          } else {
-            console.log(chalk.gray('  1. 确保微信已启动并完成登录（登录后才会在内存中缓存密钥）'))
-            console.log(chalk.gray('  2. 确保以 root 或 CAP_SYS_PTRACE 运行（sudo setcap cap_sys_ptrace=ep $(which python3)）'))
-            console.log(chalk.gray('  3. 或用第三方工具提取密钥后手动配置 weflow-cli config set ntKey <密钥>'))
+          // 较新微信版本: /proc 内存扫描同样匹配不到 x'...' 文本, 从已配置 passphrase 派生
+          const favPass = configService.get('favPassphrase') || ''
+          const scanDbs = (ntScan as any).databases || []
+          const wxidDbs = scanDbs.filter((d: any) => d.wxid === selectedWxid.wxid)
+          const deriveDbs = wxidDbs.length > 0 ? wxidDbs : scanDbs
+          let derivedOk = false
+          if (favPass && deriveDbs.length > 0) {
+            console.log(chalk.gray('  内存扫描未发现密钥文本 (较新微信密钥体系), 尝试从 passphrase 派生...'))
+            derivedOk = await applyDerivedNtKeys(favPass, deriveDbs, (l) => console.log(l))
+            if (derivedOk) linuxNtKey = configService.get('ntKey') || ''
           }
-          process.exit(1)
+          if (!derivedOk) {
+            const err = ntScan.error || '未匹配到数据库密钥'
+            console.log(chalk.red(`  ✗ ${err}`))
+            console.log(chalk.gray('\n  Linux 密钥提取方案：'))
+            if (err.includes('PERMISSION_DENIED')) {
+              console.log(chalk.gray('  1. 一次性授权（推荐）: sudo setcap cap_sys_ptrace=ep $(which python3)'))
+              console.log(chalk.gray('  2. 或用 sudo 运行: sudo weflow-cli init'))
+              console.log(chalk.gray('     （sudo 后需修复配置属主: sudo chown -R $(id -u):$(id -g) ~/.weflow-cli）'))
+            } else {
+              console.log(chalk.gray('  1. 确保微信已启动并完成登录（登录后才会在内存中缓存密钥）'))
+              console.log(chalk.gray('  2. 确保以 root 或 CAP_SYS_PTRACE 运行（sudo setcap cap_sys_ptrace=ep $(which python3)）'))
+              console.log(chalk.gray('  3. 较新微信版本需配置全库 passphrase: weflow-cli fav set-key --passphrase <64位hex>，再重新 init 自动派生'))
+              console.log(chalk.gray('  4. 或用第三方工具提取密钥后手动配置 weflow-cli config set ntKey <密钥>'))
+            }
+            process.exit(1)
+          }
         }
       } else if (process.platform !== 'win32') {
         // macOS：自动提取不可用，引导手动提供密钥
@@ -276,12 +296,19 @@ program
         if (keyResult.success && keyResult.key) {
           extractedKey = keyResult.key
         } else {
-          console.log(chalk.red(`\n✗ 密钥提取失败: ${keyResult.error}`))
-          console.log(chalk.gray('\n解决方案:'))
-          console.log(chalk.gray('  1. 确保微信已登录'))
-          console.log(chalk.gray('  2. 尝试在微信中发送一条消息'))
-          console.log(chalk.gray('  3. 或手动指定密钥: weflow-cli config set decryptKey <64位密钥>'))
-          process.exit(1)
+          // hook 只在登录瞬间触发; 微信已登录时捕获不到 → 回退到已配置的 passphrase
+          const fallback = configService.get('favPassphrase') || ''
+          if (fallback) {
+            console.log(chalk.gray('  Hook 未捕获到密钥 (微信已登录时不再触发密钥函数), 使用已配置的 passphrase 继续'))
+            extractedKey = fallback
+          } else {
+            console.log(chalk.red(`\n✗ 密钥提取失败: ${keyResult.error}`))
+            console.log(chalk.gray('\n解决方案:'))
+            console.log(chalk.gray('  1. 退出微信后重新运行 init (hook 需在微信登录瞬间触发, init 会自动等待)'))
+            console.log(chalk.gray('  2. 或用第三方工具提取全库 passphrase 后: weflow-cli fav set-key --passphrase <64位hex>, 再重新 init 自动派生'))
+            console.log(chalk.gray('  3. 或手动指定密钥: weflow-cli config set decryptKey <64位密钥>'))
+            process.exit(1)
+          }
         }
       }
 
@@ -304,7 +331,7 @@ program
           console.log(chalk.green(`  ✓ 找到 ${ntResult.matched.length} 个 NT 数据库`))
 
           // 优先选择 message_0.db (主聊天数据库)
-          let primaryDb = ntResult.matched.find((db: any) => db.name === 'message_0.db')
+          let primaryDb = ntResult.matched.find((db: any) => db.name === 'message/message_0.db')
           if (!primaryDb) {
             // 按大小降序排序，选择最大的数据库
             primaryDb = ntResult.matched.sort((a: any, b: any) => b.size - a.size)[0]
@@ -340,19 +367,40 @@ program
               console.log(chalk.gray(`${marker}${db.name} (${(db.size / 1024 / 1024).toFixed(1)}MB)`))
             }
           }
+
+          // 收藏库与聊天库共用 passphrase, 顺手启用收藏功能
+          const passForFav = extractedKey || configService.get('decryptKey') || ''
+          if (passForFav) await enableFavorites(passForFav, ntResult.databases || [])
         } else {
           console.log(chalk.gray(`  NT 数据库扫描: ${ntResult.error || '未找到匹配的数据库'}`))
-          // 即使密钥未匹配，仍尝试自动发现 sns.db 路径和盐值
-          if (ntResult.databases && ntResult.databases.length > 0) {
-            const snsDb = ntResult.databases.find((db: any) => db.name === 'sns/sns.db')
-            if (snsDb) {
-              configService.set('snsDbPath', snsDb.path)
-              configService.set('snsSalt', snsDb.salt)
-              console.log(chalk.yellow(`  ⚠ 发现朋友圈数据库: ${snsDb.name} (${(snsDb.size / 1024 / 1024).toFixed(1)}MB)`))
-              console.log(chalk.gray('    密钥未匹配，请运行: weflow-cli sns capture-key'))
-            }
+
+          // 较新微信版本: 内存中不再有 x'<key><salt>' 文本, 内存扫描匹配不到密钥,
+          // 从 DLL hook 拿到的全库 passphrase 派生各库密钥并逐一验证
+          const passphrase = extractedKey || configService.get('decryptKey') || ''
+          const allDbs = ntResult.databases || []
+          const wxidDbs = allDbs.filter((db: any) => db.wxid === selectedWxid.wxid)
+          const deriveDbs = wxidDbs.length > 0 ? wxidDbs : allDbs
+          let derivedMessage = false
+          if (passphrase && deriveDbs.length > 0) {
+            console.log(chalk.gray('  检测到较新微信密钥体系 (内存中无密钥文本), 从 passphrase 派生各库密钥...'))
+            derivedMessage = await applyDerivedNtKeys(passphrase, deriveDbs, (l) => console.log(l))
           }
-          console.log(chalk.gray('  提示: 可以稍后运行 weflow-cli init 重新扫描'))
+
+          if (derivedMessage) {
+            console.log(chalk.green('  ✓ 派生模式初始化成功 (聊天/联系人/朋友圈库已配置)'))
+          } else {
+            // 即使密钥未匹配，仍尝试自动发现 sns.db 路径和盐值
+            if (ntResult.databases && ntResult.databases.length > 0) {
+              const snsDb = ntResult.databases.find((db: any) => db.name === 'sns/sns.db')
+              if (snsDb) {
+                configService.set('snsDbPath', snsDb.path)
+                configService.set('snsSalt', snsDb.salt)
+                console.log(chalk.yellow(`  ⚠ 发现朋友圈数据库: ${snsDb.name} (${(snsDb.size / 1024 / 1024).toFixed(1)}MB)`))
+                console.log(chalk.gray('    密钥未匹配，请运行: weflow-cli sns capture-key'))
+              }
+            }
+            console.log(chalk.gray('  提示: 可以稍后运行 weflow-cli init 重新扫描'))
+          }
         }
       } else if (detected.path.toLowerCase().includes('xwechat_files') && process.platform !== 'linux') {
         console.log(chalk.yellow('\n步骤 4/4: NT 格式数据库'))
@@ -632,6 +680,7 @@ program
       })
       if (result.success && result.key) {
         console.log(chalk.green(`\n✓ 密钥: ${result.key}`))
+        console.log(chalk.gray('\n提示: 运行 weflow-cli init 可自动派生并写入各库密钥配置'))
       } else {
         console.log(chalk.red(`\n✗ 失败: ${result.error}`))
         process.exit(1)
@@ -1235,17 +1284,6 @@ const FAV_TYPE_IDS: Record<string, number> = {
 }
 const FAV_TYPE_LABELS: Record<string, string> = {
   text: '文字', image: '图片', video: '视频', article: '文章', chatrecord: '聊天记录',
-}
-
-/** 从已配置的 NT 主库路径推导 favorite.db 路径 */
-function detectFavDbPath(): string | null {
-  const ntDbPath = configService.get('ntDbPath')
-  if (!ntDbPath) return null
-  const parts = ntDbPath.replace(/\\/g, '/').split('/')
-  const idx = parts.lastIndexOf('db_storage')
-  if (idx < 0) return null
-  const favPath = [...parts.slice(0, idx), 'db_storage', 'favorite', 'favorite.db'].join('/')
-  return existsSync(favPath) ? favPath : null
 }
 
 const favCmd = program
