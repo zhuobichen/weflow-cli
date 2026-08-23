@@ -5,7 +5,7 @@ import { accessSync, constants } from 'fs'
 let cached: string | null = null
 
 const EXE_NAMES = process.platform === 'win32'
-  ? ['python.exe', 'python3.exe']
+  ? ['python.exe', 'python3.exe', 'py.exe']
   : ['python3', 'python']
 
 function isExecutable(path: string): boolean {
@@ -30,7 +30,7 @@ function candidates(): string[] {
     }
   }
   // 兜底：直接用命令名（依赖 PATH 解析，可能命中与上面相同的解释器）
-  for (const name of process.platform === 'win32' ? ['python', 'python3'] : ['python3', 'python']) {
+  for (const name of process.platform === 'win32' ? ['python', 'python3', 'py'] : ['python3', 'python']) {
     if (!found.includes(name)) found.push(name)
   }
   return found

@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env node
+#!/usr/bin/env node
 import { Command } from 'commander'
 import chalk from 'chalk'
 import inquirer from 'inquirer'
@@ -321,8 +321,10 @@ program
 
       // Step 4: 尝试扫描 NT 格式数据库 (xwechat_files)
       // 即使检测到传统路径，也可能存在 NT 格式数据库
-      // Linux 分支已在步骤 3 完成配置，跳过
-      if (version && process.platform !== 'linux') {
+      // 进入这里已经确认是 4.x 初始化流程。不要依赖步骤 0 的 version：
+      // 微信可能是在 init 等待期间才启动，初始 version 会保持为 null。
+      // Linux 分支已在步骤 3 完成配置，跳过。
+      if (process.platform !== 'linux') {
         console.log(chalk.yellow('\n步骤 4/4: 扫描 NT 格式数据库...'))
         console.log(chalk.gray('  正在从微信内存中匹配数据库密钥...'))
 
@@ -402,10 +404,6 @@ program
             console.log(chalk.gray('  提示: 可以稍后运行 weflow-cli init 重新扫描'))
           }
         }
-      } else if (detected.path.toLowerCase().includes('xwechat_files') && process.platform !== 'linux') {
-        console.log(chalk.yellow('\n步骤 4/4: NT 格式数据库'))
-        console.log(chalk.gray('  微信未运行，无法从内存中提取 NT 密钥'))
-        console.log(chalk.gray('  请启动微信后运行: weflow-cli init'))
       }
 
       console.log(chalk.cyan('\n=============================='))

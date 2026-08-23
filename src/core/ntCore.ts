@@ -19,6 +19,15 @@ const execFileAsync = promisify(execFile)
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
 
+function getPackageRoot(): string {
+  const candidates = [
+    join(__dirname, '..', '..', '..'), // dist/src/core
+    join(__dirname, '..', '..'),       // src/core (tsx)
+  ]
+  return candidates.find((candidate) => existsSync(join(candidate, 'scripts', 'nt_decrypt.py')))
+    || candidates[0]
+}
+
 export interface NtResult {
   success: boolean
   error?: string
@@ -83,9 +92,7 @@ export class NtCore {
   }
 
   private get scriptPath(): string {
-    // __dirname = dist/src/core, so ../../.. = package root
-    const pkgRoot = join(__dirname, '..', '..', '..')
-    return join(pkgRoot, 'scripts', 'nt_decrypt.py')
+    return join(getPackageRoot(), 'scripts', 'nt_decrypt.py')
   }
 
   private async callPython(args: string[]): Promise<any> {
@@ -127,8 +134,7 @@ export class NtCore {
    */
   static async scan(root?: string): Promise<NtScanResult> {
     try {
-      const pkgRoot = join(__dirname, '..', '..', '..')
-      const scriptPath = join(pkgRoot, 'scripts', 'nt_decrypt.py')
+      const scriptPath = join(getPackageRoot(), 'scripts', 'nt_decrypt.py')
       const scanArgs = root ? ['scan', '--json', '--root', root] : ['scan', '--json']
       const { stdout } = await execFileAsync(getPythonCommand(), [scriptPath, ...scanArgs], {
         timeout: 300_000,
@@ -174,8 +180,7 @@ export class NtCore {
     tables?: number
     cannotVerify?: boolean
   }> {
-    const pkgRoot = join(__dirname, '..', '..', '..')
-    const scriptPath = join(pkgRoot, 'scripts', 'nt_decrypt.py')
+    const scriptPath = join(getPackageRoot(), 'scripts', 'nt_decrypt.py')
     let stdout = ''
     try {
       const r = await execFileAsync(getPythonCommand(), [scriptPath, 'verify', '--db', dbPath, '--key', keyHex, '--salt', saltHex], {
