@@ -1,5 +1,16 @@
 # Security Policy
 
+## Intended use — access your own data only
+
+This tool is designed for a single purpose: letting a WeChat account owner access and back up **their own** local data, on **their own** machine, with **their own** consent.
+
+- Accessing a database you are not the owner of (another person's account, a device you do not control) is illegal in most jurisdictions, regardless of who owns the hardware. Monitoring a partner, employee, or any third party without their informed consent is a crime, not a gray area.
+- Deploying this tool onto someone else's machine, bundling it into other software, or operating it remotely and silently is strictly prohibited.
+- Users are solely responsible for compliance with local laws. The authors provide the code for legitimate personal-data management and accept no liability for misuse.
+- Open-source software can be modified by anyone. Forks or rebuilds that remove safeguards or repurpose this tool for surveillance, stalking, or black/gray-market use have nothing to do with this project; the original repository is the only official source.
+
+If you are being monitored or suspect this tool was installed on a device without consent: the configuration lives in `~/.weflow-cli/`, and every command invocation leaves traces in `~/.weflow-cli/` timestamps — inspect that directory and remove it.
+
 ## Local-first data handling
 
 - **100% local**: WeFlow CLI reads the local WeChat data directory directly. There is no built-in cloud service, tracking, or telemetry — nothing is collected or reported.

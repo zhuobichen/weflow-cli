@@ -70,6 +70,8 @@ weflow-cli mcp-config                  # one-shot MCP client integration
 | WeChat favorites | Read WeChat "Favorites" (official-account articles, text, images, videos, chat records) with type filters, keyword search, and Markdown/JSON export. |
 | Second-brain agent | Chat with a local AI assistant inside WeChat: natural-language queries over chats, favorites, Moments, digests, WeRead, todos, and the knowledge base; three-tier memory across sessions, daemonized background service. |
 
+> **⚠️ Intended use**: this tool only accesses data of **your own** WeChat account, on your own machine, with your own consent. Using it to monitor a partner, employee, or any third party without their informed consent — or deploying it onto someone else's device or running it remotely and silently — is illegal and has nothing to do with this project. See [SECURITY.md](SECURITY.md).
+
 ## Quick Start in Three Minutes
 
 ### 1. Install and Check
