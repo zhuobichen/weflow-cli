@@ -447,19 +447,23 @@ configCmd
     console.log(`联系人DB: ${config.contactDbPath || chalk.gray('(未设置)')}`)
     console.log(`联系人DB密钥: ${config.contactKey ? '已设置' : chalk.gray('(未设置)')}`)
     console.log(`微信账号: ${config.wxid || chalk.gray('(未设置)')}`)
+    console.log(`公众号日报来源: ${configService.get('dailySources') || chalk.gray('(全部公众号)')}`)
   })
 
 configCmd
   .command('set <key> <value>')
   .description('设置配置项 (dbPath, decryptKey, dbPath3x, decryptKey3x, dataVersion, wxid)')
   .action((key: string, value: string) => {
-    const validKeys = ['dbPath', 'decryptKey', 'dbPath3x', 'decryptKey3x', 'dataVersion', 'wxid', 'ntDbPath', 'ntKey', 'ntSalt', 'contactDbPath', 'contactKey', 'contactSalt', 'vaultRepo', 'aiEngine']
+    const validKeys = ['dbPath', 'decryptKey', 'dbPath3x', 'decryptKey3x', 'dataVersion', 'wxid', 'ntDbPath', 'ntKey', 'ntSalt', 'contactDbPath', 'contactKey', 'contactSalt', 'vaultRepo', 'aiEngine', 'dailySources', 'dailySourceCategories']
     if (!validKeys.includes(key)) {
       console.log(chalk.red(`无效的配置项: ${key}`))
       console.log(chalk.gray(`可用: ${validKeys.join(', ')}`))
       process.exit(1)
     }
-    configService.set(key as any, value)
+    const configValue = key === 'dailySourceCategories' && value.startsWith('base64:')
+      ? Buffer.from(value.slice('base64:'.length), 'base64').toString('utf8')
+      : value
+    configService.set(key as any, configValue)
     console.log(chalk.green(`✓ 已设置 ${key}`))
   })
 
@@ -2705,6 +2709,7 @@ program
 // ==================== daily ====================
 program
   .command('daily')
+  .option('--source <name>', '仅处理指定公众号，可重复或用逗号分隔', (value, previous: string[] = []) => [...previous, value], [])
   .description('一键生成公众号日报（抓取 + AI 摘要 + HTML 阅读器 + 行动建议）')
   .option('-d, --date <YYYY-MM-DD>', '日期')
   .option('--api-key <key>', 'DeepSeek API key（或设环境变量 DEEPSEEK_API_KEY）')
@@ -2731,6 +2736,7 @@ program
 
     console.log(chalk.cyan(`\n📰 正在生成 ${date} 公众号日报...\n`))
     const args = [pipeline, '--date', date, '--api-key', apiKey, '--interest', 'AI', '--skip-wiki']
+    for (const source of opts.source || []) args.push('--source', source)
     if (opts.skipClassify) args.push('--skip-classify')
 
     const child = spawn(getPythonCommand(), args, {
@@ -2815,6 +2821,34 @@ assistantCmd
     const assistant = new AssistantService()
     console.log(chalk.cyan('第二大脑前台运行中... (Ctrl+C 退出)'))
     await assistant.start((line) => console.log(chalk.gray(line)))
+  })
+
+program
+  .command('daily-stats')
+  .description('统计公众号推送频率与日报处理频率')
+  .option('--days <number>', '统计最近多少天', '30')
+  .option('--limit <number>', '最多显示多少个公众号', '30')
+  .action(async (opts) => {
+    const { execFile } = await import('child_process')
+    const { promisify } = await import('util')
+    const execFileAsync = promisify(execFile)
+    const { fileURLToPath } = await import('url')
+    const { dirname } = await import('path')
+    const __filename = fileURLToPath(import.meta.url)
+    const __dirname = dirname(__filename)
+    const script = join(__dirname, '..', 'scripts', 'daily_stats.py')
+
+    try {
+      const { stdout } = await execFileAsync(getPythonCommand(), [script, '--days', opts.days, '--limit', opts.limit], {
+        timeout: 300_000,
+        maxBuffer: 10 * 1024 * 1024,
+        env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
+      })
+      console.log(stdout)
+    } catch (e: any) {
+      console.error(chalk.red(`\n统计失败: ${e.message}`))
+      process.exit(1)
+    }
   })
 
 // ==================== daily-server ====================

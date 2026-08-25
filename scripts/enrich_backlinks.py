@@ -17,7 +17,7 @@ SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(SCRIPTS_DIR)
 DEFAULT_SOURCE = os.path.join(PROJECT_ROOT, 'output', 'biz-daily')
 
-TOPIC_ORDER = ['AI', '学术', '新闻', '文学', '投资']
+TOPIC_ORDER = ['AI', '学术', '新闻', '文学', '投资', '政治']
 
 
 def collect_articles(date_dir: str) -> list[dict]:

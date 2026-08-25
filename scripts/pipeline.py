@@ -48,6 +48,8 @@ def main():
     parser.add_argument('--skip-html', action='store_true', help='跳过 HTML 生成')
     parser.add_argument('--skip-ai-report', action='store_true', help='跳过 AI 深度阅读报告')
     parser.add_argument('--ai-report-range', type=int, default=1, help='AI 报告覆盖最近 N 天（默认 1=仅当天）')
+    parser.add_argument('--source', action='append', default=[], metavar='NAME',
+                        help='仅处理指定公众号，可重复或用逗号分隔')
     args = parser.parse_args()
 
     sys.path.insert(0, SCRIPTS_DIR)
@@ -71,6 +73,8 @@ def main():
         step1_args += ['--api-key', api_key]
     if args.date:
         step1_args += ['--date', args.date]
+    for source in args.source:
+        step1_args += ['--source', source]
     if not run_step('biz_daily — 抓取+摘要', step1_args):
         sys.exit(1)
 

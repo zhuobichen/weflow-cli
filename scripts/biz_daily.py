@@ -56,7 +56,31 @@ DEEPSEEK_TIMEOUT = 60
 FETCH_DELAY_MIN = 8   # 最小抓取间隔 (秒)
 FETCH_DELAY_MAX = 12  # 最大抓取间隔 (秒)
 
-TOPICS = ['AI', '学术', '新闻', '文学', '投资']
+TOPICS = ['AI', '学术', '新闻', '文学', '投资', '政治']
+
+
+def load_source_categories(config: dict) -> dict[str, str]:
+    """Load the explicit official-account category map from CLI config."""
+    raw = config.get('dailySourceCategories', '')
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw)
+    except (TypeError, json.JSONDecodeError):
+        print('[WARN] dailySourceCategories 不是有效 JSON，忽略来源类别配置')
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {
+        str(name).strip().casefold(): str(category).strip()
+        for name, category in data.items()
+        if str(name).strip() and str(category).strip() in TOPICS
+    }
+
+
+def get_source_category(categories: dict[str, str], username: str, display_name: str) -> str:
+    """Match a category by official-account ID first, then display name."""
+    return categories.get(username.casefold()) or categories.get(display_name.casefold()) or ''
 def _guess_topic(article: dict) -> str:
     """Keyword-based topic guess when AI classification fails."""
     title = article.get('title', '')
@@ -149,6 +173,12 @@ def get_db_keys(config):
     biz_db = os.path.join(msg_dir, 'biz_message_0.db')
     biz_key_enc = config.get('bizKey', '')
     biz_salt = config.get('bizSalt', '')
+    pass_enc = config.get('favPassphrase', '')
+    passphrase = decrypt_lock(pass_enc) if pass_enc else ''
+    if passphrase and os.path.exists(biz_db):
+        with open(biz_db, 'rb') as fh:
+            biz_salt = fh.read(16).hex()
+        biz_key_enc = ''
     if biz_key_enc and biz_salt:
         biz_key = decrypt_lock(biz_key_enc)
     else:
@@ -334,6 +364,8 @@ def download_images_to_local(markdown: str, images_dir: Path) -> tuple[str, dict
 def extract_article_info(content_bytes: bytes) -> dict:
     """Extract title, digest, URL, full text from protobuf message_content."""
     import zstandard as zstd
+    if isinstance(content_bytes, str):
+        content_bytes = content_bytes.encode('utf-8', errors='ignore')
     dctx = zstd.ZstdDecompressor()
     try:
         text = dctx.decompress(content_bytes).decode('utf-8', errors='ignore')
@@ -401,6 +433,19 @@ def sanitize_filename(name: str) -> str:
     return re.sub(r'[\\/:*?"<>|]', '_', name)[:80]
 
 
+def parse_source_filters(values) -> list[str]:
+    """Normalize repeated or comma-separated official-account filters."""
+    filters = []
+    seen = set()
+    for value in values or []:
+        for item in re.split(r'[,;\n]+', str(value or '')):
+            normalized = item.strip().strip('"\'')
+            if normalized and normalized.casefold() not in seen:
+                seen.add(normalized.casefold())
+                filters.append(normalized)
+    return filters
+
+
 # ====== Main ======
 
 def main():
@@ -413,6 +458,8 @@ def main():
     parser.add_argument('--limit', type=int, default=0, help='最多处理篇数 (0=不限制)')
     parser.add_argument('--api-key', help='AI API key (或设环境变量 DEEPSEEK_API_KEY)')
     parser.add_argument('--engine', default='deepseek', help='AI 引擎: local/deepseek/claude/ollama')
+    parser.add_argument('--source', action='append', default=[], metavar='NAME',
+                        help='仅处理指定公众号，可重复或用逗号分隔；默认读取配置 dailySources')
     args = parser.parse_args()
 
     # Date
@@ -428,6 +475,8 @@ def main():
     # Load config & DB keys
     config = load_config()
     keys = get_db_keys(config)
+    source_filters = parse_source_filters(args.source or [config.get('dailySources', '')])
+    source_categories = load_source_categories(config)
 
     # API key — only required for cloud engines
     engine = args.engine or 'deepseek'
@@ -442,6 +491,8 @@ def main():
 
     print(f'=== 公众号日报 {date_str} ===')
     print(f'Biz DB: {keys["biz_db"]}')
+    if source_filters:
+        print(f'公众号筛选: {", ".join(source_filters)}')
 
     # Connect biz db
     raw_key = f"x'{keys['biz_key']}{keys['biz_salt']}'"
@@ -466,6 +517,16 @@ def main():
     # Find today's articles
     c.execute("SELECT user_name FROM Name2Id WHERE user_name LIKE 'gh_%'")
     biz_users = [row[0] for row in c.fetchall()]
+    if source_filters:
+        filter_keys = {item.casefold() for item in source_filters}
+        biz_users = [
+            user for user in biz_users
+            if user.casefold() in filter_keys
+            or str(name_map.get(user, user)).casefold() in filter_keys
+        ]
+        print(f'匹配公众号: {len(biz_users)} 个')
+        if not biz_users:
+            print('[WARN] 没有匹配的公众号；请检查昵称或 gh_ ID')
 
     articles = []
     for user in biz_users:
@@ -488,6 +549,9 @@ def main():
                 articles.append({
                         'account': user,
                         'account_name': name_map.get(user, user),
+                        'source_category': get_source_category(
+                            source_categories, user, name_map.get(user, user)
+                        ) if source_filters else '',
                         'title': info['title'],
                         'digest': info['digest'],
                         'url': info['url'],
@@ -568,7 +632,27 @@ def main():
             content = a.get('fetched_md') or a.get('local_text', '')
             if content and len(content.strip()) > 50:
                 try:
-                    prompt = TOPIC_PROMPT + f'\n\n标题：{a["title"]}\n来源：{a["account_name"]}\n\n内容：\n{content[:4000]}'
+                    category_hint = a.get('source_category', '')
+                    if category_hint:
+                        summary_prompt = f'''请只为下面这篇公众号文章生成一段 50-300 字的中文摘要。
+来源类别已经确定为「{category_hint}」，不要重新判断或改写文章分类，不要输出主题、标签、相关度或概念字段。
+
+标题：{a["title"]}
+来源：{a["account_name"]}
+
+正文：
+{content[:4000]}'''
+                        response = call_ai(summary_prompt, engine, api_key, max_tokens=1000)
+                        a['topic'] = category_hint
+                        a['tags'] = [category_hint]
+                        a['summary'] = response.strip()[:1000]
+                        a['relevance'] = '中'
+                        a['concepts'] = []
+                        print(f'[{i+1}/{len(articles)}] [{t}] {n} - [{category_hint}] 固定来源类别，仅生成摘要')
+                        time.sleep(0.3)
+                        continue
+                    prompt = TOPIC_PROMPT + f'\n\n标题：{a["title"]}\n来源：{a["account_name"]}'
+                    prompt += f'\n\n内容：\n{content[:4000]}'
                     response = call_ai(prompt, engine, api_key, max_tokens=2000)
 
                     # Parse response: 【主题】xxx 【相关度】xxx 【标签】xxx 【摘要】xxx 【概念】xxx
@@ -579,7 +663,9 @@ def main():
                     summary_match = re.search(r'【摘要】\s*(.+?)(?=\n【(?:主题|相关度|标签|概念)】|$)', response, re.DOTALL)
                     concepts_match = re.search(r'【概念】\s*(.+)', response, re.DOTALL)
 
-                    if topic_match:
+                    if category_hint:
+                        a['topic'] = category_hint
+                    elif topic_match:
                         raw_topic = topic_match.group(1).strip()
                         if raw_topic in TOPICS:
                             a['topic'] = raw_topic
@@ -613,7 +699,9 @@ def main():
                         a['relevance'] = '中'
 
                     # Parse tags: comma-separated, clean up
-                    if tags_match:
+                    if category_hint:
+                        a['tags'] = [category_hint]
+                    elif tags_match:
                         a['tags'] = [t.strip() for t in tags_match.group(1).split(',') if t.strip()]
                     else:
                         a['tags'] = [a['topic']]
@@ -641,16 +729,16 @@ def main():
                     time.sleep(0.3)
                 except Exception as e:
                     a['summary'] = a.get('digest', '') or content[:300]
-                    a['topic'] = '学术'
-                    a['tags'] = ['学术']
+                    a['topic'] = a.get('source_category') or '学术'
+                    a['tags'] = [a['topic']]
                     a['concepts'] = []
                     print(f'[{i+1}/{len(articles)}] [{t}] {n} - ERR: {e}')
             elif content:
                 a['summary'] = content[:400]
-                a['topic'] = '学术'
+                a['topic'] = a.get('source_category') or '学术'
             else:
                 a['summary'] = a.get('digest', '(无内容)')
-                a['topic'] = '学术'
+                a['topic'] = a.get('source_category') or '学术'
 
         # Print topic distribution
         from collections import Counter

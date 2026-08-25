@@ -31,7 +31,7 @@ SOURCE_ROOT = os.path.join(ROOT_DIR, 'output', 'biz-daily')
 OUTPUT_DIR = os.path.join(ROOT_DIR, 'output', 'ai-reports')
 
 TZ = timezone(timedelta(hours=8))
-TOPICS = ['AI', '学术', '新闻', '文学', '投资']
+TOPICS = ['AI', '学术', '新闻', '文学', '投资', '政治']
 FOCUS_TOPIC = 'AI'
 
 

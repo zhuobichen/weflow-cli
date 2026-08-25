@@ -19,7 +19,7 @@ from _utils import (
 )
 
 OUTPUT_ROOT = 'output/biz-daily'
-TOPICS = ['AI', '学术', '新闻', '文学', '投资']
+TOPICS = ['AI', '学术', '新闻', '文学', '投资', '政治']
 
 AD_PATTERNS = [
     re.compile(r'在小说阅读器读本章\s*'),

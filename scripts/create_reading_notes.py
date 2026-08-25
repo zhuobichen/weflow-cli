@@ -22,7 +22,7 @@ PROJECT_ROOT = os.path.dirname(SCRIPTS_DIR)
 DEFAULT_VAULT = os.path.join(PROJECT_ROOT, 'output', 'wechat-vault')
 DEFAULT_SOURCE = os.path.join(PROJECT_ROOT, 'output', 'biz-daily')
 
-TOPIC_ORDER = ['AI', '学术', '新闻', '文学', '投资']
+TOPIC_ORDER = ['AI', '学术', '新闻', '文学', '投资', '政治']
 
 # ====== V2 模板 ======
 

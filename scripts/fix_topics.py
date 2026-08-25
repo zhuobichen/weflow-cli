@@ -6,7 +6,7 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from biz_daily import _guess_topic
 
-TOPICS = ['AI', '学术', '新闻', '文学', '投资']
+TOPICS = ['AI', '学术', '新闻', '文学', '投资', '政治']
 
 def fix_date(date_str: str):
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')
