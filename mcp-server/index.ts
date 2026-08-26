@@ -12,7 +12,7 @@ import {
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js'
 import { readFileSync, readdirSync, existsSync, statSync, writeFileSync, mkdirSync } from 'fs'
-import { join, resolve, dirname } from 'path'
+import { join, resolve, dirname, relative, isAbsolute } from 'path'
 import { fileURLToPath } from 'url'
 import { deflateSync } from 'zlib'
 
@@ -223,6 +223,17 @@ const BIZ_DAILY = join(PKG_ROOT, 'output', 'biz-daily')
 const VAULT_WIKI = join(PKG_ROOT, 'output', 'wechat-vault', 'Wiki', 'Concepts')
 const VAULT_INDEX = join(PKG_ROOT, 'output', 'wechat-vault', 'Wiki', '00-Overview.md')
 const REVIEWS = join(PKG_ROOT, 'output', 'reviews', 'Daily')
+
+function safeChildPath(root: string, child: string): string | null {
+  const candidate = resolve(root, child)
+  const rel = relative(resolve(root), candidate)
+  return rel && !rel.startsWith('..') && !isAbsolute(rel) ? candidate : null
+}
+
+function safeDate(value: unknown): string | null {
+  const date = String(value || '')
+  return /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : null
+}
 
 function parseFrontmatter(text: string): Record<string, any> {
   if (!text.startsWith('---')) return {}
@@ -486,9 +497,9 @@ async function main() {
 
         case 'wechat.get_daily': {
           const dates = existsSync(BIZ_DAILY) ? readdirSync(BIZ_DAILY).sort().reverse() : []
-          const date = String(args.date || dates[0] || '')
-          const readme = join(BIZ_DAILY, date, 'README.md')
-          if (!existsSync(readme)) return { content: [{ type: 'text', text: `未找到 ${date} 的日报` }] }
+          const date = safeDate(args.date) || dates.find(d => /^\d{4}-\d{2}-\d{2}$/.test(d)) || ''
+          const readme = safeChildPath(BIZ_DAILY, join(date, 'README.md'))
+          if (!readme || !existsSync(readme)) return { content: [{ type: 'text', text: `未找到 ${date} 的日报` }] }
           return { content: [{ type: 'text', text: readFileSync(readme, 'utf-8') }] }
         }
 
@@ -499,9 +510,12 @@ async function main() {
 
         case 'wechat.get_concept': {
           const name = String(args.name)
+          if (!name || name.includes('/') || name.includes('\\') || name.includes('..')) {
+            return { content: [{ type: 'text', text: '概念名无效' }] }
+          }
           for (const ext of ['', '.md']) {
-            const path = join(VAULT_WIKI, name + ext)
-            if (existsSync(path)) {
+            const path = safeChildPath(VAULT_WIKI, name + ext)
+            if (path && existsSync(path)) {
               return { content: [{ type: 'text', text: readFileSync(path, 'utf-8') }] }
             }
           }
@@ -509,7 +523,8 @@ async function main() {
           if (existsSync(VAULT_WIKI)) {
             for (const f of readdirSync(VAULT_WIKI)) {
               if (f.includes(name)) {
-                return { content: [{ type: 'text', text: readFileSync(join(VAULT_WIKI, f), 'utf-8') }] }
+                const path = safeChildPath(VAULT_WIKI, f)
+                if (path) return { content: [{ type: 'text', text: readFileSync(path, 'utf-8') }] }
               }
             }
           }
@@ -521,7 +536,7 @@ async function main() {
           const date = String(args.date || '')
           let path: string
           if (date) {
-            path = join(REVIEWS, `Daily-${date}.md`)
+            path = safeDate(date) ? join(REVIEWS, `Daily-${date}.md`) : ''
           } else {
             path = files.length ? join(REVIEWS, files[0]) : ''
           }
@@ -595,8 +610,9 @@ async function main() {
 
             // 上传封面图（如果提供，否则自动生成）
             let thumbMediaId = ''
-            if (coverImage && existsSync(coverImage)) {
-              thumbMediaId = await uploadWeChatImage(token, coverImage)
+            const safeCover = coverImage ? safeChildPath(join(PKG_ROOT, 'output'), coverImage) : null
+            if (safeCover && existsSync(safeCover) && /\.(png|jpe?g|gif|webp)$/i.test(safeCover) && statSync(safeCover).size <= 10 * 1024 * 1024) {
+              thumbMediaId = await uploadWeChatImage(token, safeCover)
             } else {
               // 自动生成封面图
               const autoCover = generateCoverImage(title, theme)

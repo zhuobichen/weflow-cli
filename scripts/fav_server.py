@@ -9,15 +9,43 @@
 打开 http://localhost:8765 即可使用，点击 ☆ 收藏按钮实时写入磁盘。
 """
 
-import sys, os, json, hashlib, shutil
+import sys, os, json, hashlib, shutil, ipaddress, socket
 from pathlib import Path
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 from socketserver import ThreadingMixIn
+from urllib.parse import unquote, urlparse
 import urllib.request
 
 SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(SCRIPTS_DIR)
 SOURCE_ROOT = os.path.join(PROJECT_ROOT, 'output', 'biz-daily')
+MAX_BODY_BYTES = 1 * 1024 * 1024
+
+
+def is_safe_remote_url(raw_url):
+    """Allow public HTTP(S) image hosts while rejecting SSRF targets."""
+    try:
+        parsed = urlparse(raw_url)
+        if parsed.scheme not in ('http', 'https') or not parsed.hostname or parsed.username or parsed.password:
+            return False
+        if parsed.port and not 1 <= parsed.port <= 65535:
+            return False
+        addresses = socket.getaddrinfo(parsed.hostname, parsed.port or 443, type=socket.SOCK_STREAM)
+        for address in addresses:
+            ip = ipaddress.ip_address(address[4][0])
+            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast or ip.is_unspecified:
+                return False
+        return True
+    except (ValueError, socket.gaierror, OSError):
+        return False
+
+
+class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+REMOTE_OPENER = urllib.request.build_opener(NoRedirectHandler)
 
 
 class ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
@@ -48,6 +76,9 @@ class FavHandler(SimpleHTTPRequestHandler):
 
     def do_GET(self):
         try:
+            if not self._is_local_origin():
+                self.send_error(403, 'Cross-origin request denied')
+                return
             if self.path.startswith('/api/fav/list'):
                 self._handle_fav_list()
             elif self.path == '/api/read/list':
@@ -66,6 +97,13 @@ class FavHandler(SimpleHTTPRequestHandler):
 
     def do_POST(self):
         try:
+            content_length = int(self.headers.get('Content-Length', 0))
+            if content_length < 0 or content_length > MAX_BODY_BYTES:
+                self.send_error(413, 'Request body too large')
+                return
+            if not self._is_local_origin():
+                self.send_error(403, 'Cross-origin request denied')
+                return
             if self.path == '/api/fav/toggle':
                 self._handle_fav_toggle()
             elif self.path == '/api/read/toggle':
@@ -93,14 +131,13 @@ class FavHandler(SimpleHTTPRequestHandler):
 
     def _handle_proxy(self):
         """代理微信CDN图片，绕过防盗链Referer检查（带本地缓存）。"""
-        from urllib.parse import unquote, urlparse
         qs = self.path.split('?', 1)[1] if '?' in self.path else ''
         url = ''
         for p in qs.split('&'):
             if p.startswith('url='):
                 url = unquote(p[4:])
                 break
-        if not url or not url.startswith(('http://', 'https://')):
+        if not url or not is_safe_remote_url(url):
             self.send_error(400, 'Missing url')
             return
 
@@ -136,7 +173,10 @@ class FavHandler(SimpleHTTPRequestHandler):
                 'Referer': 'https://mp.weixin.qq.com/',
                 'Accept': 'image/webp,image/apng,image/*,*/*;q=0.8',
             })
-            with urllib.request.urlopen(req, timeout=8) as resp:
+            with REMOTE_OPENER.open(req, timeout=8) as resp:
+                if resp.headers.get('Content-Length') and int(resp.headers['Content-Length']) > 10 * 1024 * 1024:
+                    self.send_error(413, 'Image too large')
+                    return
                 data = resp.read(10 * 1024 * 1024)  # max 10MB
                 content_type = resp.headers.get('Content-Type', 'image/jpeg')
 
@@ -155,7 +195,8 @@ class FavHandler(SimpleHTTPRequestHandler):
             self.send_header('Cache-Control', 'public, max-age=86400')
             self.send_header('X-Cache', 'MISS')
             self.send_header('Cache-Control', 'public, max-age=86400')
-            self.send_header('Access-Control-Allow-Origin', '*')
+            if self._is_local_origin():
+                self.send_header('Access-Control-Allow-Origin', self.headers.get('Origin', f'http://localhost:{self.server.server_port}'))
             self.end_headers()
             self.wfile.write(data)
         except Exception as e:
@@ -212,8 +253,13 @@ class FavHandler(SimpleHTTPRequestHandler):
 
         desired_names = set()
         for rel_path in favs:
-            src = Path(self.date_dir) / rel_path
-            if src.exists():
+            src = (Path(self.date_dir) / str(rel_path)).resolve()
+            date_root = Path(self.date_dir).resolve()
+            try:
+                src.relative_to(date_root)
+            except ValueError:
+                continue
+            if src.is_file():
                 desired_names.add(src.name)
                 link = fav_dir / src.name
                 if not link.exists():
@@ -382,13 +428,27 @@ class FavHandler(SimpleHTTPRequestHandler):
         self.send_response(200)
         self.send_header('Content-Type', 'application/json; charset=utf-8')
         self.send_header('Content-Length', len(body))
-        self.send_header('Access-Control-Allow-Origin', '*')
+        if self._is_local_origin():
+            self.send_header('Access-Control-Allow-Origin', self.headers.get('Origin', f'http://localhost:{self.server.server_port}'))
         self.end_headers()
         self.wfile.write(body)
 
+    def _is_local_origin(self):
+        origin = self.headers.get('Origin')
+        if not origin:
+            return True
+        expected = {
+            f'http://localhost:{self.server.server_port}',
+            f'http://127.0.0.1:{self.server.server_port}',
+        }
+        return origin in expected
+
     def do_OPTIONS(self):
+        if not self._is_local_origin():
+            self.send_error(403, 'Cross-origin request denied')
+            return
         self.send_response(200)
-        self.send_header('Access-Control-Allow-Origin', '*')
+        self.send_header('Access-Control-Allow-Origin', self.headers.get('Origin', f'http://localhost:{self.server.server_port}'))
         self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
         self.send_header('Access-Control-Allow-Headers', 'Content-Type')
         self.end_headers()
@@ -419,7 +479,7 @@ def main():
     # 切换到日报目录以提供静态文件服务
     os.chdir(date_dir)
 
-    server = ThreadingHTTPServer(('0.0.0.0', args.port), FavHandler)
+    server = ThreadingHTTPServer(('127.0.0.1', args.port), FavHandler)
     print(f'⭐ 收藏服务器已启动')
     print(f'   打开: http://localhost:{args.port}')
     print(f'   日期: {args.date}')

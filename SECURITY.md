@@ -16,6 +16,7 @@ If you are being monitored or suspect this tool was installed on a device withou
 - **100% local**: WeFlow CLI reads the local WeChat data directory directly. There is no built-in cloud service, tracking, or telemetry — nothing is collected or reported.
 - **Encrypted key storage**: database keys are written to `~/.weflow-cli/config.json` only after machine- and user-bound AES-256-GCM encryption; the ciphertext cannot be decrypted on another machine or under another account.
 - **Explicit AI opt-in**: AI features (article summaries, classification, RAG Q&A) activate only after you explicitly configure your own API key, and only the content you select for processing is uploaded.
+- **Strict assistant defaults**: the WeChat assistant denies all senders until `assistantWhitelist` is explicitly configured, and cloud inference defaults to `strict` privacy mode.
 - **Loopback-only web services**: local readers and servers bind to `127.0.0.1` and are never exposed to the network.
 - **Minimal process injection**: on Windows, key extraction injects into the running WeChat process only during initialization, performs read-only key retrieval, and unloads immediately afterwards.
 

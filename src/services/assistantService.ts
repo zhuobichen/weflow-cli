@@ -61,11 +61,11 @@ export class AssistantService {
     return { url: 'https://api.deepseek.com/v1', model: 'deepseek-chat', key: configService.get('deepseekApiKey'), local: false }
   }
 
-  /** 访问控制: assistantWhitelist 空 = 放行所有人; 非空 = 仅名单内 @im.wechat ID */
+  /** 访问控制: 未配置 assistantWhitelist 时默认拒绝所有人 */
   private isAllowed(userId: string): boolean {
     const list = String(configService.get('assistantWhitelist') || '')
       .split(/[,;\s]+/).map(s => s.trim()).filter(Boolean)
-    return list.length === 0 || list.includes(userId)
+    return list.length > 0 && list.includes(userId)
   }
 
   private dailyQuotaLeft(): number {

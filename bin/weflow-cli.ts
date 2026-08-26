@@ -2797,7 +2797,7 @@ assistantCmd
     const { privacyGate } = await import('../src/services/assistantPrivacy.js')
     console.log(`隐私模式: ${chalk.cyan(privacyGate.mode())}${privacyGate.isLocalInference() ? chalk.green(' (本地推理, 数据不出境)') : chalk.gray(' (工具结果脱敏后出境)')}`)
     const wl = String(configService.get('assistantWhitelist') || '').trim()
-    console.log(`白名单: ${wl ? chalk.green(`${wl.split(/[,;\s]+/).filter(Boolean).length} 人`) : chalk.gray('未设置 (允许所有人; config set assistantWhitelist "<@im.wechat ID>")')}`)
+    console.log(`白名单: ${wl ? chalk.green(`${wl.split(/[,;\s]+/).filter(Boolean).length} 人`) : chalk.red('未设置 (默认拒绝所有人; config set assistantWhitelist "<@im.wechat ID>")')}`)
     console.log(`用量护栏: ${chalk.cyan('100 条/天')} (微信内发「记忆」可查今日用量)`)
     rotateLogIfNeeded()
     console.log(chalk.cyan('\n最近日志:'))

@@ -19,15 +19,17 @@
 
 </div>
 
-**WeFlow CLI turns WeChat into your local second brain**: decrypt and query chat history with one command, export readable HTML; turn official-account articles into AI-digested daily reports; read your WeChat favorites; build a semantic-searchable knowledge base — and plug it all into MCP-compatible AI editors like Claude Code. Works on Windows and Linux.
+**WeFlow CLI turns WeChat into your local second brain**: read and query chat history locally with one command, export readable HTML; turn official-account articles into AI-digested daily reports; read your WeChat favorites; build a semantic-searchable knowledge base — and plug it all into MCP-compatible AI editors like Claude Code. Works on Windows and Linux.
 
 > 🔒 **Local-first**: runs entirely on your machine — zero telemetry, zero cloud reporting. Database keys are stored locally, encrypted with machine-bound AES-256-GCM. AI features only activate after you explicitly configure your own API key. See the [Security & Privacy statement](./SECURITY.md).
 
 > This project is intended only for data you are authorized to access. Please obey applicable laws, WeChat's terms, and the privacy of others.
 
+> **⚠️ Use boundaries and risks**: Use this project only on devices you control and only with data you own or are explicitly authorized to access. Do not use it to monitor, track, or read another person's WeChat data, deploy it on someone else's device, or run it remotely and silently. Review applicable laws, WeChat's terms, and account permissions before use; third-party tools may trigger account restrictions or suspension. This is not legal advice, and users are responsible for their use of the project.
+
 ## At a Glance
 
-**WeChat favorites query** (real data, locally decrypted `favorite.db`, with type filter and keyword search):
+**WeChat favorites query** (read local `favorite.db`, with type filter and keyword search):
 
 ```text
 $ weflow-cli fav list -n 3
@@ -70,7 +72,7 @@ weflow-cli mcp-config                  # one-shot MCP client integration
 | WeChat favorites | Read WeChat "Favorites" (official-account articles, text, images, videos, chat records) with type filters, keyword search, and Markdown/JSON export. |
 | Second-brain agent | Chat with a local AI assistant inside WeChat: natural-language queries over chats, favorites, Moments, digests, WeRead, todos, and the knowledge base; three-tier memory across sessions, daemonized background service. |
 
-> **⚠️ Intended use**: this tool only accesses data of **your own** WeChat account, on your own machine, with your own consent. Using it to monitor a partner, employee, or any third party without their informed consent — or deploying it onto someone else's device or running it remotely and silently — is illegal and has nothing to do with this project. See [SECURITY.md](SECURITY.md).
+> **⚠️ Intended use**: this tool only accesses data of **your own** WeChat account, on your own machine, with your own consent. Do not use it to monitor a partner, employee, or any third party without explicit consent, deploy it onto someone else's device, or run it remotely and silently. Review WeChat's terms, account-risk policies, and local legal requirements. See [SECURITY.md](SECURITY.md).
 
 ## Quick Start in Three Minutes
 
@@ -165,10 +167,10 @@ Then just talk to ClawBot on your phone. The assistant queries local chats and f
 
 How it works: the daemon long-polls WeChat's official bot channel (iLink); the agent loop, three-tier memory (working window / rolling summary / long-term facts), and all database queries run on your machine. Only the final question and reply texts go to the configured LLM; phone numbers, emails, and links in tool output are redacted by default (`config set assistantPrivacy strict` for stronger masking; a local `ollama` engine keeps everything offline). Sessions expire after 24h of inactivity, and proactive replies per window are capped by official limits.
 
-Cost guardrails: a built-in daily cap of 100 processed messages (send "记忆" in WeChat to check usage), plus an optional whitelist so only you can trigger AI calls:
+Cost guardrails: a built-in daily cap of 100 processed messages (send "记忆" in WeChat to check usage). The assistant denies all incoming users by default; configure an explicit whitelist before AI calls are enabled:
 
 ```powershell
-weflow-cli config set assistantWhitelist "your-@im.wechat-ID"   # empty = allow everyone
+weflow-cli config set assistantWhitelist "your-@im.wechat-ID"   # unset = deny everyone
 ```
 
 Management: `weflow-cli assistant status` / `log` / `stop`; send "帮助" in WeChat for in-chat commands.
