@@ -235,6 +235,20 @@ function safeDate(value: unknown): string | null {
   return /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : null
 }
 
+function isCoverImage(path: string): boolean {
+  try {
+    const stat = statSync(path)
+    if (!stat.isFile() || stat.size > 10 * 1024 * 1024) return false
+    const head = readFileSync(path).subarray(0, 12)
+    return (head.length >= 8 && head.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) ||
+      (head.length >= 3 && head.subarray(0, 3).equals(Buffer.from([255, 216, 255]))) ||
+      (head.length >= 6 && (head.subarray(0, 6).toString() === 'GIF87a' || head.subarray(0, 6).toString() === 'GIF89a')) ||
+      (head.length >= 12 && head.subarray(0, 4).toString() === 'RIFF' && head.subarray(8, 12).toString() === 'WEBP')
+  } catch {
+    return false
+  }
+}
+
 function parseFrontmatter(text: string): Record<string, any> {
   if (!text.startsWith('---')) return {}
   const end = text.indexOf('---', 3)
@@ -610,9 +624,9 @@ async function main() {
 
             // 上传封面图（如果提供，否则自动生成）
             let thumbMediaId = ''
-            const safeCover = coverImage ? safeChildPath(join(PKG_ROOT, 'output'), coverImage) : null
-            if (safeCover && existsSync(safeCover) && /\.(png|jpe?g|gif|webp)$/i.test(safeCover) && statSync(safeCover).size <= 10 * 1024 * 1024) {
-              thumbMediaId = await uploadWeChatImage(token, safeCover)
+            const selectedCover = coverImage ? resolve(coverImage) : null
+            if (selectedCover && isCoverImage(selectedCover)) {
+              thumbMediaId = await uploadWeChatImage(token, selectedCover)
             } else {
               // 自动生成封面图
               const autoCover = generateCoverImage(title, theme)
