@@ -3,6 +3,7 @@ dist/
 output/
 !output/biz-daily/.template/
 logs/
+issue-*.log
 *.db
 *.decrypted.db
 test-*.txt
