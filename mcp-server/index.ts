@@ -12,9 +12,10 @@ import {
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js'
 import { readFileSync, readdirSync, existsSync, statSync, writeFileSync, mkdirSync } from 'fs'
-import { join, resolve, dirname, relative, isAbsolute } from 'path'
+import { join, resolve, dirname } from 'path'
 import { fileURLToPath } from 'url'
 import { deflateSync } from 'zlib'
+import { isCoverImage, safeChildPath, safeDate } from '../src/utils/mcpSecurity.js'
 
 // ---- 微信公众号文章抓取 ----
 async function fetchWeChatArticle(url: string): Promise<{
@@ -223,31 +224,6 @@ const BIZ_DAILY = join(PKG_ROOT, 'output', 'biz-daily')
 const VAULT_WIKI = join(PKG_ROOT, 'output', 'wechat-vault', 'Wiki', 'Concepts')
 const VAULT_INDEX = join(PKG_ROOT, 'output', 'wechat-vault', 'Wiki', '00-Overview.md')
 const REVIEWS = join(PKG_ROOT, 'output', 'reviews', 'Daily')
-
-function safeChildPath(root: string, child: string): string | null {
-  const candidate = resolve(root, child)
-  const rel = relative(resolve(root), candidate)
-  return rel && !rel.startsWith('..') && !isAbsolute(rel) ? candidate : null
-}
-
-function safeDate(value: unknown): string | null {
-  const date = String(value || '')
-  return /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : null
-}
-
-function isCoverImage(path: string): boolean {
-  try {
-    const stat = statSync(path)
-    if (!stat.isFile() || stat.size > 10 * 1024 * 1024) return false
-    const head = readFileSync(path).subarray(0, 12)
-    return (head.length >= 8 && head.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) ||
-      (head.length >= 3 && head.subarray(0, 3).equals(Buffer.from([255, 216, 255]))) ||
-      (head.length >= 6 && (head.subarray(0, 6).toString() === 'GIF87a' || head.subarray(0, 6).toString() === 'GIF89a')) ||
-      (head.length >= 12 && head.subarray(0, 4).toString() === 'RIFF' && head.subarray(8, 12).toString() === 'WEBP')
-  } catch {
-    return false
-  }
-}
 
 function parseFrontmatter(text: string): Record<string, any> {
   if (!text.startsWith('---')) return {}

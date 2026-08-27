@@ -26,7 +26,7 @@ WeFlow CLI is a local-first command-line tool and MCP server for user-authorized
 | MCP | Local stdio MCP server exposes daily, knowledge, and local-data tools. | `mcp-config`, `mcp-server/index.ts` |
 | Assistant | Optional WeChat Bot-channel assistant with local memory and privacy gates. | `login-wechat`, `assistant` |
 
-The current regression suite covers home-path expansion, outbound PII redaction, local-inference bypass, and strict message-body masking.
+The current regression suite covers home-path expansion, outbound PII redaction, local-inference bypass, strict message-body masking, MCP path/date validation, and cover-image signature validation.
 
 ## Security Baseline
 

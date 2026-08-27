@@ -3,6 +3,10 @@ import assert from 'node:assert/strict'
 import { homedir } from 'node:os'
 import { expandHomePath } from '../src/utils/pathUtils.js'
 import { maskMessageBodyText, redactText } from '../src/services/assistantPrivacy.js'
+import { isCoverImage, safeChildPath, safeDate } from '../src/utils/mcpSecurity.js'
+import { mkdtempSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 test('expands home directory prefixes without changing other paths', () => {
   assert.equal(expandHomePath('~'), homedir())
@@ -32,4 +36,25 @@ test('masks third-party message bodies only in strict cloud mode', () => {
   assert.equal(maskMessageBodyText('私密消息', 'strict', false), '[内容4字已按严格模式屏蔽]')
   assert.equal(maskMessageBodyText('私密消息', 'balanced', false), '私密消息')
   assert.equal(maskMessageBodyText('私密消息', 'strict', true), '私密消息')
+})
+
+test('rejects MCP path traversal and invalid dates', () => {
+  const root = join(tmpdir(), 'weflow-test-root')
+  assert.equal(safeChildPath(root, 'article.md'), join(root, 'article.md'))
+  assert.equal(safeChildPath(root, '../secret.txt'), null)
+  assert.equal(safeChildPath(root, root), null)
+  assert.equal(safeDate('2026-08-27'), '2026-08-27')
+  assert.equal(safeDate('2026-8-27'), null)
+  assert.equal(safeDate('../secret'), null)
+})
+
+test('accepts real image signatures and rejects non-images', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'weflow-cover-'))
+  const png = join(dir, 'cover.bin')
+  const text = join(dir, 'text.bin')
+  writeFileSync(png, Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))
+  writeFileSync(text, 'not an image')
+  assert.equal(isCoverImage(png), true)
+  assert.equal(isCoverImage(text), false)
+  assert.equal(isCoverImage(join(dir, 'missing.png')), false)
 })
