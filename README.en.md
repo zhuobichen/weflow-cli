@@ -251,6 +251,8 @@ For a more complete view of modules and data flow, read [ARCHITECTURE.md](./ARCH
 - [Cross-machine Deployment Guide](./docs/SETUP.md): full installation on a new Windows PC.
 - [MCP Integration Guide](./docs/MCP.md): client configuration, tool scopes, security boundaries.
 - [Detailed Architecture](./ARCHITECTURE.md): modules, data flow, implementation boundaries.
+- [Project State](./docs/PROJECT_STATE.md): current capabilities, constraints, priorities, and handoff entry point.
+- [Technical Decisions](./docs/DECISIONS.md): durable design rationale for long-term maintenance.
 - [Contributing Guide](./CONTRIBUTING.md) and [Security Policy](./SECURITY.md): development, feedback, and sensitive issues.
 - [Changelog](./CHANGELOG.md): release summaries.
 - [GitHub Issues](https://github.com/zhuobichen/weflow-cli/issues): please attach sanitized command output, OS, WeChat version, and reproduction steps.

@@ -302,6 +302,8 @@ python scripts/fav_server.py --date YYYY-MM-DD
 - [跨电脑部署指南](./docs/SETUP.md)：从新 Windows 电脑完成完整安装。
 - [MCP 集成指南](./docs/MCP.md)：客户端配置、工具范围与安全边界。
 - [详细架构说明](./ARCHITECTURE.md)：模块、数据流与实现边界。
+- [项目维护状态](./docs/PROJECT_STATE.md)：当前能力、限制、优先级与交接入口。
+- [技术决策记录](./docs/DECISIONS.md)：长期维护中的关键设计取舍。
 - [贡献指南](./CONTRIBUTING.md) 与 [安全策略](./SECURITY.md)：开发、反馈和敏感问题处理。
 - [变更记录](./CHANGELOG.md)：版本更新摘要。
 - [GitHub Issues](https://github.com/zhuobichen/weflow-cli/issues)：请附上脱敏后的命令输出、操作系统、微信版本和复现步骤。

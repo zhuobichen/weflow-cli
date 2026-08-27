@@ -2,6 +2,8 @@
 
 微信聊天记录命令行工具（TypeScript/Node.js 18+），Python 脚本处理公众号日报 + AI 摘要。
 
+> 维护入口：先阅读 [AGENTS.md](AGENTS.md)、[docs/PROJECT_STATE.md](docs/PROJECT_STATE.md) 与 [docs/DECISIONS.md](docs/DECISIONS.md)。本文件保留 Claude 相关的快速操作与历史排障记录；当前事实以 `PROJECT_STATE.md` 为准。
+
 ## 项目结构
 
 - `bin/weflow-cli.ts` — CLI 入口（commander）

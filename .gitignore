@@ -31,6 +31,9 @@ scripts/regen_wsl_keys.mjs
 !README.md
 !ARCHITECTURE.md
 !CLAUDE.md
+!AGENTS.md
 !OPERATIONS.md
+!docs/PROJECT_STATE.md
+!docs/DECISIONS.md
 .DS_Store
 Thumbs.db
