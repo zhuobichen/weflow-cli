@@ -458,6 +458,7 @@ def main():
     parser.add_argument('--limit', type=int, default=0, help='最多处理篇数 (0=不限制)')
     parser.add_argument('--api-key', help='AI API key (或设环境变量 DEEPSEEK_API_KEY)')
     parser.add_argument('--engine', default='deepseek', help='AI 引擎: local/deepseek/claude/ollama')
+    parser.add_argument('--no-ai', action='store_true', help='关闭摘要、分类和日报简报的 AI 调用')
     parser.add_argument('--source', action='append', default=[], metavar='NAME',
                         help='仅处理指定公众号，可重复或用逗号分隔；默认读取配置 dailySources')
     args = parser.parse_args()
@@ -624,7 +625,7 @@ def main():
             print(f'  无URL, 使用本地缓存')
 
     # ====== Phase 2: AI summary + topic classification ======
-    if api_key or engine != 'deepseek':
+    if not args.no_ai and (api_key or engine != 'deepseek'):
         print(f'\n=== Phase 2: AI 摘要 + 主题分类 (engine={engine}) ===\n')
         from _utils import call_ai
         for i, a in enumerate(articles):
@@ -939,7 +940,7 @@ def main():
                 break
 
         highlight_text = '\n'.join(highlights[:25])
-        if highlight_text:
+        if highlight_text and not args.no_ai:
             try:
                 briefing_prompt = f"""你是公众号日报助手。基于今天 {len(all_articles)} 篇文章（{topic_summary}），生成一段200字以内的今日简报。
 

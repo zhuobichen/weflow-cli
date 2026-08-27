@@ -133,6 +133,9 @@ weflow-cli daily-server --date 2026-08-12
 
 # Preview articles only; no AI calls or daily-report writes
 weflow-cli daily --date 2026-08-12 --dry-run
+
+# Generate without any AI calls; fetching, HTML, and local indexes remain enabled
+weflow-cli daily --date 2026-08-12 --no-ai
 ```
 
 The reader serves at `http://localhost:8765/` by default.

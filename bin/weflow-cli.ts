@@ -448,13 +448,14 @@ configCmd
     console.log(`联系人DB密钥: ${config.contactKey ? '已设置' : chalk.gray('(未设置)')}`)
     console.log(`微信账号: ${config.wxid || chalk.gray('(未设置)')}`)
     console.log(`公众号日报来源: ${configService.get('dailySources') || chalk.gray('(全部公众号)')}`)
+    console.log(`公众号日报 AI: ${configService.get('dailyAiEnabled') === 'false' ? '已关闭' : '已开启'}`)
   })
 
 configCmd
   .command('set <key> <value>')
   .description('设置配置项 (dbPath, decryptKey, dbPath3x, decryptKey3x, dataVersion, wxid)')
   .action((key: string, value: string) => {
-    const validKeys = ['dbPath', 'decryptKey', 'dbPath3x', 'decryptKey3x', 'dataVersion', 'wxid', 'ntDbPath', 'ntKey', 'ntSalt', 'contactDbPath', 'contactKey', 'contactSalt', 'vaultRepo', 'aiEngine', 'dailySources', 'dailySourceCategories']
+    const validKeys = ['dbPath', 'decryptKey', 'dbPath3x', 'decryptKey3x', 'dataVersion', 'wxid', 'ntDbPath', 'ntKey', 'ntSalt', 'contactDbPath', 'contactKey', 'contactSalt', 'vaultRepo', 'aiEngine', 'dailySources', 'dailySourceCategories', 'dailyAiEnabled']
     if (!validKeys.includes(key)) {
       console.log(chalk.red(`无效的配置项: ${key}`))
       console.log(chalk.gray(`可用: ${validKeys.join(', ')}`))
@@ -2715,6 +2716,7 @@ program
   .option('--api-key <key>', 'DeepSeek API key（或设环境变量 DEEPSEEK_API_KEY）')
   .option('--skip-classify', '跳过后处理')
   .option('--dry-run', '仅预览文章，不调用 AI 或写入日报')
+  .option('--no-ai', '关闭本次日报的所有 AI 处理')
   .action(async (opts) => {
     const { execFile, spawn } = await import('child_process')
     const { promisify } = await import('util')
@@ -2729,6 +2731,7 @@ program
 
     const date = opts.date || new Date().toISOString().slice(0, 10)
     const apiKey = opts.apiKey || process.env.DEEPSEEK_API_KEY || ''
+    const noAi = opts.ai === false || configService.get('dailyAiEnabled') === 'false'
 
     if (opts.dryRun) {
       const dryRunArgs = [bizDaily, '--date', date, '--engine', 'local', '--dry-run']
@@ -2741,15 +2744,17 @@ program
       return
     }
 
-    if (!apiKey) {
+    if (!apiKey && !noAi) {
       console.log(chalk.red('\n❌ 缺少 DeepSeek API key'))
       console.log(chalk.gray('  用法: weflow-cli daily --api-key <key>'))
       console.log(chalk.gray('  或设环境变量: set DEEPSEEK_API_KEY=<key>\n'))
       process.exit(1)
     }
 
-    console.log(chalk.cyan(`\n📰 正在生成 ${date} 公众号日报...\n`))
-    const args = [pipeline, '--date', date, '--api-key', apiKey, '--interest', 'AI', '--skip-wiki']
+    console.log(chalk.cyan(`\n📰 正在生成 ${date} 公众号日报${noAi ? '（AI 已关闭）' : ''}...\n`))
+    const args = [pipeline, '--date', date, '--engine', noAi ? 'local' : 'deepseek', '--interest', 'AI', '--skip-wiki']
+    if (apiKey) args.push('--api-key', apiKey)
+    if (noAi) args.push('--no-ai')
     for (const source of opts.source || []) args.push('--source', source)
     if (opts.skipClassify) args.push('--skip-classify')
 

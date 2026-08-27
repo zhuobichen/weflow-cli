@@ -172,6 +172,9 @@ weflow-cli daily-server --date 2026-08-12
 # 仅预览指定日期的文章，不调用 AI、不写入日报
 weflow-cli daily --date 2026-08-12 --dry-run
 
+# 单次生成日报时关闭所有 AI，仍保留抓取、HTML 和本地索引
+weflow-cli daily --date 2026-08-12 --no-ai
+
 # 查看最近 30 天各公众号的推送与日报处理频率
 weflow-cli daily-stats --days 30 --limit 30
 
@@ -181,6 +184,10 @@ weflow-cli daily --source "公众号A,公众号B"
 
 # 持久化日报来源；留空则恢复为全部公众号
 weflow-cli config set dailySources "公众号A,公众号B"
+
+# 持久化关闭日报 AI；恢复为 true 即重新启用
+weflow-cli config set dailyAiEnabled false
+weflow-cli config set dailyAiEnabled true
 
 # 为来源设置固定类别；已分类来源只生成摘要，不再调用文章主题分类
 weflow-cli config set dailySourceCategories '<JSON object: source name or gh_ ID -> AI/政治/学术/新闻/文学/投资>'
