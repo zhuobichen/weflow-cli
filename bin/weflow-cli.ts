@@ -2714,6 +2714,7 @@ program
   .option('-d, --date <YYYY-MM-DD>', '日期')
   .option('--api-key <key>', 'DeepSeek API key（或设环境变量 DEEPSEEK_API_KEY）')
   .option('--skip-classify', '跳过后处理')
+  .option('--dry-run', '仅预览文章，不调用 AI 或写入日报')
   .action(async (opts) => {
     const { execFile, spawn } = await import('child_process')
     const { promisify } = await import('util')
@@ -2724,9 +2725,22 @@ program
     const __dirname = dirname(__filename)
     const pkgRoot = join(__dirname, '..')
     const pipeline = join(pkgRoot, 'scripts', 'pipeline.py')
+    const bizDaily = join(pkgRoot, 'scripts', 'biz_daily.py')
 
     const date = opts.date || new Date().toISOString().slice(0, 10)
     const apiKey = opts.apiKey || process.env.DEEPSEEK_API_KEY || ''
+
+    if (opts.dryRun) {
+      const dryRunArgs = [bizDaily, '--date', date, '--engine', 'local', '--dry-run']
+      for (const source of opts.source || []) dryRunArgs.push('--source', source)
+      const child = spawn(getPythonCommand(), dryRunArgs, {
+        stdio: 'inherit',
+        env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
+      })
+      child.on('exit', (code) => process.exit(code || 0))
+      return
+    }
+
     if (!apiKey) {
       console.log(chalk.red('\n❌ 缺少 DeepSeek API key'))
       console.log(chalk.gray('  用法: weflow-cli daily --api-key <key>'))

@@ -169,6 +169,9 @@ weflow-cli export "联系人" html --output ./output
 weflow-cli daily --date 2026-08-12 --api-key "你的 DeepSeek API Key"
 weflow-cli daily-server --date 2026-08-12
 
+# 仅预览指定日期的文章，不调用 AI、不写入日报
+weflow-cli daily --date 2026-08-12 --dry-run
+
 # 查看最近 30 天各公众号的推送与日报处理频率
 weflow-cli daily-stats --days 30 --limit 30
 

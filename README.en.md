@@ -130,6 +130,9 @@ weflow-cli export "contact" html --output ./output
 ```powershell
 weflow-cli daily --date 2026-08-12 --api-key "Your DeepSeek API Key"
 weflow-cli daily-server --date 2026-08-12
+
+# Preview articles only; no AI calls or daily-report writes
+weflow-cli daily --date 2026-08-12 --dry-run
 ```
 
 The reader serves at `http://localhost:8765/` by default.
