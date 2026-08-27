@@ -17,10 +17,11 @@ Read this file and [docs/PROJECT_STATE.md](docs/PROJECT_STATE.md) before changin
 - `src/services/`: configuration, chat access, exports, assistant, privacy, whitelist, and message workflows.
 - `scripts/`: Python workflows for NT databases, daily reading, HTML generation, knowledge processing, and reports.
 - `mcp-server/`: stdio MCP server.
+- `test/`: Node built-in regression tests for pure utilities and privacy boundaries.
 
 ## Verification
 
-Run the narrowest relevant check first. TypeScript changes require `npm run build`. For Python changes, compile or run the affected script's focused check. Before handoff, run `git diff --check` and inspect the staged diff for sensitive information.
+Run the narrowest relevant check first. TypeScript changes require `npm run build`; run `npm test` for the regression suite. For Python changes, compile or run the affected script's focused check. Before handoff, run `git diff --check` and inspect the staged diff for sensitive information.
 
 ## Documentation Protocol
 

@@ -30,6 +30,23 @@ const PII_RULES: Rule[] = [
   { re: /https?:\/\/\S+/g, mask: '[链接]' },
 ]
 
+export function redactText(text: string, mode: PrivacyMode, localInference: boolean): { safe: string; redactions: number } {
+  if (mode === 'open' || localInference) {
+    return { safe: text, redactions: 0 }
+  }
+  let count = 0
+  let safe = text
+  for (const { re, mask } of PII_RULES) {
+    safe = safe.replace(re, () => { count++; return mask })
+  }
+  return { safe, redactions: count }
+}
+
+export function maskMessageBodyText(body: string, mode: PrivacyMode, localInference: boolean): string {
+  if (mode !== 'strict' || localInference) return body
+  return `[内容${body.length}字已按严格模式屏蔽]`
+}
+
 export class PrivacyGate {
   mode(): PrivacyMode {
     const m = configService.get('assistantPrivacy')
@@ -47,21 +64,12 @@ export class PrivacyGate {
    * 用户自己输入的话按原意发送 (用户对自己的话有处置权)。
    */
   redact(text: string): { safe: string; redactions: number } {
-    if (this.mode() === 'open' || this.isLocalInference()) {
-      return { safe: text, redactions: 0 }
-    }
-    let count = 0
-    let safe = text
-    for (const { re, mask } of PII_RULES) {
-      safe = safe.replace(re, () => { count++; return mask })
-    }
-    return { safe, redactions: count }
+    return redactText(text, this.mode(), this.isLocalInference())
   }
 
   /** strict 模式: 第三方聊天正文不出境, 只保留元数据形态 */
   maskMessageBody(body: string): string {
-    if (this.mode() !== 'strict' || this.isLocalInference()) return body
-    return `[内容${body.length}字已按严格模式屏蔽]`
+    return maskMessageBodyText(body, this.mode(), this.isLocalInference())
   }
 
   /** 审计日志 — 只记事件与字节量, 绝不记内容 */

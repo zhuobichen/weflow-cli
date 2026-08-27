@@ -12,6 +12,7 @@ WeFlow CLI is a local-first command-line tool and MCP server for user-authorized
 - Runtime: Node.js 18+; Python 3.10+ is required for database and daily-reading workflows.
 - Main development command: `npm run dev -- <command>`.
 - Build check: `npm run build`.
+- Regression check: `npm test`.
 - Supported focus: Windows WeChat 4.x; Linux WeChat 4.x has an NT database path; macOS requires user-provided local access credentials for initialization.
 
 ## Verified Capabilities
@@ -24,6 +25,8 @@ WeFlow CLI is a local-first command-line tool and MCP server for user-authorized
 | Knowledge workflows | Wiki compilation, semantic search, RAG, WeRead sync, reviews, and reading notes. | `wiki`, `search`, `chat`, `weread`, `review` |
 | MCP | Local stdio MCP server exposes daily, knowledge, and local-data tools. | `mcp-config`, `mcp-server/index.ts` |
 | Assistant | Optional WeChat Bot-channel assistant with local memory and privacy gates. | `login-wechat`, `assistant` |
+
+The current regression suite covers home-path expansion, outbound PII redaction, local-inference bypass, and strict message-body masking.
 
 ## Security Baseline
 
