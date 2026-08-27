@@ -654,6 +654,43 @@ program
     console.log(chalk.yellow('  注意: 哈希用于证明文件未被改动，不等于证明内容真实或必然具有法律效力。'))
   })
 
+program
+  .command('evidence-review <talker>')
+  .description('用 AI 整理聊天中的法律争议线索（不提供法律结论）')
+  .option('-o, --output <dir>', '分析结果输出目录', './output/evidence-review')
+  .option('-n, --limit <number>', '最多分析消息数', '500')
+  .option('--allow-cloud', '明确允许将按隐私模式处理后的内容发送到云端 AI')
+  .action(async (talkerInput: string, opts) => {
+    if (!configService.isConfigured()) {
+      console.log(chalk.red('\n❌ 还没配置'))
+      console.log(chalk.gray('  运行: weflow-cli init\n'))
+      process.exit(1)
+    }
+    const talker = await resolveTalker(talkerInput)
+    const messages = await chatService.getMessages(talker, parseInt(opts.limit, 10))
+    if (messages.length === 0) {
+      console.log(chalk.gray('未找到消息，未创建分析结果'))
+      return
+    }
+    const { AssistantService } = await import('../src/services/assistantService.js')
+    const result = await new AssistantService().reviewEvidence(talker, messages, Boolean(opts.allowCloud))
+    const { mkdirSync } = await import('fs')
+    mkdirSync(opts.output, { recursive: true })
+    const outputPath = join(opts.output, `${Date.now()}-${talker.replace(/[^a-zA-Z0-9._-]+/g, '_').slice(0, 60)}.md`)
+    writeFileSync(outputPath, [
+      '# 聊天法律争议线索整理', '',
+      `- 会话：${talker}`,
+      `- 消息数：${messages.length}`,
+      `- 推理方式：${result.localInference ? '本地模型' : '云端模型（已按隐私模式处理）'}`,
+      `- 脱敏次数：${result.redactions}`,
+      '', result.text, '',
+      '---', '',
+      '本文件仅供线索整理，不是法律意见，不代表违法认定或法院必然采信。请保留原设备、原始数据和完整上下文，并咨询专业人士。',
+    ].join('\n'), 'utf8')
+    console.log(chalk.green(`✓ 分析结果已保存: ${outputPath}`))
+    console.log(chalk.yellow(`  ${result.localInference ? '使用本地模型，聊天正文未离开本机' : '已使用云端模型，请确认隐私模式和授权范围'}`))
+  })
+
 // ==================== dbkey ====================
 program
   .command('dbkey')

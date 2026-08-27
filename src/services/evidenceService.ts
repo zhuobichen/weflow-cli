@@ -2,6 +2,7 @@ import { createHash } from 'crypto'
 import { mkdirSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import type { Message } from '../types.js'
+import { redactText, type PrivacyMode } from './assistantPrivacy.js'
 
 export interface EvidenceManifest {
   schemaVersion: '1.0'
@@ -21,6 +22,12 @@ export interface EvidenceManifest {
 export interface EvidencePackageResult {
   path: string
   manifest: EvidenceManifest
+}
+
+export interface EvidenceReviewInput {
+  transcript: string
+  redactions: number
+  localInference: boolean
 }
 
 const LEGAL_NOTICE = '本包用于本地证据整理，不代表任何法院或机构必然采信；请保留原设备和原始数据，并根据案件情况咨询专业律师。'
@@ -90,3 +97,33 @@ export function writeEvidencePackage(outputRoot: string, talker: string, message
 }
 
 export const evidenceLegalNotice = LEGAL_NOTICE
+
+export function buildEvidenceReviewInput(talker: string, messages: Message[], mode: PrivacyMode, localInference: boolean): EvidenceReviewInput {
+  let redactions = 0
+  const safeMetadata = (value: string, fallback: string): string => {
+    if (localInference) return value || fallback
+    if (mode === 'strict') return fallback
+    const result = redactText(value || fallback, mode, false)
+    redactions += result.redactions
+    return result.safe
+  }
+  const safeTalker = safeMetadata(talker, '[会话已按严格隐私模式屏蔽]')
+  const lines = messages.map(message => {
+    const rawBody = message.content || message.parsedContent || message.rawContent || ''
+    const body = mode === 'strict' && !localInference
+      ? `[聊天正文已按严格隐私模式屏蔽，共${rawBody.length}字]`
+      : (() => {
+          const result = redactText(rawBody, mode, localInference)
+          redactions += result.redactions
+          return result.safe
+        })()
+    const time = isoTime(message.createTime) || '时间未知'
+    const sender = safeMetadata(message.senderUsername || '', '[发送方已按严格隐私模式屏蔽]')
+    return `[消息ID:${message.localId}] [${time}] [发送方:${sender}] ${body}`
+  })
+  return {
+    transcript: `会话：${safeTalker}\n消息数：${messages.length}\n\n${lines.join('\n')}`,
+    redactions,
+    localInference,
+  }
+}

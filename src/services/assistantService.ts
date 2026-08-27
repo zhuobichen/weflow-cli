@@ -13,6 +13,8 @@ import { AssistantMemory, type ChatTurn } from './assistantMemory.js'
 import { privacyGate } from './assistantPrivacy.js'
 import { TOOL_DEFS, executeTool } from './assistantTools.js'
 import { appendLog } from './assistantDaemon.js'
+import type { Message } from '../types.js'
+import { buildEvidenceReviewInput } from './evidenceService.js'
 
 const MAX_TOOL_ROUNDS = 6
 /** 每日 LLM 处理上限 (护栏: 防 bug 死循环/异常流量烧钱; 0 = 不限制) */
@@ -99,6 +101,37 @@ export class AssistantService {
       throw new Error(`LLM ${res.status}: ${t.slice(0, 120)}`)
     }
     return res.json()
+  }
+
+  /** 在明确授权后分析本地聊天，输出证据线索而非法律结论。 */
+  async reviewEvidence(talker: string, messages: Message[], allowCloud = false): Promise<{ text: string; localInference: boolean; redactions: number }> {
+    const { local } = this.engineConfig()
+    if (!local && !allowCloud) {
+      throw new Error('默认禁止将聊天正文发送到云端；请切换本地模型，或明确使用 --allow-cloud')
+    }
+    const input = buildEvidenceReviewInput(talker, messages, privacyGate.mode(), local)
+    const response = await this.callLLM([
+      {
+        role: 'system',
+        content: `你是电子数据整理助手，不是律师。只根据提供的聊天原文进行线索整理，不判断“必然违法”、不判断法院必然采信，也不编造法律条文或事实。
+请用中文输出以下结构：
+## 疑似争议线索
+逐项引用消息ID，区分原文事实和你的待核查推测。
+## 可能涉及的法律主题
+只写宽泛主题，例如合同履行、借贷、劳动争议、名誉侵权、隐私或个人信息；不作定性结论。
+## 还需要核验的材料
+列出原设备、完整上下文、转账/合同/平台记录、身份归属等缺口。
+## 保全建议
+提醒保留原始设备、原始数据、完整对话和导出记录。
+如果信息不足，明确写“信息不足”，不要补全。${local ? '' : '\n当前不是本地推理：不要复述已被隐私模式屏蔽的聊天正文。'}`,
+      },
+      { role: 'user', content: input.transcript },
+    ], undefined, 1800)
+    return {
+      text: (response.choices?.[0]?.message?.content || '信息不足，未生成分析。').trim(),
+      localInference: local,
+      redactions: input.redactions,
+    }
   }
 
   /** 组装系统提示: 基础人格 + L2 摘要 + L3 事实 */

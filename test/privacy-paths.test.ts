@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { homedir } from 'node:os'
 import { expandHomePath } from '../src/utils/pathUtils.js'
 import { maskMessageBodyText, redactText } from '../src/services/assistantPrivacy.js'
-import { buildEvidenceManifest, writeEvidencePackage } from '../src/services/evidenceService.js'
+import { buildEvidenceManifest, buildEvidenceReviewInput, writeEvidencePackage } from '../src/services/evidenceService.js'
 import { isCoverImage, safeChildPath, safeDate } from '../src/utils/mcpSecurity.js'
 import { mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -116,4 +116,27 @@ test('empty evidence manifests contain no fabricated timestamps', () => {
   assert.equal(manifest.firstMessageAt, null)
   assert.equal(manifest.lastMessageAt, null)
   assert.deepEqual(manifest.messageIds, [])
+})
+
+test('cloud evidence review respects strict privacy mode', () => {
+  const messages: Message[] = [{
+    localId: 7,
+    serverId: 'server-7',
+    localType: 1,
+    createTime: 1704067200,
+    isSend: 0,
+    senderUsername: 'wxid-a@example.com',
+    content: '请在明天前还款，联系电话13812345678',
+    rawContent: '请在明天前还款，联系电话13812345678',
+    parsedContent: '请在明天前还款，联系电话13812345678',
+  }]
+  const strict = buildEvidenceReviewInput('对话', messages, 'strict', false)
+  const local = buildEvidenceReviewInput('对话', messages, 'strict', true)
+
+  assert.equal(strict.redactions, 0)
+  assert.equal(strict.transcript.includes('请在明天前还款'), false)
+  assert.equal(strict.transcript.includes('wxid-a@example.com'), false)
+  assert.equal(strict.transcript.includes('对话'), false)
+  assert.match(strict.transcript, /聊天正文已按严格隐私模式屏蔽/)
+  assert.equal(local.transcript.includes('请在明天前还款'), true)
 })
