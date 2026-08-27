@@ -11,6 +11,7 @@ import { NtCore } from '../src/core/ntCore.js'
 import { configService } from '../src/services/configService.js'
 import { chatService } from '../src/services/chatService.js'
 import { exportService } from '../src/services/exportService.js'
+import { writeEvidencePackage } from '../src/services/evidenceService.js'
 import { resolveTalker as resolveTalkerCore } from '../src/utils/talkerUtils.js'
 import { getPythonCommand } from '../src/utils/python.js'
 import { WechatMessageService } from '../src/services/wechatMessageService.js'
@@ -625,6 +626,32 @@ program
       console.log(chalk.red(`✗ 导出失败: ${result?.error}`))
       process.exit(1)
     }
+  })
+
+// ==================== evidence ====================
+program
+  .command('evidence <talker>')
+  .description('整理本地聊天证据包（原始消息、哈希与保全说明）')
+  .option('-o, --output <dir>', '证据包输出目录', './output/evidence')
+  .option('-n, --limit <number>', '最多包含消息数', '10000')
+  .option('--case <note>', '案件或争议说明（仅保存在本地证据包）')
+  .action(async (talkerInput: string, opts) => {
+    if (!configService.isConfigured()) {
+      console.log(chalk.red('\n❌ 还没配置'))
+      console.log(chalk.gray('  运行: weflow-cli init\n'))
+      process.exit(1)
+    }
+    const talker = await resolveTalker(talkerInput)
+    const messages = await chatService.getMessages(talker, parseInt(opts.limit, 10))
+    if (messages.length === 0) {
+      console.log(chalk.gray('未找到消息，未创建证据包'))
+      return
+    }
+    const result = writeEvidencePackage(opts.output, talker, messages, opts.case)
+    console.log(chalk.green(`✓ 证据包已创建: ${result.path}`))
+    console.log(chalk.gray(`  消息: ${result.manifest.messageCount} 条`))
+    console.log(chalk.gray(`  SHA-256: ${result.manifest.messagesSha256}`))
+    console.log(chalk.yellow('  注意: 哈希用于证明文件未被改动，不等于证明内容真实或必然具有法律效力。'))
   })
 
 // ==================== dbkey ====================

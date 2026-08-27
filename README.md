@@ -314,6 +314,7 @@ python scripts/fav_server.py --date YYYY-MM-DD
 - [详细架构说明](./ARCHITECTURE.md)：模块、数据流与实现边界。
 - [项目维护状态](./docs/PROJECT_STATE.md)：当前能力、限制、优先级与交接入口。
 - [技术决策记录](./docs/DECISIONS.md)：长期维护中的关键设计取舍。
+- [电子数据证据指南](./docs/EVIDENCE_GUIDE.md)：证据保全、法律边界与使用注意事项。
 - [贡献指南](./CONTRIBUTING.md) 与 [安全策略](./SECURITY.md)：开发、反馈和敏感问题处理。
 - [变更记录](./CHANGELOG.md)：版本更新摘要。
 - [GitHub Issues](https://github.com/zhuobichen/weflow-cli/issues)：请附上脱敏后的命令输出、操作系统、微信版本和复现步骤。

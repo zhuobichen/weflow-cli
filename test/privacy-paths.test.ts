@@ -3,10 +3,12 @@ import assert from 'node:assert/strict'
 import { homedir } from 'node:os'
 import { expandHomePath } from '../src/utils/pathUtils.js'
 import { maskMessageBodyText, redactText } from '../src/services/assistantPrivacy.js'
+import { buildEvidenceManifest, writeEvidencePackage } from '../src/services/evidenceService.js'
 import { isCoverImage, safeChildPath, safeDate } from '../src/utils/mcpSecurity.js'
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import type { Message } from '../src/types.js'
 
 test('expands home directory prefixes without changing other paths', () => {
   assert.equal(expandHomePath('~'), homedir())
@@ -57,4 +59,61 @@ test('accepts real image signatures and rejects non-images', () => {
   assert.equal(isCoverImage(png), true)
   assert.equal(isCoverImage(text), false)
   assert.equal(isCoverImage(join(dir, 'missing.png')), false)
+})
+
+test('builds a deterministic local evidence manifest from synthetic messages', () => {
+  const messages: Message[] = [
+    {
+      localId: 2,
+      serverId: 'server-2',
+      localType: 1,
+      createTime: 1704067200,
+      isSend: 0,
+      senderUsername: 'wxid-a',
+      content: 'second',
+      rawContent: 'second',
+      parsedContent: 'second',
+    },
+    {
+      localId: 1,
+      serverId: 'server-1',
+      localType: 1,
+      createTime: 1703980800,
+      isSend: 1,
+      senderUsername: 'wxid-b',
+      content: 'first',
+      rawContent: 'first',
+      parsedContent: 'first',
+    },
+  ]
+  const first = buildEvidenceManifest('person/group', messages, '  case note  ', '2026-08-27T00:00:00.000Z')
+  const second = buildEvidenceManifest('person/group', messages, 'case note', '2026-08-27T00:00:00.000Z')
+
+  assert.equal(first.messageCount, 2)
+  assert.equal(first.firstMessageAt, '2023-12-31T00:00:00.000Z')
+  assert.equal(first.lastMessageAt, '2024-01-01T00:00:00.000Z')
+  assert.deepEqual(first.messageIds, [2, 1])
+  assert.equal(first.caseNote, 'case note')
+  assert.equal(first.messagesSha256, second.messagesSha256)
+  assert.match(first.notice, /不代表任何法院/)
+})
+
+test('evidence package sanitizes talker names and writes local files', () => {
+  const root = mkdtempSync(join(tmpdir(), 'weflow-evidence-'))
+  const messages: Message[] = []
+  const result = writeEvidencePackage(root, '../private\\chat', messages, 'x'.repeat(600))
+  const packageName = readdirSync(root)[0]
+
+  assert.match(packageName, /^_private_chat-/)
+  assert.equal(JSON.parse(readFileSync(join(result.path, 'messages.json'), 'utf8')).length, 0)
+  assert.equal(result.manifest.caseNote.length, 500)
+  assert.equal(readFileSync(join(result.path, 'manifest.json'), 'utf8').includes('private\\chat'), false)
+})
+
+test('empty evidence manifests contain no fabricated timestamps', () => {
+  const manifest = buildEvidenceManifest('empty', [], '')
+  assert.equal(manifest.messageCount, 0)
+  assert.equal(manifest.firstMessageAt, null)
+  assert.equal(manifest.lastMessageAt, null)
+  assert.deepEqual(manifest.messageIds, [])
 })

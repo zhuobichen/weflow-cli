@@ -18,6 +18,7 @@ Read this file and [docs/PROJECT_STATE.md](docs/PROJECT_STATE.md) before changin
 - `scripts/`: Python workflows for NT databases, daily reading, HTML generation, knowledge processing, and reports.
 - `mcp-server/`: stdio MCP server.
 - `test/`: Node built-in regression tests for pure utilities and privacy boundaries.
+- Evidence packages and legal notes stay local; never commit real evidence or personal data.
 
 ## Verification
 

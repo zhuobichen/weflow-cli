@@ -259,6 +259,7 @@ For a more complete view of modules and data flow, read [ARCHITECTURE.md](./ARCH
 - [Detailed Architecture](./ARCHITECTURE.md): modules, data flow, implementation boundaries.
 - [Project State](./docs/PROJECT_STATE.md): current capabilities, constraints, priorities, and handoff entry point.
 - [Technical Decisions](./docs/DECISIONS.md): durable design rationale for long-term maintenance.
+- [Electronic Evidence Guide](./docs/EVIDENCE_GUIDE.md): preservation workflow, legal boundaries, and usage notes.
 - [Contributing Guide](./CONTRIBUTING.md) and [Security Policy](./SECURITY.md): development, feedback, and sensitive issues.
 - [Changelog](./CHANGELOG.md): release summaries.
 - [GitHub Issues](https://github.com/zhuobichen/weflow-cli/issues): please attach sanitized command output, OS, WeChat version, and reproduction steps.
