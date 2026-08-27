@@ -475,6 +475,8 @@ def main():
 
     # Load config & DB keys
     config = load_config()
+    if str(config.get('dailyAiEnabled', 'true')).strip().lower() == 'false':
+        args.no_ai = True
     keys = get_db_keys(config)
     source_filters = parse_source_filters(args.source or [config.get('dailySources', '')])
     source_categories = load_source_categories(config)

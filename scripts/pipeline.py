@@ -56,6 +56,8 @@ def main():
     sys.path.insert(0, SCRIPTS_DIR)
     from _utils import load_config, get_api_key
     config = load_config()
+    if str(config.get('dailyAiEnabled', 'true')).strip().lower() == 'false':
+        args.no_ai = True
 
     # api_key：本地/ollama 引擎不需要；云端需要
     api_key = args.api_key or ''

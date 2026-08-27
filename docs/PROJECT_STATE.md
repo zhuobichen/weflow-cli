@@ -28,7 +28,7 @@ WeFlow CLI is a local-first command-line tool and MCP server for user-authorized
 
 The current regression suite covers home-path expansion, outbound PII redaction, local-inference bypass, strict message-body masking, MCP path/date validation, and cover-image signature validation.
 
-The daily workflow supports `dailyAiEnabled=false` for a persistent no-AI mode, or `daily --no-ai` for a single run. Fetching, HTML generation, and local indexes remain available in that mode.
+The daily workflow supports `dailyAiEnabled=false` for a persistent no-AI mode, or `daily --no-ai` for a single run. Both the CLI and direct Python entry points honor the setting. Fetching, HTML generation, and local indexes remain available in that mode.
 
 ## Security Baseline
 
