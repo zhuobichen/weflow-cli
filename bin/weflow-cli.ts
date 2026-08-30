@@ -106,8 +106,27 @@ program
   .command('init')
   .description('自动检测微信数据目录并提取解密密钥')
   .option('-p, --path <path>', '微信数据目录、账号目录或 db_storage 目录')
+  .option('--refresh', '忽略已有配置并重新初始化')
+  .option('--test-missing-keys', '仅在本次运行模拟密钥缺失，不修改已保存配置')
   .action(async (opts) => {
     console.log(chalk.cyan('🔧 WeFlow CLI 初始化\n'))
+
+    if (opts.testMissingKeys) {
+      configService.maskDatabaseKeysForTesting()
+      console.log(chalk.yellow('测试模式：本次运行忽略已保存的数据库密钥。'))
+      console.log(chalk.gray('测试失败不会清除磁盘上的现有密钥配置。\n'))
+    }
+
+    if (!opts.refresh && !opts.path && !opts.testMissingKeys && configService.isConfigured()) {
+      const existingConnection = await chatService.connect()
+      if (existingConnection.success) {
+        console.log(chalk.green('✓ 已验证现有本地配置可用，跳过密钥捕获。'))
+        console.log(chalk.gray('  可直接运行 weflow-cli sessions、messages 等命令。'))
+        console.log(chalk.gray('  仅在微信迁移、切换账号或访问失败后运行 weflow-cli init --refresh。'))
+        return
+      }
+      console.log(chalk.yellow('  已发现现有配置，但无法验证数据库访问；继续重新初始化。'))
+    }
 
     // Step 0: 检测微信版本
     console.log(chalk.yellow('步骤 0/3: 检测微信版本...'))
@@ -165,7 +184,7 @@ program
       console.log(chalk.white(`数据目录: ${wxDir}`))
       console.log(chalk.white(`消息数据库: ${msg0Path}`))
       console.log(chalk.white(`账号: ${wxid}`))
-      console.log(chalk.white(`密钥: ${result.key.slice(0, 8)}...${result.key.slice(-8)}`))
+      console.log(chalk.white('密钥: 已安全保存'))
 
     } else {
       // ====== 4.x 初始化 (原有逻辑) ======
@@ -209,7 +228,7 @@ program
 
       // 优先尝试从 WeFlow 配置读取
       console.log(chalk.gray('  尝试从 WeFlow 桌面版配置读取...'))
-      let extractedKey = tryReadWeFlowKey()
+      let extractedKey = opts.testMissingKeys ? '' : tryReadWeFlowKey()
       let linuxNtKey = ''
 
       if (extractedKey) {
@@ -413,7 +432,7 @@ program
       console.log(chalk.white(`数据目录: ${detected.path}`))
       console.log(chalk.white(`账号: ${selectedWxid.wxid}${selectedWxid.nickname ? ` (${selectedWxid.nickname})` : ''}`))
       const displayKey = extractedKey || linuxNtKey
-      console.log(chalk.white(`密钥: ${displayKey.slice(0, 8)}...${displayKey.slice(-8)}`))
+      console.log(chalk.white('密钥: 已安全保存'))
       const ntDbPath = configService.get('ntDbPath')
       if (ntDbPath) {
         console.log(chalk.white(`NT 数据库: ${ntDbPath}`))
@@ -454,9 +473,9 @@ configCmd
 
 configCmd
   .command('set <key> <value>')
-  .description('设置配置项 (dbPath, decryptKey, dbPath3x, decryptKey3x, dataVersion, wxid)')
+  .description('设置配置项')
   .action((key: string, value: string) => {
-    const validKeys = ['dbPath', 'decryptKey', 'dbPath3x', 'decryptKey3x', 'dataVersion', 'wxid', 'ntDbPath', 'ntKey', 'ntSalt', 'contactDbPath', 'contactKey', 'contactSalt', 'vaultRepo', 'aiEngine', 'dailySources', 'dailySourceCategories', 'dailyAiEnabled']
+    const validKeys = ['dbPath', 'decryptKey', 'dbPath3x', 'decryptKey3x', 'dataVersion', 'wxid', 'ntDbPath', 'ntKey', 'ntSalt', 'contactDbPath', 'contactKey', 'contactSalt', 'vaultRepo', 'aiEngine', 'aiBaseUrl', 'aiModel', 'assistantPrivacy', 'assistantWhitelist', 'assistantGroupWhitelist', 'assistantGroupRequireMention', 'dailySources', 'dailySourceCategories', 'dailyAiEnabled']
     if (!validKeys.includes(key)) {
       console.log(chalk.red(`无效的配置项: ${key}`))
       console.log(chalk.gray(`可用: ${validKeys.join(', ')}`))
@@ -475,6 +494,30 @@ configCmd
   .action(() => {
     configService.clear()
     console.log(chalk.green('✓ 配置已清除'))
+  })
+
+configCmd
+  .command('forget-keys')
+  .description('仅清除本机数据库访问密钥，用于重新初始化测试')
+  .option('--yes', '跳过确认')
+  .action(async (opts) => {
+    if (!opts.yes) {
+      const { confirmed } = await inquirer.prompt([{
+        type: 'confirm',
+        name: 'confirmed',
+        message: '清除数据库访问密钥后，聊天读取会暂时不可用。继续吗？',
+        default: false,
+      }])
+      if (!confirmed) {
+        console.log(chalk.gray('已取消，未修改配置。'))
+        return
+      }
+    }
+
+    configService.clearDatabaseKeys()
+    console.log(chalk.green('✓ 已清除数据库访问密钥。'))
+    console.log(chalk.gray('  数据目录、AI、日报、白名单和机器人设置均已保留。'))
+    console.log(chalk.gray('  现在可运行 weflow-cli init 测试首次初始化流程。'))
   })
 
 // ==================== sessions ====================
@@ -696,9 +739,16 @@ program
   .command('dbkey')
   .description('从运行中的微信进程提取数据库解密密钥 (自动检测版本)')
   .option('-t, --timeout <ms>', '超时时间(毫秒)', '60000')
+  .option('--force', '即使已有本地配置也执行捕获')
   .action(async (opts) => {
     console.log(chalk.cyan('🔑 提取微信数据库密钥\n'))
-    console.log(chalk.gray('请确保微信已登录且正在运行...\n'))
+    if (!opts.force && configService.isConfigured()) {
+      console.log(chalk.green('✓ 已检测到本地数据库访问配置，未重复捕获密钥。'))
+      console.log(chalk.gray('  可直接运行 weflow-cli sessions 验证访问。'))
+      console.log(chalk.gray('  仅在需要排障时使用 --force。'))
+      return
+    }
+    console.log(chalk.gray('请确保微信已登录且正在运行。\n'))
 
     if (process.platform === 'linux') {
       // Linux：/proc 内存扫描提取 NT 密钥
@@ -707,7 +757,7 @@ program
       if (result.success && result.matched && result.matched.length > 0) {
         for (const db of result.matched) {
           console.log(chalk.green(`✓ ${db.name} (${(db.size / 1024 / 1024).toFixed(1)}MB)`))
-          console.log(chalk.white(`  密钥: ${db.key}`))
+          console.log(chalk.white('  密钥: 已匹配，未显示'))
           console.log(chalk.white(`  盐值: ${db.salt}`))
         }
         console.log(chalk.gray('\n提示: 运行 weflow-cli init 可自动写入配置'))
@@ -734,7 +784,7 @@ program
         console.log(chalk.gray(`  ${msg}`))
       })
       if (result.success && result.key) {
-        console.log(chalk.green(`\n✓ 密钥: ${result.key}`))
+        console.log(chalk.green('\n✓ 密钥已捕获，未显示'))
         console.log(chalk.green(`  wxid: ${result.wxid}`))
         console.log(chalk.green(`  消息目录: ${result.msgDir}`))
       } else {
@@ -742,11 +792,11 @@ program
         process.exit(1)
       }
     } else {
-      const result = await keyService.autoGetDbKey(parseInt(opts.timeout), (msg) => {
+      const result = await keyService.autoGetDbKey(parseInt(opts.timeout, 10), (msg) => {
         console.log(chalk.gray(`  ${msg}`))
       })
       if (result.success && result.key) {
-        console.log(chalk.green(`\n✓ 密钥: ${result.key}`))
+        console.log(chalk.green('\n✓ 密钥已捕获，未显示'))
         console.log(chalk.gray('\n提示: 运行 weflow-cli init 可自动派生并写入各库密钥配置'))
       } else {
         console.log(chalk.red(`\n✗ 失败: ${result.error}`))
@@ -1327,7 +1377,7 @@ snsCmd
       if (result.success && result.key) {
         configService.set('snsKey', result.key)
         console.log(chalk.green(`\n✓ 成功捕获 sns.db 密钥!`))
-        console.log(chalk.white(`  密钥: ${result.key.slice(0, 8)}...${result.key.slice(-8)}`))
+        console.log(chalk.white('  密钥: 已安全保存'))
         console.log(chalk.cyan('\n现在可以使用朋友圈功能:'))
         console.log(chalk.gray('  weflow-cli sns timeline'))
         console.log(chalk.gray('  weflow-cli sns users'))
@@ -2881,6 +2931,9 @@ assistantCmd
     console.log(`隐私模式: ${chalk.cyan(privacyGate.mode())}${privacyGate.isLocalInference() ? chalk.green(' (本地推理, 数据不出境)') : chalk.gray(' (工具结果脱敏后出境)')}`)
     const wl = String(configService.get('assistantWhitelist') || '').trim()
     console.log(`白名单: ${wl ? chalk.green(`${wl.split(/[,;\s]+/).filter(Boolean).length} 人`) : chalk.red('未设置 (默认拒绝所有人; config set assistantWhitelist "<@im.wechat ID>")')}`)
+    const groups = String(configService.get('assistantGroupWhitelist') || '').trim()
+    console.log(`群聊实验: ${groups ? chalk.yellow(`${groups.split(/[,;\s]+/).filter(Boolean).length} 个已配置，等待上游群事件`) : chalk.gray('未配置（默认拒绝所有群）')}`)
+    console.log(`群聊 @ 门槛: ${configService.get('assistantGroupRequireMention') === 'false' ? chalk.red('已关闭') : chalk.green('已开启')}`)
     console.log(`用量护栏: ${chalk.cyan('100 条/天')} (微信内发「记忆」可查今日用量)`)
     rotateLogIfNeeded()
     console.log(chalk.cyan('\n最近日志:'))

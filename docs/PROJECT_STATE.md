@@ -1,6 +1,6 @@
 # Project State
 
-> Last reviewed: 2026-08-27. This is the current maintenance snapshot, not a release note. Keep it factual and update it with meaningful project changes.
+> Last reviewed: 2026-08-29. This is the current maintenance snapshot, not a release note. Keep it factual and update it with meaningful project changes.
 
 ## Purpose
 
@@ -20,7 +20,7 @@ WeFlow CLI is a local-first command-line tool and MCP server for user-authorized
 | Area | Current state | Main entry points |
 | --- | --- | --- |
 | Local chat data | Query sessions, contacts, messages, favorites, Moments cache, and exports. | `sessions`, `contacts`, `messages`, `export`, `fav`, `sns` |
-| Initialization | Detect local data paths and initialize available database access. Newer NT variants have a local passphrase-derivation fallback. | `init`, `check` |
+| Initialization | Verify and reuse existing local database access by default; refresh only when needed. Missing-key tests can run without changing saved configuration. | `init`, `init --refresh`, `init --test-missing-keys`, `config forget-keys`, `check` |
 | Official-account daily | Filter configured sources, preserve source categories, fetch articles, create summaries, and generate a local HTML reader. | `daily`, `daily-stats`, `daily-server` |
 | Knowledge workflows | Wiki compilation, semantic search, RAG, WeRead sync, reviews, and reading notes. | `wiki`, `search`, `chat`, `weread`, `review` |
 | MCP | Local stdio MCP server exposes daily, knowledge, and local-data tools. | `mcp-config`, `mcp-server/index.ts` |
@@ -35,7 +35,7 @@ The daily workflow supports `dailyAiEnabled=false` for a persistent no-AI mode, 
 - Process only data the user owns or is explicitly authorized to access.
 - Sensitive configuration fields are encrypted at rest with machine- and user-bound AES-256-GCM.
 - The daily reader binds to `127.0.0.1`; its API rejects cross-origin mutations, validates local paths, and restricts image proxy requests.
-- The assistant denies all senders until `assistantWhitelist` is explicitly configured. New or incomplete configurations use `strict` privacy mode for cloud inference.
+- The assistant denies all senders until `assistantWhitelist` is explicitly configured. Group routing is experimental and remains denied unless the upstream explicitly supplies group metadata, the group and sender are both allowlisted, and the bot is mentioned. New or incomplete configurations use `strict` privacy mode for cloud inference.
 - MCP path inputs are constrained to their expected data roots. MCP clients remain trusted local integrations and must be reviewed before configuration.
 - Public reports and commits must not contain databases, keys, tokens, wxid values, real chat content, or unredacted logs.
 
@@ -43,7 +43,8 @@ The daily workflow supports `dailyAiEnabled=false` for a persistent no-AI mode, 
 
 - WeChat platform behavior, database formats, account restrictions, and terms can change without notice. Local operation is not a legal, account-safety, or platform-compatibility guarantee.
 - The daily workflow can take substantial time when many configured sources publish on the same day. It fetches article bodies sequentially to reduce upstream pressure.
-- The OC Bot channel is separate from a personal WeChat message stream; do not assume it can message existing personal contacts.
+- The OC Bot channel is separate from a personal WeChat message stream. `send` can only reply through an already established Bot-channel conversation with a valid context token; it cannot initiate messages to existing personal contacts, post as the user's personal account, or send into ordinary personal WeChat groups.
+- The current official OC/iLink payload model has not been verified to support group events or group invitations. The project does not implement client automation or protocol bypasses to add a bot to groups.
 - Cloud AI workflows may transmit user-selected, privacy-filtered input to the configured provider. Local inference avoids that network transfer.
 - Dependency audit findings must be reviewed before dependency upgrades; do not run breaking `npm audit fix --force` without validation.
 
@@ -53,6 +54,7 @@ The daily workflow supports `dailyAiEnabled=false` for a persistent no-AI mode, 
 2. Keep the daily reader reliable for configured sources and categories without widening access to local data.
 3. Maintain security boundaries around local servers, assistant access, MCP tools, and cloud AI disclosure.
 4. Evaluate external collaboration through read-only, synthetic-data, versioned interfaces before connecting real user data.
+5. Make Bot-channel send capability and its limitations unambiguous in CLI naming and help text before extending messaging features.
 
 ## External Collaboration Position
 

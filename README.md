@@ -234,6 +234,15 @@ weflow-cli assistant start     # 后台守护进程常驻
 weflow-cli config set assistantWhitelist "你的@im.wechat ID"   # 未设置 = 拒绝所有人
 ```
 
+群聊功能目前取决于微信官方 Bot 通道是否返回明确的群事件；本项目不会通过客户端自动化或非官方协议强行入群。若上游未来提供群 ID、发送成员 ID 与 @ 提及字段，群消息仍默认拒绝，必须同时设置群白名单、成员白名单并保留 @ 门槛：
+
+```powershell
+weflow-cli config set assistantGroupWhitelist "群聊ID"
+weflow-cli config set assistantGroupRequireMention true
+```
+
+仅当官方通道实际送来群事件时，上述配置才会生效；当前 ClawBot 私聊能力不受影响。
+
 常用管理命令：`weflow-cli assistant status` / `log` / `stop`；微信内发送「帮助」查看助手指令。
 
 ## 常用命令
@@ -305,6 +314,8 @@ python scripts/fav_server.py --date YYYY-MM-DD
 - 涉及 DeepSeek、公众号抓取、微信读书或 MCP 的联网请求仅在你执行相应工作流时发生。
 - 使用 `whitelist`、`blacklist` 和 `audit` 管理或审计消息发送；发送前请确认目标联系人与内容。
 - 升级微信、切换账号或迁移电脑后，可能需要重新初始化或扫描 NT 密钥。
+- `init` 会先验证已有本地配置；验证通过时不再重复捕获密钥。仅在迁移、切换账号或访问失败后使用 `weflow-cli init --refresh`。
+- 测试首次初始化或密钥失效时，优先使用 `weflow-cli init --test-missing-keys`；它只在本次运行模拟密钥缺失，不改动已保存配置。实际密钥失效时可使用 `weflow-cli config forget-keys`，该命令仅清除数据库访问密钥并要求确认。
 
 ## 文档与反馈
 

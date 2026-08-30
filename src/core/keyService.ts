@@ -37,6 +37,8 @@ export class KeyService {
   private QueryFullProcessImageNameW: any = null
 
   private readonly PROCESS_ALL_ACCESS = 0x1F0FFF
+  private readonly PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+  private readonly exitedPids = new Set<number>()
 
   private getDllPath(): string {
     const archDir = process.arch === 'arm64' ? 'arm64' : 'x64'
@@ -156,12 +158,26 @@ export class KeyService {
         const parts = line.split('","').map((p) => p.replace(/^"|"$/g, ''))
         if (parts[0]?.toLowerCase() === imageName.toLowerCase()) {
           const pid = Number(parts[1])
-          if (!Number.isNaN(pid)) return pid
+          if (!Number.isNaN(pid) && await this.isProcessRunning(pid)) return pid
         }
       }
       return null
     } catch {
       return null
+    }
+  }
+
+  private async isProcessRunning(pid: number): Promise<boolean> {
+    if (this.exitedPids.has(pid)) return false
+    try {
+      const command = `$process = Get-Process -Id ${pid} -ErrorAction SilentlyContinue; if ($process -and -not $process.HasExited) { 'running' }`
+      const { stdout } = await execFileAsync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command])
+      const running = stdout.trim() === 'running'
+      if (!running) this.exitedPids.add(pid)
+      return running
+    } catch {
+      this.exitedPids.add(pid)
+      return false
     }
   }
 
@@ -176,7 +192,7 @@ export class KeyService {
 
   private async getProcessExecutablePath(pid: number): Promise<string | null> {
     if (!this.ensureKernel32()) return null
-    const hProcess = this.OpenProcess(0x1000, false, pid)
+    const hProcess = this.OpenProcess(this.PROCESS_QUERY_LIMITED_INFORMATION, false, pid)
     if (!hProcess) return null
 
     try {
@@ -232,7 +248,7 @@ export class KeyService {
       return { success: false, error: '等待超时，未检测到微信进程' }
     }
 
-    onStatus?.(`检测到微信进程 (PID: ${pid})，立即 hook...`)
+    onStatus?.('检测到微信进程，正在准备初始化...')
     return this.extractKeyFromPid(pid, logs, onStatus)
   }
 
@@ -261,8 +277,8 @@ export class KeyService {
       return { success: false, error: '未找到微信进程，请先启动微信并登录' }
     }
 
-    onStatus?.(`检测到微信进程 (PID: ${pid})，正在提取 key...`)
-    return this.extractKeyFromPid(pid, logs, onStatus)
+    onStatus?.('检测到微信进程，正在准备初始化...')
+    return this.extractKeyFromPid(pid, logs, onStatus, timeoutMs)
   }
 
   private async extractKeyFromPid(
@@ -271,7 +287,7 @@ export class KeyService {
     onStatus?: (message: string) => void,
     timeoutMs = 90_000
   ): Promise<DbKeyResult> {
-
+    onStatus?.('正在安装本地访问组件...')
     const ok = this.initHook(pid)
     if (!ok) {
       const error = this.getLastErrorMsg ? this.decodeCString(this.getLastErrorMsg()) : ''
@@ -279,10 +295,12 @@ export class KeyService {
         if (error.includes('0xC0000022') || error.includes('ACCESS_DENIED')) {
           return { success: false, error: '权限不足，请以管理员身份运行 CLI' }
         }
-        return { success: false, error }
+        return { success: false, error: '本地访问组件初始化失败' }
       }
       return { success: false, error: '初始化 Hook 失败' }
     }
+
+    onStatus?.('本地访问组件已就绪，等待数据库初始化事件...')
 
     const keyBuffer = Buffer.alloc(128)
     const start = Date.now()
@@ -294,27 +312,19 @@ export class KeyService {
         const pollResult = this.pollKeyData(keyBuffer, keyBuffer.length)
         if (pollResult) {
           const key = this.decodeUtf8(keyBuffer)
-          onStatus?.(`[调试] pollKeyData=true, key长度=${key.length}, 内容=${key.slice(0, 20)}...`)
           if (key.length === 64) {
             onStatus?.('密钥获取成功!')
             return { success: true, key, logs }
           }
-        } else if (pollCount <= 5 || pollCount % 20 === 0) {
-          // 前5次和每20次输出一次调试信息
-          const hexSample = keyBuffer.slice(0, 16).toString('hex')
-          onStatus?.(`[调试] poll #${pollCount}: pollResult=${pollResult}, buffer=${hexSample}`)
+        } else if (pollCount % 100 === 0) {
+          onStatus?.('仍在等待数据库初始化事件...')
         }
 
-        // 读取状态消息
+        // Drain native status messages without forwarding process details to the terminal.
         for (let i = 0; i < 5; i++) {
           const statusBuffer = Buffer.alloc(256)
           const levelOut = [0]
           if (!this.getStatusMessage(statusBuffer, statusBuffer.length, levelOut)) break
-          const msg = this.decodeUtf8(statusBuffer)
-          if (msg) {
-            logs.push(msg)
-            onStatus?.(msg)
-          }
         }
 
         await new Promise(resolve => setTimeout(resolve, 120))
@@ -323,7 +333,7 @@ export class KeyService {
       try { this.cleanupHook() } catch { }
     }
 
-    return { success: false, error: '获取密钥超时，请确保微信已登录', logs }
+    return { success: false, error: '等待超时，未观察到数据库初始化事件', logs }
   }
 
   /**
@@ -354,7 +364,7 @@ export class KeyService {
       return { success: false, error: '初始化 Hook 失败，请以管理员身份运行' }
     }
 
-    onStatus?.(`已 Hook 微信进程 (PID: ${pid})，等待数据库访问...`)
+    onStatus?.('本地访问组件已就绪，等待数据库访问...')
 
     const keyBuffer = Buffer.alloc(128)
     const capturedKeys = new Set<string>()
@@ -367,7 +377,7 @@ export class KeyService {
           const key = this.decodeUtf8(keyBuffer)
           if (key.length === 64 && !capturedKeys.has(key)) {
             capturedKeys.add(key)
-            onStatus?.(`捕获到密钥: ${key.slice(0, 8)}...${key.slice(-8)}，测试 sns.db...`)
+            onStatus?.('捕获到密钥，正在测试 sns.db...')
 
             // Test against sns.db using Python
             const snsSalt = configService.get('snsSalt')
@@ -442,7 +452,7 @@ export class KeyService {
       return { success: false, error: '未找到 WeChat 3.x (WeChat.exe) 进程，请先启动 3.x 微信并登录' }
     }
 
-    onStatus?.(`找到 3.x 进程 (PID: ${pid})，正在通过内存搜索提取密钥...`)
+    onStatus?.('检测到 3.x 微信进程，正在准备初始化...')
 
     try {
       const scriptPath = resolveScriptPath('extract_3x_key.py')

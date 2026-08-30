@@ -83,6 +83,12 @@ export interface WechatLoginSession {
 export interface WechatInboundMessage {
   messageId: string
   fromUserId: string
+  /** Reply destination. A group ID is used only when the upstream explicitly provides one. */
+  conversationId: string
+  conversationType: 'direct' | 'group'
+  /** Person who sent the message; group messages without this identifier are denied. */
+  senderId: string
+  mentionedBot: boolean
   senderNickname: string
   timestamp: number
   timestampMs: number

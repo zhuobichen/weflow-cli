@@ -7,6 +7,7 @@ import crypto from 'crypto'
 import path from 'path'
 import { WechatClient } from '../core/wechatClient.js'
 import { configService } from './configService.js'
+import { resolveInboundRouting } from './assistantRouting.js'
 import type { WechatOCConfig, WechatLoginSession, WechatInboundMessage, WechatMessageComponent } from '../types.js'
 
 function sleep(ms: number): Promise<void> {
@@ -345,12 +346,13 @@ export class WechatMessageService {
   private parseInboundMessage(msg: any): WechatInboundMessage | null {
     const fromUserId: string = msg.from_user_id || ''
     if (!fromUserId) return null
+    const routing = resolveInboundRouting(msg, String(configService.get('wechatOcAccountId') || ''))
 
     // Store context token for future replies
     if (msg.context_token) {
-      this.contextTokens.set(fromUserId, msg.context_token)
+      this.contextTokens.set(routing.conversationId, msg.context_token)
       // 持久化, 让后续一次性 send 命令也能复用
-      try { configService.upsertContextToken(fromUserId, msg.context_token) } catch {}
+      try { configService.upsertContextToken(routing.conversationId, msg.context_token) } catch {}
     }
 
     const components: WechatMessageComponent[] = []
@@ -388,6 +390,7 @@ export class WechatMessageService {
     return {
       messageId: msg.client_id || uuidHex(),
       fromUserId,
+      ...routing,
       senderNickname: msg.from_user_id || '',
       timestamp: Math.floor(Date.now() / 1000),
       timestampMs: Date.now(),

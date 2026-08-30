@@ -13,8 +13,9 @@ import { AssistantMemory, type ChatTurn } from './assistantMemory.js'
 import { privacyGate } from './assistantPrivacy.js'
 import { TOOL_DEFS, executeTool } from './assistantTools.js'
 import { appendLog } from './assistantDaemon.js'
-import type { Message } from '../types.js'
+import type { Message, WechatInboundMessage } from '../types.js'
 import { buildEvidenceReviewInput } from './evidenceService.js'
+import { evaluateAssistantAccess } from './assistantRouting.js'
 
 const MAX_TOOL_ROUNDS = 6
 /** 每日 LLM 处理上限 (护栏: 防 bug 死循环/异常流量烧钱; 0 = 不限制) */
@@ -63,11 +64,17 @@ export class AssistantService {
     return { url: 'https://api.deepseek.com/v1', model: 'deepseek-chat', key: configService.get('deepseekApiKey'), local: false }
   }
 
-  /** 访问控制: 未配置 assistantWhitelist 时默认拒绝所有人 */
-  private isAllowed(userId: string): boolean {
-    const list = String(configService.get('assistantWhitelist') || '')
-      .split(/[,;\s]+/).map(s => s.trim()).filter(Boolean)
-    return list.length > 0 && list.includes(userId)
+  /**
+   * Direct messages require an explicit sender allowlist. Groups are disabled
+   * until the upstream provides an explicit group ID, and then require all
+   * three controls: group allowlist, sender allowlist, and an @ mention.
+   */
+  private accessDecision(message: WechatInboundMessage): ReturnType<typeof evaluateAssistantAccess> {
+    return evaluateAssistantAccess(message, {
+      directWhitelist: String(configService.get('assistantWhitelist') || ''),
+      groupWhitelist: String(configService.get('assistantGroupWhitelist') || ''),
+      requireGroupMention: configService.get('assistantGroupRequireMention') !== 'false',
+    })
   }
 
   private dailyQuotaLeft(): number {
@@ -243,11 +250,12 @@ export class AssistantService {
       // 串行入队: 并发到达的消息按顺序处理, 记忆窗口不交错
       this.queue = this.queue.then(async () => {
         if (!this.running) return
-        const uid = msg.fromUserId
+        const access = this.accessDecision(msg)
+        const sessionId = msg.conversationId
 
-        if (!this.isAllowed(uid)) {
-          privacyGate.audit('DENY_NOT_WHITELISTED', 0, uid.slice(0, 12))
-          onLog?.(`  → 拒绝: ${uid.slice(0, 12)}… 不在白名单 (未回复, 不耗 LLM)`)
+        if (!access.allowed) {
+          privacyGate.audit(`DENY_${access.reason.toUpperCase().replace(/-/g, '_')}`, 0, sessionId.slice(0, 12))
+          onLog?.(`  → 拒绝: ${sessionId.slice(0, 12)}… ${access.reason} (未回复, 不耗 LLM)`)
           return
         }
         if (msg.messageKind !== 'text') {
@@ -257,15 +265,15 @@ export class AssistantService {
         if (this.dailyQuotaLeft() <= 0) {
           privacyGate.audit('DENY_DAILY_LIMIT', this.dailyCount)
           appendLog(`[配额] 今日 ${DAILY_LIMIT} 条上限已用尽, 拒绝: ${msg.messageStr.slice(0, 30)}`)
-          await this.svc!.sendText(uid, '今日额度已用完, 明天再来吧').catch(() => {})
+          await this.svc!.sendText(sessionId, '今日额度已用完, 明天再来吧').catch(() => {})
           return
         }
 
-        onLog?.(`[${new Date().toLocaleTimeString('zh-CN')}] ${uid.slice(0, 12)}…: ${msg.messageStr.slice(0, 40)}`)
+        onLog?.(`[${new Date().toLocaleTimeString('zh-CN')}] ${sessionId.slice(0, 12)}…: ${msg.messageStr.slice(0, 40)}`)
         try {
-          const reply = await this.handleMessage(uid, msg.messageStr, msg.messageKind)
+          const reply = await this.handleMessage(sessionId, msg.messageStr, msg.messageKind)
           this.dailyCount++
-          const ok = await this.svc!.sendText(uid, reply)
+          const ok = await this.svc!.sendText(sessionId, reply)
           onLog?.(`  → ${ok ? `已回复 (${reply.length}字, 今日 ${this.dailyCount}/${DAILY_LIMIT})` : '回复失败'}`)
         } catch (e: any) {
           onLog?.(`  → 处理异常: ${e.message}`)

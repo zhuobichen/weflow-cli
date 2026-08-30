@@ -4,6 +4,7 @@ import { homedir } from 'node:os'
 import { expandHomePath } from '../src/utils/pathUtils.js'
 import { maskMessageBodyText, redactText } from '../src/services/assistantPrivacy.js'
 import { buildEvidenceManifest, buildEvidenceReviewInput, writeEvidencePackage } from '../src/services/evidenceService.js'
+import { evaluateAssistantAccess, resolveInboundRouting } from '../src/services/assistantRouting.js'
 import { isCoverImage, safeChildPath, safeDate } from '../src/utils/mcpSecurity.js'
 import { mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -139,4 +140,22 @@ test('cloud evidence review respects strict privacy mode', () => {
   assert.equal(strict.transcript.includes('对话'), false)
   assert.match(strict.transcript, /聊天正文已按严格隐私模式屏蔽/)
   assert.equal(local.transcript.includes('请在明天前还款'), true)
+})
+
+test('group assistant routing requires explicit metadata and all access controls', () => {
+  const direct = resolveInboundRouting({ from_user_id: 'person-a' }, 'bot-a')
+  const group = resolveInboundRouting({
+    from_user_id: 'person-a',
+    group_id: 'test-group',
+    sender_id: 'person-a',
+    mentioned_user_ids: ['bot-a'],
+  }, 'bot-a')
+  const policy = { directWhitelist: 'person-a', groupWhitelist: 'test-group', requireGroupMention: true }
+
+  assert.deepEqual(direct, { conversationType: 'direct', conversationId: 'person-a', senderId: 'person-a', mentionedBot: false })
+  assert.deepEqual(group, { conversationType: 'group', conversationId: 'test-group', senderId: 'person-a', mentionedBot: true })
+  assert.deepEqual(evaluateAssistantAccess(group, policy), { allowed: true, reason: 'allowed' })
+  assert.deepEqual(evaluateAssistantAccess({ ...group, mentionedBot: false }, policy), { allowed: false, reason: 'group-mention-required' })
+  assert.deepEqual(evaluateAssistantAccess({ ...group, senderId: 'person-b' }, policy), { allowed: false, reason: 'group-sender-not-whitelisted' })
+  assert.deepEqual(evaluateAssistantAccess({ ...group, conversationId: 'other-group' }, policy), { allowed: false, reason: 'group-not-whitelisted' })
 })
