@@ -11,6 +11,8 @@
 > 让聊天记录、公众号阅读和个人知识工作流回到你的本地电脑。
 
 [![npm](https://img.shields.io/npm/v/weflow-cli)](https://www.npmjs.com/package/weflow-cli)
+
+> npm releases are published separately from GitHub and may lag behind the latest `master` branch. Check the release version when you need the newest changes.
 [![Node.js](https://img.shields.io/badge/Node.js-18%2B-339933)](https://nodejs.org/)
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB)](https://www.python.org/)
 [![WeChat](https://img.shields.io/badge/WeChat-4.1.12.26%20verified-07C160?logo=wechat&logoColor=white)](https://github.com/zhuobichen/weflow-cli/releases)

@@ -10,6 +10,16 @@ All notable user-facing changes are recorded here. This project follows [Semanti
 - Added MCP integration, contribution and security guidance.
 - Included README architecture assets and installation manifests in npm and portable releases.
 
+## 1.5.1
+
+### Fixed
+
+- Improved WeChat data-directory discovery for custom locations, nested folders, and database subdirectories.
+- Added staged guidance and optional `init --full-scan` fallback when automatic discovery cannot find the data.
+- Completed incomplete yesterday output before an unqualified daily report run.
+
+The npm package is published separately from GitHub. It may lag behind the `master` branch until a release is published.
+
 ## 1.5.0
 
 ### Added
