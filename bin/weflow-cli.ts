@@ -365,7 +365,7 @@ program
         console.log(chalk.yellow('\n步骤 4/4: 扫描 NT 格式数据库...'))
         console.log(chalk.gray('  正在从微信内存中匹配数据库密钥...'))
 
-        const ntResult = await NtCore.scan()
+        const ntResult = await NtCore.scan(detected.path)
         if (ntResult.success && ntResult.matched && ntResult.matched.length > 0) {
           console.log(chalk.green(`  ✓ 找到 ${ntResult.matched.length} 个 NT 数据库`))
 

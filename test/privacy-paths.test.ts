@@ -28,9 +28,9 @@ test('normalizes WeChat data, account, and database subdirectory paths', () => {
   const service = new DbPathService()
 
   assert.equal(service.resolveDataRoot(root), root)
-  assert.equal(service.resolveDataRoot(account), account)
-  assert.equal(service.resolveDataRoot(dbStorage), account)
-  assert.equal(service.resolveDataRoot(message), account)
+  assert.equal(service.resolveDataRoot(account), root)
+  assert.equal(service.resolveDataRoot(dbStorage), root)
+  assert.equal(service.resolveDataRoot(message), root)
   const customParent = join(root, 'Tencent', 'WeChatData')
   mkdirSync(join(customParent, 'xwechat_files'), { recursive: true })
   const nestedAccount = join(customParent, 'xwechat_files', 'wxid_nested_account')

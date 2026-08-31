@@ -21,7 +21,7 @@ export class DbPathService {
     if (!rootPath || !existsSync(rootPath)) return null
 
     const ancestorPath = this.findAccountAncestor(rootPath)
-    if (ancestorPath) return ancestorPath
+    if (ancestorPath) return dirname(ancestorPath)
 
     const descendantPath = this.findAccountDescendant(rootPath, 3)
     if (descendantPath) {
