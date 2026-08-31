@@ -248,10 +248,44 @@ def scan_memory_keys_linux(pid):
 
 # ========== NT Database Discovery ==========
 
+def _is_nt_account_dir(path):
+    return os.path.isdir(os.path.join(path, 'db_storage')) or \
+        os.path.isdir(os.path.join(path, 'Msg'))
+
+
+def _normalize_nt_root(root):
+    if not root:
+        return None
+    path = os.path.abspath(os.path.expandvars(os.path.expanduser(root)))
+    if os.path.isfile(path):
+        path = os.path.dirname(path)
+    if not os.path.isdir(path):
+        return None
+
+    try:
+        for entry in os.listdir(path):
+            candidate = os.path.join(path, entry)
+            if os.path.isdir(candidate) and _is_nt_account_dir(candidate):
+                return path
+    except OSError:
+        return None
+
+    for _ in range(6):
+        if _is_nt_account_dir(path):
+            return os.path.dirname(path)
+        parent = os.path.dirname(path)
+        if parent == path:
+            break
+        path = parent
+
+    return None
+
+
 def find_nt_databases(root=None):
     """Find all NT-format databases under xwechat_files (message + contact)."""
     if root:
-        candidates = [root]
+        normalized_root = _normalize_nt_root(root)
+        candidates = [normalized_root] if normalized_root else []
     elif IS_WINDOWS:
         candidates = [
             os.path.expandvars(r'%USERPROFILE%\xwechat_files'),
