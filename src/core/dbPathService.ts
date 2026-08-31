@@ -1,5 +1,5 @@
 import { join, basename, dirname } from 'path'
-import { existsSync, readdirSync, statSync, readFileSync } from 'fs'
+import { existsSync, readdirSync, statSync, lstatSync, readFileSync } from 'fs'
 import { homedir } from 'os'
 import { createDecipheriv } from 'crypto'
 import { expandHomePath } from '../utils/pathUtils.js'
@@ -20,16 +20,90 @@ export class DbPathService {
     const rootPath = expandHomePath(inputPath)
     if (!rootPath || !existsSync(rootPath)) return null
 
-    if (basename(rootPath).toLowerCase() === 'db_storage') {
-      const accountPath = dirname(rootPath)
-      return this.isAccountDir(accountPath) ? accountPath : null
-    }
+    const ancestorPath = this.findAccountAncestor(rootPath)
+    if (ancestorPath) return ancestorPath
 
-    if (this.isAccountDir(rootPath) || this.findAccountDirs(rootPath).length > 0) {
-      return rootPath
+    const descendantPath = this.findAccountDescendant(rootPath, 3)
+    if (descendantPath) {
+      return dirname(descendantPath)
     }
 
     return null
+  }
+
+  private findAccountAncestor(inputPath: string): string | null {
+    let currentPath = inputPath
+    for (let level = 0; level <= 4; level++) {
+      if (this.isAccountDir(currentPath)) return currentPath
+      const parentPath = dirname(currentPath)
+      if (parentPath === currentPath) break
+      currentPath = parentPath
+    }
+    return null
+  }
+
+  private findAccountDescendant(rootPath: string, maxDepth: number): string | null {
+    if (maxDepth < 0) return null
+    if (this.isAccountDir(rootPath)) return rootPath
+
+    try {
+      for (const entry of readdirSync(rootPath)) {
+        const entryPath = join(rootPath, entry)
+        let stat: ReturnType<typeof statSync>
+        try {
+          if (lstatSync(entryPath).isSymbolicLink()) continue
+          stat = statSync(entryPath)
+        } catch {
+          continue
+        }
+        if (!stat.isDirectory()) continue
+        if (this.shouldSkipSearchDirectory(entry)) continue
+        const accountPath = this.findAccountDescendant(entryPath, maxDepth - 1)
+        if (accountPath) return accountPath
+      }
+    } catch { }
+
+    return null
+  }
+
+  private shouldSkipSearchDirectory(name: string): boolean {
+    return [
+      '$recycle.bin', 'node_modules', 'windows', 'program files',
+      'program files (x86)', 'programdata', 'system volume information',
+    ].includes(name.toLowerCase())
+  }
+
+  private findKnownDataRoots(basePath: string, maxDepth: number): string[] {
+    const roots: string[] = []
+    const visit = (currentPath: string, depth: number): void => {
+      if (depth > maxDepth) return
+      let entries: string[]
+      try {
+        entries = readdirSync(currentPath)
+      } catch {
+        return
+      }
+
+      for (const entry of entries) {
+        const entryPath = join(currentPath, entry)
+        try {
+          if (lstatSync(entryPath).isSymbolicLink()) continue
+        } catch {
+          continue
+        }
+        if (!this.isDirectory(entryPath)) continue
+        const lower = entry.toLowerCase()
+        if (lower === 'xwechat_files' || lower === 'wechat files') {
+          roots.push(entryPath)
+          continue
+        }
+        if (depth < maxDepth && !this.shouldSkipSearchDirectory(lower) && lower !== 'appdata') {
+          visit(entryPath, depth + 1)
+        }
+      }
+    }
+    if (this.isDirectory(basePath)) visit(basePath, 0)
+    return roots
   }
 
   private readVarint(buf: Buffer, offset: number): { value: number, length: number } {
@@ -109,7 +183,7 @@ export class DbPathService {
   /**
    * 自动检测微信数据库根目录
    */
-  async autoDetect(): Promise<{ success: boolean; path?: string; error?: string }> {
+  async autoDetect(options: { fullScan?: boolean } = {}): Promise<{ success: boolean; path?: string; error?: string }> {
     try {
       const possiblePaths: string[] = []
       const home = homedir()
@@ -143,12 +217,36 @@ export class DbPathService {
         possiblePaths.push(join(home, 'Documents', 'xwechat_files'))
         // Windows 微信3.x 数据目录
         possiblePaths.push(join(home, 'Documents', 'WeChat Files'))
+        for (const basePath of [
+          process.env.LOCALAPPDATA,
+          process.env.APPDATA,
+          process.env.USERPROFILE,
+          process.env.OneDrive,
+        ]) {
+          if (basePath) possiblePaths.push(...this.findKnownDataRoots(basePath, 3))
+        }
       }
 
       for (const path of possiblePaths) {
         const dataRoot = this.resolveDataRoot(path)
         if (dataRoot) {
           return { success: true, path: dataRoot }
+        }
+      }
+
+      if (process.platform === 'win32') {
+        for (const volumeRoot of this.getVolumeRoots()) {
+          for (const dataRootPath of this.findKnownDataRoots(volumeRoot, 12)) {
+            const dataRoot = this.resolveDataRoot(dataRootPath)
+            if (dataRoot) return { success: true, path: dataRoot }
+          }
+        }
+      }
+
+      if (options.fullScan) {
+        for (const volumeRoot of this.getVolumeRoots()) {
+          const accountPath = this.findAccountDescendant(volumeRoot, 32)
+          if (accountPath) return { success: true, path: dirname(accountPath) }
         }
       }
 
@@ -193,11 +291,29 @@ export class DbPathService {
 
   private isAccountDir(entryPath: string): boolean {
     return (
-      existsSync(join(entryPath, 'db_storage')) ||  // WeChat 4.x
-      existsSync(join(entryPath, 'Msg')) ||          // WeChat 3.x
-      existsSync(join(entryPath, 'FileStorage', 'Image')) ||
-      existsSync(join(entryPath, 'FileStorage', 'Image2'))
+      this.isDirectory(join(entryPath, 'db_storage')) ||  // WeChat 4.x
+      this.isDirectory(join(entryPath, 'Msg')) ||          // WeChat 3.x
+      this.isDirectory(join(entryPath, 'FileStorage', 'Image')) ||
+      this.isDirectory(join(entryPath, 'FileStorage', 'Image2'))
     )
+  }
+
+  private getVolumeRoots(): string[] {
+    if (process.platform !== 'win32') return [homedir()]
+    const roots: string[] = []
+    for (let code = 65; code <= 90; code++) {
+      const volumeRoot = `${String.fromCharCode(code)}:\\`
+      if (this.isDirectory(volumeRoot)) roots.push(volumeRoot)
+    }
+    return roots
+  }
+
+  private isDirectory(entryPath: string): boolean {
+    try {
+      return statSync(entryPath).isDirectory()
+    } catch {
+      return false
+    }
   }
 
   private isPotentialAccountName(name: string): boolean {
@@ -241,7 +357,7 @@ export class DbPathService {
    * 扫描目录名候选（仅包含下划线的文件夹，排除 all_users）
    */
   scanWxidCandidates(rootPath: string): WxidInfo[] {
-    const resolvedRootPath = expandHomePath(rootPath)
+    const resolvedRootPath = this.resolveDataRoot(rootPath) || expandHomePath(rootPath)
     const wxids: WxidInfo[] = []
 
     try {
@@ -292,7 +408,7 @@ export class DbPathService {
    * 扫描 wxid 列表
    */
   scanWxids(rootPath: string): WxidInfo[] {
-    const resolvedRootPath = expandHomePath(rootPath)
+    const resolvedRootPath = this.resolveDataRoot(rootPath) || expandHomePath(rootPath)
     const wxids: WxidInfo[] = []
 
     try {

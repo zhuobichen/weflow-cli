@@ -76,6 +76,14 @@ The current `send` implementation uses the official OC/iLink Bot channel. It may
 
 **Reason:** Repeated capture depends on client lifecycle timing and is unnecessary when a valid local configuration already exists. A verification-first workflow reduces account disruption and makes recovery steps deliberate.
 
+## D-011: Backfill incomplete yesterday before today
+
+**Status:** Active
+
+An unqualified `daily` run checks yesterday's required local artifacts and completes yesterday first when `README.md`, `.articles.json`, or `index.html` is missing or empty. Explicit-date and dry-run invocations remain single-date operations.
+
+**Reason:** A daily reader should not silently leave a gap when a previous scheduled run was interrupted. The required-artifact check is local, deterministic, and does not treat a directory alone as proof of a complete report.
+
 ## Decision Template
 
 ```markdown

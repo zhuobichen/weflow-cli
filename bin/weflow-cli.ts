@@ -106,6 +106,7 @@ program
   .command('init')
   .description('自动检测微信数据目录并提取解密密钥')
   .option('-p, --path <path>', '微信数据目录、账号目录或 db_storage 目录')
+  .option('--full-scan', '目录名被修改时，使用深度磁盘结构扫描（耗时较长）')
   .option('--refresh', '忽略已有配置并重新初始化')
   .option('--test-missing-keys', '仅在本次运行模拟密钥缺失，不修改已保存配置')
   .action(async (opts) => {
@@ -193,13 +194,29 @@ program
       const configuredDataRoot = configuredPath
         ? dbPathService.resolveDataRoot(configuredPath)
         : null
+      if (configuredPath && !configuredDataRoot) {
+        console.log(chalk.yellow('  已检查指定路径，但未识别到有效的微信数据结构；继续自动搜索...'))
+      }
+      if (!configuredDataRoot) {
+        console.log(chalk.gray('  正在自动检查常见位置及本机磁盘中的微信数据目录...'))
+      }
+      if (!configuredDataRoot && opts.fullScan) {
+        console.log(chalk.gray('  目录名未命中时将继续进行深度结构扫描，过程可能需要较长时间...'))
+      }
       const detected = configuredDataRoot
         ? { success: true, path: configuredDataRoot }
-        : await dbPathService.autoDetect()
+        : await dbPathService.autoDetect({ fullScan: opts.fullScan })
       if (!detected.success || !detected.path) {
         console.log(chalk.red('✗ 未检测到微信数据目录'))
-        console.log(chalk.gray('  请确保微信 4.x 已安装并登录过'))
-        console.log(chalk.gray('  或手动指定: weflow-cli config set dbPath <path>'))
+        if (!opts.fullScan) {
+          console.log(chalk.gray('  已完成常见位置和标准目录名搜索。'))
+          console.log(chalk.cyan('  下一步: weflow-cli init --full-scan'))
+          console.log(chalk.gray('  此模式会继续按目录结构扫描可访问磁盘，耗时较长。'))
+        } else {
+          console.log(chalk.gray('  已完成深度结构扫描，仍未找到可识别的数据目录。'))
+          console.log(chalk.cyan('  请指定数据根、账号目录或 db_storage 目录:'))
+          console.log(chalk.cyan('  weflow-cli init --path "D:\\微信数据目录"'))
+        }
         process.exit(1)
       }
       console.log(chalk.green(`✓ 检测到数据目录: ${detected.path}`))
@@ -2832,20 +2849,46 @@ program
   .option('--dry-run', '仅预览文章，不调用 AI 或写入日报')
   .option('--no-ai', '关闭本次日报的所有 AI 处理')
   .action(async (opts) => {
-    const { execFile, spawn } = await import('child_process')
-    const { promisify } = await import('util')
-    const execFileAsync = promisify(execFile)
+    const { spawn } = await import('child_process')
+    const { existsSync, statSync } = await import('fs')
     const { fileURLToPath } = await import('url')
-    const { dirname } = await import('path')
+    const { dirname, join } = await import('path')
     const __filename = fileURLToPath(import.meta.url)
     const __dirname = dirname(__filename)
     const pkgRoot = join(__dirname, '..')
     const pipeline = join(pkgRoot, 'scripts', 'pipeline.py')
     const bizDaily = join(pkgRoot, 'scripts', 'biz_daily.py')
 
-    const date = opts.date || new Date().toISOString().slice(0, 10)
+    const now = new Date()
+    const localDate = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
+    const date = opts.date || localDate
     const apiKey = opts.apiKey || process.env.DEEPSEEK_API_KEY || ''
     const noAi = opts.ai === false || configService.get('dailyAiEnabled') === 'false'
+
+    const isComplete = (targetDate: string): boolean => {
+      const outputDir = join(pkgRoot, 'output', 'biz-daily', targetDate)
+      const requiredFiles = ['README.md', '.articles.json', 'index.html']
+      return requiredFiles.every((file) => {
+        const path = join(outputDir, file)
+        try { return existsSync(path) && statSync(path).size > 0 } catch { return false }
+      })
+    }
+
+    const runPipeline = (targetDate: string): Promise<number> => new Promise((resolve) => {
+      const args = [pipeline, '--date', targetDate, '--engine', noAi ? 'local' : 'deepseek', '--interest', 'AI', '--skip-wiki']
+      if (apiKey) args.push('--api-key', apiKey)
+      if (noAi) args.push('--no-ai')
+      for (const source of opts.source || []) args.push('--source', source)
+      if (opts.skipClassify) args.push('--skip-classify')
+
+      console.log(chalk.cyan(`\n📰 正在生成 ${targetDate} 公众号日报${noAi ? '（AI 已关闭）' : ''}...\n`))
+      const child = spawn(getPythonCommand(), args, {
+        stdio: 'inherit',
+        env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
+      })
+      child.on('error', () => resolve(1))
+      child.on('exit', (code) => resolve(code || 0))
+    })
 
     if (opts.dryRun) {
       const dryRunArgs = [bizDaily, '--date', date, '--engine', 'local', '--dry-run']
@@ -2865,25 +2908,28 @@ program
       process.exit(1)
     }
 
-    console.log(chalk.cyan(`\n📰 正在生成 ${date} 公众号日报${noAi ? '（AI 已关闭）' : ''}...\n`))
-    const args = [pipeline, '--date', date, '--engine', noAi ? 'local' : 'deepseek', '--interest', 'AI', '--skip-wiki']
-    if (apiKey) args.push('--api-key', apiKey)
-    if (noAi) args.push('--no-ai')
-    for (const source of opts.source || []) args.push('--source', source)
-    if (opts.skipClassify) args.push('--skip-classify')
-
-    const child = spawn(getPythonCommand(), args, {
-      stdio: 'inherit',
-      env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
-    })
-    child.on('exit', (code) => {
-      if (code === 0) {
-        console.log(chalk.green(`\n✓ 日报已生成: output/biz-daily/${date}/`))
-        console.log(chalk.gray(`  HTML 阅读器: weflow-cli daily-server --date ${date}`))
-      } else {
-        process.exit(code || 1)
+    if (!opts.date) {
+      const previous = new Date(now)
+      previous.setDate(previous.getDate() - 1)
+      const previousDate = `${previous.getFullYear()}-${String(previous.getMonth() + 1).padStart(2, '0')}-${String(previous.getDate()).padStart(2, '0')}`
+      if (!opts.dryRun && !isComplete(previousDate)) {
+        console.log(chalk.yellow(`\n⚠️ 昨日报不完整，先补生成 ${previousDate}...`))
+        const previousCode = await runPipeline(previousDate)
+        if (previousCode !== 0 || !isComplete(previousDate)) {
+          console.log(chalk.red(`\n✗ 昨日报补生成失败或仍不完整，已停止当天日报生成。`))
+          process.exit(previousCode || 1)
+        }
+        console.log(chalk.green(`\n✓ 昨日报已补齐: output/biz-daily/${previousDate}/`))
       }
-    })
+    }
+
+    const code = await runPipeline(date)
+    if (code === 0) {
+      console.log(chalk.green(`\n✓ 日报已生成: output/biz-daily/${date}/`))
+      console.log(chalk.gray(`  HTML 阅读器: weflow-cli daily-server --date ${date}`))
+    } else {
+      process.exit(code || 1)
+    }
   })
 
 // ==================== assistant (第二大脑持久化 Agent) ====================

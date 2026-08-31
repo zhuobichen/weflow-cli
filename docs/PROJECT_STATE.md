@@ -21,7 +21,7 @@ WeFlow CLI is a local-first command-line tool and MCP server for user-authorized
 | --- | --- | --- |
 | Local chat data | Query sessions, contacts, messages, favorites, Moments cache, and exports. | `sessions`, `contacts`, `messages`, `export`, `fav`, `sns` |
 | Initialization | Verify and reuse existing local database access by default; refresh only when needed. Missing-key tests can run without changing saved configuration. | `init`, `init --refresh`, `init --test-missing-keys`, `config forget-keys`, `check` |
-| Official-account daily | Filter configured sources, preserve source categories, fetch articles, create summaries, and generate a local HTML reader. | `daily`, `daily-stats`, `daily-server` |
+| Official-account daily | Filter configured sources, preserve source categories, backfill incomplete yesterday output before an unqualified today run, fetch articles, create summaries, and generate a local HTML reader. | `daily`, `daily-stats`, `daily-server` |
 | Knowledge workflows | Wiki compilation, semantic search, RAG, WeRead sync, reviews, and reading notes. | `wiki`, `search`, `chat`, `weread`, `review` |
 | MCP | Local stdio MCP server exposes daily, knowledge, and local-data tools. | `mcp-config`, `mcp-server/index.ts` |
 | Assistant | Optional WeChat Bot-channel assistant with local memory and privacy gates. | `login-wechat`, `assistant` |

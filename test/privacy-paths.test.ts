@@ -6,16 +6,38 @@ import { maskMessageBodyText, redactText } from '../src/services/assistantPrivac
 import { buildEvidenceManifest, buildEvidenceReviewInput, writeEvidencePackage } from '../src/services/evidenceService.js'
 import { evaluateAssistantAccess, resolveInboundRouting } from '../src/services/assistantRouting.js'
 import { isCoverImage, safeChildPath, safeDate } from '../src/utils/mcpSecurity.js'
-import { mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { Message } from '../src/types.js'
+import { DbPathService } from '../src/core/dbPathService.js'
 
 test('expands home directory prefixes without changing other paths', () => {
   assert.equal(expandHomePath('~'), homedir())
   assert.equal(expandHomePath('~/data'), `${homedir()}/data`)
   assert.equal(expandHomePath('C:\\data'), 'C:\\data')
   assert.equal(expandHomePath(''), '')
+})
+
+test('normalizes WeChat data, account, and database subdirectory paths', () => {
+  const root = mkdtempSync(join(tmpdir(), 'weflow-db-path-'))
+  const account = join(root, 'wxid_test_account')
+  const dbStorage = join(account, 'db_storage')
+  const message = join(dbStorage, 'message')
+  mkdirSync(message, { recursive: true })
+  const service = new DbPathService()
+
+  assert.equal(service.resolveDataRoot(root), root)
+  assert.equal(service.resolveDataRoot(account), account)
+  assert.equal(service.resolveDataRoot(dbStorage), account)
+  assert.equal(service.resolveDataRoot(message), account)
+  const customParent = join(root, 'Tencent', 'WeChatData')
+  mkdirSync(join(customParent, 'xwechat_files'), { recursive: true })
+  const nestedAccount = join(customParent, 'xwechat_files', 'wxid_nested_account')
+  mkdirSync(join(nestedAccount, 'db_storage', 'message'), { recursive: true })
+  assert.equal(service.resolveDataRoot(customParent), join(customParent, 'xwechat_files'))
+  assert.equal(service.resolveDataRoot(join(root, 'missing')), null)
+  assert.deepEqual(service.scanWxids(message).map(item => item.wxid), ['wxid_test_account'])
 })
 
 test('redacts common outbound PII in balanced mode', () => {
