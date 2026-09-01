@@ -37,6 +37,8 @@ def read_frontmatter(path: Path) -> dict:
 def collect_articles(vault_path: str) -> list[dict]:
     lit = Path(vault_path) / '002_Literature' / 'WeChat'
     articles = []
+    if not lit.is_dir():
+        return articles
     for d in lit.iterdir():
         if not d.is_dir(): continue
         for f in d.glob('*.md'):

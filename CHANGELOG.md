@@ -9,6 +9,8 @@ All notable user-facing changes are recorded here. This project follows [Semanti
 - Run the regression suite in CI and make NT path-discovery checks independent of the optional SQLCipher runtime.
 - Make data-directory search staged: common locations by default, explicit cross-drive search, then explicit deep structural search.
 - Avoid printing database salts, account identifiers, and message paths in `dbkey` diagnostics.
+- Added `daily favorites` commands to synchronize and manage reader favorites as local files.
+- Added `vault promote ideas` and `vault promote all`; both default to no-AI local generation and require explicit opt-in for AI outputs.
 
 ### Documentation and packaging
 

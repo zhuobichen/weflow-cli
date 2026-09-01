@@ -24,6 +24,8 @@ def collect_metadata(vault_path: str) -> list[dict]:
     """收集所有 002_Literature 笔记的元数据。"""
     lit_dir = Path(vault_path) / '002_Literature' / 'WeChat'
     articles = []
+    if not lit_dir.is_dir():
+        return articles
     for date_dir in sorted(lit_dir.iterdir()):
         if not date_dir.is_dir():
             continue

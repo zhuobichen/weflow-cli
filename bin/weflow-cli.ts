@@ -1906,6 +1906,19 @@ program
             '.obsidian',
             'Templates',
             'Sources/WeChat',
+            '000_Inbox',
+            '001_Daily',
+            '002_Literature/WeChat',
+            '002_Literature/WeRead',
+            '003_Ideas',
+            '004_Permanent',
+            '005_Reference/Tools',
+            '005_Reference/Methods',
+            '006_Projects',
+            '007_Wiki/Concepts',
+            '008_MOC',
+            '999_Archive',
+            '_attachments',
             'Wiki/Concepts',
             'Wiki/Entities',
             'Wiki/Topics',
@@ -2277,6 +2290,50 @@ program
           await runPythonCmd(script, ['--type', opts.type])
         })
     )
+
+  const vaultPromoteCmd = new Command('promote')
+    .description('从 Vault 阅读笔记生成知识索引、想法和长期笔记')
+
+  const runVaultPromotion = async (scriptName: string, opts: { vault: string, withAi?: boolean, apiKey?: string }) => {
+    const { fileURLToPath } = await import('url')
+    const { dirname } = await import('path')
+    const __filename = fileURLToPath(import.meta.url)
+    const pkgRoot = join(dirname(__filename), '..', '..')
+    const args = ['--vault', opts.vault]
+    if (opts.withAi) {
+      const apiKey = opts.apiKey || process.env.DEEPSEEK_API_KEY
+      if (!apiKey) {
+        console.error(chalk.red('启用 AI 升级需要 --api-key 或 DEEPSEEK_API_KEY。'))
+        process.exit(1)
+      }
+      args.push('--api-key', apiKey)
+    } else {
+      args.push('--skip-ai')
+    }
+    await runPythonCmd(join(pkgRoot, 'scripts', scriptName), args)
+  }
+
+  vaultPromoteCmd
+    .command('ideas')
+    .description('生成主题导航和可选的研究想法')
+    .option('--vault <path>', 'Vault 路径', './output/wechat-vault')
+    .option('--with-ai', '允许 AI 生成研究想法')
+    .option('--api-key <key>', 'AI API key，仅与 --with-ai 一起使用')
+    .action(async (opts) => {
+      await runVaultPromotion('promote_ideas.py', opts)
+    })
+
+  vaultPromoteCmd
+    .command('all')
+    .description('生成参考索引和可选的永久笔记、项目提案')
+    .option('--vault <path>', 'Vault 路径', './output/wechat-vault')
+    .option('--with-ai', '允许 AI 生成永久笔记和项目提案')
+    .option('--api-key <key>', 'AI API key，仅与 --with-ai 一起使用')
+    .action(async (opts) => {
+      await runVaultPromotion('promote_all.py', opts)
+    })
+
+  program.commands.find(c => c.name() === 'vault')?.addCommand(vaultPromoteCmd)
 
   // chat-stats
   program
@@ -2939,6 +2996,63 @@ program
       process.exit(code || 1)
     }
   })
+
+const dailyFavoritesCmd = new Command('favorites')
+  .description('同步或调整日报阅读器中的本地收藏')
+
+const defaultDailyDate = () => {
+  const now = new Date()
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
+}
+
+const runDailyFavorites = async (date: string, root: string, changes: string[] = []) => {
+  const { execFile } = await import('child_process')
+  const { promisify } = await import('util')
+  const { fileURLToPath } = await import('url')
+  const { dirname } = await import('path')
+  const __filename = fileURLToPath(import.meta.url)
+  const script = join(dirname(__filename), '..', 'scripts', 'sync_fav.py')
+  try {
+    const { stdout } = await promisify(execFile)(getPythonCommand(), [script, '--date', date, '--root', root, ...changes], {
+      timeout: 120_000,
+      maxBuffer: 5 * 1024 * 1024,
+      env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
+    })
+    console.log(stdout)
+  } catch (error: any) {
+    console.error(chalk.red(`收藏同步失败: ${error.message}`))
+    process.exit(1)
+  }
+}
+
+dailyFavoritesCmd
+  .command('sync')
+  .description('按阅读器保存的收藏状态同步本地收藏目录')
+  .option('-d, --date <YYYY-MM-DD>', '日报日期')
+  .option('--root <dir>', '日报输出根目录', './output/biz-daily')
+  .action(async (opts) => {
+    await runDailyFavorites(opts.date || defaultDailyDate(), opts.root)
+  })
+
+dailyFavoritesCmd
+  .command('add <article...>')
+  .description('添加日报文章到本地收藏')
+  .option('-d, --date <YYYY-MM-DD>', '日报日期')
+  .option('--root <dir>', '日报输出根目录', './output/biz-daily')
+  .action(async (articles, opts) => {
+    await runDailyFavorites(opts.date || defaultDailyDate(), opts.root, ['--add', ...articles])
+  })
+
+dailyFavoritesCmd
+  .command('remove <article...>')
+  .description('从本地收藏中移除日报文章')
+  .option('-d, --date <YYYY-MM-DD>', '日报日期')
+  .option('--root <dir>', '日报输出根目录', './output/biz-daily')
+  .action(async (articles, opts) => {
+    await runDailyFavorites(opts.date || defaultDailyDate(), opts.root, ['--remove', ...articles])
+  })
+
+program.commands.find(c => c.name() === 'daily')?.addCommand(dailyFavoritesCmd)
 
 // ==================== assistant (第二大脑持久化 Agent) ====================
 const assistantCmd = program

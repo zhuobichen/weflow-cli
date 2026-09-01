@@ -6,7 +6,7 @@ import { maskMessageBodyText, redactText } from '../src/services/assistantPrivac
 import { buildEvidenceManifest, buildEvidenceReviewInput, writeEvidencePackage } from '../src/services/evidenceService.js'
 import { evaluateAssistantAccess, resolveInboundRouting } from '../src/services/assistantRouting.js'
 import { isCoverImage, safeChildPath, safeDate } from '../src/utils/mcpSecurity.js'
-import { mkdtempSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
@@ -74,6 +74,66 @@ test('discovers NT databases from a custom xwechat_files root', () => {
   const databases = JSON.parse(result.stdout)
   assert.ok(databases.some((db: { name: string }) => db.name === 'message/message_0.db'))
   assert.ok(databases.some((db: { name: string }) => db.name === 'contact/contact.db'))
+})
+
+test('syncs daily favorites without touching other report files', () => {
+  const root = mkdtempSync(join(tmpdir(), 'weflow-daily-favorites-'))
+  const date = '2026-09-01'
+  const articleDir = join(root, date, 'AI')
+  const article = join(articleDir, 'article.md')
+  const favorite = join(root, date, '收藏', 'article.md')
+  const python = process.platform === 'win32' ? 'python' : 'python3'
+  const script = join(process.cwd(), 'scripts', 'sync_fav.py')
+
+  try {
+    mkdirSync(articleDir, { recursive: true })
+    writeFileSync(article, '# Synthetic article\n', 'utf8')
+    const add = spawnSync(python, [script, '--date', date, '--root', root, '--add', 'AI/article.md'], { encoding: 'utf8' })
+    assert.equal(add.status, 0, add.stderr || add.stdout)
+    assert.equal(readFileSync(favorite, 'utf8'), '# Synthetic article\n')
+
+    const remove = spawnSync(python, [script, '--date', date, '--root', root, '--remove', 'AI/article.md'], { encoding: 'utf8' })
+    assert.equal(remove.status, 0, remove.stderr || remove.stdout)
+    assert.equal(readdirSync(join(root, date, '收藏')).length, 0)
+    assert.equal(readFileSync(article, 'utf8'), '# Synthetic article\n')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('builds vault promotion outputs from synthetic notes without AI', () => {
+  const vault = mkdtempSync(join(tmpdir(), 'weflow-vault-promote-'))
+  const date = '2026-09-01'
+  const notesDir = join(vault, '002_Literature', 'WeChat', date)
+  const python = process.platform === 'win32' ? 'python' : 'python3'
+  const ideasScript = join(process.cwd(), 'scripts', 'promote_ideas.py')
+  const allScript = join(process.cwd(), 'scripts', 'promote_all.py')
+
+  try {
+    mkdirSync(notesDir, { recursive: true })
+    for (let index = 1; index <= 5; index++) {
+      writeFileSync(join(notesDir, `article-${index}.md`), [
+        '---',
+        `title: Synthetic AI article ${index}`,
+        'source: Test source',
+        'hasTopic: [[AI]]',
+        'tags: [test]',
+        '---',
+        '',
+        '## Related',
+        `[[Concept ${index}]]`,
+      ].join('\n'), 'utf8')
+    }
+
+    const ideas = spawnSync(python, [ideasScript, '--vault', vault, '--skip-ai'], { encoding: 'utf8' })
+    assert.equal(ideas.status, 0, ideas.stderr || ideas.stdout)
+    assert.equal(readFileSync(join(vault, '008_MOC', 'MOC-AI.md'), 'utf8').includes('Synthetic AI article'), true)
+
+    const all = spawnSync(python, [allScript, '--vault', vault, '--skip-ai'], { encoding: 'utf8' })
+    assert.equal(all.status, 0, all.stderr || all.stdout)
+  } finally {
+    rmSync(vault, { recursive: true, force: true })
+  }
 })
 
 test('redacts common outbound PII in balanced mode', () => {
