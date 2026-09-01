@@ -55,6 +55,7 @@ test('discovers NT databases from a custom xwechat_files root', () => {
   const python = process.platform === 'win32' ? 'python' : 'python3'
   const script = join(process.cwd(), 'scripts', 'nt_decrypt.py')
   const result = spawnSync(python, [
+    '-S',
     '-c',
     [
       'import importlib.util, json, sys',

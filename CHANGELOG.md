@@ -4,6 +4,12 @@ All notable user-facing changes are recorded here. This project follows [Semanti
 
 ## Unreleased
 
+### Security and reliability
+
+- Run the regression suite in CI and make NT path-discovery checks independent of the optional SQLCipher runtime.
+- Make data-directory search staged: common locations by default, explicit cross-drive search, then explicit deep structural search.
+- Avoid printing database salts, account identifiers, and message paths in `dbkey` diagnostics.
+
 ### Documentation and packaging
 
 - Added a unified Python dependency manifest for the standard Windows 4.x workflow and an optional legacy 3.x manifest.
