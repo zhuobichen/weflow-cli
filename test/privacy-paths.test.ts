@@ -9,6 +9,7 @@ import { isCoverImage, safeChildPath, safeDate } from '../src/utils/mcpSecurity.
 import { mkdtempSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { spawnSync } from 'node:child_process'
 import type { Message } from '../src/types.js'
 import { DbPathService } from '../src/core/dbPathService.js'
 
@@ -38,6 +39,40 @@ test('normalizes WeChat data, account, and database subdirectory paths', () => {
   assert.equal(service.resolveDataRoot(customParent), join(customParent, 'xwechat_files'))
   assert.equal(service.resolveDataRoot(join(root, 'missing')), null)
   assert.deepEqual(service.scanWxids(message).map(item => item.wxid), ['wxid_test_account'])
+})
+
+test('discovers NT databases from a custom xwechat_files root', () => {
+  const root = mkdtempSync(join(tmpdir(), 'weflow-custom-nt-'))
+  const xwechatRoot = join(root, 'xwechat_files')
+  const wxid = 'wxid_test_account'
+  const messageDir = join(xwechatRoot, wxid, 'db_storage', 'message')
+  const contactDir = join(xwechatRoot, wxid, 'db_storage', 'contact')
+  mkdirSync(messageDir, { recursive: true })
+  mkdirSync(contactDir, { recursive: true })
+  writeFileSync(join(messageDir, 'message_0.db'), Buffer.alloc(256, 1))
+  writeFileSync(join(contactDir, 'contact.db'), Buffer.alloc(256, 2))
+
+  const python = process.platform === 'win32' ? 'python' : 'python3'
+  const script = join(process.cwd(), 'scripts', 'nt_decrypt.py')
+  const result = spawnSync(python, [
+    '-c',
+    [
+      'import importlib.util, json, sys',
+      "spec = importlib.util.spec_from_file_location('nt_decrypt', sys.argv[1])",
+      'mod = importlib.util.module_from_spec(spec)',
+      'spec.loader.exec_module(mod)',
+      'print(json.dumps(mod.find_nt_databases(sys.argv[2]), ensure_ascii=False))',
+    ].join('; '),
+    script,
+    xwechatRoot,
+  ], {
+    encoding: 'utf8',
+  })
+
+  assert.equal(result.status, 0, result.stderr || result.stdout)
+  const databases = JSON.parse(result.stdout)
+  assert.ok(databases.some((db: { name: string }) => db.name === 'message/message_0.db'))
+  assert.ok(databases.some((db: { name: string }) => db.name === 'contact/contact.db'))
 })
 
 test('redacts common outbound PII in balanced mode', () => {
