@@ -99,13 +99,14 @@ async function resolveTalker(input: string): Promise<string> {
 program
   .name('weflow-cli')
   .description('WeFlow CLI - 微信聊天记录命令行查询与导出工具')
-  .version('1.5.0')
+  .version('1.5.1')
 
 // ==================== init ====================
 program
   .command('init')
   .description('自动检测微信数据目录并提取解密密钥')
   .option('-p, --path <path>', '微信数据目录、账号目录或 db_storage 目录')
+  .option('--search-drives', '跨本机磁盘按标准微信目录名搜索（耗时较长）')
   .option('--full-scan', '目录名被修改时，使用深度磁盘结构扫描（耗时较长）')
   .option('--refresh', '忽略已有配置并重新初始化')
   .option('--test-missing-keys', '仅在本次运行模拟密钥缺失，不修改已保存配置')
@@ -198,18 +199,25 @@ program
         console.log(chalk.yellow('  已检查指定路径，但未识别到有效的微信数据结构；继续自动搜索...'))
       }
       if (!configuredDataRoot) {
-        console.log(chalk.gray('  正在自动检查常见位置及本机磁盘中的微信数据目录...'))
+        console.log(chalk.gray('  正在自动检查常见的微信数据目录位置...'))
+      }
+      if (!configuredDataRoot && opts.searchDrives) {
+        console.log(chalk.gray('  将跨本机磁盘按标准目录名搜索，过程可能需要较长时间...'))
       }
       if (!configuredDataRoot && opts.fullScan) {
         console.log(chalk.gray('  目录名未命中时将继续进行深度结构扫描，过程可能需要较长时间...'))
       }
       const detected = configuredDataRoot
         ? { success: true, path: configuredDataRoot }
-        : await dbPathService.autoDetect({ fullScan: opts.fullScan })
+        : await dbPathService.autoDetect({ searchDrives: opts.searchDrives, fullScan: opts.fullScan })
       if (!detected.success || !detected.path) {
         console.log(chalk.red('✗ 未检测到微信数据目录'))
-        if (!opts.fullScan) {
-          console.log(chalk.gray('  已完成常见位置和标准目录名搜索。'))
+        if (!opts.searchDrives && !opts.fullScan) {
+          console.log(chalk.gray('  已完成常见位置搜索。'))
+          console.log(chalk.cyan('  下一步: weflow-cli init --search-drives'))
+          console.log(chalk.gray('  该模式会跨本机磁盘按 xwechat_files 或 WeChat Files 名称搜索。'))
+        } else if (!opts.fullScan) {
+          console.log(chalk.gray('  已完成标准目录名的跨盘搜索。'))
           console.log(chalk.cyan('  下一步: weflow-cli init --full-scan'))
           console.log(chalk.gray('  此模式会继续按目录结构扫描可访问磁盘，耗时较长。'))
         } else {
@@ -776,7 +784,7 @@ program
         for (const db of result.matched) {
           console.log(chalk.green(`✓ ${db.name} (${(db.size / 1024 / 1024).toFixed(1)}MB)`))
           console.log(chalk.white('  密钥: 已匹配，未显示'))
-          console.log(chalk.white(`  盐值: ${db.salt}`))
+          console.log(chalk.white('  盐值: 已匹配，未显示'))
         }
         console.log(chalk.gray('\n提示: 运行 weflow-cli init 可自动写入配置'))
       } else if (result.error?.includes('PERMISSION_DENIED')) {
@@ -803,8 +811,7 @@ program
       })
       if (result.success && result.key) {
         console.log(chalk.green('\n✓ 密钥已捕获，未显示'))
-        console.log(chalk.green(`  wxid: ${result.wxid}`))
-        console.log(chalk.green(`  消息目录: ${result.msgDir}`))
+        console.log(chalk.green('  账号与消息目录: 已识别，未显示'))
       } else {
         console.log(chalk.red(`\n✗ 失败: ${result.error}`))
         process.exit(1)
@@ -1369,8 +1376,8 @@ snsCmd
             snsPath = snsDb.path
             configService.set('snsDbPath', snsDb.path)
             configService.set('snsSalt', snsDb.salt)
-            console.log(chalk.green(`✓ 自动发现 sns.db: ${snsDb.path}`))
-            console.log(chalk.gray(`  盐值: ${snsDb.salt}`))
+            console.log(chalk.green('✓ 已自动发现 sns.db'))
+            console.log(chalk.gray('  数据库位置与盐值: 已识别，未显示'))
           }
         }
       } catch (e) {

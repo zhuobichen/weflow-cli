@@ -11,11 +11,20 @@ import ctypes
 from ctypes import wintypes, c_void_p, c_size_t, create_string_buffer, byref, sizeof
 from pathlib import Path
 
-try:
-    from sqlcipher3 import dbapi2 as sqlcipher
-except ImportError:
-    print(json.dumps({"error": "需要 sqlcipher3: pip install sqlcipher3"}))
-    sys.exit(1)
+sqlcipher = None
+
+
+def require_sqlcipher():
+    """Load SQLCipher only for database operations, not path discovery."""
+    global sqlcipher
+    if sqlcipher is not None:
+        return sqlcipher
+    try:
+        from sqlcipher3 import dbapi2 as sqlcipher_module
+    except ImportError as error:
+        raise RuntimeError("需要 sqlcipher3: pip install sqlcipher3") from error
+    sqlcipher = sqlcipher_module
+    return sqlcipher
 
 # ========== Memory Scanner ==========
 PROCESS_VM_READ = 0x0010
@@ -405,7 +414,7 @@ def load_contact_names(contact_db_path, contact_key_hex, contact_salt_hex):
 
     try:
         raw_key = f"x'{contact_key_hex}{contact_salt_hex}'"
-        conn = sqlcipher.connect(contact_db_path)
+        conn = require_sqlcipher().connect(contact_db_path)
         c = conn.cursor()
         c.execute(f'PRAGMA key = "{raw_key}";')
 
@@ -453,7 +462,7 @@ def match_keys_to_databases(keys, databases):
 def connect_nt_db(db_path, key_hex, salt_hex):
     """Connect to an NT database using sqlcipher3."""
     raw_key = f"x'{key_hex}{salt_hex}'"
-    conn = sqlcipher.connect(db_path)
+    conn = require_sqlcipher().connect(db_path)
     c = conn.cursor()
     c.execute(f'PRAGMA key = "{raw_key}";')
     return conn, c
@@ -464,7 +473,7 @@ def get_fav_schema(db_path, key_hex):
     try:
         with open(db_path, 'rb') as fh:
             salt = fh.read(16).hex()
-        conn = sqlcipher.connect(db_path)
+        conn = require_sqlcipher().connect(db_path)
         conn.execute(f'PRAGMA key = "x\'{key_hex}{salt}\'";')
         tables = conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
@@ -538,7 +547,7 @@ def get_favorites(db_path, key_hex, limit=100, offset=0, keyword=None, fav_type=
     try:
         with open(db_path, 'rb') as fh:
             salt = fh.read(16).hex()
-        conn = sqlcipher.connect(db_path)
+        conn = require_sqlcipher().connect(db_path)
         conn.execute(f'PRAGMA key = "x\'{key_hex}{salt}\'";')
         c = conn.cursor()
 

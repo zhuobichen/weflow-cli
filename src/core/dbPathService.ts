@@ -183,7 +183,7 @@ export class DbPathService {
   /**
    * 自动检测微信数据库根目录
    */
-  async autoDetect(options: { fullScan?: boolean } = {}): Promise<{ success: boolean; path?: string; error?: string }> {
+  async autoDetect(options: { searchDrives?: boolean; fullScan?: boolean } = {}): Promise<{ success: boolean; path?: string; error?: string }> {
     try {
       const possiblePaths: string[] = []
       const home = homedir()
@@ -234,7 +234,7 @@ export class DbPathService {
         }
       }
 
-      if (process.platform === 'win32') {
+      if (process.platform === 'win32' && (options.searchDrives || options.fullScan)) {
         for (const volumeRoot of this.getVolumeRoots()) {
           for (const dataRootPath of this.findKnownDataRoots(volumeRoot, 12)) {
             const dataRoot = this.resolveDataRoot(dataRootPath)

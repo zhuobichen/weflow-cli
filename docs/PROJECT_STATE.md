@@ -1,6 +1,6 @@
 # Project State
 
-> Last reviewed: 2026-08-29. This is the current maintenance snapshot, not a release note. Keep it factual and update it with meaningful project changes.
+> Last reviewed: 2026-09-01. This is the current maintenance snapshot, not a release note. Keep it factual and update it with meaningful project changes.
 
 ## Purpose
 
@@ -8,7 +8,7 @@ WeFlow CLI is a local-first command-line tool and MCP server for user-authorized
 
 ## Current Baseline
 
-- Package version: `1.5.0`.
+- Source package version: `1.5.1`. The npm registry may remain on an earlier version until a maintainer publishes a release.
 - Runtime: Node.js 18+; Python 3.10+ is required for database and daily-reading workflows.
 - Main development command: `npm run dev -- <command>`.
 - Build check: `npm run build`.
@@ -26,7 +26,7 @@ WeFlow CLI is a local-first command-line tool and MCP server for user-authorized
 | MCP | Local stdio MCP server exposes daily, knowledge, and local-data tools. | `mcp-config`, `mcp-server/index.ts` |
 | Assistant | Optional WeChat Bot-channel assistant with local memory and privacy gates. | `login-wechat`, `assistant` |
 
-The current regression suite covers home-path expansion, outbound PII redaction, local-inference bypass, strict message-body masking, MCP path/date validation, and cover-image signature validation.
+The current regression suite covers home-path expansion, custom NT data-root discovery, outbound PII redaction, local-inference bypass, strict message-body masking, MCP path/date validation, evidence-package safety, assistant routing, and cover-image signature validation. CI runs both the build and this suite on Node 20 with Python 3.10 available for path-discovery coverage.
 
 The daily workflow supports `dailyAiEnabled=false` for a persistent no-AI mode, or `daily --no-ai` for a single run. Both the CLI and direct Python entry points honor the setting. Fetching, HTML generation, and local indexes remain available in that mode.
 
@@ -46,6 +46,7 @@ The daily workflow supports `dailyAiEnabled=false` for a persistent no-AI mode, 
 - The OC Bot channel is separate from a personal WeChat message stream. `send` can only reply through an already established Bot-channel conversation with a valid context token; it cannot initiate messages to existing personal contacts, post as the user's personal account, or send into ordinary personal WeChat groups.
 - The current official OC/iLink payload model has not been verified to support group events or group invitations. The project does not implement client automation or protocol bypasses to add a bot to groups.
 - Cloud AI workflows may transmit user-selected, privacy-filtered input to the configured provider. Local inference avoids that network transfer.
+- Automatic data-directory discovery checks common user locations only. Cross-drive name search requires `init --search-drives`; structural disk search requires `init --full-scan`. Both can be slow on large, removable, or network-attached volumes.
 - Dependency audit findings must be reviewed before dependency upgrades; do not run breaking `npm audit fix --force` without validation.
 
 ## Current Priorities
