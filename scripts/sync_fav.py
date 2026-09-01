@@ -18,9 +18,9 @@ SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
 SOURCE_ROOT = os.path.join(os.path.dirname(SCRIPTS_DIR), 'output', 'biz-daily')
 
 
-def sync_favorites(date_str: str):
+def sync_favorites(date_str: str, source_root: str = SOURCE_ROOT):
     """读取 .fav_state.json 并同步 收藏/ 文件夹中的 symlink。"""
-    date_dir = Path(SOURCE_ROOT) / date_str
+    date_dir = Path(source_root) / date_str
     if not date_dir.is_dir():
         print(f'[ERROR] 目录不存在: {date_dir}')
         return
@@ -90,9 +90,9 @@ def sync_favorites(date_str: str):
                 print(f'  复制: {src.name}')
 
 
-def manage_fav(date_str: str, add: list = None, remove: list = None):
+def manage_fav(date_str: str, add: list = None, remove: list = None, source_root: str = SOURCE_ROOT):
     """手动添加/移除收藏项。"""
-    date_dir = Path(SOURCE_ROOT) / date_str
+    date_dir = Path(source_root) / date_str
     fav_state_file = date_dir / '.fav_state.json'
 
     fav_list = []
@@ -123,7 +123,7 @@ def manage_fav(date_str: str, add: list = None, remove: list = None):
             json.dump(fav_list, f, ensure_ascii=False, indent=2)
         print(f'已更新 .fav_state.json ({len(fav_list)} 篇收藏)')
 
-    sync_favorites(date_str)
+    sync_favorites(date_str, source_root)
 
 
 def main():
@@ -131,14 +131,15 @@ def main():
     import argparse
     parser = argparse.ArgumentParser(description='同步收藏夹到 收藏/ 文件夹')
     parser.add_argument('--date', required=True, help='日期 YYYY-MM-DD')
+    parser.add_argument('--root', default=SOURCE_ROOT, help='日报输出根目录')
     parser.add_argument('--add', nargs='*', help='添加收藏 (相对路径)')
     parser.add_argument('--remove', nargs='*', help='取消收藏 (相对路径)')
     args = parser.parse_args()
 
     if args.add or args.remove:
-        manage_fav(args.date, args.add, args.remove)
+        manage_fav(args.date, args.add, args.remove, args.root)
     else:
-        sync_favorites(args.date)
+        sync_favorites(args.date, args.root)
         print(f'✓ 收藏同步完成')
 
 

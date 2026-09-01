@@ -21,12 +21,12 @@ WeFlow CLI is a local-first command-line tool and MCP server for user-authorized
 | --- | --- | --- |
 | Local chat data | Query sessions, contacts, messages, favorites, Moments cache, and exports. | `sessions`, `contacts`, `messages`, `export`, `fav`, `sns` |
 | Initialization | Verify and reuse existing local database access by default; refresh only when needed. Missing-key tests can run without changing saved configuration. | `init`, `init --refresh`, `init --test-missing-keys`, `config forget-keys`, `check` |
-| Official-account daily | Filter configured sources, preserve source categories, backfill incomplete yesterday output before an unqualified today run, fetch articles, create summaries, and generate a local HTML reader. | `daily`, `daily-stats`, `daily-server` |
-| Knowledge workflows | Wiki compilation, semantic search, RAG, WeRead sync, reviews, and reading notes. | `wiki`, `search`, `chat`, `weread`, `review` |
+| Official-account daily | Filter configured sources, preserve source categories, backfill incomplete yesterday output before an unqualified today run, fetch articles, create summaries, generate a local HTML reader, and synchronize reader favorites into local files. | `daily`, `daily favorites`, `daily-stats`, `daily-server` |
+| Knowledge workflows | Wiki compilation, semantic search, RAG, WeRead sync, reviews, reading notes, and staged Vault promotion. | `wiki`, `vault`, `search`, `chat`, `weread`, `review` |
 | MCP | Local stdio MCP server exposes daily, knowledge, and local-data tools. | `mcp-config`, `mcp-server/index.ts` |
 | Assistant | Optional WeChat Bot-channel assistant with local memory and privacy gates. | `login-wechat`, `assistant` |
 
-The current regression suite covers home-path expansion, custom NT data-root discovery, outbound PII redaction, local-inference bypass, strict message-body masking, MCP path/date validation, evidence-package safety, assistant routing, and cover-image signature validation. CI runs both the build and this suite on Node 20 with Python 3.10 available for path-discovery coverage.
+The current regression suite covers home-path expansion, custom NT data-root discovery, daily-favorites synchronization, no-AI Vault promotion, outbound PII redaction, local-inference bypass, strict message-body masking, MCP path/date validation, evidence-package safety, assistant routing, and cover-image signature validation. CI runs both the build and this suite on Node 20 with Python 3.10 available for path-discovery coverage.
 
 The daily workflow supports `dailyAiEnabled=false` for a persistent no-AI mode, or `daily --no-ai` for a single run. Both the CLI and direct Python entry points honor the setting. Fetching, HTML generation, and local indexes remain available in that mode.
 
@@ -46,6 +46,7 @@ The daily workflow supports `dailyAiEnabled=false` for a persistent no-AI mode, 
 - The OC Bot channel is separate from a personal WeChat message stream. `send` can only reply through an already established Bot-channel conversation with a valid context token; it cannot initiate messages to existing personal contacts, post as the user's personal account, or send into ordinary personal WeChat groups.
 - The current official OC/iLink payload model has not been verified to support group events or group invitations. The project does not implement client automation or protocol bypasses to add a bot to groups.
 - Cloud AI workflows may transmit user-selected, privacy-filtered input to the configured provider. Local inference avoids that network transfer.
+- `vault promote ideas` and `vault promote all` run without AI by default. AI generation requires explicit `--with-ai` and an API key. `vault init` creates both the existing article-sync folders and the structured directories required by promotion workflows.
 - Automatic data-directory discovery checks common user locations only. Cross-drive name search requires `init --search-drives`; structural disk search requires `init --full-scan`. Both can be slow on large, removable, or network-attached volumes.
 - Dependency audit findings must be reviewed before dependency upgrades; do not run breaking `npm audit fix --force` without validation.
 
