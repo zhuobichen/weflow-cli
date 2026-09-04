@@ -27,7 +27,7 @@ MSG_TYPES = {
     43: 'video', 47: 'emoji', 48: 'location', 49: 'link',
     50: 'voip', 10000: 'system', 10002: 'quote',
 }
-MAX_EMBED_SIZE = 256 * 1024  # Max 256KB per embedded image
+MAX_EMBED_SIZE = 8 * 1024 * 1024  # Bound self-contained HTML growth per image.
 
 
 def connect(db_path, key_hex, salt_hex):
@@ -38,21 +38,35 @@ def connect(db_path, key_hex, salt_hex):
     return conn, c
 
 
-def fetch_messages(conn, talker):
+def fetch_messages(conn, talker, date=''):
     """Fetch all messages for a talker, ordered by time ascending."""
     tbl = 'Msg_' + hashlib.md5(talker.encode()).hexdigest()
     c = conn.cursor()
+
+    c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (tbl,))
+    if not c.fetchone():
+        return []
 
     c.execute(f"SELECT COUNT(*) FROM \"{tbl}\"")
     total = c.fetchone()[0]
     print(f"Total messages: {total}")
 
+    date_filter = ''
+    date_params = []
+    if date:
+        try:
+            day = datetime.datetime.strptime(date, '%Y-%m-%d')
+        except ValueError:
+            raise ValueError('date must use YYYY-MM-DD')
+        date_filter = ' WHERE create_time >= ? AND create_time < ?'
+        date_params = [int(day.timestamp()), int((day + datetime.timedelta(days=1)).timestamp())]
+
     c.execute(f'''
         SELECT local_id, server_id, local_type, sort_seq, real_sender_id,
                create_time, status, source, message_content, compress_content
-        FROM "{tbl}"
+        FROM "{tbl}"{date_filter}
         ORDER BY create_time ASC
-    ''')
+    ''', date_params)
 
     messages = []
     batch = 0
@@ -65,6 +79,52 @@ def fetch_messages(conn, talker):
         batch += 1
         print(f"  Fetched {len(messages)}/{total}...")
 
+    return messages
+
+
+def discover_message_shards(db_path):
+    """Return all NT message shards alongside the configured database."""
+    db = Path(db_path)
+    candidates = sorted(db.parent.glob('message_*.db'))
+    return [str(path) for path in candidates if path.name.lower() not in {
+        'message_fts.db', 'message_resource.db'
+    }]
+
+
+def derive_database_key(path, fallback_key, fallback_salt, passphrase=''):
+    """Derive a shard-specific SQLCipher key from the shared NT passphrase."""
+    if not passphrase:
+        return fallback_key, fallback_salt
+    try:
+        with open(path, 'rb') as fh:
+            salt = fh.read(16)
+        if len(salt) != 16:
+            return fallback_key, fallback_salt
+        raw_passphrase = bytes.fromhex(passphrase)
+        key = hashlib.pbkdf2_hmac('sha512', raw_passphrase, salt, 256000, 32).hex()
+        return key, salt.hex()
+    except (OSError, ValueError):
+        return fallback_key, fallback_salt
+
+
+def fetch_messages_from_shards(db_path, key_hex, salt_hex, talker, date='', passphrase=''):
+    """Read and merge messages from every NT message shard."""
+    shards = discover_message_shards(db_path)
+    if not shards:
+        shards = [db_path]
+    messages = []
+    for shard in shards:
+        shard_conn = None
+        try:
+            shard_key, shard_salt = derive_database_key(shard, key_hex, salt_hex, passphrase)
+            shard_conn, _ = connect(shard, shard_key, shard_salt)
+            messages.extend(fetch_messages(shard_conn, talker, date))
+        except Exception:
+            continue
+        finally:
+            if shard_conn is not None:
+                shard_conn.close()
+    messages.sort(key=lambda row: (int(row[5] or 0), int(row[0] or 0)))
     return messages
 
 
@@ -89,7 +149,24 @@ def build_sender_map(conn, talker):
     return sender_map
 
 
-def scan_nt_cache(nt_cache_dir, talker):
+def build_sender_map_from_shards(db_path, key_hex, salt_hex, talker, passphrase=''):
+    """Merge sender mappings from every message shard."""
+    sender_map = {}
+    for shard in discover_message_shards(db_path):
+        shard_conn = None
+        try:
+            shard_key, shard_salt = derive_database_key(shard, key_hex, salt_hex, passphrase)
+            shard_conn, _ = connect(shard, shard_key, shard_salt)
+            sender_map.update(build_sender_map(shard_conn, talker))
+        except Exception:
+            continue
+        finally:
+            if shard_conn is not None:
+                shard_conn.close()
+    return sender_map
+
+
+def scan_nt_cache(nt_cache_dir, talker, account_dir=''):
     """Scan NT cache directory for image thumbnails and temp images.
 
     NT cache structure:
@@ -132,6 +209,10 @@ def scan_nt_cache(nt_cache_dir, talker):
                                 data = fh.read()
                             if len(data) < MAX_EMBED_SIZE:
                                 image_map[local_id] = (base64.b64encode(data).decode(), mime)
+                                cache_time = parse_cache_timestamp(fname)
+                                if cache_time:
+                                    image_map[f'pair:{local_id}:{cache_time}'] = image_map[local_id]
+                                    image_map[f'time:{cache_time}'] = image_map[local_id]
                         except:
                             pass
 
@@ -153,17 +234,231 @@ def scan_nt_cache(nt_cache_dir, talker):
                                     data = fh.read()
                                 if len(data) < MAX_EMBED_SIZE:
                                     image_map[local_id] = (base64.b64encode(data).decode(), 'image/jpeg')
+                                    cache_time = parse_cache_timestamp(fname)
+                                    if cache_time:
+                                        image_map[f'pair:{local_id}:{cache_time}'] = image_map[local_id]
+                                        image_map[f'time:{cache_time}'] = image_map[local_id]
                             except:
                                 pass
 
+        for root, _, files in os.walk(msg_dir):
+            if root == img_temp_dir:
+                continue
+            for fname in files:
+                parts = fname.split('_', 1)
+                local_id = int(parts[0]) if parts and parts[0].isdigit() else None
+                file_md5 = extract_media_md5(fname)
+                if local_id is None and not file_md5:
+                    continue
+                cache_time = parse_cache_timestamp(fname)
+                if local_id is not None and (local_id in image_map or f'time:{cache_time}' in image_map):
+                    continue
+                if file_md5 and f'md5:{file_md5}' in image_map:
+                    continue
+                fpath = os.path.join(root, fname)
+                try:
+                    if os.path.getsize(fpath) >= MAX_EMBED_SIZE:
+                        continue
+                    mime = detect_mime(fpath)
+                    if not mime:
+                        continue
+                    with open(fpath, 'rb') as fh:
+                        data = fh.read()
+                    if data:
+                        image = (base64.b64encode(data).decode(), mime)
+                        if local_id is not None:
+                            image_map[local_id] = image
+                        if cache_time:
+                            if local_id is not None:
+                                image_map[f'pair:{local_id}:{cache_time}'] = image
+                            image_map[f'time:{cache_time}'] = image
+                        if file_md5:
+                            image_map[f'md5:{file_md5}'] = image
+                except OSError:
+                    continue
+
+    if account_dir and os.path.isdir(account_dir):
+        for key, image in scan_account_media(account_dir).items():
+            if key.startswith('md5:'):
+                image_map.setdefault(key, image)
+
     return image_map
+
+
+def scan_account_media(account_dir):
+    """Index image resources stored outside a conversation cache directory."""
+    image_map = {}
+    roots = [
+        os.path.join(account_dir, 'cache'),
+        os.path.join(account_dir, 'msg'),
+        os.path.join(account_dir, 'resource'),
+        os.path.join(account_dir, 'business'),
+        os.path.join(account_dir, 'temp'),
+    ]
+    seen = set()
+    for root in roots:
+        if not os.path.isdir(root):
+            continue
+        for current_root, _, files in os.walk(root):
+            for fname in files:
+                path = os.path.join(current_root, fname)
+                try:
+                    stat = os.stat(path)
+                    if stat.st_size <= 16 or stat.st_size > MAX_EMBED_SIZE:
+                        continue
+                    real_path = os.path.realpath(path)
+                    if real_path in seen:
+                        continue
+                    seen.add(real_path)
+                    with open(path, 'rb') as fh:
+                        header = fh.read(64)
+                    mime = detect_mime_from_bytes(header[:16])
+                    if not mime:
+                        decoded = decode_wechat_media(header, path)
+                        if decoded:
+                            data, mime = decoded
+                    else:
+                        with open(path, 'rb') as fh:
+                            data = fh.read(MAX_EMBED_SIZE + 1)
+                    if not mime or len(data) > MAX_EMBED_SIZE:
+                        continue
+                    image = (base64.b64encode(data).decode(), mime)
+                    for media_md5 in extract_media_md5s(fname):
+                        image_map.setdefault(f'md5:{media_md5}', image)
+                    content_md5 = hashlib.md5(data).hexdigest()
+                    image_map.setdefault(f'md5:{content_md5}', image)
+                except (OSError, ValueError):
+                    continue
+    return image_map
+
+
+def decode_wechat_media(data, filepath=None):
+    """Decode common XOR-obfuscated WeChat image cache payloads."""
+    if not data or len(data) < 16:
+        return None
+    for key in range(1, 256):
+        decoded = bytes(value ^ key for value in data[: min(len(data), 64)])
+        mime = detect_mime_from_bytes(decoded)
+        if mime:
+            if filepath:
+                try:
+                    with open(filepath, 'rb') as fh:
+                        raw = fh.read(MAX_EMBED_SIZE + 1)
+                    if len(raw) > MAX_EMBED_SIZE:
+                        return None
+                except OSError:
+                    return None
+            else:
+                raw = data
+            full = bytes(value ^ key for value in raw)
+            return full, mime
+    return None
+
+
+def parse_cache_timestamp(filename):
+    parts = filename.split('_', 2)
+    if len(parts) < 2 or not parts[1].isdigit():
+        return 0
+    timestamp = int(parts[1])
+    if timestamp > 10_000_000_000:
+        timestamp //= 1000
+    return timestamp
+
+
+def extract_media_md5(value):
+    values = extract_media_md5s(value)
+    return values[0] if values else ''
+
+
+def extract_media_md5s(value):
+    matches = re.findall(r'(?<![0-9a-f])([0-9a-f]{32})(?![0-9a-f])', str(value or ''), re.IGNORECASE)
+    return list(dict.fromkeys(match.lower() for match in matches))
+
+
+def extract_blob_md5s(value, known_md5s=None):
+    if value is None:
+        return []
+    if isinstance(value, memoryview):
+        data = value.tobytes()
+    elif isinstance(value, (bytes, bytearray)):
+        data = bytes(value)
+    else:
+        data = str(value).encode('utf-8', errors='ignore')
+    matches = re.findall(rb'(?i)([0-9a-f]{32})(?:[._][thbc])?\.dat', data)
+    if not matches:
+        matches = re.findall(rb'(?i)(?<![0-9a-f])([0-9a-f]{32})(?![0-9a-f])', data)
+    result = [item.decode('ascii').lower() for item in matches]
+    # MessageResourceInfo commonly stores MD5 values as raw 16-byte fields.
+    # Index those candidates; get_cached_image will retain only candidates
+    # that resolve to an actual local media file.
+    for offset in range(0, max(0, len(data) - 15)):
+        candidate = data[offset:offset + 16]
+        candidate_hex = candidate.hex()
+        if (candidate not in (b'\x00' * 16, b'\xff' * 16)
+                and (known_md5s is None or candidate_hex in known_md5s)):
+            result.append(candidate_hex)
+    return list(dict.fromkeys(result))
+
+
+def load_resource_media_map(account_dir, key_hex, salt_hex, messages, image_map=None, passphrase=''):
+    """Load message-resource MD5s keyed by message IDs when available."""
+    if not account_dir or not messages:
+        return {}
+    resource_db = os.path.join(account_dir, 'db_storage', 'message', 'message_resource.db')
+    if not os.path.isfile(resource_db):
+        return {}
+    local_ids = {int(row[0] or 0) for row in messages if row[0]}
+    server_ids = {int(row[1] or 0) for row in messages if row[1]}
+    result = {}
+    known_md5s = {
+        key[4:].lower() for key in (image_map or {})
+        if isinstance(key, str) and key.startswith('md5:')
+    }
+    conn = None
+    try:
+        resource_key, resource_salt = derive_database_key(resource_db, key_hex, salt_hex, passphrase)
+        conn, cursor = connect(resource_db, resource_key, resource_salt)
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND lower(name)=lower('MessageResourceInfo')")
+        table = cursor.fetchone()
+        if not table:
+            conn.close()
+            return result
+        cursor.execute('SELECT message_svr_id, message_local_id, packed_info FROM "MessageResourceInfo"')
+        for server_id, local_id, packed_info in cursor.fetchall():
+            sid = int(server_id or 0)
+            lid = int(local_id or 0)
+            if sid not in server_ids and lid not in local_ids:
+                continue
+            md5s = extract_blob_md5s(packed_info, known_md5s)
+            if md5s:
+                result.setdefault(f'server:{sid}', []).extend(md5s)
+                result.setdefault(f'local:{lid}', []).extend(md5s)
+        conn.close()
+    except Exception:
+        try:
+            conn.close()
+        except Exception:
+            pass
+    return {key: list(dict.fromkeys(values)) for key, values in result.items()}
+
+
+def get_cached_image(image_map, local_id, create_time, content='', resource_md5s=None, server_id=0):
+    if not image_map:
+        return None
+    for media_md5 in resource_md5s or []:
+        if image_map.get(f'md5:{media_md5}'):
+            return image_map[f'md5:{media_md5}']
+    for media_md5 in extract_media_md5s(content):
+        if image_map.get(f'md5:{media_md5}'):
+            return image_map[f'md5:{media_md5}']
+    return None
 
 
 def detect_mime(filepath):
     """Detect MIME type from file header."""
     try:
         with open(filepath, 'rb') as f:
-            header = f.read(8)
+            header = f.read(12)
         if header[:2] == b'\xff\xd8':
             return 'image/jpeg'
         if header[:4] == b'\x89PNG':
@@ -194,9 +489,10 @@ def find_thumbnail(create_time, msg_local_id, wx_dir):
                 fpath = os.path.join(img_dir, f)
                 if not os.path.isfile(fpath):
                     continue
+                if not f.startswith(f'{msg_local_id}_'):
+                    continue
                 fstat = os.stat(fpath)
-                time_diff = abs(fstat.st_mtime - create_time)
-                if time_diff < 300 and os.path.getsize(fpath) < MAX_EMBED_SIZE:
+                if os.path.getsize(fpath) < MAX_EMBED_SIZE:
                     with open(fpath, 'rb') as fh:
                         data = fh.read()
                     if len(data) < MAX_EMBED_SIZE:
@@ -206,7 +502,31 @@ def find_thumbnail(create_time, msg_local_id, wx_dir):
     return None
 
 
-def download_image_as_base64(url, timeout=10):
+def _decrypt_aes_cbc(payload, key_hex):
+    key_hex = re.sub(r'[^0-9a-f]', '', str(key_hex or ''), flags=re.IGNORECASE)
+    if len(key_hex) != 32:
+        return None
+    try:
+        from Crypto.Cipher import AES
+        decrypted = AES.new(bytes.fromhex(key_hex), AES.MODE_CBC, bytes(16)).decrypt(payload)
+        padding = decrypted[-1] if decrypted else 0
+        if 0 < padding <= AES.block_size and decrypted.endswith(bytes([padding]) * padding):
+            decrypted = decrypted[:-padding]
+        return decrypted
+    except Exception:
+        return None
+
+
+def _valid_media(data):
+    if not data:
+        return None
+    mime = detect_mime_from_bytes(data[:16])
+    if mime:
+        return data, mime
+    return None
+
+
+def download_image_as_base64(url, aes_key='', timeout=10):
     """Download image from URL and return (base64_data, mime_type) or None."""
     if not url or not url.startswith(('http://', 'https://')):
         return None
@@ -219,10 +539,14 @@ def download_image_as_base64(url, timeout=10):
             data = resp.read(MAX_EMBED_SIZE + 1)
             if len(data) > MAX_EMBED_SIZE:
                 return None
-            mime = resp.headers.get('Content-Type', 'image/jpeg').split(';')[0].strip()
-            if mime not in ('image/jpeg', 'image/png', 'image/gif', 'image/webp'):
-                # Try detecting from data
-                mime = detect_mime_from_bytes(data) or 'image/jpeg'
+            candidates = [data]
+            decrypted = _decrypt_aes_cbc(data, aes_key)
+            if decrypted:
+                candidates.insert(0, decrypted)
+            detected = next((_valid_media(candidate) for candidate in candidates if _valid_media(candidate)), None)
+            if not detected:
+                return None
+            data, mime = detected
             return (base64.b64encode(data).decode(), mime)
     except Exception:
         return None
@@ -245,26 +569,45 @@ def extract_appmsg_image(content):
     """Extract image URL from appmsg XML content."""
     if not content:
         return None
-    # Try common image URL fields in appmsg XML
-    for tag in ('thumburl', 'cdnthumburl', 'appthumburl'):
-        m = re.search(rf'<{tag}>([^<]+)</{tag}>', content)
+    for tag in ('encrypturl', 'thumburl', 'cdnthumburl', 'appthumburl'):
+        m = re.search(rf'<{tag}\b[^>]*>([\s\S]*?)</{tag}>', content, re.IGNORECASE)
         if m:
             url = m.group(1).strip()
+            url = url.replace('<![CDATA[', '').replace(']]>', '').strip()
+            url = decode_xml(url).replace('\\/', '/').strip()
             if url.startswith(('http://', 'https://')):
                 return url
-    # Also check for <msg><appmsg> nested structure
-    m = re.search(r'<thumburl>([^<]+)</thumburl>', content)
-    if m:
-        url = m.group(1).strip()
+    for tag in ('encrypturl', 'thumburl', 'cdnthumburl', 'appthumburl'):
+        m = re.search(rf'\b{tag}\s*=\s*["\']([^"\']+)', content, re.IGNORECASE)
+        if m:
+            url = decode_xml(m.group(1).strip()).replace('\\/', '/').strip()
+            if url.startswith(('http://', 'https://')):
+                return url
+    for raw_url in re.findall(r'https?://[^\s<>"\']+', str(content), re.IGNORECASE):
+        url = decode_xml(raw_url).replace('\\/', '/').replace('\\u0026', '&').strip(' \t\r\n\\\'"')
         if url.startswith(('http://', 'https://')):
             return url
     return None
 
 
+def extract_media_aes_key(content):
+    if not content:
+        return ''
+    for name in ('aeskey', 'aes_key', 'encryptaeskey'):
+        match = re.search(rf'\b{name}\s*=\s*["\']([0-9a-f]{{32}})', content, re.IGNORECASE)
+        if match:
+            return match.group(1)
+        match = re.search(rf'<{name}\b[^>]*>\s*([0-9a-f]{{32}})\s*</{name}>', content, re.IGNORECASE)
+        if match:
+            return match.group(1)
+    return ''
+
+
 def escape_html(text):
     if not text:
         return ''
-    return (str(text)
+    text = ''.join(char for char in str(text) if char in '\n\r\t' or ord(char) >= 32)
+    return (text
             .replace('&', '&amp;')
             .replace('<', '&lt;')
             .replace('>', '&gt;')
@@ -297,7 +640,19 @@ def parse_source(source_text):
     return sender, content
 
 
-def format_message(row, talker, wx_dir, image_map=None, sender_map=None, display_name=''):
+def sender_matches_account(sender_user_name, own_wxid):
+    """Match the sender against the configured account, including NT suffixes."""
+    if not sender_user_name or not own_wxid:
+        return False
+    if sender_user_name == own_wxid or sender_user_name.startswith(own_wxid + '_'):
+        return True
+    account_base = own_wxid.rsplit('_', 1)
+    if len(account_base) == 2 and len(account_base[1]) == 4 and account_base[1].isalnum():
+        return sender_user_name == account_base[0]
+    return False
+
+
+def format_message(row, talker, wx_dir, image_map=None, sender_map=None, display_name='', resource_map=None, own_wxid=''):
     """Format a single message for HTML display.
 
     Args:
@@ -309,15 +664,26 @@ def format_message(row, talker, wx_dir, image_map=None, sender_map=None, display
         display_name: human-readable name for the target talker
     """
     local_id = row[0] or 0
+    server_id = row[1] or 0
     local_type = row[2] or 0
+    if local_type > 0xffffffff:
+        local_type &= 0xffffffff
     real_sender_id = row[4] or 0
     create_time = row[5] or 0
     source = row[7]
     message_content = row[8]
+    compressed_content = row[9]
+    resource_md5s = list((resource_map or {}).get(f'server:{int(server_id)}', []))
+    if not resource_md5s:
+        resource_md5s = list((resource_map or {}).get(f'local:{int(local_id)}', []))
 
     # Resolve sender name
     sender_user_name = (sender_map or {}).get(real_sender_id, '')
-    is_self = (sender_user_name != talker)  # not the target talker = sent by me
+    # Do not infer "self" from a missing mapping. NT shards can have incomplete
+    # Name2Id rows, and that would otherwise mark every unresolved message as sent.
+    is_self = sender_matches_account(sender_user_name, own_wxid)
+    if not is_self and sender_user_name and not own_wxid:
+        is_self = sender_user_name != talker
 
     # Build display sender name
     if is_self:
@@ -327,20 +693,23 @@ def format_message(row, talker, wx_dir, image_map=None, sender_map=None, display
     elif sender_user_name:
         sender_display = sender_user_name
     else:
-        sender_display = talker
+        sender_display = '未知发送者'
 
     # Get content
     content = ''
     if isinstance(message_content, str) and message_content:
         content = message_content
     elif isinstance(message_content, bytes):
-        try:
-            content = message_content.decode('utf-8', errors='ignore')
-        except:
-            pass
+        content = decode_message_content(message_content)
+
+    if not content and isinstance(compressed_content, bytes):
+        content = decode_message_content(compressed_content)
 
     if not content and isinstance(source, str):
         _, content = parse_source(source)
+
+    if '\x00' in content or sum(ord(char) < 32 and char not in '\n\r\t' for char in content) > 2:
+        content = ''
 
     # Determine display content
     display = ''
@@ -356,21 +725,27 @@ def format_message(row, talker, wx_dir, image_map=None, sender_map=None, display
         mime = 'image/jpeg'
 
         # Priority 1: NT cache thumbnails
-        if image_map and local_id in image_map:
-            img_data, mime = image_map[local_id]
+        cached = get_cached_image(image_map, local_id, create_time, content, resource_md5s)
+        if cached:
+            img_data, mime = cached
         # Priority 2: Traditional FileStorage
         else:
             result = find_thumbnail(create_time, local_id, wx_dir)
             if result:
                 img_data, mime = result
+            else:
+                thumb_url = extract_appmsg_image(content)
+                downloaded = download_image_as_base64(thumb_url, extract_media_aes_key(content)) if thumb_url else None
+                if downloaded:
+                    img_data, mime = downloaded
 
         if img_data:
             image_b64 = img_data
             display += f'<br><img src="data:{mime};base64,{img_data}" loading="lazy" />'
-    elif image_map and local_id in image_map:
+    elif get_cached_image(image_map, local_id, create_time, content, resource_md5s):
         # Some image messages use encoded types (e.g. 21474836529 = images in appmsg)
         # Check image_map for any message type
-        img_data, mime = image_map[local_id]
+        img_data, mime = get_cached_image(image_map, local_id, create_time, content, resource_md5s)
         if img_data:
             image_b64 = img_data
             display = f'<span class="msg-media">[图片]</span><br><img src="data:{mime};base64,{img_data}" loading="lazy" />'
@@ -379,7 +754,23 @@ def format_message(row, talker, wx_dir, image_map=None, sender_map=None, display
     elif local_type == 43:
         display = '<span class="msg-media">[视频]</span>'
     elif local_type == 47:
-        display = escape_html(content) if content else '<span class="msg-media">[表情]</span>'
+        cached = get_cached_image(image_map, local_id, create_time, content, resource_md5s)
+        if cached:
+            img_data, mime = cached
+            image_b64 = img_data
+            display = f'<span class="msg-media">[表情]</span><br><img src="data:{mime};base64,{img_data}" loading="lazy" />'
+        else:
+            thumb_url = extract_appmsg_image(content)
+            downloaded = download_image_as_base64(thumb_url, extract_media_aes_key(content)) if thumb_url else None
+            if downloaded:
+                img_data, mime = downloaded
+                image_b64 = img_data
+                display = f'<span class="msg-media">[表情]</span><br><img src="data:{mime};base64,{img_data}" loading="lazy" />'
+            elif thumb_url and thumb_url.startswith(('http://', 'https://')):
+                remote_url = thumb_url.replace('http://', 'https://', 1)
+                display = f'<span class="msg-media">[表情]</span><br><img src="{escape_html(remote_url)}" referrerpolicy="no-referrer" loading="lazy" />'
+            else:
+                display = '<span class="msg-media">[表情]</span>'
     elif local_type == 49:
         # App message (link/file/article)
         if content:
@@ -397,11 +788,14 @@ def format_message(row, talker, wx_dir, image_map=None, sender_map=None, display
                 # Extract and embed article thumbnail image
                 thumb_url = extract_appmsg_image(content)
                 if thumb_url:
-                    img_data = download_image_as_base64(thumb_url)
+                    img_data = download_image_as_base64(thumb_url, extract_media_aes_key(content))
                     if img_data:
                         b64, mime = img_data
                         image_b64 = b64
                         parts.append(f'<img class="msg-app-thumb" src="data:{mime};base64,{b64}" loading="lazy" />')
+                    elif thumb_url.startswith(('http://', 'https://')):
+                        remote_url = thumb_url.replace('http://', 'https://', 1)
+                        parts.append(f'<img class="msg-app-thumb" src="{escape_html(remote_url)}" referrerpolicy="no-referrer" loading="lazy" />')
                 if url_m:
                     parts.append(f'<a class="msg-link" href="{escape_html(url_m.group(1))}" target="_blank">{escape_html(decode_xml(title_m.group(1)))}</a>')
                 else:
@@ -436,6 +830,20 @@ def format_message(row, talker, wx_dir, image_map=None, sender_map=None, display
         'display': display,
         'image_b64': image_b64,
     }
+
+
+def decode_message_content(value):
+    """Decode NT message content, which may be Zstandard compressed."""
+    if not value:
+        return ''
+    try:
+        import zstandard
+        value = zstandard.ZstdDecompressor().decompress(value)
+    except Exception:
+        pass
+    if isinstance(value, bytes):
+        return value.decode('utf-8', errors='ignore')
+    return str(value)
 
 
 def decode_xml(text):
@@ -647,6 +1055,27 @@ function searchMessages(query) {{
 </html>'''
 
 
+def build_empty_html(talker, date, display_name):
+    """Build a date-scoped empty page without falling back to older messages."""
+    name = escape_html(display_name or talker)
+    date_text = escape_html(date or '指定日期')
+    return f'''<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>聊天记录 - {name} - {date_text}</title>
+<style>
+body {{ margin:0; padding:48px 20px; background:#ededed; font-family:-apple-system,BlinkMacSystemFont,"Microsoft YaHei",sans-serif; color:#666; }}
+.empty {{ max-width:720px; margin:0 auto; padding:40px 20px; text-align:center; background:#fff; border-radius:12px; box-shadow:0 1px 3px rgba(0,0,0,.08); }}
+h2 {{ margin:0 0 12px; color:#333; font-size:18px; }}
+p {{ margin:8px 0; font-size:14px; }}
+</style>
+</head>
+<body><main class="empty"><h2>{name}</h2><p>{date_text}没有消息记录</p><p>未加载其他日期的历史消息。</p></main></body>
+</html>'''
+
+
 def main():
     import argparse
     parser = argparse.ArgumentParser(description='Export WeChat NT chat as HTML')
@@ -659,7 +1088,11 @@ def main():
     parser.add_argument('--parts', type=int, default=5, help='Number of parts to split into')
     parser.add_argument('--wx-dir', default='', help='Traditional WeChat data dir (FileStorage fallback)')
     parser.add_argument('--cache-dir', default='', help='NT cache directory for image thumbnails')
+    parser.add_argument('--account-dir', default='', help='Account data directory for media resources')
     parser.add_argument('--single', action='store_true', help='Generate a single HTML file (no splitting)')
+    parser.add_argument('--date', default='', help='Only export messages from local date YYYY-MM-DD')
+    parser.add_argument('--passphrase', default='', help='Shared NT passphrase for deriving shard keys')
+    parser.add_argument('--own-wxid', default='', help='Configured account identifier for self-message detection')
     args = parser.parse_args()
 
     os.makedirs(args.out, exist_ok=True)
@@ -668,7 +1101,9 @@ def main():
     image_map = {}
     if args.cache_dir:
         print(f"Scanning NT cache: {args.cache_dir}")
-        image_map = scan_nt_cache(args.cache_dir, args.talker)
+        image_map = scan_nt_cache(args.cache_dir, args.talker, args.account_dir)
+    elif args.account_dir:
+        image_map = scan_account_media(args.account_dir)
         print(f"  Found {len(image_map)} cached images for embedding")
 
     # Connect
@@ -677,16 +1112,34 @@ def main():
 
     # Fetch messages
     print(f"Fetching messages for {args.talker}...")
-    messages = fetch_messages(conn, args.talker)
+    messages = fetch_messages_from_shards(args.db, args.key, args.salt, args.talker, args.date, args.passphrase)
 
     if not messages:
+        if args.date:
+            file_prefix = sanitize_filename(args.name or args.talker)
+            filepath = os.path.join(args.out, f'{file_prefix}.html')
+            with open(filepath, 'w', encoding='utf-8') as f:
+                f.write(build_empty_html(args.talker, args.date, args.name or args.talker))
+            print(f"No messages found for {args.date}; wrote empty date-scoped page")
+            print(json.dumps({"success": True, "total": 0, "parts": 1, "files": [filepath]}))
+            conn.close()
+            return
         print("No messages found!")
         conn.close()
         sys.exit(1)
 
-    # Build sender name map
+    resource_map = load_resource_media_map(
+        args.account_dir, args.key, args.salt, messages, image_map, args.passphrase
+    )
+    if resource_map:
+        print(f"  Found resource mappings for {len(resource_map)} message keys")
+
+    # Build sender name map from every message shard because each shard can
+    # contain a different Name2Id mapping.
     print(f"Building sender name map...")
-    sender_map = build_sender_map(conn, args.talker)
+    sender_map = build_sender_map_from_shards(
+        args.db, args.key, args.salt, args.talker, args.passphrase
+    )
     print(f"  Found {len(sender_map)} sender(s): {list(sender_map.values())}")
 
     # Format messages
@@ -699,7 +1152,7 @@ def main():
     for i, row in enumerate(messages):
         if i % 2000 == 0:
             print(f"  Formatting {i}/{len(messages)}...")
-        result = format_message(row, args.talker, wx_dir, image_map, sender_map, display_name)
+        result = format_message(row, args.talker, wx_dir, image_map, sender_map, display_name, resource_map, args.own_wxid)
         if result.get('image_b64'):
             img_hit_count += 1
             if result.get('local_type') == 49:

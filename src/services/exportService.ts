@@ -12,6 +12,15 @@ const execFileAsync = promisify(execFile)
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
 
+function getPackageRoot(): string {
+  const candidates = [
+    join(__dirname, '..', '..', '..'),
+    join(__dirname, '..', '..'),
+  ]
+  return candidates.find(candidate => existsSync(join(candidate, 'scripts', 'export_chat_html.py')))
+    || candidates[0]
+}
+
 export class ExportService {
   async exportJson(talker: string, outputDir: string, limit = 0): Promise<{ success: boolean; path?: string; error?: string }> {
     try {
@@ -52,13 +61,14 @@ export class ExportService {
     }
   }
 
-  async exportHtml(talker: string, outputDir: string, limit = 0): Promise<{ success: boolean; path?: string; error?: string }> {
+  async exportHtml(talker: string, outputDir: string, limit = 0, date = ''): Promise<{ success: boolean; path?: string; error?: string }> {
     try {
       // Use Python export_chat_html.py for rich HTML with images
       const cfg = configService.getAll()
       const db = cfg.ntDbPath
       const key = cfg.ntKey
       const salt = cfg.ntSalt
+      const passphrase = configService.get('favPassphrase')
 
       if (!db || !key || !salt) {
         // Fallback: basic HTML
@@ -66,12 +76,14 @@ export class ExportService {
       }
 
       // Resolve Python script path (dist/src/services → package root)
-      const pkgRoot = join(__dirname, '..', '..', '..')
-      const script = join(pkgRoot, 'scripts', 'export_chat_html.py')
+      const script = join(getPackageRoot(), 'scripts', 'export_chat_html.py')
 
       // Cache dir for image thumbnails
-      const cacheDir = cfg.contactDbPath
-        ? join(dirname(dirname(cfg.contactDbPath)), 'cache')
+      const cacheDir = cfg.ntDbPath
+        ? join(dirname(dirname(dirname(cfg.ntDbPath))), 'cache')
+        : ''
+      const accountDir = cfg.ntDbPath
+        ? dirname(dirname(dirname(cfg.ntDbPath)))
         : ''
 
       // Resolve display name for filename (prefer remark/nickname over wxid)
@@ -94,11 +106,24 @@ export class ExportService {
         '--single',
         '--parts', '1',
       ]
+      const ownWxid = String(cfg.wxid || '').trim()
+      if (ownWxid) {
+        args.push('--own-wxid', ownWxid)
+      }
       if (displayName) {
         args.push('--name', displayName)
       }
       if (cacheDir && existsSync(cacheDir)) {
         args.push('--cache-dir', cacheDir)
+      }
+      if (accountDir && existsSync(accountDir)) {
+        args.push('--account-dir', accountDir)
+      }
+      if (date) {
+        args.push('--date', date)
+      }
+      if (passphrase) {
+        args.push('--passphrase', passphrase)
       }
 
       console.log(`  Exporting HTML via Python...`)
@@ -121,6 +146,9 @@ export class ExportService {
       return { success: false, error: 'Python export succeeded but no output found' }
     } catch (e: any) {
       console.error(`  Python export failed: ${e.message}`)
+      if (date) {
+        return { success: false, error: `指定日期导出失败: ${e.message}` }
+      }
       // Fallback to basic HTML
       return this.exportHtmlBasic(talker, outputDir, limit)
     }

@@ -19,7 +19,7 @@ WeFlow CLI is a local-first command-line tool and MCP server for user-authorized
 
 | Area | Current state | Main entry points |
 | --- | --- | --- |
-| Local chat data | Query sessions, contacts, messages, favorites, Moments cache, and exports. | `sessions`, `contacts`, `messages`, `export`, `fav`, `sns` |
+| Local chat data | Query sessions, contacts, messages, favorites, Moments cache, and exports. HTML chat exports decode NT compressed media records and embed images or emoji when local cache media or a usable source URL is available. | `sessions`, `contacts`, `messages`, `export`, `fav`, `sns` |
 | Initialization | Verify and reuse existing local database access by default; refresh only when needed. Missing-key tests can run without changing saved configuration. | `init`, `init --refresh`, `init --test-missing-keys`, `config forget-keys`, `check` |
 | Official-account daily | Filter configured sources, preserve source categories, backfill incomplete yesterday output before an unqualified today run, fetch articles, create summaries, generate a local HTML reader, and synchronize reader favorites into local files. | `daily`, `daily favorites`, `daily-stats`, `daily-server` |
 | Knowledge workflows | Wiki compilation, semantic search, RAG, WeRead sync, reviews, reading notes, and staged Vault promotion. | `wiki`, `vault`, `search`, `chat`, `weread`, `review` |
