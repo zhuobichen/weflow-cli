@@ -653,6 +653,7 @@ program
   .description('导出聊天记录 (支持 wxid / 昵称 / 备注 / 序号)')
   .option('-o, --output <dir>', '输出目录', './output')
   .option('-n, --limit <number>', '最大数量', '10000')
+  .option('-d, --date <YYYY-MM-DD>', '仅导出指定日期的消息（本地时间）')
   .action(async (talkerInput: string, format: string, opts) => {
     if (!configService.isConfigured()) {
       console.log(chalk.red('\n❌ 还没配置'))
@@ -682,7 +683,7 @@ program
         result = await exportService.exportTxt(talker, opts.output, limit)
         break
       case 'html':
-        result = await exportService.exportHtml(talker, opts.output, limit)
+        result = await exportService.exportHtml(talker, opts.output, limit, opts.date || '')
         break
       case 'excel':
         result = await exportService.exportExcel(talker, opts.output, limit)
