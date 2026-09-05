@@ -170,6 +170,13 @@ class EmojiExportTests(unittest.TestCase):
         )
         self.assertIn('data:image/gif', result['display'])
 
+    def test_signature_only_facepalm_uses_bundled_default_emoji(self):
+        source = b'<msgsource><pua>1</pua><signature>N0_V1_Sy7NKsXR|v1_kQSlFQy4</signature></msgsource>'
+        row = (7, 101, 1, 0, 1, 1700000000, 0, source, '[\u6253\u8138]', b'')
+        result = export.format_message(row, 'example-contact', '', {}, resource_map={})
+        self.assertIn('[\u6253\u8138]', result['display'])
+        self.assertIn('data:image/png;base64,', result['display'])
+
 
 if __name__ == '__main__':
     unittest.main()

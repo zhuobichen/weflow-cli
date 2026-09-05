@@ -32,6 +32,7 @@ MSG_TYPES = {
 MAX_EMBED_SIZE = 8 * 1024 * 1024  # Bound self-contained HTML growth per image.
 V2_MAGIC = b'\x07\x08V2\x08\x07'
 V2_CIPHERTEXT_START = 0x0F
+BUILTIN_EMOJI_DIR = os.path.join(os.path.dirname(__file__), '..', 'resources', 'wechat-emoji')
 
 
 def connect(db_path, key_hex, salt_hex):
@@ -782,6 +783,29 @@ def escape_html(text):
             .replace('"', '&quot;'))
 
 
+def load_builtin_emoji(name):
+    """Load a bundled WeChat default emoji as (base64, mime), if available."""
+    path = os.path.join(BUILTIN_EMOJI_DIR, f'{name}.png')
+    try:
+        with open(path, 'rb') as stream:
+            data = stream.read(MAX_EMBED_SIZE + 1)
+        if len(data) > MAX_EMBED_SIZE or detect_mime_from_bytes(data[:16]) != 'image/png':
+            return None
+        return base64.b64encode(data).decode(), 'image/png'
+    except OSError:
+        return None
+
+
+def render_builtin_facepalm(content):
+    image = load_builtin_emoji('Facepalm')
+    if not image:
+        return escape_html(content)
+    b64, mime = image
+    before, marker, after = str(content).partition('[打脸]')
+    display = escape_html(before) + escape_html(marker) + escape_html(after)
+    return f'{display}<br><img src="data:{mime};base64,{b64}" loading="lazy" />'
+
+
 def parse_source(source_text):
     """Parse source field to extract sender and content."""
     sender = ''
@@ -896,6 +920,10 @@ def format_message(row, talker, wx_dir, image_map=None, sender_map=None, display
         metadata_parts.append(content)
     metadata_content = '\n'.join(metadata_parts)
     is_emoji_xml = bool(re.search(r'<(?:msg\s*>)?\s*<emoji\b|<emoji\b', metadata_content, re.IGNORECASE))
+    has_facepalm_signature = bool(
+        re.search(r'<signature\b[^>]*>[^<]+</signature>', metadata_content, re.IGNORECASE)
+        and '[打脸]' in content
+    )
 
     if '\x00' in content or sum(ord(char) < 32 and char not in '\n\r\t' for char in content) > 2:
         content = ''
@@ -963,6 +991,8 @@ def format_message(row, talker, wx_dir, image_map=None, sender_map=None, display
             elif thumb_url and thumb_url.startswith(('http://', 'https://')):
                 remote_url = thumb_url.replace('http://', 'https://', 1)
                 display = f'<span class="msg-media">{escape_html(emoji_label)}</span><br><img src="{escape_html(remote_url)}" referrerpolicy="no-referrer" loading="lazy" />'
+            elif has_facepalm_signature:
+                display = render_builtin_facepalm(content)
             else:
                 display = escape_html(content) if content else '<span class="msg-media">[表情]</span>'
     elif local_type == 49 and not is_emoji_xml:

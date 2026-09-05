@@ -10,6 +10,7 @@ All notable user-facing changes are recorded here. This project follows [Semanti
 - Match exported chat media by stable server-message identity so reused local IDs cannot attach an unrelated image or emoji.
 - Preserve forwarded app cards with cached covers, including CDATA-wrapped Bilibili links, and decrypt remote WeChat 4.x emoticons with their message-provided AES key.
 - Decode entity-escaped emoji XML and try `encrypturl`, `thumburl`, `cdnurl`, and `externurl` fallbacks; resolve Bilibili BV covers when a share page omits `og:image`.
+- Render signature-only WeChat default `[打脸]` messages with the bundled official `Facepalm` asset when no message-specific resource is available.
 
 ### Security and reliability
 
