@@ -13,6 +13,7 @@ import re
 import base64
 import urllib.request
 import urllib.error
+import struct
 from pathlib import Path
 
 try:
@@ -28,6 +29,8 @@ MSG_TYPES = {
     50: 'voip', 10000: 'system', 10002: 'quote',
 }
 MAX_EMBED_SIZE = 8 * 1024 * 1024  # Bound self-contained HTML growth per image.
+V2_MAGIC = b'\x07\x08V2\x08\x07'
+V2_CIPHERTEXT_START = 0x0F
 
 
 def connect(db_path, key_hex, salt_hex):
@@ -166,7 +169,7 @@ def build_sender_map_from_shards(db_path, key_hex, salt_hex, talker, passphrase=
     return sender_map
 
 
-def scan_nt_cache(nt_cache_dir, talker, account_dir=''):
+def scan_nt_cache(nt_cache_dir, talker, account_dir='', own_wxid=''):
     """Scan NT cache directory for image thumbnails and temp images.
 
     NT cache structure:
@@ -278,16 +281,17 @@ def scan_nt_cache(nt_cache_dir, talker, account_dir=''):
                     continue
 
     if account_dir and os.path.isdir(account_dir):
-        for key, image in scan_account_media(account_dir).items():
+        for key, image in scan_account_media(account_dir, own_wxid).items():
             if key.startswith('md5:'):
                 image_map.setdefault(key, image)
 
     return image_map
 
 
-def scan_account_media(account_dir):
+def scan_account_media(account_dir, own_wxid=''):
     """Index image resources stored outside a conversation cache directory."""
     image_map = {}
+    v2_key = resolve_v2_media_key(account_dir, own_wxid)
     roots = [
         os.path.join(account_dir, 'cache'),
         os.path.join(account_dir, 'msg'),
@@ -314,7 +318,7 @@ def scan_account_media(account_dir):
                         header = fh.read(64)
                     mime = detect_mime_from_bytes(header[:16])
                     if not mime:
-                        decoded = decode_wechat_media(header, path)
+                        decoded = decode_wechat_media(header, path, v2_key)
                         if decoded:
                             data, mime = decoded
                     else:
@@ -332,10 +336,113 @@ def scan_account_media(account_dir):
     return image_map
 
 
-def decode_wechat_media(data, filepath=None):
+def clean_account_wxid(value):
+    value = str(value or '').strip()
+    parts = value.rsplit('_', 1)
+    if len(parts) == 2 and len(parts[1]) == 4 and parts[1].isalnum():
+        return parts[0]
+    return value
+
+
+def resolve_v2_media_key(account_dir, own_wxid='', kvcomm_dir=''):
+    """Derive and verify the local WeChat V2 image key without persisting it."""
+    if not account_dir:
+        return None
+    if not kvcomm_dir:
+        appdata = os.environ.get('APPDATA', '')
+        kvcomm_dir = os.path.join(appdata, 'Tencent', 'xwechat', 'net', 'kvcomm')
+    try:
+        codes = sorted({
+            int(match.group(1))
+            for name in os.listdir(kvcomm_dir)
+            if (match := re.fullmatch(r'key_(\d+)_.+\.statistic', name, re.IGNORECASE))
+        })
+    except (OSError, ValueError):
+        return None
+    if not codes:
+        return None
+
+    templates = []
+    for root in ('msg', 'cache', 'resource'):
+        search_root = os.path.join(account_dir, root)
+        if not os.path.isdir(search_root):
+            continue
+        for current_root, _, files in os.walk(search_root):
+            for name in files:
+                if not name.lower().endswith('_t.dat'):
+                    continue
+                path = os.path.join(current_root, name)
+                try:
+                    with open(path, 'rb') as stream:
+                        header = stream.read(V2_CIPHERTEXT_START + 16)
+                    if header.startswith(V2_MAGIC) and len(header) >= V2_CIPHERTEXT_START + 16:
+                        templates.append(header[V2_CIPHERTEXT_START:V2_CIPHERTEXT_START + 16])
+                except OSError:
+                    continue
+                if len(templates) >= 32:
+                    break
+            if len(templates) >= 32:
+                break
+        if len(templates) >= 32:
+            break
+    if not templates:
+        return None
+
+    wxids = list(dict.fromkeys(filter(None, (
+        clean_account_wxid(own_wxid),
+        clean_account_wxid(Path(account_dir).name),
+    ))))
+    try:
+        from Crypto.Cipher import AES
+    except ImportError:
+        return None
+    for wxid in wxids:
+        for code in codes:
+            aes_key = hashlib.md5(f'{code}{wxid}'.encode()).hexdigest()[:16].encode('ascii')
+            try:
+                plaintext = AES.new(aes_key, AES.MODE_ECB).decrypt(templates[0])
+            except (TypeError, ValueError):
+                continue
+            if detect_mime_from_bytes(plaintext) or plaintext.startswith((b'wxgf', b'WXGF')):
+                return code & 0xff, aes_key
+    return None
+
+
+def decode_wechat_v2(filepath, xor_key, aes_key):
+    try:
+        from Crypto.Cipher import AES
+        from Crypto.Util import Padding
+        with open(filepath, 'rb') as stream:
+            data = stream.read(MAX_EMBED_SIZE + 1)
+        if len(data) > MAX_EMBED_SIZE or not data.startswith(V2_MAGIC):
+            return None
+        signature, aes_size, xor_size = struct.unpack('<6sLLx', data[:V2_CIPHERTEXT_START])
+        if signature != V2_MAGIC:
+            return None
+        encrypted_size = aes_size + 16 - aes_size % 16
+        encrypted = data[V2_CIPHERTEXT_START:V2_CIPHERTEXT_START + encrypted_size]
+        decrypted = Padding.unpad(AES.new(aes_key, AES.MODE_ECB).decrypt(encrypted), 16)
+        remainder = data[V2_CIPHERTEXT_START + encrypted_size:]
+        if xor_size:
+            if xor_size > len(remainder):
+                return None
+            raw = remainder[:-xor_size]
+            tail = bytes(value ^ xor_key for value in remainder[-xor_size:])
+        else:
+            raw, tail = remainder, b''
+        output = decrypted + raw + tail
+        mime = detect_mime_from_bytes(output[:16])
+        return (output, mime) if mime else None
+    except (OSError, ValueError, struct.error):
+        return None
+
+
+def decode_wechat_media(data, filepath=None, v2_key=None):
     """Decode common XOR-obfuscated WeChat image cache payloads."""
     if not data or len(data) < 16:
         return None
+    if data.startswith(V2_MAGIC) and filepath and v2_key:
+        return decode_wechat_v2(filepath, *v2_key)
     for key in range(1, 256):
         decoded = bytes(value ^ key for value in data[: min(len(data), 64)])
         mime = detect_mime_from_bytes(decoded)
@@ -407,7 +514,6 @@ def load_resource_media_map(account_dir, key_hex, salt_hex, messages, image_map=
     resource_db = os.path.join(account_dir, 'db_storage', 'message', 'message_resource.db')
     if not os.path.isfile(resource_db):
         return {}
-    local_ids = {int(row[0] or 0) for row in messages if row[0]}
     server_ids = {int(row[1] or 0) for row in messages if row[1]}
     result = {}
     known_md5s = {
@@ -426,13 +532,12 @@ def load_resource_media_map(account_dir, key_hex, salt_hex, messages, image_map=
         cursor.execute('SELECT message_svr_id, message_local_id, packed_info FROM "MessageResourceInfo"')
         for server_id, local_id, packed_info in cursor.fetchall():
             sid = int(server_id or 0)
-            lid = int(local_id or 0)
-            if sid not in server_ids and lid not in local_ids:
+            # Local IDs can collide across conversations and database shards.
+            if not sid or sid not in server_ids:
                 continue
             md5s = extract_blob_md5s(packed_info, known_md5s)
             if md5s:
                 result.setdefault(f'server:{sid}', []).extend(md5s)
-                result.setdefault(f'local:{lid}', []).extend(md5s)
         conn.close()
     except Exception:
         try:
@@ -508,7 +613,8 @@ def _decrypt_aes_cbc(payload, key_hex):
         return None
     try:
         from Crypto.Cipher import AES
-        decrypted = AES.new(bytes.fromhex(key_hex), AES.MODE_CBC, bytes(16)).decrypt(payload)
+        key = bytes.fromhex(key_hex)
+        decrypted = AES.new(key, AES.MODE_CBC, key).decrypt(payload)
         padding = decrypted[-1] if decrypted else 0
         if 0 < padding <= AES.block_size and decrypted.endswith(bytes([padding]) * padding):
             decrypted = decrypted[:-padding]
@@ -588,6 +694,18 @@ def extract_appmsg_image(content):
         if url.startswith(('http://', 'https://')):
             return url
     return None
+
+
+def extract_xml_text(content, tag):
+    """Extract plain or CDATA-wrapped text from one XML element."""
+    if not content:
+        return ''
+    match = re.search(rf'<{tag}\b[^>]*>([\s\S]*?)</{tag}>', content, re.IGNORECASE)
+    if not match:
+        return ''
+    value = match.group(1).strip()
+    cdata = re.fullmatch(r'<!\[CDATA\[([\s\S]*)\]\]>', value)
+    return decode_xml((cdata.group(1) if cdata else value).strip())
 
 
 def extract_media_aes_key(content):
@@ -673,9 +791,7 @@ def format_message(row, talker, wx_dir, image_map=None, sender_map=None, display
     source = row[7]
     message_content = row[8]
     compressed_content = row[9]
-    resource_md5s = list((resource_map or {}).get(f'server:{int(server_id)}', []))
-    if not resource_md5s:
-        resource_md5s = list((resource_map or {}).get(f'local:{int(local_id)}', []))
+    resource_md5s = list((resource_map or {}).get(f'server:{int(server_id)}', [])) if server_id else []
 
     # Resolve sender name
     sender_user_name = (sender_map or {}).get(real_sender_id, '')
@@ -705,8 +821,18 @@ def format_message(row, talker, wx_dir, image_map=None, sender_map=None, display
     if not content and isinstance(compressed_content, bytes):
         content = decode_message_content(compressed_content)
 
-    if not content and isinstance(source, str):
-        _, content = parse_source(source)
+    source_text = decode_message_content(source) if isinstance(source, (bytes, bytearray, memoryview)) else str(source or '')
+    if not content and source_text:
+        _, content = parse_source(source_text)
+    # NT emoji metadata may be split between source XML and message_content.
+    # Prefer the representation that actually carries media identity/URLs;
+    # source can contain only PUA/signature fields for the same message.
+    metadata_parts = []
+    if source_text:
+        metadata_parts.append(source_text)
+    if content and content != source_text:
+        metadata_parts.append(content)
+    metadata_content = '\n'.join(metadata_parts)
 
     if '\x00' in content or sum(ord(char) < 32 and char not in '\n\r\t' for char in content) > 2:
         content = ''
@@ -715,7 +841,7 @@ def format_message(row, talker, wx_dir, image_map=None, sender_map=None, display
     display = ''
     image_b64 = None
 
-    if local_type == 1:
+    if local_type == 1 and '<' not in metadata_content:
         # Text
         display = escape_html(content)
     elif local_type == 3:
@@ -725,7 +851,7 @@ def format_message(row, talker, wx_dir, image_map=None, sender_map=None, display
         mime = 'image/jpeg'
 
         # Priority 1: NT cache thumbnails
-        cached = get_cached_image(image_map, local_id, create_time, content, resource_md5s)
+        cached = get_cached_image(image_map, local_id, create_time, metadata_content, resource_md5s)
         if cached:
             img_data, mime = cached
         # Priority 2: Traditional FileStorage
@@ -742,7 +868,7 @@ def format_message(row, talker, wx_dir, image_map=None, sender_map=None, display
         if img_data:
             image_b64 = img_data
             display += f'<br><img src="data:{mime};base64,{img_data}" loading="lazy" />'
-    elif get_cached_image(image_map, local_id, create_time, content, resource_md5s):
+    elif local_type not in MSG_TYPES and get_cached_image(image_map, local_id, create_time, content, resource_md5s):
         # Some image messages use encoded types (e.g. 21474836529 = images in appmsg)
         # Check image_map for any message type
         img_data, mime = get_cached_image(image_map, local_id, create_time, content, resource_md5s)
@@ -753,37 +879,37 @@ def format_message(row, talker, wx_dir, image_map=None, sender_map=None, display
         display = '<span class="msg-media">[语音]</span>'
     elif local_type == 43:
         display = '<span class="msg-media">[视频]</span>'
-    elif local_type == 47:
-        cached = get_cached_image(image_map, local_id, create_time, content, resource_md5s)
+    elif local_type in (1, 47) and ('<' in metadata_content or local_type == 47):
+        emoji_label = content if content.startswith('[') and content.endswith(']') else '[表情]'
+        cached = get_cached_image(image_map, local_id, create_time, metadata_content, resource_md5s)
         if cached:
             img_data, mime = cached
             image_b64 = img_data
-            display = f'<span class="msg-media">[表情]</span><br><img src="data:{mime};base64,{img_data}" loading="lazy" />'
+            display = f'<span class="msg-media">{escape_html(emoji_label)}</span><br><img src="data:{mime};base64,{img_data}" loading="lazy" />'
         else:
-            thumb_url = extract_appmsg_image(content)
-            downloaded = download_image_as_base64(thumb_url, extract_media_aes_key(content)) if thumb_url else None
+            thumb_url = extract_appmsg_image(metadata_content)
+            downloaded = download_image_as_base64(thumb_url, extract_media_aes_key(metadata_content)) if thumb_url else None
             if downloaded:
                 img_data, mime = downloaded
                 image_b64 = img_data
-                display = f'<span class="msg-media">[表情]</span><br><img src="data:{mime};base64,{img_data}" loading="lazy" />'
+                display = f'<span class="msg-media">{escape_html(emoji_label)}</span><br><img src="data:{mime};base64,{img_data}" loading="lazy" />'
             elif thumb_url and thumb_url.startswith(('http://', 'https://')):
                 remote_url = thumb_url.replace('http://', 'https://', 1)
-                display = f'<span class="msg-media">[表情]</span><br><img src="{escape_html(remote_url)}" referrerpolicy="no-referrer" loading="lazy" />'
+                display = f'<span class="msg-media">{escape_html(emoji_label)}</span><br><img src="{escape_html(remote_url)}" referrerpolicy="no-referrer" loading="lazy" />'
             else:
-                display = '<span class="msg-media">[表情]</span>'
+                display = escape_html(content) if content else '<span class="msg-media">[表情]</span>'
     elif local_type == 49:
         # App message (link/file/article)
         if content:
             # Try to parse XML for title/desc
-            title_m = re.search(r'<title>([^<]*)</title>', content)
-            desc_m = re.search(r'<des>([^<]*)</des>', content)
-            url_m = re.search(r'<url>([^<]*)</url>', content)
-            type_m = re.search(r'<type>(\d+)</type>', content)
-            fname_m = re.search(r'<title>([^<]+\.\w+)</title>', content)
+            title = extract_xml_text(content, 'title')
+            desc = extract_xml_text(content, 'des')
+            url = extract_xml_text(content, 'url')
+            app_type = extract_xml_text(content, 'type')
 
-            if type_m and type_m.group(1) == '6' and fname_m:
-                display = f'<span class="msg-file">[文件] {escape_html(fname_m.group(1))}</span>'
-            elif title_m:
+            if app_type == '6' and re.search(r'\.\w+$', title):
+                display = f'<span class="msg-file">[文件] {escape_html(title)}</span>'
+            elif title:
                 parts = []
                 # Extract and embed article thumbnail image
                 thumb_url = extract_appmsg_image(content)
@@ -796,12 +922,12 @@ def format_message(row, talker, wx_dir, image_map=None, sender_map=None, display
                     elif thumb_url.startswith(('http://', 'https://')):
                         remote_url = thumb_url.replace('http://', 'https://', 1)
                         parts.append(f'<img class="msg-app-thumb" src="{escape_html(remote_url)}" referrerpolicy="no-referrer" loading="lazy" />')
-                if url_m:
-                    parts.append(f'<a class="msg-link" href="{escape_html(url_m.group(1))}" target="_blank">{escape_html(decode_xml(title_m.group(1)))}</a>')
+                if url.startswith(('http://', 'https://')):
+                    parts.append(f'<a class="msg-link" href="{escape_html(url)}" target="_blank">{escape_html(title)}</a>')
                 else:
-                    parts.append(f'<span class="msg-app-title">{escape_html(decode_xml(title_m.group(1)))}</span>')
-                if desc_m:
-                    parts.append(f'<div class="msg-app-desc">{escape_html(decode_xml(desc_m.group(1)))}</div>')
+                    parts.append(f'<span class="msg-app-title">{escape_html(title)}</span>')
+                if desc:
+                    parts.append(f'<div class="msg-app-desc">{escape_html(desc)}</div>')
                 display = '<div class="msg-app">' + ''.join(parts) + '</div>'
             else:
                 display = '<span class="msg-media">[链接/文件]</span>'
@@ -1101,9 +1227,9 @@ def main():
     image_map = {}
     if args.cache_dir:
         print(f"Scanning NT cache: {args.cache_dir}")
-        image_map = scan_nt_cache(args.cache_dir, args.talker, args.account_dir)
+        image_map = scan_nt_cache(args.cache_dir, args.talker, args.account_dir, args.own_wxid)
     elif args.account_dir:
-        image_map = scan_account_media(args.account_dir)
+        image_map = scan_account_media(args.account_dir, args.own_wxid)
         print(f"  Found {len(image_map)} cached images for embedding")
 
     # Connect

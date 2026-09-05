@@ -104,7 +104,18 @@ Initialization checks common user locations by default. Cross-drive searches for
 
 **Consequences:** `vault init` must include the structured reading-note directories used by promotion. The promotion scripts must safely handle an empty or newly initialized Vault.
 
+## D-014: Match exported media using reliable message identity
+
+**Status:** Active
+
+HTML export selects message-resource records by nonzero server message ID. It does not use unscoped local message IDs or server ID zero to associate media. Content MD5 and source URL lookup remain available when a server mapping is absent.
+
+**Reason:** Local IDs can repeat across conversations and database shards. An ambiguous fallback can attach unrelated media to a chat message.
+
+**Consequences:** WeChat 4.x V2 media keys are derived from local `kvcomm` data, verified against a real cached V2 header, and used only in memory during export. Remote emoticons are decrypted with message-provided keys, and structured app cards keep their links when a cover image is available. Some messages remain placeholders when reliable identity or source media is unavailable. Synthetic tests cover these paths; reporter verification is still needed for issue #7.
+
 ## Decision Template
+
 
 ```markdown
 ## D-XXX: Short title

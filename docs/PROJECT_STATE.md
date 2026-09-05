@@ -1,6 +1,6 @@
 # Project State
 
-> Last reviewed: 2026-09-01. This is the current maintenance snapshot, not a release note. Keep it factual and update it with meaningful project changes.
+> Last reviewed: 2026-09-05. This is the current maintenance snapshot, not a release note. Keep it factual and update it with meaningful project changes.
 
 ## Purpose
 
@@ -19,7 +19,7 @@ WeFlow CLI is a local-first command-line tool and MCP server for user-authorized
 
 | Area | Current state | Main entry points |
 | --- | --- | --- |
-| Local chat data | Query sessions, contacts, messages, favorites, Moments cache, and exports. HTML chat exports decode NT compressed media records and embed images or emoji when local cache media or a usable source URL is available. | `sessions`, `contacts`, `messages`, `export`, `fav`, `sns` |
+| Local chat data | Query sessions, contacts, messages, favorites, Moments cache, and exports. HTML chat exports decode NT compressed media records and locally cached WeChat 4.x V2 image containers, decrypt remote emoticons with message-provided AES keys, and preserve forwarded app-card links alongside their covers. | `sessions`, `contacts`, `messages`, `export`, `fav`, `sns` |
 | Initialization | Verify and reuse existing local database access by default; refresh only when needed. Missing-key tests can run without changing saved configuration. | `init`, `init --refresh`, `init --test-missing-keys`, `config forget-keys`, `check` |
 | Official-account daily | Filter configured sources, preserve source categories, backfill incomplete yesterday output before an unqualified today run, fetch articles, create summaries, generate a local HTML reader, and synchronize reader favorites into local files. | `daily`, `daily favorites`, `daily-stats`, `daily-server` |
 | Knowledge workflows | Wiki compilation, semantic search, RAG, WeRead sync, reviews, reading notes, and staged Vault promotion. | `wiki`, `vault`, `search`, `chat`, `weread`, `review` |
@@ -40,6 +40,8 @@ The daily workflow supports `dailyAiEnabled=false` for a persistent no-AI mode, 
 - Public reports and commits must not contain databases, keys, tokens, wxid values, real chat content, or unredacted logs.
 
 ## Active Constraints
+
+- Issue #7 remains open pending reporter verification. HTML emoji export preserves the emoji label and matches resource records only by nonzero server-message identity; local IDs are not unique across shards or conversations. WeChat 4.x V2 image containers are decoded with an account-specific media key derived from local `kvcomm` data and verified against a real cached V2 header. Remote emoticons use AES-CBC with the message key as both key and IV. Type-1 custom stickers whose NT row contains only a PUA/signature and no MD5, URL, AES key, or local resource remain a labeled placeholder until WeChat supplies a linked asset; the exporter must not guess across unrelated stickers. Forwarded app cards remain structured links even when a cached cover is present, including CDATA-wrapped URLs. Nine synthetic Python regression tests cover these paths; run `python -m unittest discover -s test -p '*_test.py' -v`. CI also runs these tests. This does not establish compatibility with every real WeChat media format.
 
 - WeChat platform behavior, database formats, account restrictions, and terms can change without notice. Local operation is not a legal, account-safety, or platform-compatibility guarantee.
 - The daily workflow can take substantial time when many configured sources publish on the same day. It fetches article bodies sequentially to reduce upstream pressure.
