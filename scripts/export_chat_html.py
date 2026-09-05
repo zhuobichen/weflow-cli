@@ -675,6 +675,31 @@ def extract_appmsg_image(content):
     """Extract image URL from appmsg XML content."""
     if not content:
         return None
+
+
+def download_bilibili_cover(page_url, timeout=10):
+    """Resolve a Bilibili share page and embed its og:image cover."""
+    if not page_url or not re.match(
+            r'https?://(?:www\.)?(?:b23\.tv|bilibili\.com)(?:/|$)',
+            page_url, re.IGNORECASE):
+        return None
+    try:
+        req = urllib.request.Request(page_url, headers={
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Referer': 'https://www.bilibili.com/',
+        })
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            html = resp.read(1024 * 1024).decode('utf-8', errors='ignore')
+        match = re.search(
+            r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)',
+            html, re.IGNORECASE,
+        )
+        if not match:
+            return None
+        cover_url = decode_xml(match.group(1)).replace('\\/', '/').strip()
+        return download_image_as_base64(cover_url, timeout=timeout)
+    except Exception:
+        return None
     for tag in ('encrypturl', 'thumburl', 'cdnthumburl', 'appthumburl'):
         m = re.search(rf'<{tag}\b[^>]*>([\s\S]*?)</{tag}>', content, re.IGNORECASE)
         if m:
@@ -691,7 +716,10 @@ def extract_appmsg_image(content):
                 return url
     for raw_url in re.findall(r'https?://[^\s<>"\']+', str(content), re.IGNORECASE):
         url = decode_xml(raw_url).replace('\\/', '/').replace('\\u0026', '&').strip(' \t\r\n\\\'"')
-        if url.startswith(('http://', 'https://')):
+        # App-card URLs (notably b23.tv/Bilibili share links) are page links,
+        # not image resources. Never emit them as a broken <img> source.
+        if (url.startswith(('http://', 'https://'))
+                and not re.match(r'https?://(?:www\.)?(?:b23\.tv|bilibili\.com)(?:/|$)', url, re.IGNORECASE)):
             return url
     return None
 
@@ -915,13 +943,16 @@ def format_message(row, talker, wx_dir, image_map=None, sender_map=None, display
                 thumb_url = extract_appmsg_image(content)
                 if thumb_url:
                     img_data = download_image_as_base64(thumb_url, extract_media_aes_key(content))
-                    if img_data:
-                        b64, mime = img_data
-                        image_b64 = b64
-                        parts.append(f'<img class="msg-app-thumb" src="data:{mime};base64,{b64}" loading="lazy" />')
-                    elif thumb_url.startswith(('http://', 'https://')):
-                        remote_url = thumb_url.replace('http://', 'https://', 1)
-                        parts.append(f'<img class="msg-app-thumb" src="{escape_html(remote_url)}" referrerpolicy="no-referrer" loading="lazy" />')
+                else:
+                    page_url = extract_xml_text(content, 'url')
+                    img_data = download_bilibili_cover(page_url)
+                if img_data:
+                    b64, mime = img_data
+                    image_b64 = b64
+                    parts.append(f'<img class="msg-app-thumb" src="data:{mime};base64,{b64}" loading="lazy" />')
+                elif thumb_url and thumb_url.startswith(('http://', 'https://')):
+                    remote_url = thumb_url.replace('http://', 'https://', 1)
+                    parts.append(f'<img class="msg-app-thumb" src="{escape_html(remote_url)}" referrerpolicy="no-referrer" loading="lazy" />')
                 if url.startswith(('http://', 'https://')):
                     parts.append(f'<a class="msg-link" href="{escape_html(url)}" target="_blank">{escape_html(title)}</a>')
                 else:

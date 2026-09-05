@@ -107,6 +107,14 @@ class EmojiExportTests(unittest.TestCase):
         self.assertIn('href="https://www.bilibili.com/video/BV-example"', result['display'])
         self.assertNotIn('[\u56fe\u7247]', result['display'])
 
+    def test_bilibili_share_url_is_not_used_as_cover_image(self):
+        content = (
+            '<appmsg><title>Video</title><url><![CDATA['
+            'https://b23.tv/Br96Gss?share_source=weixin'
+            ']]></url></appmsg>'
+        )
+        self.assertIsNone(export.extract_appmsg_image(content))
+
     def test_emoticon_cbc_uses_key_as_iv(self):
         from Crypto.Cipher import AES
         from Crypto.Util import Padding
