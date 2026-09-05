@@ -39,6 +39,7 @@ BUILTIN_EMOJI_DIR = os.path.join(os.path.dirname(__file__), '..', 'resources', '
 BUILTIN_EMOJI_MAP = {
     '[打脸]': 'Facepalm',
     '[皱眉]': 'Concerned',
+    '[合十]': 'Respect',
 }
 
 
@@ -689,17 +690,18 @@ def extract_appmsg_image(content):
         if m:
             url = m.group(1).strip()
             url = url.replace('<![CDATA[', '').replace(']]>', '').strip()
-            url = decode_xml(url).replace('\\/', '/').strip()
+            url = decode_xml(url).replace('\\/', '/').replace('*#*', ':').strip()
             if url.startswith(('http://', 'https://')):
                 return url
     for tag in ('encrypturl', 'thumburl', 'cdnthumburl', 'appthumburl'):
         m = re.search(rf'\b{tag}\s*=\s*["\']([^"\']+)', content, re.IGNORECASE)
         if m:
-            url = decode_xml(m.group(1).strip()).replace('\\/', '/').strip()
+            url = decode_xml(m.group(1).strip()).replace('\\/', '/').replace('*#*', ':').strip()
             if url.startswith(('http://', 'https://')):
                 return url
     for raw_url in re.findall(r'https?://[^\s<>"\']+', str(content), re.IGNORECASE):
-        url = decode_xml(raw_url).replace('\\/', '/').replace('\\u0026', '&').strip(' \t\r\n\\\'"')
+        url = (decode_xml(raw_url).replace('\\/', '/').replace('\\u0026', '&')
+               .replace('*#*', ':').strip(' \t\r\n\\\'"'))
         # App-card URLs (notably b23.tv/Bilibili share links) are page links,
         # not image resources. Never emit them as a broken <img> source.
         if (url.startswith(('http://', 'https://'))
@@ -750,7 +752,7 @@ def extract_xml_attr_url(content, name):
     match = re.search(rf'\b{name}\s*=\s*["\']([^"\']+)', str(content or ''), re.IGNORECASE)
     if not match:
         return None
-    url = decode_xml(match.group(1)).replace('\\/', '/').strip()
+    url = decode_xml(match.group(1)).replace('\\/', '/').replace('*#*', ':').strip()
     return url if url.startswith(('http://', 'https://')) else None
 
 
@@ -1004,7 +1006,14 @@ def format_message(row, talker, wx_dir, image_map=None, sender_map=None, display
             elif has_builtin_signature and builtin_emoji_label:
                 display = render_builtin_emoji(content, builtin_emoji_label)
             else:
-                display = escape_html(content) if content else '<span class="msg-media">[表情]</span>'
+                # Forwarded/default emoji messages can contain a complete
+                # appmsg XML wrapper but no recoverable local media. Keep the
+                # export readable instead of dumping the XML into the bubble.
+                if is_emoji_xml:
+                    title = extract_xml_text(content, 'title')
+                    display = escape_html(title or emoji_label)
+                else:
+                    display = escape_html(content) if content else '<span class="msg-media">[表情]</span>'
     elif local_type == 49 and not is_emoji_xml:
         # App message (link/file/article)
         if content:

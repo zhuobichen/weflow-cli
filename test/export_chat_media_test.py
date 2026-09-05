@@ -184,6 +184,31 @@ class EmojiExportTests(unittest.TestCase):
         self.assertIn('[\u76b1\u7709]', result['display'])
         self.assertIn('data:image/png;base64,', result['display'])
 
+    def test_signature_only_respect_uses_bundled_default_emoji(self):
+        source = b'<msgsource><pua>1</pua><signature>only-signature</signature></msgsource>'
+        row = (7, 103, 1, 0, 1, 1700000000, 0, source, '[\u5408\u5341]', b'')
+        result = export.format_message(row, 'example-contact', '', {}, resource_map={})
+        self.assertIn('[\u5408\u5341]', result['display'])
+        self.assertIn('data:image/png;base64,', result['display'])
+
+    def test_forwarded_emoji_xml_does_not_dump_raw_xml(self):
+        content = (
+            '<?xml version="1.0"?><msg><appmsg><title>看到这个表情就想笑</title>'
+            '<refermsg><type>47</type><content><msg><emoji md5="abc" />'
+            '</msg></content></refermsg></appmsg></msg>'
+        )
+        row = (7, 104, 1, 0, 1, 1700000000, 0, b'', content, b'')
+        result = export.format_message(row, 'example-contact', '', {}, resource_map={})
+        self.assertIn('看到这个表情就想笑', result['display'])
+        self.assertNotIn('&lt;?xml', result['display'])
+
+    def test_forwarded_emoji_restores_wechat_url_separator(self):
+        content = '<msg><emoji encrypturl="http*#*//example.test/emoji.png" /></msg>'
+        self.assertEqual(
+            export.extract_appmsg_image(content),
+            'http://example.test/emoji.png',
+        )
+
 
 if __name__ == '__main__':
     unittest.main()
