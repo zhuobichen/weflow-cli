@@ -177,6 +177,13 @@ class EmojiExportTests(unittest.TestCase):
         self.assertIn('[\u6253\u8138]', result['display'])
         self.assertIn('data:image/png;base64,', result['display'])
 
+    def test_signature_only_concerned_uses_bundled_default_emoji(self):
+        source = b'<msgsource><pua>1</pua><signature>only-signature</signature></msgsource>'
+        row = (7, 102, 1, 0, 1, 1700000000, 0, source, '[\u76b1\u7709]', b'')
+        result = export.format_message(row, 'example-contact', '', {}, resource_map={})
+        self.assertIn('[\u76b1\u7709]', result['display'])
+        self.assertIn('data:image/png;base64,', result['display'])
+
 
 if __name__ == '__main__':
     unittest.main()
