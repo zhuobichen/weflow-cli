@@ -157,6 +157,19 @@ class EmojiExportTests(unittest.TestCase):
         )
         self.assertIn('data:image/gif', result['display'])
 
+    def test_entity_escaped_emoji_xml_is_decoded(self):
+        content = (
+            '&lt;msg&gt;&lt;emoji md5=&quot;' + MEDIA_MD5 + '&quot; '
+            'encrypturl=&quot;https://example.test/encrypted&quot; '
+            'aeskey=&quot;' + ('12' * 16) + '&quot; /&gt;&lt;/msg&gt;'
+        )
+        row = (7, 101, 1, 0, 1, 1700000000, 0, b'', content, b'')
+        result = export.format_message(
+            row, 'example-contact', '', {f'md5:{MEDIA_MD5}': IMAGE},
+            resource_map={'server:101': [MEDIA_MD5]},
+        )
+        self.assertIn('data:image/gif', result['display'])
+
 
 if __name__ == '__main__':
     unittest.main()

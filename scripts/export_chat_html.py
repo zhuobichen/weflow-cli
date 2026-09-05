@@ -724,6 +724,14 @@ def download_bilibili_cover(page_url, timeout=10):
     return None
 
 
+def extract_xml_attr_url(content, name):
+    match = re.search(rf'\b{name}\s*=\s*["\']([^"\']+)', str(content or ''), re.IGNORECASE)
+    if not match:
+        return None
+    url = decode_xml(match.group(1)).replace('\\/', '/').strip()
+    return url if url.startswith(('http://', 'https://')) else None
+
+
 def extract_xml_text(content, tag):
     """Extract plain or CDATA-wrapped text from one XML element."""
     if not content:
@@ -852,6 +860,18 @@ def format_message(row, talker, wx_dir, image_map=None, sender_map=None, display
     source_text = decode_message_content(source) if isinstance(source, (bytes, bytearray, memoryview)) else str(source or '')
     if not content and source_text:
         _, content = parse_source(source_text)
+    # Some NT rows store the complete emoji XML entity-escaped in the message
+    # column (for example ``&lt;msg&gt;...&lt;/msg&gt;``). Normalize it before
+    # detecting media metadata so it follows the same path as raw XML.
+    if '&lt;' in content.lower():
+        normalized_content = content
+        for _ in range(2):
+            candidate = decode_xml(normalized_content)
+            if candidate == normalized_content:
+                break
+            normalized_content = candidate
+        if re.search(r'<(?:msg|emoji)\b', normalized_content, re.IGNORECASE):
+            content = normalized_content
     # NT emoji metadata may be split between source XML and message_content.
     # Prefer the representation that actually carries media identity/URLs;
     # source can contain only PUA/signature fields for the same message.
@@ -861,6 +881,7 @@ def format_message(row, talker, wx_dir, image_map=None, sender_map=None, display
     if content and content != source_text:
         metadata_parts.append(content)
     metadata_content = '\n'.join(metadata_parts)
+    is_emoji_xml = bool(re.search(r'<(?:msg\s*>)?\s*<emoji\b|<emoji\b', metadata_content, re.IGNORECASE))
 
     if '\x00' in content or sum(ord(char) < 32 and char not in '\n\r\t' for char in content) > 2:
         content = ''
@@ -907,7 +928,7 @@ def format_message(row, talker, wx_dir, image_map=None, sender_map=None, display
         display = '<span class="msg-media">[语音]</span>'
     elif local_type == 43:
         display = '<span class="msg-media">[视频]</span>'
-    elif local_type in (1, 47) and ('<' in metadata_content or local_type == 47):
+    elif is_emoji_xml or (local_type in (1, 47) and ('<' in metadata_content or local_type == 47)):
         emoji_label = content if content.startswith('[') and content.endswith(']') else '[表情]'
         cached = get_cached_image(image_map, local_id, create_time, metadata_content, resource_md5s)
         if cached:
@@ -917,6 +938,10 @@ def format_message(row, talker, wx_dir, image_map=None, sender_map=None, display
         else:
             thumb_url = extract_appmsg_image(metadata_content)
             downloaded = download_image_as_base64(thumb_url, extract_media_aes_key(metadata_content)) if thumb_url else None
+            if not downloaded:
+                fallback_url = extract_xml_attr_url(metadata_content, 'thumburl')
+                if fallback_url and fallback_url != thumb_url:
+                    downloaded = download_image_as_base64(fallback_url)
             if downloaded:
                 img_data, mime = downloaded
                 image_b64 = img_data
@@ -926,7 +951,7 @@ def format_message(row, talker, wx_dir, image_map=None, sender_map=None, display
                 display = f'<span class="msg-media">{escape_html(emoji_label)}</span><br><img src="{escape_html(remote_url)}" referrerpolicy="no-referrer" loading="lazy" />'
             else:
                 display = escape_html(content) if content else '<span class="msg-media">[表情]</span>'
-    elif local_type == 49:
+    elif local_type == 49 and not is_emoji_xml:
         # App message (link/file/article)
         if content:
             # Try to parse XML for title/desc
