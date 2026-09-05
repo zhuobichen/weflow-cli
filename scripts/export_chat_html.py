@@ -45,6 +45,7 @@ BUILTIN_EMOJI_MAP = {
     '[微笑]': 'Smile',
     '[强]': 'Awesome',
     '[呲牙]': 'Grin',
+    '[睡]': 'Sleep',
 }
 
 
