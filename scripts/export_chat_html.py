@@ -40,6 +40,7 @@ BUILTIN_EMOJI_MAP = {
     '[打脸]': 'Facepalm',
     '[皱眉]': 'Concerned',
     '[合十]': 'Respect',
+    '[流泪]': 'Cry',
 }
 
 
@@ -691,25 +692,30 @@ def extract_appmsg_image(content):
             url = m.group(1).strip()
             url = url.replace('<![CDATA[', '').replace(']]>', '').strip()
             url = decode_xml(url).replace('\\/', '/').replace('*#*', ':').strip()
-            if url.startswith(('http://', 'https://')):
+            if url.startswith(('http://', 'https://')) and not is_share_page_url(url):
                 return url
     for tag in ('encrypturl', 'thumburl', 'cdnthumburl', 'appthumburl'):
         m = re.search(rf'\b{tag}\s*=\s*["\']([^"\']+)', content, re.IGNORECASE)
         if m:
             url = decode_xml(m.group(1).strip()).replace('\\/', '/').replace('*#*', ':').strip()
-            if url.startswith(('http://', 'https://')):
+            if url.startswith(('http://', 'https://')) and not is_share_page_url(url):
                 return url
     for raw_url in re.findall(r'https?://[^\s<>"\']+', str(content), re.IGNORECASE):
         url = (decode_xml(raw_url).replace('\\/', '/').replace('\\u0026', '&')
                .replace('*#*', ':').strip(' \t\r\n\\\'"'))
         # App-card URLs (notably b23.tv/Bilibili share links) are page links,
         # not image resources. Never emit them as a broken <img> source.
-        if (url.startswith(('http://', 'https://'))
-                and not re.match(
-                    r'https?://(?:www\.)?(?:b23\.tv|bilibili\.com|pan\.quark\.cn)(?:/|$)',
-                    url, re.IGNORECASE)):
+        if url.startswith(('http://', 'https://')) and not is_share_page_url(url):
             return url
     return None
+
+
+def is_share_page_url(url):
+    return bool(re.match(
+        r'https?://(?:www\.)?(?:b23\.tv|bilibili\.com|pan\.quark\.cn|'
+        r'y\.music\.163\.com|music\.163\.com|mp\.weixin\.qq\.com)(?:/|$)',
+        str(url or ''), re.IGNORECASE,
+    ))
 
 
 def download_bilibili_cover(page_url, timeout=10):
@@ -718,6 +724,7 @@ def download_bilibili_cover(page_url, timeout=10):
             r'https?://(?:www\.)?(?:b23\.tv|bilibili\.com)(?:/|$)',
             page_url, re.IGNORECASE):
         return None
+
     try:
         req = urllib.request.Request(page_url, headers={
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
@@ -746,6 +753,33 @@ def download_bilibili_cover(page_url, timeout=10):
         if not cover_url:
             return None
         return download_image_as_base64(cover_url, timeout=timeout)
+    except Exception:
+        return None
+
+
+def download_page_og_image(page_url, timeout=10):
+    """Fetch a share page's og:image and embed the resolved cover."""
+    if not page_url or not page_url.startswith(('http://', 'https://')):
+        return None
+    try:
+        req = urllib.request.Request(page_url, headers={
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Referer': page_url,
+        })
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            html = resp.read(2 * 1024 * 1024).decode('utf-8', errors='ignore')
+        patterns = (
+            r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)',
+            r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']og:image',
+            r'<meta[^>]+name=["\']twitter:image["\'][^>]+content=["\']([^"\']+)',
+        )
+        cover_url = ''
+        for pattern in patterns:
+            match = re.search(pattern, html, re.IGNORECASE)
+            if match:
+                cover_url = decode_xml(match.group(1)).replace('\\/', '/').strip()
+                break
+        return download_image_as_base64(cover_url, timeout=timeout) if cover_url else None
     except Exception:
         return None
 
@@ -1039,6 +1073,8 @@ def format_message(row, talker, wx_dir, image_map=None, sender_map=None, display
                 else:
                     page_url = extract_xml_text(content, 'url')
                     img_data = download_bilibili_cover(page_url)
+                    if not img_data:
+                        img_data = download_page_og_image(page_url)
                 if img_data:
                     b64, mime = img_data
                     image_b64 = b64

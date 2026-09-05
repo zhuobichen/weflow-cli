@@ -224,6 +224,26 @@ class EmojiExportTests(unittest.TestCase):
         self.assertIn('看这个也觉得师兄面试不好[打脸]', result['display'])
         self.assertIn('data:image/png;base64,', result['display'])
 
+    def test_page_og_image_supports_reordered_meta_attributes(self):
+        html = '<meta content="https://img.example/cover.jpg" property="og:image">'
+        class Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def read(self, _limit):
+                return html.encode()
+
+        with patch.object(export.urllib.request, 'urlopen') as open_url, \
+                patch.object(export, 'download_image_as_base64', return_value=('abc', 'image/jpeg')):
+            open_url.return_value = Response()
+            self.assertEqual(
+                export.download_page_og_image('https://example.test'),
+                ('abc', 'image/jpeg'),
+            )
+
 
 if __name__ == '__main__':
     unittest.main()
