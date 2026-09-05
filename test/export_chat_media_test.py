@@ -247,6 +247,11 @@ class EmojiExportTests(unittest.TestCase):
             '<emoji encrypturl="https://share.traecontent.cn/artifact/example" />'
         ))
 
+    def test_temporary_share_thumbnail_is_not_emitted_as_app_image(self):
+        self.assertIsNone(export.extract_appmsg_image(
+            '<appmsg><thumburl>https://campusgateway.51job.com/thd-external/online/detail/shareVisit?sign=temporary</thumburl></appmsg>'
+        ))
+
     def test_page_og_image_supports_reordered_meta_attributes(self):
         html = '<meta content="https://img.example/cover.jpg" property="og:image">'
         class Response:
