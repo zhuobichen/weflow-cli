@@ -224,6 +224,17 @@ class EmojiExportTests(unittest.TestCase):
         self.assertIn('看这个也觉得师兄面试不好[打脸]', result['display'])
         self.assertIn('data:image/png;base64,', result['display'])
 
+    def test_plain_text_builtin_emoji_is_rendered(self):
+        row = (7, 106, 1, 0, 1, 1700000000, 0, b'', '[\u751f\u75c5]', b'')
+        result = export.format_message(row, 'example-contact', '', {}, resource_map={})
+        self.assertIn('[\u751f\u75c5]', result['display'])
+        self.assertIn('data:image/png;base64,', result['display'])
+
+    def test_unstable_share_page_is_not_emitted_as_emoji_image(self):
+        self.assertIsNone(export.extract_appmsg_image(
+            '<emoji encrypturl="https://share.traecontent.cn/artifact/example" />'
+        ))
+
     def test_page_og_image_supports_reordered_meta_attributes(self):
         html = '<meta content="https://img.example/cover.jpg" property="og:image">'
         class Response:

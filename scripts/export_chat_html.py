@@ -41,6 +41,9 @@ BUILTIN_EMOJI_MAP = {
     '[皱眉]': 'Concerned',
     '[合十]': 'Respect',
     '[流泪]': 'Cry',
+    '[生病]': 'Sick',
+    '[微笑]': 'Smile',
+    '[强]': 'Awesome',
 }
 
 
@@ -713,7 +716,8 @@ def extract_appmsg_image(content):
 def is_share_page_url(url):
     return bool(re.match(
         r'https?://(?:www\.)?(?:b23\.tv|bilibili\.com|pan\.quark\.cn|'
-        r'y\.music\.163\.com|music\.163\.com|mp\.weixin\.qq\.com)(?:/|$)',
+        r'y\.music\.163\.com|music\.163\.com|mp\.weixin\.qq\.com|'
+        r'schoai\.cn|share\.traecontent\.cn)(?:/|$)',
         str(url or ''), re.IGNORECASE,
     ))
 
@@ -982,7 +986,8 @@ def format_message(row, talker, wx_dir, image_map=None, sender_map=None, display
 
     if local_type == 1 and '<' not in metadata_content:
         # Text
-        display = escape_html(content)
+        builtin_label = next((label for label in BUILTIN_EMOJI_MAP if label in content), None)
+        display = render_builtin_emoji(content, builtin_label) if builtin_label else escape_html(content)
     elif local_type == 3:
         # Image - try cache map first, then traditional FileStorage
         display = '<span class="msg-media">[图片]</span>'
@@ -1048,6 +1053,8 @@ def format_message(row, talker, wx_dir, image_map=None, sender_map=None, display
                 if is_emoji_xml:
                     title = extract_xml_text(content, 'title')
                     display = escape_html(title or emoji_label)
+                elif is_share_page_url(content.strip()):
+                    display = '<span class="msg-media">[表情]</span>'
                 else:
                     display = escape_html(content) if content else '<span class="msg-media">[表情]</span>'
     elif local_type == 49 and not is_emoji_xml:
