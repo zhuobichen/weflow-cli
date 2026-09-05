@@ -44,6 +44,7 @@ BUILTIN_EMOJI_MAP = {
     '[生病]': 'Sick',
     '[微笑]': 'Smile',
     '[强]': 'Awesome',
+    '[呲牙]': 'Grin',
 }
 
 

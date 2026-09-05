@@ -230,6 +230,12 @@ class EmojiExportTests(unittest.TestCase):
         self.assertIn('[\u751f\u75c5]', result['display'])
         self.assertIn('data:image/png;base64,', result['display'])
 
+    def test_repeated_grin_emoji_is_rendered(self):
+        row = (7, 107, 1, 0, 1, 1700000000, 0, b'', '[呲牙][呲牙][呲牙]', b'')
+        result = export.format_message(row, 'example-contact', '', {}, resource_map={})
+        self.assertIn('[呲牙][呲牙][呲牙]', result['display'])
+        self.assertIn('data:image/png;base64,', result['display'])
+
     def test_unstable_share_page_is_not_emitted_as_emoji_image(self):
         self.assertIsNone(export.extract_appmsg_image(
             '<emoji encrypturl="https://share.traecontent.cn/artifact/example" />'
