@@ -1081,7 +1081,9 @@ def format_message(row, talker, wx_dir, image_map=None, sender_map=None, display
                     title = extract_xml_text(content, 'title')
                     display = escape_html(title or emoji_label)
                 elif is_share_page_url(content.strip()):
-                    display = '<span class="msg-media">[表情]</span>'
+                    # A webpage URL carried by an emoji-like row is still a
+                    # link, not an image. Preserve the original content.
+                    display = escape_html(content)
                 else:
                     display = escape_html(content) if content else '<span class="msg-media">[表情]</span>'
     elif local_type == 49 and not is_emoji_xml:
