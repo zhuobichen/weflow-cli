@@ -252,6 +252,11 @@ class EmojiExportTests(unittest.TestCase):
             '<appmsg><thumburl>https://campusgateway.51job.com/thd-external/online/detail/shareVisit?sign=temporary</thumburl></appmsg>'
         ))
 
+    def test_tieba_page_is_not_emitted_as_app_image(self):
+        self.assertIsNone(export.extract_appmsg_image(
+            '<appmsg><thumburl>https://tieba.baidu.com/p/9643963939?share=1</thumburl></appmsg>'
+        ))
+
     def test_page_og_image_supports_reordered_meta_attributes(self):
         html = '<meta content="https://img.example/cover.jpg" property="og:image">'
         class Response:
