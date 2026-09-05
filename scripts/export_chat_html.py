@@ -14,6 +14,7 @@ import base64
 import urllib.request
 import urllib.error
 import struct
+import json
 from pathlib import Path
 
 try:
@@ -675,31 +676,6 @@ def extract_appmsg_image(content):
     """Extract image URL from appmsg XML content."""
     if not content:
         return None
-
-
-def download_bilibili_cover(page_url, timeout=10):
-    """Resolve a Bilibili share page and embed its og:image cover."""
-    if not page_url or not re.match(
-            r'https?://(?:www\.)?(?:b23\.tv|bilibili\.com)(?:/|$)',
-            page_url, re.IGNORECASE):
-        return None
-    try:
-        req = urllib.request.Request(page_url, headers={
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-            'Referer': 'https://www.bilibili.com/',
-        })
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            html = resp.read(1024 * 1024).decode('utf-8', errors='ignore')
-        match = re.search(
-            r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)',
-            html, re.IGNORECASE,
-        )
-        if not match:
-            return None
-        cover_url = decode_xml(match.group(1)).replace('\\/', '/').strip()
-        return download_image_as_base64(cover_url, timeout=timeout)
-    except Exception:
-        return None
     for tag in ('encrypturl', 'thumburl', 'cdnthumburl', 'appthumburl'):
         m = re.search(rf'<{tag}\b[^>]*>([\s\S]*?)</{tag}>', content, re.IGNORECASE)
         if m:
@@ -722,6 +698,44 @@ def download_bilibili_cover(page_url, timeout=10):
                 and not re.match(r'https?://(?:www\.)?(?:b23\.tv|bilibili\.com)(?:/|$)', url, re.IGNORECASE)):
             return url
     return None
+
+
+def download_bilibili_cover(page_url, timeout=10):
+    """Resolve a Bilibili share page and embed its og:image cover."""
+    if not page_url or not re.match(
+            r'https?://(?:www\.)?(?:b23\.tv|bilibili\.com)(?:/|$)',
+            page_url, re.IGNORECASE):
+        return None
+    try:
+        req = urllib.request.Request(page_url, headers={
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Referer': 'https://www.bilibili.com/',
+        })
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            html = resp.read(1024 * 1024).decode('utf-8', errors='ignore')
+            final_url = resp.geturl()
+        match = re.search(
+            r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)',
+            html, re.IGNORECASE,
+        )
+        cover_url = decode_xml(match.group(1)).replace('\\/', '/').strip() if match else ''
+        if not cover_url:
+            bvid_match = re.search(r'/(BV[0-9A-Za-z]+)(?:/|\?|$)', final_url, re.IGNORECASE)
+            if not bvid_match:
+                return None
+            api_url = 'https://api.bilibili.com/x/web-interface/view?bvid=' + bvid_match.group(1)
+            api_req = urllib.request.Request(api_url, headers={
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+                'Referer': final_url,
+            })
+            with urllib.request.urlopen(api_req, timeout=timeout) as api_resp:
+                payload = json.loads(api_resp.read(1024 * 1024).decode('utf-8'))
+            cover_url = str((payload.get('data') or {}).get('pic') or '')
+        if not cover_url:
+            return None
+        return download_image_as_base64(cover_url, timeout=timeout)
+    except Exception:
+        return None
 
 
 def extract_xml_attr_url(content, name):
