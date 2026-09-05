@@ -705,7 +705,9 @@ def extract_appmsg_image(content):
         # App-card URLs (notably b23.tv/Bilibili share links) are page links,
         # not image resources. Never emit them as a broken <img> source.
         if (url.startswith(('http://', 'https://'))
-                and not re.match(r'https?://(?:www\.)?(?:b23\.tv|bilibili\.com)(?:/|$)', url, re.IGNORECASE)):
+                and not re.match(
+                    r'https?://(?:www\.)?(?:b23\.tv|bilibili\.com|pan\.quark\.cn)(?:/|$)',
+                    url, re.IGNORECASE)):
             return url
     return None
 
@@ -1027,6 +1029,9 @@ def format_message(row, talker, wx_dir, image_map=None, sender_map=None, display
                 display = f'<span class="msg-file">[文件] {escape_html(title)}</span>'
             elif title:
                 parts = []
+                builtin_title = next((label for label in BUILTIN_EMOJI_MAP if label in title), None)
+                title_html = (render_builtin_emoji(title, builtin_title)
+                              if builtin_title else escape_html(title))
                 # Extract and embed article thumbnail image
                 thumb_url = extract_appmsg_image(content)
                 if thumb_url:
@@ -1042,9 +1047,9 @@ def format_message(row, talker, wx_dir, image_map=None, sender_map=None, display
                     remote_url = thumb_url.replace('http://', 'https://', 1)
                     parts.append(f'<img class="msg-app-thumb" src="{escape_html(remote_url)}" referrerpolicy="no-referrer" loading="lazy" />')
                 if url.startswith(('http://', 'https://')):
-                    parts.append(f'<a class="msg-link" href="{escape_html(url)}" target="_blank">{escape_html(title)}</a>')
+                    parts.append(f'<a class="msg-link" href="{escape_html(url)}" target="_blank">{title_html}</a>')
                 else:
-                    parts.append(f'<span class="msg-app-title">{escape_html(title)}</span>')
+                    parts.append(f'<span class="msg-app-title">{title_html}</span>')
                 if desc:
                     parts.append(f'<div class="msg-app-desc">{escape_html(desc)}</div>')
                 display = '<div class="msg-app">' + ''.join(parts) + '</div>'

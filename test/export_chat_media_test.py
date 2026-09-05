@@ -209,6 +209,21 @@ class EmojiExportTests(unittest.TestCase):
             'http://example.test/emoji.png',
         )
 
+    def test_share_page_is_not_used_as_broken_app_thumbnail(self):
+        self.assertIsNone(export.extract_appmsg_image(
+            '<appmsg><url>https://pan.quark.cn/s/example</url></appmsg>'
+        ))
+
+    def test_app_title_renders_builtin_emoji(self):
+        content = (
+            '<msg><appmsg><title>看这个也觉得师兄面试不好[打脸]</title>'
+            '<type>5</type></appmsg></msg>'
+        )
+        row = (7, 105, 49, 0, 1, 1700000000, 0, b'', content, b'')
+        result = export.format_message(row, 'example-contact', '', {}, resource_map={})
+        self.assertIn('看这个也觉得师兄面试不好[打脸]', result['display'])
+        self.assertIn('data:image/png;base64,', result['display'])
+
 
 if __name__ == '__main__':
     unittest.main()
