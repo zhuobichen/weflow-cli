@@ -650,13 +650,14 @@ def download_image_as_base64(url, aes_key='', timeout=10):
     """Download image from URL and return (base64_data, mime_type) or None."""
     if not url or not url.startswith(('http://', 'https://')):
         return None
-    try:
-        req = urllib.request.Request(url, headers={
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-            'Referer': 'https://mp.weixin.qq.com/',
-        })
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            data = resp.read(MAX_EMBED_SIZE + 1)
+    for _ in range(2):
+        try:
+            req = urllib.request.Request(url, headers={
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                'Referer': 'https://mp.weixin.qq.com/',
+            })
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                data = resp.read(MAX_EMBED_SIZE + 1)
             if len(data) > MAX_EMBED_SIZE:
                 return None
             candidates = [data]
@@ -664,12 +665,12 @@ def download_image_as_base64(url, aes_key='', timeout=10):
             if decrypted:
                 candidates.insert(0, decrypted)
             detected = next((_valid_media(candidate) for candidate in candidates if _valid_media(candidate)), None)
-            if not detected:
-                return None
-            data, mime = detected
-            return (base64.b64encode(data).decode(), mime)
-    except Exception:
-        return None
+            if detected:
+                data, mime = detected
+                return (base64.b64encode(data).decode(), mime)
+        except Exception:
+            continue
+    return None
 
 
 def detect_mime_from_bytes(header_bytes):
@@ -794,6 +795,26 @@ def extract_xml_attr_url(content, name):
         return None
     url = decode_xml(match.group(1)).replace('\\/', '/').replace('*#*', ':').strip()
     return url if url.startswith(('http://', 'https://')) else None
+
+
+def extract_xml_attr_value(content, name):
+    match = re.search(rf'\b{name}\s*=\s*["\']([^"\']*)', str(content or ''), re.IGNORECASE)
+    return decode_xml(match.group(1).strip()) if match else ''
+
+
+def render_contact_card(content):
+    nickname = extract_xml_attr_value(content, 'nickname') or '公众号名片'
+    username = extract_xml_attr_value(content, 'username')
+    avatar_url = extract_xml_attr_url(content, 'brandIconUrl')
+    avatar = download_image_as_base64(avatar_url) if avatar_url else None
+    parts = []
+    if avatar:
+        b64, mime = avatar
+        parts.append(f'<img class="msg-app-thumb" src="data:{mime};base64,{b64}" loading="lazy" />')
+    parts.append(f'<span class="msg-app-title">{escape_html(nickname)}</span>')
+    if username:
+        parts.append(f'<div class="msg-app-desc">{escape_html(username)}</div>')
+    return '<div class="msg-app">' + ''.join(parts) + '</div>'
 
 
 def extract_xml_text(content, tag):
@@ -969,6 +990,10 @@ def format_message(row, talker, wx_dir, image_map=None, sender_map=None, display
         metadata_parts.append(content)
     metadata_content = '\n'.join(metadata_parts)
     is_emoji_xml = bool(re.search(r'<(?:msg\s*>)?\s*<emoji\b|<emoji\b', metadata_content, re.IGNORECASE))
+    is_contact_card = bool(
+        re.search(r'<msg\b[^>]*(?:nickname|username)=', metadata_content, re.IGNORECASE)
+        and re.search(r'\bbrandIconUrl=', metadata_content, re.IGNORECASE)
+    )
     has_builtin_signature = bool(
         re.search(r'<signature\b[^>]*>[^<]+</signature>', metadata_content, re.IGNORECASE)
         and any(label in content for label in BUILTIN_EMOJI_MAP)
@@ -984,7 +1009,9 @@ def format_message(row, talker, wx_dir, image_map=None, sender_map=None, display
     display = ''
     image_b64 = None
 
-    if local_type == 1 and '<' not in metadata_content:
+    if is_contact_card:
+        display = render_contact_card(metadata_content)
+    elif local_type == 1 and '<' not in metadata_content:
         # Text
         builtin_label = next((label for label in BUILTIN_EMOJI_MAP if label in content), None)
         display = render_builtin_emoji(content, builtin_label) if builtin_label else escape_html(content)
