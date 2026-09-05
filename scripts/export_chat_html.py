@@ -718,7 +718,7 @@ def is_share_page_url(url):
     return bool(re.match(
         r'https?://(?:www\.)?(?:b23\.tv|bilibili\.com|pan\.quark\.cn|'
         r'y\.music\.163\.com|music\.163\.com|mp\.weixin\.qq\.com|'
-        r'schoai\.cn|share\.traecontent\.cn)(?:/|$)',
+        r'schoai\.cn|share\.traecontent\.cn|hycx-gd\.cn)(?:/|$)',
         str(url or ''), re.IGNORECASE,
     ))
 
