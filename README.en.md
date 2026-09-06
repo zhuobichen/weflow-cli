@@ -230,7 +230,7 @@ python scripts/fav_server.py --date YYYY-MM-DD
 
 ## Architecture
 
-![WeFlow CLI architecture](./docs/images/weflow-architecture.svg)
+![WeFlow CLI architecture](./docs/images/weflow-architecture-gpt-image-2.png)
 
 The project is split into four clearly bounded parts:
 

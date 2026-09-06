@@ -286,7 +286,7 @@ python scripts/fav_server.py --date YYYY-MM-DD
 
 ## 架构
 
-![WeFlow CLI architecture](./docs/images/weflow-architecture.svg)
+![WeFlow CLI architecture](./docs/images/weflow-architecture-gpt-image-2.png)
 
 项目分为四个边界清晰的部分：
 

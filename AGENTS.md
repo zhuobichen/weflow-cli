@@ -9,6 +9,7 @@ Read this file and [docs/PROJECT_STATE.md](docs/PROJECT_STATE.md) before changin
 - Use placeholders in examples: `联系人A`, `示例群`, `YOUR_API_KEY`, and `YYYY-MM-DD`.
 - Do not present local processing as a legal, account-safety, or platform-compatibility guarantee. Follow [SECURITY.md](SECURITY.md).
 - Do not expand process-memory, key-extraction, or platform-automation details in public documentation without a security review.
+- For future architecture-diagram visual assets, use GPT-image-2 as requested by the project owner, while keeping a maintainable source representation when practical and checking text, dimensions, and repository references after generation.
 
 ## Project Map
 

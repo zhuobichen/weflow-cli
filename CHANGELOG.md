@@ -8,7 +8,7 @@ All notable user-facing changes are recorded here. This project follows [Semanti
 
 - Synchronized setup, operations, architecture, security, MCP, and maintenance guidance with the current `1.5.1` source baseline.
 - Clarified source-versus-npm version drift, no-AI daily runs, staged data-directory discovery, media-export limitations, and local-data privacy boundaries.
-- Replaced the outdated architecture image with a maintainable diagram covering current CLI, MCP, service, workflow, data, and privacy boundaries.
+- Replaced the outdated architecture image with a GPT-image-2 diagram covering current CLI, MCP, service, workflow, data, and privacy boundaries.
 
 ### Fixed
 
