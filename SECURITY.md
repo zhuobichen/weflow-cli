@@ -9,16 +9,16 @@ This tool is designed for a single purpose: letting a WeChat account owner acces
 - Users are solely responsible for compliance with local laws. The authors provide the code for legitimate personal-data management and accept no liability for misuse.
 - Open-source software can be modified by anyone. Forks or rebuilds that remove safeguards or repurpose this tool for surveillance, stalking, or black/gray-market use have nothing to do with this project; the original repository is the only official source.
 
-If you are being monitored or suspect this tool was installed on a device without consent: the configuration lives in `~/.weflow-cli/`, and every command invocation leaves traces in `~/.weflow-cli/` timestamps — inspect that directory and remove it.
+If you suspect this tool was installed on a device without consent, stop using the device for sensitive activity and ask a qualified security professional to inspect it. Do not publish the configuration directory or its contents while reporting the concern.
 
 ## Local-first data handling
 
-- **100% local**: WeFlow CLI reads the local WeChat data directory directly. There is no built-in cloud service, tracking, or telemetry — nothing is collected or reported.
+- **Local-first**: WeFlow CLI reads local data directly and has no built-in tracking or telemetry. Explicit article, WeRead, Bot-channel and cloud-AI workflows can make network requests.
 - **Encrypted key storage**: database keys are written to `~/.weflow-cli/config.json` only after machine- and user-bound AES-256-GCM encryption; the ciphertext cannot be decrypted on another machine or under another account.
 - **Explicit AI opt-in**: AI features (article summaries, classification, RAG Q&A) activate only after you explicitly configure your own API key, and only the content you select for processing is uploaded.
 - **Strict assistant defaults**: the WeChat assistant denies all senders until `assistantWhitelist` is explicitly configured, and cloud inference defaults to `strict` privacy mode.
 - **Loopback-only web services**: local readers and servers bind to `127.0.0.1` and are never exposed to the network.
-- **Minimal process injection**: on Windows, key extraction injects into the running WeChat process only during initialization, performs read-only key retrieval, and unloads immediately afterwards.
+- **Narrow initialization scope**: platform-specific initialization is only an optional local setup path; it must not be repurposed for remote access, surveillance, or collection of another account's data.
 
 ## Reporting a vulnerability
 

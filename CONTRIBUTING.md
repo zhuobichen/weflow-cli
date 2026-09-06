@@ -36,3 +36,10 @@ Keep documentation responsibilities separate:
 - `docs/SETUP.md`: a complete fresh-machine installation.
 - `OPERATIONS.md`: maintenance and deep troubleshooting.
 - `docs/MCP.md`: MCP client integration and tool boundaries.
+- `docs/EVIDENCE_GUIDE.md`: evidence preservation and legal limitations.
+- `docs/PROJECT_STATE.md`: current baseline, verified capabilities and constraints.
+- `docs/DECISIONS.md`: durable design decisions and their consequences.
+- `ARCHITECTURE.md`: current module boundaries and data flows.
+- `OPERATIONS.md`: operational procedures and troubleshooting.
+
+Before opening a PR, verify command examples against `weflow-cli <command> --help`, update the relevant documentation in the same change, and run `npm run build`, `npm test`, and `git diff --check`. Do not use the changelog as an engineering diary.

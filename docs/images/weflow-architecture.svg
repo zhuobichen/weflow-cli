@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1080" viewBox="0 0 1600 1080" role="img" aria-labelledby="title desc">
+  <title id="title">WeFlow CLI architecture</title>
+  <desc id="desc">Local-first layers from user inputs through CLI, MCP, services and data adapters to local outputs, with optional external services.</desc>
+  <defs>
+    <style>
+      .bg { fill: #f7f8fa; }
+      .panel { stroke: #d7dce3; stroke-width: 2; rx: 14; }
+      .title { font: 700 27px "Segoe UI", "Microsoft YaHei", sans-serif; fill: #14213d; }
+      .label { font: 600 22px "Segoe UI", "Microsoft YaHei", sans-serif; fill: #14213d; }
+      .body { font: 18px "Segoe UI", "Microsoft YaHei", sans-serif; fill: #334155; }
+      .small { font: 16px "Segoe UI", "Microsoft YaHei", sans-serif; fill: #475569; }
+      .tag { font: 700 16px "Segoe UI", "Microsoft YaHei", sans-serif; fill: #ffffff; }
+      .arrow { stroke: #64748b; stroke-width: 3; marker-end: url(#arrowhead); }
+    </style>
+    <marker id="arrowhead" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto">
+      <path d="M0,0 L10,4 L0,8 Z" fill="#64748b"/>
+    </marker>
+  </defs>
+  <rect class="bg" width="1600" height="1080"/>
+  <text class="title" x="80" y="66">WeFlow CLI · 当前技术架构</text>
+  <text class="small" x="80" y="96">本地优先：只有用户明确选择的文章抓取、微信读书、Bot 通道或云端 AI 才会联网</text>
+
+  <rect class="panel" x="80" y="130" width="1440" height="145" fill="#e9eef8"/>
+  <rect x="105" y="151" width="112" height="34" rx="17" fill="#3767a8"/><text class="tag" x="130" y="175">入口</text>
+  <text class="label" x="105" y="225">终端用户</text><text class="body" x="105" y="255">weflow-cli &lt;command&gt;</text>
+  <text class="label" x="460" y="225">MCP 客户端</text><text class="body" x="460" y="255">stdio JSON-RPC</text>
+  <text class="label" x="810" y="225">可选 Bot 通道</text><text class="body" x="810" y="255">官方会话与白名单</text>
+  <text class="label" x="1190" y="225">维护 Agent</text><text class="body" x="1190" y="255">代码、测试与文档</text>
+
+  <line class="arrow" x1="800" y1="280" x2="800" y2="320"/>
+  <rect class="panel" x="80" y="330" width="1440" height="180" fill="#e7f4f0"/>
+  <rect x="105" y="351" width="150" height="34" rx="17" fill="#16866f"/><text class="tag" x="130" y="375">CLI 与服务</text>
+  <text class="body" x="105" y="420">初始化与配置 · sessions / contacts / messages</text>
+  <text class="body" x="105" y="457">export · evidence · favorites · sns · report · todos</text>
+  <text class="body" x="105" y="494">daily / daily-server · vault / wiki / weread · assistant</text>
+  <text class="body" x="850" y="420">路径与权限校验</text>
+  <text class="body" x="850" y="457">隐私过滤 · 白名单 · 发送确认</text>
+  <text class="body" x="850" y="494">日期、来源和 no-ai 开关</text>
+
+  <line class="arrow" x1="800" y1="515" x2="800" y2="555"/>
+  <rect class="panel" x="80" y="565" width="1440" height="180" fill="#fff5df"/>
+  <rect x="105" y="586" width="160" height="34" rx="17" fill="#c47b16"/><text class="tag" x="130" y="610">适配与工作流</text>
+  <text class="body" x="105" y="655">Node：数据库适配 · 配置加密 · 消息通道 · MCP 工具</text>
+  <text class="body" x="105" y="692">Python：NT 数据 · 公众号日报 · HTML 阅读器 · 搜索与报告</text>
+  <text class="body" x="105" y="729">媒体导出：按稳定消息身份匹配，无法确认时保留占位符</text>
+  <text class="body" x="850" y="655">来源类别优先于文章主题分类</text>
+  <text class="body" x="850" y="692">日报无日期时先补齐昨天，再生成今天</text>
+  <text class="body" x="850" y="729">Vault promotion 默认不调用 AI</text>
+
+  <line class="arrow" x1="800" y1="750" x2="800" y2="790"/>
+  <rect class="panel" x="80" y="800" width="680" height="190" fill="#edf1f5"/>
+  <rect x="105" y="821" width="120" height="34" rx="17" fill="#536579"/><text class="tag" x="130" y="845">本地数据</text>
+  <text class="body" x="105" y="885">微信 3.x / 4.x 数据库与媒体缓存</text>
+  <text class="body" x="105" y="920">日报、阅读状态、收藏、Vault 与证据包</text>
+  <text class="body" x="105" y="955">本机配置、加密密钥与助手记忆</text>
+
+  <rect class="panel" x="840" y="800" width="680" height="190" fill="#f1eefa"/>
+  <rect x="865" y="821" width="150" height="34" rx="17" fill="#7654a8"/><text class="tag" x="890" y="845">按需联网</text>
+  <text class="body" x="865" y="885">公众号网页 · 微信读书 API · 官方 Bot</text>
+  <text class="body" x="865" y="920">用户配置的云端 AI 端点</text>
+  <text class="body" x="865" y="955">默认不自动上传聊天数据库或证据包</text>
+
+  <rect x="80" y="1015" width="1440" height="40" rx="20" fill="#14213d"/>
+  <text class="tag" x="510" y="1042">隐私边界：仅处理本人或明确获授权的数据 · 阅读器默认仅监听 127.0.0.1</text>
+</svg>

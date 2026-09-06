@@ -1,6 +1,6 @@
 # Project State
 
-> Last reviewed: 2026-09-05. This is the current maintenance snapshot, not a release note. Keep it factual and update it with meaningful project changes.
+> Last reviewed: 2026-09-06. This is the current maintenance snapshot, not a release note. Keep it factual and update it with meaningful project changes.
 
 ## Purpose
 
@@ -38,6 +38,8 @@ The daily workflow supports `dailyAiEnabled=false` for a persistent no-AI mode, 
 - The assistant denies all senders until `assistantWhitelist` is explicitly configured. Group routing is experimental and remains denied unless the upstream explicitly supplies group metadata, the group and sender are both allowlisted, and the bot is mentioned. New or incomplete configurations use `strict` privacy mode for cloud inference.
 - MCP path inputs are constrained to their expected data roots. MCP clients remain trusted local integrations and must be reviewed before configuration.
 - Public reports and commits must not contain databases, keys, tokens, wxid values, real chat content, or unredacted logs.
+
+Documentation was synchronized with the `1.5.1` source baseline on 2026-09-06. Command behavior is defined by `bin/weflow-cli.ts`; release packages can lag behind the GitHub source until published.
 
 ## Active Constraints
 

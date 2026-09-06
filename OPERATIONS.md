@@ -1,420 +1,188 @@
-# WeFlow CLI 操作手册
+# WeFlow CLI 操作与排障手册
 
-> 本文档帮助用户和 AI 助手快速上手、排查问题，覆盖初始化到日常使用全流程。
+本文面向用户和维护 Agent。所有命令都应在项目目录或已安装 CLI 的终端中执行；示例中的路径、联系人和密钥均为占位符。
 
----
+## 1. 环境
 
-## 一、环境要求
+| 依赖 | 用途 | 检查 |
+| --- | --- | --- |
+| Node.js 18+ | CLI、MCP、构建 | `node --version` |
+| Python 3.10+ | NT 数据、日报、阅读器 | `python --version` |
+| `requirements.txt` | 标准 4.x 工作流 | `python -m pip install -r requirements.txt` |
+| `requirements-3x.txt` | 旧版 3.x 数据，可选 | `python -m pip install -r requirements-3x.txt` |
 
-| 依赖 | 版本/说明 | 检查命令 |
-|------|-----------|----------|
-| Node.js | ≥18 | `node -v` |
-| Python | ≥3.9 | `python --version` |
-| sqlcipher3 | NT 数据库解密 | `python -c "import sqlcipher3"` |
-| pymem | NT 密钥扫描 | `python -c "import pymem"` |
-| 微信 | 4.x（Weixin.exe） | `tasklist \| grep -i weixin` |
+先运行：
 
-```bash
-python -m pip install -r requirements.txt
+```powershell
+weflow-cli check
 ```
 
----
+源码开发使用：
 
-## 二、初始化完整流程
-
-**核心前提**：密钥提取通过 Hook 微信进程完成，**Hook 必须在微信登录之前安装**。
-
-### 方式 A：标准流程（推荐）
-
-```bash
-# 1. 完全退出微信（右下角托盘 → 右键退出）
-# 2. 运行 init，程序会等待微信进程
-weflow-cli init
-
-# 3. 看到 "请现在启动微信 4.x 并登录" 后，启动微信
-# 4. 扫码登录 — Hook 在登录时自动捕获密钥
-# 5. 看到 "密钥获取成功!" 即完成
-```
-
-### 方式 B：微信已在运行
-
-如果微信已登录且不便重新登录，用 `dbkey` 从内存提取：
-
-```bash
-weflow-cli dbkey --timeout 120000
-
-# 保存提取到的密钥
-weflow-cli config set decryptKey <64位密钥>
-```
-
-> **注意**：`dbkey` 提取的是全库 passphrase。老版本微信 NT 库密钥还需内存扫描（见第四节）；较新版本（实测 4.1.12.55）则由 `init` 从 passphrase 自动派生（见第四 A 节）。
-
----
-
-## 三、连接数据库的 4 层优先级
-
-`weflow-cli` 连接 4.x 数据库时，按以下顺序尝试：
-
-| 优先级 | 方案 | 条件 | 状态 |
-|--------|------|------|------|
-| 1 | 预解密 `MSG0_decrypted.db`（纯 SQLite） | 文件已存在 | 通常不存在 |
-| 2 | SQLCipher 解密 `MSG0.db` | 主密钥正确 | 4.x 新版已无此文件 |
-| **3** | **NT 格式** `message_0.db`（Python sqlcipher3） | NT key + salt + Python 依赖 | **✅ 当前主路径** |
-| 4 | WCDB API（降级） | 原生 WCDB 库 | 通常报 `-1006` |
-
-**关键理解**：如果看到 `WCDB 初始化失败: -1006`，说明前 3 个方案全部失败，需检查 NT 密钥配置。
-
----
-
-## 四、NT 密钥扫描（老版本微信）
-
-NT 数据库（`message_0.db`、`contact.db`）有独立的 **key + salt**，和主解密密钥不同：
-
-```bash
-# 前提：微信已登录、Python 已装 sqlcipher3 + pymem
-python scripts/nt_decrypt.py scan --json
-```
-
-输出示例（JSON），找到对应数据库的 key/salt 后保存：
-
-```bash
-# message_0.db（主消息库）
-weflow-cli config set ntKey <message_0的key>
-weflow-cli config set ntSalt <message_0的salt>
-
-# contact.db（联系人库，用于昵称/备注名映射）
-weflow-cli config set contactKey <contact.db的key>
-weflow-cli config set contactSalt <contact.db的salt>
-```
-
----
-
-## 四 A、密钥派生模式（较新微信版本）
-
-较新的微信版本（实测 4.1.12.55；4.1.12.26 仍可内存扫描）进程内存中不再出现 `x'<key><salt>'` 文本，`scan` 会得到空的 `keys`/`matched`——这是版本变更，不是故障。各库密钥改为本地派生：
-
-```
-库密钥 = PBKDF2-HMAC-SHA512(全库 passphrase, 库文件前16字节, 256000轮, 32字节)
-```
-
-**`weflow-cli init` 已内置此逻辑**：DLL hook 拿到 passphrase 后，若内存扫描无结果，自动派生各库密钥并逐库用 sqlcipher 真实打开验证，通过才写入配置（聊天/联系人/朋友圈/收藏一并配置）。
-
-手动路径（适合 init 拿不到 hook 的场景）：
-
-```bash
-# 1. 用第三方工具拿到 64 位 hex 的全库 passphrase
-# 2. 写入配置
-weflow-cli fav set-key --passphrase <64位hex>
-# 3. 重新 init 自动派生（Linux/macOS 同样适用）
-weflow-cli init
-```
-
-验证单个密钥是否正确（init 内部也用这个）：
-
-```bash
-python scripts/nt_decrypt.py verify --db <库路径> --key <64位hex> --salt <32位hex>
-# {"success": true, "tables": 122}  密钥正确
-# {"success": false, "error": "file is not a database"}  密钥错误
-```
-
----
-
-## 五、常见错误速查
-
-| 错误信息 | 根因 | 解决方案 |
-|----------|------|----------|
-| `WCDB 初始化失败: -1006` | 方案 1-3 都失败，WCDB 不可用 | 检查/重新扫描 NT 密钥（第四节）；新版微信见第四 A 节 |
-| `scan` 输出的 `keys`/`matched` 为空 | 较新微信版本内存中无密钥文本 | 正常现象，`init` 会走派生模式（第四 A 节） |
-| 派生密钥验证失败 `file is not a database` | passphrase 不属于该账号 | 确认微信已登录目标账号后重新 `init` |
-| `未找到会话` / `未找到联系人` | 数据库连接失败 | `config show` 检查密钥状态 |
-| `获取密钥超时` | init 时微信已登录，Hook 装不上 | 用 `dbkey` 代替 init（方式 B） |
-| `需要 sqlcipher3` | Python 缺依赖 | `python -m pip install -r requirements.txt` |
-| `Weixin.exe 未运行` | pymem 未装或微信没启动 | 安装 `requirements.txt` 后确认微信在运行 |
-| `Python not found` | PATH 中没有 python | 安装 Python 并添加到 PATH |
-
----
-
-## 六、Python 环境避坑
-
-NT 方案通过 Node.js 调用 Python 脚本（`execFile('python', ...)`），使用系统默认 `python` 命令。
-
-**常见问题**：系统有多个 Python/venv，默认 `python` 指向的 venv 没有安装依赖。
-
-```bash
-# 诊断：找到 python 的实际位置
-which python
-
-# 诊断：检查依赖
-python -c "import sqlcipher3, pymem; print('OK')"
-
-# 在当前 Python 环境安装统一依赖
-python -m pip install -r requirements.txt
-```
-
----
-
-## 七、密钥过期处理
-
-微信版本更新后（或切换账号），密钥会失效，表现为所有查询返回空。
-
-```bash
-# 完整重新初始化
-weflow-cli config show                 # 1. 查看当前状态
-
-# 2. 完全退出微信 → weflow-cli init → 重新登录（捕获主密钥）
-
-python scripts/nt_decrypt.py scan --json  # 3. 扫描 NT 密钥
-weflow-cli config set ntKey <key>         # 4. 保存 NT key/salt
-weflow-cli config set ntSalt <salt>
-weflow-cli config set contactKey <key>    # 5. 保存 contact key/salt
-weflow-cli config set contactSalt <salt>
-
-weflow-cli contacts -k <已知联系人>        # 6. 验证
-weflow-cli messages <联系人> -n 5
-```
-
----
-
-## 八、AI 助手排查清单
-
-按顺序执行以下 6 步即可定位绝大多数问题：
-
-```bash
-# Step 1: 项目构建
+```powershell
+npm install
 npm run build
+npm run dev -- check
+```
 
-# Step 2: 查看当前配置（密钥是否已填）
+## 2. 初始化与已有配置
+
+首次使用：
+
+```powershell
+weflow-cli init
+```
+
+初始化会发现常见数据位置、识别账号目录并验证本地数据库访问。默认优先复用已验证配置；配置有效时不会重复初始化。迁移、切换账号或访问失败时显式刷新：
+
+```powershell
+weflow-cli init --refresh
+```
+
+数据目录不在常见位置时按成本递增尝试：
+
+```powershell
+weflow-cli init --path "D:\WeChatData"
+weflow-cli init --search-drives
+weflow-cli init --full-scan
+```
+
+`--path` 可以指向微信数据根目录、账号目录或其 `db_storage` 目录。全盘结构搜索可能耗时较长，且会枚举更多本地目录，只有前两种方式找不到时再使用。
+
+测试“密钥缺失但不破坏当前配置”的首次初始化流程：
+
+```powershell
+weflow-cli init --test-missing-keys
+```
+
+确认密钥确实需要重新获取时，才使用：
+
+```powershell
+weflow-cli config forget-keys --yes
+weflow-cli init --refresh
+```
+
+## 3. 数据读取验证
+
+```powershell
 weflow-cli config show
-
-# Step 3: 微信是否在运行（dbkey / NT 扫描需要）
-tasklist | grep -i weixin    # Windows
-
-# Step 4: Python 依赖
-python -c "import sqlcipher3, pymem; print('OK')"
-
-# Step 5: NT 数据库能否解密（直接用 Python 测试）
-python scripts/nt_decrypt.py sessions \
-  --db "<NT数据库路径>" \
-  --key "<ntKey>" --salt "<ntSalt>"
-# 成功 → 返回 JSON 会话列表
-
-# Step 6: CLI 最终验证
-weflow-cli sessions
-weflow-cli contacts -k <部分昵称>
+weflow-cli sessions -n 10
+weflow-cli contacts -k "关键词"
+weflow-cli messages "联系人A" -n 10
 ```
 
----
+看到 `WCDB 初始化失败: -1006` 时，先不要反复登录或删除全部配置。先运行 `check`，确认 Python、数据路径和 NT 数据库状态；然后检查 `config show` 是否只显示“已设置”，不要把密钥复制到 Issue 或日志中。若配置失效，再按第二节执行 `init --refresh`。
 
-## 九、每日使用
+## 4. 导出聊天记录
 
-```bash
-# 查看所有会话
-weflow-cli sessions
-
-# 搜索联系人
-weflow-cli contacts -k <关键词>
-
-# 查看最近消息
-weflow-cli messages <联系人或群名> -n 50
-
-# 导出聊天记录
-weflow-cli export <联系人> html
-weflow-cli export <联系人> json
-
-# 生成月报
-weflow-cli report --month 2026-05 --talker <联系人>
-
-# 初始化 Obsidian Vault
-weflow-cli vault init
-
-# 公众号日报
-python scripts/biz_daily.py --api-key <DeepSeek-key>
-python scripts/classify_daily.py --api-key <DeepSeek-key> --interest AI
+```powershell
+weflow-cli export "联系人A" html --output ./output
+weflow-cli export "联系人A" json --output ./output
 ```
 
----
+支持 `json`、`txt`、`md`、`html` 和 `excel`。HTML 导出会尽力匹配本地图片、表情、公众号卡片和其他媒体；匹配不到时应显示类型或占位信息，不应从其他会话猜图。跨分片数据尤其要保留原始导出和完整上下文，导出后请人工抽查发送者、时间和媒体对应关系。
 
-## 十、用户自定义脚本
+## 5. 公众号日报与阅读器
 
-`scripts/user/` 目录可供用户存放自定义脚本（如查询特定联系人的对话），该目录已加入 `.gitignore`，不会被提交。
+生成今天的日报：
 
-```bash
-# 示例：创建自己的查询脚本
-cat > scripts/user/my_query.py << 'EOF'
-# 你的自定义查询逻辑
-import subprocess, json, sys
-# ...
-EOF
-
-python scripts/user/my_query.py
+```powershell
+weflow-cli daily
 ```
 
----
+关闭本次运行的全部 AI：
 
-## 十一、Obsidian Vault 集成
-
-### 初始化 Vault
-
-```bash
-weflow-cli vault init                    # 默认 output/wechat-vault/
-weflow-cli vault init --path ~/my-vault  # 自定义路径
+```powershell
+weflow-cli daily --no-ai
 ```
 
-生成的结构：
-```
-wechat-vault/
-├── .obsidian/app.json       # Obsidian 基础配置
-├── .gitignore
-├── README.md                # Vault 总索引（含 Dataview 查询示例）
-├── Templates/article.md     # 文章模板
-├── Sources/WeChat/          # 公众号文章（按日期+主题）
-├── Wiki/Concepts/           # AI 生成的概念页
-├── Wiki/Entities/           # 实体页（公众号、作者）
-└── Wiki/Topics/             # 主题总览页
+无日期运行会先补齐昨天的不完整产物；指定日期只处理该日期：
+
+```powershell
+weflow-cli daily --date YYYY-MM-DD --no-ai
 ```
 
-### 在 Obsidian 中打开
+只处理指定来源：
 
-1. 安装 [Obsidian](https://obsidian.md/)
-2. `File → Open Vault` → 选择 `output/wechat-vault/` 目录
-3. 安装推荐插件：**Dataview**（表格查询）、**Graph View**（知识图谱）
-
-### 日常工作流
-
-```bash
-# 1. 生成日报（文章自动带 Frontmatter + Wiki Links）
-python scripts/biz_daily.py --api-key <key>
-
-# 2. 后处理（广告清洗 + AI 深度摘要 + 更新 Frontmatter）
-python scripts/classify_daily.py --api-key <key> --interest AI
-
-# 3. 复制到 Vault
-cp -r output/biz-daily/YYYY-MM-DD/* output/wechat-vault/Sources/WeChat/YYYY-MM-DD/
+```powershell
+weflow-cli daily --source "公众号A" --source "公众号B"
+weflow-cli daily --source "公众号A,公众号B"
 ```
 
-### Dataview 查询示例
+仅预览来源文章，不写日报、不调用 AI：
 
-```dataview
-TABLE date, topic, tags
-FROM "Sources/WeChat"
-WHERE topic = "AI"
-SORT date DESC
+```powershell
+weflow-cli daily --dry-run
 ```
 
-### Frontmatter 格式
+持久化来源和 AI 设置：
 
-每篇文章自动带 YAML 元数据：
-
-```yaml
----
-title: "文章标题"
-source: "公众号名称"
-date: 2026-05-15
-topic: AI
-tags: [AI, Agent, 开源]
-url: "https://mp.weixin.qq.com/s/xxx"
-created: 2026-05-15
----
+```powershell
+weflow-cli config set dailySources "公众号A,公众号B"
+weflow-cli config set dailyAiEnabled false
+weflow-cli config set dailyAiEnabled true
+weflow-cli config show
 ```
 
-文末自动生成 `[[Wiki Links]]` 概念链接，可在 Graph View 中作为节点展示。
+来源类别配置使用 JSON；值可以是公众号名称或稳定来源 ID：
 
----
-
-## 十二、概念图谱编译
-
-将 Phase 1 生成的 `[[Wiki Links]]` 编译为 Wiki 概念页，在 Obsidian Graph View 中形成真正的知识节点。
-
-```bash
-# 扫描所有文章 wikilinks → 聚合 → AI 生成概念页
-weflow-cli wiki compile --limit 20 --api-key <key>
-
-# 或直接调用 Python
-python scripts/compile_wiki.py --api-key <key> --limit 20 \
-  --source output/biz-daily \
-  --output output/wechat-vault/Wiki/Concepts
+```powershell
+weflow-cli config set dailySourceCategories '{"公众号A":"新闻","公众号B":"政治"}'
 ```
 
-生成的每个概念页包含：
-- **定义** — 1-2 句话精确定义
-- **关键要点** — 3 条简洁摘要
-- **相关概念** — `[[wikilinks]]` 到其他概念
-- **来源** — 引用该概念的所有文章
+启动指定日期阅读器：
 
-```bash
-# 查看概念索引
-cat output/wechat-vault/Wiki/00-Overview.md
+```powershell
+weflow-cli daily-server --date YYYY-MM-DD --open
 ```
 
----
+默认地址为 `http://127.0.0.1:8765/`。阅读器是本地服务，已生成的日报可离线阅读；文章正文、封面或图片的抓取可能需要联网。
 
-## 十三、端到端流水线
+查看来源阅读频率：
 
-```bash
-# 一键跑完 biz_daily → classify → wiki compile
-weflow-cli pipeline run --api-key <key> [--date 2026-05-15]
-
-# 或直接 Python
-python scripts/pipeline.py --api-key <key> --interest AI --wiki-limit 20
+```powershell
+weflow-cli daily-stats --days 30 --limit 30
 ```
 
-## 十四、AI 日报生成
+## 6. AI 和助手
 
-```bash
-# 基于今日文章生成学习日报
-python scripts/generate_review.py --api-key <key> [--date 2026-05-15]
+日报关闭 AI 不会自动关闭其他命令的 AI。报告、RAG、助手和证据线索分析分别按命令参数和配置决定是否调用模型。云端分析前应确认输入范围、供应商和隐私设置；优先使用本地模型处理聊天正文。
 
-# 输出: output/reviews/Daily/Daily-YYYY-MM-DD.md
-```
+助手基础配置：
 
-## 十五、GitHub 自动同步
-
-```bash
-# 设置远端仓库
-weflow-cli config set vaultRepo git@github.com:user/wechat-knowledge.git
-
-# 增量同步
-weflow-cli vault sync
-# 或指定: weflow-cli vault sync --repo <url> --branch main
-```
-
-## 十六、多 AI 引擎切换
-
-```bash
-# 切换到 Claude
-weflow-cli config set aiEngine claude
-
-# 切换到本地 Ollama
+```powershell
 weflow-cli config set aiEngine ollama
-
-# Python 脚本也支持：
-python scripts/biz_daily.py --api-key <key> --engine claude
+weflow-cli login-wechat
+weflow-cli assistant start
+weflow-cli assistant status
 ```
 
----
+助手默认拒绝所有发送者，需明确设置 `assistantWhitelist`。群聊还需要群白名单、成员白名单和 @ 门槛；项目不通过客户端自动化或非官方协议拉群。
 
-## 附录
+## 7. 常见问题
 
-### 关键路径
+| 现象 | 处理 |
+| --- | --- |
+| 找不到数据目录 | 先 `init --path`，再 `--search-drives`，最后 `--full-scan`。 |
+| `Python not found` | 安装 Python 并确保当前 PowerShell 能执行 `python --version`。 |
+| 缺少 `sqlcipher3` 等依赖 | 用同一个 Python 执行 `python -m pip install -r requirements.txt`，再 `weflow-cli check`。 |
+| `WCDB ... -1006` | 检查 NT 配置和数据库路径，不要只看 WCDB 降级信息；必要时刷新初始化。 |
+| 日报缺昨天 | 无日期运行 `daily` 会检查并补齐昨天；补齐失败会停止今天，不覆盖失败状态。 |
+| `daily --dry-run` 不识别 | 确认使用的是当前源码或最新发布包；当前源码支持该参数，旧 npm 包可能落后。 |
+| 阅读器打不开 | 使用 `daily-server --date YYYY-MM-DD --open`，不要直接双击 `file://` 页面。 |
+| 图片或表情串错 | 保留原始数据库和导出日志，反馈脱敏后的消息类型、版本和最小复现；不要提交真实媒体。 |
 
-| 数据 | 路径 |
-|------|------|
-| 配置 | `~/.weflow-cli/config.json` |
-| 4.x 数据 | `C:\Users\<用户名>\xwechat_files` |
-| NT 消息库 | `<xwechat>\<wxid>\db_storage\message\message_0.db` |
-| NT 联系人库 | `<xwechat>\<wxid>\db_storage\contact\contact.db` |
-| 3.x 消息库 | `Documents\WeChat Files\<wxid>\Msg\Multi\MSG0.db` |
-| 公众号库 | `<xwechat>\<wxid>\db_storage\message\biz_message_0.db` |
+## 8. 安全排查原则
 
-### 密钥安全
+不要在 Issue、PR、截图或共享日志中包含数据库、密钥、token、账号 ID、聊天正文或完整本地路径。公开报告只需操作系统、Node/Python 版本、微信版本、命令和脱敏错误。安全漏洞按 `SECURITY.md` 私下报告。
 
-- 密钥用 `机器名+用户名` PBKDF2 派生，AES-256-GCM 加密存储
-- 绑定单机，其他电脑无法解密
-- 配置中 `lock:` 前缀表示已加密字段
+## 9. 维护验证
 
-### 限制 & 注意
+```powershell
+npm run build
+npm test
+python -m unittest discover -s test -p '*_test.py' -v
+git diff --check
+```
 
-- NT 图片：HTML 导出中图片来自缩略图缓存 + 公众号封面图远程下载；公众号文章通过 `data-src` 懒加载提取，图片覆盖率显著提升
-- DeepSeek V4：推理模型需 `max_tokens ≥ 500`（含 reasoning_tokens），否则输出为空
-- 公众号抓取：8-12s 随机间隔，防止触发 WAF
-- 消息收发：ilink API 是实验性功能，需要扫码登录
+测试优先使用合成数据。涉及真实账号时只做最小范围读取，并在完成后关闭本地服务和清理临时导出。

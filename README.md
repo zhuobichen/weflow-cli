@@ -13,8 +13,8 @@
 [![npm](https://img.shields.io/npm/v/weflow-cli)](https://www.npmjs.com/package/weflow-cli)
 [![Node.js](https://img.shields.io/badge/Node.js-18%2B-339933)](https://nodejs.org/)
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB)](https://www.python.org/)
-[![WeChat](https://img.shields.io/badge/WeChat-4.1.12.26%20verified-07C160?logo=wechat&logoColor=white)](https://github.com/zhuobichen/weflow-cli/releases)
-[![Local-first](https://img.shields.io/badge/100%25_local-zero%20telemetry-8A2BE2)](./SECURITY.md)
+[![WeChat](https://img.shields.io/badge/WeChat-4.x%20tested-07C160?logo=wechat&logoColor=white)](https://github.com/zhuobichen/weflow-cli/releases)
+[![Local-first](https://img.shields.io/badge/local--first-zero%20telemetry-8A2BE2)](./SECURITY.md)
 [![License](https://img.shields.io/badge/License-MIT-f4b400)](./LICENSE)
 
 </div>
@@ -65,12 +65,12 @@ weflow-cli mcp-config                  # 一键接入 Claude Code 等 MCP 客户
 | 能力 | Windows | macOS | Linux |
 | --- | --- | --- | --- |
 | 数据目录自动发现 | ✅ | ✅ | ✅ |
-| 本地数据初始化 | ✅ 自动获取 | ❌ 需手动提供 | ✅ 内存扫描（需 root/CAP_SYS_PTRACE） |
+| 本地数据初始化 | ✅ 自动发现/验证 | ❌ 需手动提供凭据 | ⚠️ 取决于发行版与权限 |
 | 聊天记录查询（NT / 本地数据库） | ✅ | ✅ | ✅ |
 | WCDB 数据服务（联系人昵称等） | ✅ | ⚠️ 依赖原生库 | ⚠️ 依赖原生库 |
 | 公众号日报 / 知识库 / MCP | ✅ | ✅ | ✅ |
 
-macOS：当前不提供自动初始化；如你已通过官方或其他经授权的方式取得本地数据访问凭据，可执行 `weflow-cli config set decryptKey <密钥>` 完成初始化。
+macOS：当前不提供自动初始化；如你已通过官方或其他经授权的方式取得本地数据访问凭据，请按 `weflow-cli init --path` 和 `config` 的帮助完成配置。
 
 ### Linux 快速上手（微信 4.x Linux 原生版）
 
@@ -83,20 +83,10 @@ pip3 install --user sqlcipher3 cryptography html2text zstandard
 
 # 3. 安装 CLI 并初始化
 npm install -g weflow-cli
-weflow-cli init    # 需微信已登录；内存扫描要求 root 或授权 python3
+weflow-cli init    # 按提示完成本地初始化
 ```
 
-`weflow-cli init` 在 Linux 上通过扫描微信进程内存提取 NT 密钥。受 `ptrace_scope` 限制，需满足其一：
-
-```bash
-# 方案 A：授权 python3 读取进程内存（推荐，免 root 运行 CLI）
-sudo setcap cap_sys_ptrace=ep $(readlink -f $(which python3))
-
-# 方案 B：直接以 root 运行
-sudo weflow-cli init
-```
-
-无 root 权限安装 sqlcipher：下载 `libsqlcipher-dev` 与 `libsqlcipher0` deb 包，`dpkg -x` 解包到用户目录后，`CFLAGS=-I<解包目录>/usr/include LDFLAGS=-L<解包目录>/usr/lib/x86_64-linux-gnu pip3 install --user sqlcipher3`。
+Linux 的自动初始化能力取决于微信发行版、Python 依赖和当前用户权限；请先运行 `weflow-cli check`，按系统安全策略配置，不要为了排障降低整机权限。
 
 ## 你可以做什么
 
@@ -105,7 +95,7 @@ sudo weflow-cli init
 | 聊天记录 | 查询会话、联系人和消息；导出 JSON、TXT、Markdown、HTML、Excel。 |
 | 公众号日报 | 抓取文章、AI 摘要与分类、生成本地阅读页，保留收藏和已读状态。 |
 | 个人知识库 | 同步微信读书笔记、构建 Obsidian Vault、语义搜索、RAG 问答和概念 Wiki。 |
-| AI 协作 | 通过 MCP（22 个工具）把文章抓取、知识库、日报与本地聊天数据（会话/收藏/朋友圈/待办）全部交给 Claude Code 等客户端——与微信 bot 共享同一工具层。 |
+| AI 协作 | 通过 MCP 把文章、知识库、日报和受控的本地数据能力交给兼容客户端；工具清单以 `weflow-cli mcp-config` 和 `docs/MCP.md` 为准。 |
 | 个人回顾 | 聊天月报、年度报告、待办提取与朋友圈本地缓存查询。 |
 | 微信收藏 | 读取微信"收藏"内容（公众号文章、文字、图片、视频、聊天记录），支持类型过滤、关键词搜索与 Markdown/JSON 导出。 |
 | 第二大脑 Agent | 在微信里和本地 AI 助手对话：自然语言查询聊天记录、收藏、朋友圈、日报、微信读书、待办与知识库；三层记忆跨会话延续，守护进程常驻后台。 |
@@ -205,7 +195,7 @@ weflow-cli mcp-config > .mcp.json
 
 将生成的配置放到所用 MCP 客户端的配置位置后重启客户端即可。MCP 的工具列表与配置方式见 `weflow-cli mcp-config` 输出。
 
-除知识库类工具外，MCP 同样暴露完整的本地微信数据能力（会话、聊天记录、收藏正文、朋友圈、日报、微信读书、待办、知识库与助手记忆），共 22 个工具——与微信 bot 共享同一工具层和长期记忆，两边能力完全一致。工具明细与安全边界见 [MCP 集成指南](./docs/MCP.md)。
+除知识库类工具外，MCP 也暴露受控的本地微信数据能力（会话、聊天记录、收藏、朋友圈、日报、微信读书、待办、知识库与助手记忆）。工具清单以当前代码和 [MCP 集成指南](./docs/MCP.md) 为准，不固定写死数量。
 
 **在微信里挂一个本地 AI 助手（第二大脑）**
 
@@ -296,7 +286,7 @@ python scripts/fav_server.py --date YYYY-MM-DD
 
 ## 架构
 
-![WeFlow CLI architecture](./docs/images/weflow-architecture.png)
+![WeFlow CLI architecture](./docs/images/weflow-architecture.svg)
 
 项目分为四个边界清晰的部分：
 

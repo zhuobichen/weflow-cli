@@ -13,8 +13,8 @@
 [![npm](https://img.shields.io/npm/v/weflow-cli)](https://www.npmjs.com/package/weflow-cli)
 [![Node.js](https://img.shields.io/badge/Node.js-18%2B-339933)](https://nodejs.org/)
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB)](https://www.python.org/)
-[![WeChat](https://img.shields.io/badge/WeChat-4.1.12.26%20verified-07C160?logo=wechat&logoColor=white)](https://github.com/zhuobichen/weflow-cli/releases)
-[![Local-first](https://img.shields.io/badge/100%25_local-zero%20telemetry-8A2BE2)](./SECURITY.md)
+[![WeChat](https://img.shields.io/badge/WeChat-4.x%20tested-07C160?logo=wechat&logoColor=white)](https://github.com/zhuobichen/weflow-cli/releases)
+[![Local-first](https://img.shields.io/badge/local--first-zero%20telemetry-8A2BE2)](./SECURITY.md)
 [![License](https://img.shields.io/badge/License-MIT-f4b400)](./LICENSE)
 
 </div>
@@ -67,7 +67,7 @@ weflow-cli mcp-config                  # one-shot MCP client integration
 | Chat history | Query sessions, contacts, and messages; export to JSON, TXT, Markdown, HTML, Excel. |
 | Official-account digest | Crawl articles, AI summarization and classification, generate a local reading page, keep favorites and read states. |
 | Personal knowledge base | Sync WeRead notes, build an Obsidian vault, semantic search, RAG Q&A, and a concept wiki. |
-| AI collaboration | Expose article crawling, knowledge-base retrieval, digests, and local chat data (sessions/favorites/Moments/todos) to MCP-compatible clients — 22 tools sharing the same layer as the WeChat bot. |
+| AI collaboration | Expose article crawling, knowledge-base retrieval, digests, and selected local-data tools to MCP-compatible clients. The inventory follows the current code and `docs/MCP.md`. |
 | Personal review | Monthly chat reports, annual reports, todo extraction, and local Moments cache queries. |
 | WeChat favorites | Read WeChat "Favorites" (official-account articles, text, images, videos, chat records) with type filters, keyword search, and Markdown/JSON export. |
 | Second-brain agent | Chat with a local AI assistant inside WeChat: natural-language queries over chats, favorites, Moments, digests, WeRead, todos, and the knowledge base; three-tier memory across sessions, daemonized background service. |
@@ -148,7 +148,7 @@ weflow-cli mcp-config > .mcp.json
 
 Place the generated configuration wherever your MCP client expects it and restart the client. See `weflow-cli mcp-config` output for the tool list and configuration details.
 
-Beyond the knowledge-base tools, the MCP server also exposes the full local WeChat data layer (sessions, chat history, favorite-article bodies, Moments, digests, WeRead, todos, knowledge base, and assistant memory) — 22 tools in total, sharing the same tool layer and long-term memory as the WeChat bot. See the [MCP Integration Guide](./docs/MCP.md) for the tool inventory and security boundaries.
+Beyond the knowledge-base tools, the MCP server also exposes selected local WeChat data capabilities (sessions, chat history, favorites, Moments, digests, WeRead, todos, knowledge base, and assistant memory). See the [MCP Integration Guide](./docs/MCP.md) for the current inventory and security boundaries.
 
 **Host a local AI assistant in WeChat (second brain)**
 
@@ -230,7 +230,7 @@ python scripts/fav_server.py --date YYYY-MM-DD
 
 ## Architecture
 
-![WeFlow CLI architecture](./docs/images/weflow-architecture.png)
+![WeFlow CLI architecture](./docs/images/weflow-architecture.svg)
 
 The project is split into four clearly bounded parts:
 

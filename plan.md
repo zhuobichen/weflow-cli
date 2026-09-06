@@ -1,93 +1,35 @@
-# WeFlow CLI 开发计划
+# WeFlow CLI 当前路线
 
-## 当前状态
+> 本文件是维护路线，不是历史实现计划。当前事实以 `docs/PROJECT_STATE.md` 和代码为准。
 
-版本 v1.1.0，核心功能完备。支持 npm 全局安装，一行命令解密/查询/导出微信聊天记录，自动抓取公众号文章并 AI 分类整理。
+## 已完成基线
 
-### 已完成 (v1.1.0)
+- CLI、源码构建、npm 入口和 stdio MCP Server 已建立。
+- Windows 微信 4.x NT 数据查询、会话/联系人/消息读取和多格式导出可用。
+- 自定义数据目录采用显式路径、跨磁盘搜索、深度结构搜索的分阶段发现。
+- 日报支持来源筛选、来源类别优先、昨天缺失产物补齐和 `--no-ai`。
+- 阅读器、收藏同步、Vault、WeRead、报告、待办和可选助手已接入。
+- HTML 媒体匹配已优先使用稳定消息身份，无法可靠匹配时不猜测其他资源。
+- 密钥、路径、助手白名单和云端 AI 的隐私边界已写入公开文档。
 
-- [x] 4.x NT 格式数据库解密 + 3.x SQLCipher 解密，连接优先级：预解密 → PBKDF2 → NT → WCDB
-- [x] 微信进程内存密钥扫描，密钥 AES-256-GCM 加密绑定单机
-- [x] 多格式导出：JSON / TXT / Markdown / HTML / Excel
-- [x] HTML 导出：微信风格气泡 + 图片 base64 内嵌 + 发送人昵称 + 全文搜索
-- [x] HTML 单文件导出，文件名使用备注名
-- [x] contact.db 昵称/备注名映射，sessions/contacts/messages 替换 wxid
-- [x] CLI 兼容昵称、备注名、序号
-- [x] 公众号日报：biz_daily.py 抓取全文 + DeepSeek V4 摘要与分类
-- [x] 后处理管线：classify_daily.py 广告清洗 + 兴趣深度摘要 + AI/学术/新闻/文学分文件夹
-- [x] npm 全局安装支持：`npm install -g weflow-cli` → `weflow-cli <command>`
-- [x] 聊天月报：chat_report.py 三阶段（采集→AI任务识别→Markdown），支持 --talker 多选
-- [x] 公共工具模块 scripts/_utils.py
-- [x] export 命令内置 Python HTML 导出
-- [x] sns.db 朋友圈数据库扫描
-- [x] 微信消息 bridge（实验性，ilink API）
-- [x] README 对齐 qchat-cli 风格 + 苏轼诗句 + 架构图
-- [x] 隐私修复：git filter-repo 清理敏感文件历史
+## 下一步优先级
 
-### 运行命令
+1. 收集不同微信 4.x 版本的脱敏验证结果，保持初始化和分片数据库读取稳定。
+2. 继续覆盖真实格式的图片、表情、卡片导出，但必须使用合成夹具或脱敏样本。
+3. 保持日报来源配置、无 AI 模式和阅读器日期切换行为一致。
+4. 加强 MCP 输入路径、助手路由和发送确认的回归测试。
+5. 评估外部项目合作时，仅提供只读、最小化、可审计的接口。
 
-```bash
-# 安装
-npm install -g weflow-cli
+## 每次改动的交接步骤
 
-# 初始化
-weflow-cli init
+1. 阅读 `AGENTS.md`、`docs/PROJECT_STATE.md` 和 `docs/DECISIONS.md`。
+2. 对照 `bin/weflow-cli.ts`、相关 service/script 和现有测试确认行为。
+3. 修改代码后更新对应文档；安全、兼容性或数据流取舍追加决策记录。
+4. 运行 `npm run build`、`npm test`、相关 Python 测试和 `git diff --check`。
+5. 检查 diff 不含数据库、密钥、token、账号标识、聊天内容或本机私密路径。
 
-# 查看会话 / 消息
-weflow-cli sessions
-weflow-cli messages 联系人A -n 20
+## 暂不承诺
 
-# 导出 HTML（单文件，含图片+搜索+昵称）
-weflow-cli export 联系人A html
-
-# 公众号日报 + AI 分类
-python scripts/biz_daily.py --api-key <key>
-python scripts/classify_daily.py --api-key <key> --interest AI
-```
-
----
-
-## 未来考虑
-
-收到用户反馈后再做：
-
-- Electron 入口错误提示友好化
-- HTML 时间线导航（按日期折叠）
-- init 进度条
-
----
-
-## 技术备忘
-
-### 关键路径
-
-| 版本 | 数据库路径 | 加密方式 |
-|------|-----------|---------|
-| 3.x | `Documents\WeChat Files\<wxid>\Msg\Multi\MSG0.db` | SQLCipher 3, PBKDF2-HMAC-SHA1 |
-| 4.x | `xwechat_files\<wxid>\db_storage\message\message_0.db` | SQLCipher 4, hex密钥+盐 |
-
-### 密钥安全
-
-- 配置：`~/.weflow-cli/config.json`，敏感字段 `lock:` 前缀 AES-256-GCM 加密
-- 密钥由 `机器名+用户名` PBKDF2 派生，绑定单机
-
-### NT 图片限制
-
-- `.dat` 文件（`msg/attach/<md5>/YYYY-MM/Img/`）是微信专有加密格式，无法离线破解
-- 从 `cache/YYYY-MM/Message/<md5>/Thumb/` 提取 JPG 缩略图，按 `local_id` 匹配
-- 覆盖率 ~15%（仅最近两个月），翻看旧聊天可生成更多缓存
-
-### 发送人识别
-
-- `real_sender_id` → `Name2Id` → `contact.db` 三重映射
-
-### DeepSeek V4 注意
-
-- 推理模型需 `max_tokens ≥ 500`（含 reasoning_tokens），否则输出为空
-- 分类 prompt 需简短，避免过多 examples 触发长推理
-
-### 隐私安全规则
-
-- 文档中的示例命令**必须使用占位符**（联系人A、示例群等），禁止真实人名/群名
-- `wxid_` 格式仅允许代码逻辑（如 `startswith('wxid_')`），不允许硬编码真实值
-- 提交前运行: `git diff --staged | grep -E "sk-[a-z0-9]{30,}|wxid_[a-z0-9]{10,}|备注名"` 检查泄露
+- 不承诺兼容所有微信版本、所有数据库变体或所有媒体格式。
+- 不实现个人微信账号的远程静默操控、普通群聊自动入群或非官方协议绕过。
+- 不把 AI 摘要、证据线索或图片识别结果当成法律结论或原始证据。

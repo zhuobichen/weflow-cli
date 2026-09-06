@@ -1,6 +1,6 @@
 # MCP Integration
 
-WeFlow CLI exposes local article and knowledge-base functions through an MCP server over stdio. The server reads the project's local `output/` directory and only contacts external services when a requested tool requires it.
+WeFlow CLI exposes article, knowledge-base, and selected local-data functions through an MCP server over stdio. The server reads the project's local `output/` directory and only contacts external services when a requested tool requires it. The available inventory follows `mcp-server/index.ts`; do not hard-code a tool count in client documentation.
 
 ## Configure a client
 
@@ -53,7 +53,7 @@ Copy this entry into your MCP client's configuration and ensure `cwd` points to 
 | `wechat.search_memory` | Search long-term assistant memory. | `~/.weflow-cli/assistant_memory.json` |
 | `wechat.save_memory` | Save a durable fact into long-term memory. | `~/.weflow-cli/assistant_memory.json` |
 
-The chat-data tools (`list_sessions` through `save_memory`) share the same tool layer as the `weflow-cli assistant` WeChat bot, so the bot and MCP clients see identical capabilities and memory.
+The chat-data tools share service code with the optional `weflow-cli assistant` WeChat bot, but access is still controlled by the MCP client's permissions and local configuration. The bot and MCP transport are not interchangeable message channels.
 
 ## Safety boundary
 

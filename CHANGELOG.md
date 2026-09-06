@@ -4,6 +4,12 @@ All notable user-facing changes are recorded here. This project follows [Semanti
 
 ## Unreleased
 
+### Documentation
+
+- Synchronized setup, operations, architecture, security, MCP, and maintenance guidance with the current `1.5.1` source baseline.
+- Clarified source-versus-npm version drift, no-AI daily runs, staged data-directory discovery, media-export limitations, and local-data privacy boundaries.
+- Replaced the outdated architecture image with a maintainable diagram covering current CLI, MCP, service, workflow, data, and privacy boundaries.
+
 ### Fixed
 
 - Decode locally cached WeChat 4.x V2 image containers during HTML chat export by deriving and validating the account-specific media key from local `kvcomm` data.
