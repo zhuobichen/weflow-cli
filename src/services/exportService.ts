@@ -12,9 +12,9 @@ const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
 
 export class ExportService {
-  async exportJson(talker: string, outputDir: string, limit = 0): Promise<{ success: boolean; path?: string; error?: string }> {
+  async exportJson(talker: string, outputDir: string, limit = 0, from?: number, to?: number): Promise<{ success: boolean; path?: string; error?: string }> {
     try {
-      const messages = await chatService.getMessages(talker, limit)
+      const messages = this.filterByTime(await chatService.getMessages(talker, limit), from, to)
       if (messages.length === 0) {
         return { success: false, error: '未找到消息' }
       }
@@ -28,9 +28,9 @@ export class ExportService {
     }
   }
 
-  async exportTxt(talker: string, outputDir: string, limit = 0): Promise<{ success: boolean; path?: string; error?: string }> {
+  async exportTxt(talker: string, outputDir: string, limit = 0, from?: number, to?: number): Promise<{ success: boolean; path?: string; error?: string }> {
     try {
-      const messages = await chatService.getMessages(talker, limit)
+      const messages = this.filterByTime(await chatService.getMessages(talker, limit), from, to)
       if (messages.length === 0) {
         return { success: false, error: '未找到消息' }
       }
@@ -51,8 +51,11 @@ export class ExportService {
     }
   }
 
-  async exportHtml(talker: string, outputDir: string, limit = 0): Promise<{ success: boolean; path?: string; error?: string }> {
+  async exportHtml(talker: string, outputDir: string, limit = 0, from?: number, to?: number): Promise<{ success: boolean; path?: string; error?: string }> {
     try {
+      if (from !== undefined || to !== undefined) {
+        return this.exportHtmlBasic(talker, outputDir, limit, from, to)
+      }
       // Use Python export_chat_html.py for rich HTML with images
       const cfg = configService.getAll()
       const db = cfg.ntDbPath
@@ -61,7 +64,7 @@ export class ExportService {
 
       if (!db || !key || !salt) {
         // Fallback: basic HTML
-        return this.exportHtmlBasic(talker, outputDir, limit)
+        return this.exportHtmlBasic(talker, outputDir, limit, from, to)
       }
 
       // Resolve Python script path (dist/src/services → package root)
@@ -121,12 +124,12 @@ export class ExportService {
     } catch (e: any) {
       console.error(`  Python export failed: ${e.message}`)
       // Fallback to basic HTML
-      return this.exportHtmlBasic(talker, outputDir, limit)
+      return this.exportHtmlBasic(talker, outputDir, limit, from, to)
     }
   }
 
-  private async exportHtmlBasic(talker: string, outputDir: string, limit = 0): Promise<{ success: boolean; path?: string; error?: string }> {
-    const messages = await chatService.getMessages(talker, limit)
+  private async exportHtmlBasic(talker: string, outputDir: string, limit = 0, from?: number, to?: number): Promise<{ success: boolean; path?: string; error?: string }> {
+    const messages = this.filterByTime(await chatService.getMessages(talker, limit), from, to)
     if (messages.length === 0) {
       return { success: false, error: '未找到消息' }
     }
@@ -138,10 +141,10 @@ export class ExportService {
     return { success: true, path: filePath }
   }
 
-  async exportExcel(talker: string, outputDir: string, limit = 0): Promise<{ success: boolean; path?: string; error?: string }> {
+  async exportExcel(talker: string, outputDir: string, limit = 0, from?: number, to?: number): Promise<{ success: boolean; path?: string; error?: string }> {
     try {
       const ExcelJS = await import('exceljs')
-      const messages = await chatService.getMessages(talker, limit)
+      const messages = this.filterByTime(await chatService.getMessages(talker, limit), from, to)
       if (messages.length === 0) {
         return { success: false, error: '未找到消息' }
       }
@@ -174,6 +177,16 @@ export class ExportService {
     } catch (e) {
       return { success: false, error: String(e) }
     }
+  }
+
+  private filterByTime(messages: Message[], from?: number, to?: number): Message[] {
+    if (from === undefined && to === undefined) return messages
+    return messages.filter((message) => {
+      const timestamp = Number(message.createTime)
+      return Number.isFinite(timestamp) &&
+        (from === undefined || timestamp >= from) &&
+        (to === undefined || timestamp <= to)
+    })
   }
 
   private buildHtml(talker: string, messages: Message[]): string {

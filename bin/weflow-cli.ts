@@ -470,7 +470,9 @@ program
   .command('export <talker> <format>')
   .description('导出聊天记录 (支持 wxid / 昵称 / 备注 / 序号)')
   .option('-o, --output <dir>', '输出目录', './output')
-  .option('-n, --limit <number>', '最大数量', '10000')
+  .option('-n, --limit <number>', '最大数量（0=全量导出）', '0')
+  .option('--from <date>', '起始日期或时间（YYYY-MM-DD 或 ISO 时间）')
+  .option('--to <date>', '结束日期或时间（YYYY-MM-DD 或 ISO 时间）')
   .action(async (talkerInput: string, format: string, opts) => {
     if (!configService.isConfigured()) {
       console.log(chalk.red('\n❌ 还没配置'))
@@ -491,19 +493,37 @@ program
 
     let result
     const limit = parseInt(opts.limit)
+    const parseDate = (value: string | undefined, endOfDay = false): number | undefined => {
+      if (!value) return undefined
+      const normalized = /^\d{4}-\d{2}-\d{2}$/.test(value)
+        ? `${value}T${endOfDay ? '23:59:59.999' : '00:00:00.000'}+08:00`
+        : value
+      const timestamp = Date.parse(normalized)
+      if (Number.isNaN(timestamp)) {
+        console.log(chalk.red(`无效日期: ${value}`))
+        process.exit(1)
+      }
+      return Math.floor(timestamp / 1000)
+    }
+    const from = parseDate(opts.from)
+    const to = parseDate(opts.to, true)
+    if (from !== undefined && to !== undefined && from > to) {
+      console.log(chalk.red('起始日期不能晚于结束日期'))
+      process.exit(1)
+    }
 
     switch (format) {
       case 'json':
-        result = await exportService.exportJson(talker, opts.output, limit)
+        result = await exportService.exportJson(talker, opts.output, limit, from, to)
         break
       case 'txt':
-        result = await exportService.exportTxt(talker, opts.output, limit)
+        result = await exportService.exportTxt(talker, opts.output, limit, from, to)
         break
       case 'html':
-        result = await exportService.exportHtml(talker, opts.output, limit)
+        result = await exportService.exportHtml(talker, opts.output, limit, from, to)
         break
       case 'excel':
-        result = await exportService.exportExcel(talker, opts.output, limit)
+        result = await exportService.exportExcel(talker, opts.output, limit, from, to)
         break
     }
 
@@ -2377,6 +2397,7 @@ program
   .option('-d, --date <YYYY-MM-DD>', '日期')
   .option('--api-key <key>', 'DeepSeek API key（或设环境变量 DEEPSEEK_API_KEY）')
   .option('--skip-classify', '跳过后处理')
+  .option('--no-ai', '仅抓取和生成文件，不调用 AI')
   .action(async (opts) => {
     const { execFile, spawn } = await import('child_process')
     const { promisify } = await import('util')
@@ -2389,8 +2410,9 @@ program
     const pipeline = join(pkgRoot, 'scripts', 'pipeline.py')
 
     const date = opts.date || new Date().toISOString().slice(0, 10)
+    const noAi = opts.ai === false
     const apiKey = opts.apiKey || process.env.DEEPSEEK_API_KEY || ''
-    if (!apiKey) {
+    if (!noAi && !apiKey) {
       console.log(chalk.red('\n❌ 缺少 DeepSeek API key'))
       console.log(chalk.gray('  用法: weflow-cli daily --api-key <key>'))
       console.log(chalk.gray('  或设环境变量: set DEEPSEEK_API_KEY=<key>\n'))
@@ -2398,8 +2420,10 @@ program
     }
 
     console.log(chalk.cyan(`\n📰 正在生成 ${date} 公众号日报...\n`))
-    const args = [pipeline, '--date', date, '--api-key', apiKey, '--interest', 'AI', '--skip-wiki']
+    const args = [pipeline, '--date', date, '--interest', 'AI', '--skip-wiki']
+    if (apiKey) args.push('--api-key', apiKey)
     if (opts.skipClassify) args.push('--skip-classify')
+    if (noAi) args.push('--no-ai')
 
     const child = spawn('python', args, {
       stdio: 'inherit',

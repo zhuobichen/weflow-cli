@@ -1,5 +1,5 @@
 import { join } from 'path'
-import { existsSync, copyFileSync, mkdirSync } from 'fs'
+import { existsSync, copyFileSync, mkdirSync, readFileSync } from 'fs'
 import { execFile, execSync } from 'child_process'
 import { promisify } from 'util'
 import { createRequire } from 'module'
@@ -152,6 +152,21 @@ export class KeyService {
   async findWeChatPid(): Promise<number | null> {
     const names = ['Weixin.exe', 'WeChat.exe']
     for (const name of names) {
+      try {
+        const { stdout } = await execFileAsync('powershell.exe', [
+          '-NoProfile',
+          '-NonInteractive',
+          '-Command',
+          `$rows = @(Get-CimInstance Win32_Process -Filter "Name='${name}'" | Select-Object ProcessId,ParentProcessId); $rows | ConvertTo-Json -Compress`,
+        ])
+        const parsed = JSON.parse(stdout.trim() || '[]')
+        const rows = Array.isArray(parsed) ? parsed : [parsed]
+        const pids = new Set(rows.map((row: any) => Number(row.ProcessId)).filter((pid: number) => pid > 0))
+        const root = rows.find((row: any) => !pids.has(Number(row.ParentProcessId)))
+        const rootPid = Number(root?.ProcessId)
+        if (rootPid > 0) return rootPid
+      } catch {}
+
       const pid = await this.findPidByImageName(name)
       if (pid) return pid
     }
@@ -383,6 +398,72 @@ export class KeyService {
     }
 
     return { success: false, error: `超时 (${timeoutMs / 1000}s)，未捕获到 sns.db 的密钥。请确保在微信中打开了朋友圈` }
+  }
+
+  /**
+   * Captures the key used when the currently open WeChat view accesses a
+   * specific NT database. The key is returned only to the caller and is not
+   * persisted in the local WeFlow configuration.
+   */
+  async captureDatabaseKey(
+    timeoutMs: number,
+    dbPath: string,
+    onStatus?: (message: string) => void
+  ): Promise<DbKeyResult> {
+    if (!existsSync(dbPath)) return { success: false, error: '目标数据库不存在' }
+    if (!this.ensureLoaded()) return { success: false, error: 'wx_key.dll 未加载，请确认 resources/key/ 目录完整' }
+
+    let pid = await this.findWeChatPid()
+    const waitStartedAt = Date.now()
+    while (!pid && Date.now() - waitStartedAt < timeoutMs) {
+      onStatus?.('等待微信启动并登录...')
+      await new Promise(resolve => setTimeout(resolve, 500))
+      pid = await this.findWeChatPid()
+    }
+    if (!pid) return { success: false, error: '等待微信进程超时' }
+
+    if (!this.initHook(pid)) {
+      const error = this.getLastErrorMsg ? this.decodeCString(this.getLastErrorMsg()) : ''
+      return { success: false, error: error || '初始化 Hook 失败，请以管理员身份运行' }
+    }
+
+    const salt = readFileSync(dbPath).subarray(0, 16).toString('hex')
+    const scriptPath = join(process.cwd(), 'scripts', 'nt_decrypt.py')
+    const keyBuffer = Buffer.alloc(128)
+    const seen = new Set<string>()
+    const startedAt = Date.now()
+
+    onStatus?.(`已连接微信进程 (PID: ${pid})，等待收藏库访问...`)
+    try {
+      while (Date.now() - startedAt < timeoutMs) {
+        if (this.pollKeyData(keyBuffer, keyBuffer.length)) {
+          const key = this.decodeUtf8(keyBuffer)
+          if (key.length === 64 && !seen.has(key)) {
+            seen.add(key)
+            try {
+              const { stdout } = await execFileAsync('py', [
+                '-3', scriptPath, 'schema', '--db', dbPath, '--key', key, '--salt', salt,
+              ], {
+                timeout: 15_000,
+                maxBuffer: 1024 * 1024,
+                env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
+                encoding: 'utf-8',
+              })
+              const lines = stdout.split('\n').filter(line => line.trim().startsWith('{'))
+              const result = JSON.parse(lines.at(-1) || '{}')
+              if (result.success) return { success: true, key }
+            } catch {
+              // This key belongs to another database access; keep listening.
+            }
+          }
+        }
+        await new Promise(resolve => setTimeout(resolve, 200))
+      }
+    } finally {
+      try { this.cleanupHook() } catch { }
+    }
+
+    return { success: false, error: `超时 (${timeoutMs / 1000}s)，未捕获到收藏库密钥。请保持“收藏”页面打开。` }
   }
 
   /**

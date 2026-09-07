@@ -46,6 +46,7 @@ def main():
     parser.add_argument('--skip-wiki', action='store_true', help='跳过概念编译')
     parser.add_argument('--skip-vault', action='store_true', help='跳过 Vault 同步')
     parser.add_argument('--skip-html', action='store_true', help='跳过 HTML 生成')
+    parser.add_argument('--no-ai', action='store_true', help='跳过所有 AI 处理')
     parser.add_argument('--skip-ai-report', action='store_true', help='跳过 AI 深度阅读报告')
     parser.add_argument('--ai-report-range', type=int, default=1, help='AI 报告覆盖最近 N 天（默认 1=仅当天）')
     args = parser.parse_args()
@@ -56,7 +57,7 @@ def main():
 
     # api_key：本地/ollama 引擎不需要；云端需要
     api_key = args.api_key or ''
-    if args.engine in ('deepseek', 'claude') and not api_key:
+    if not args.no_ai and args.engine in ('deepseek', 'claude') and not api_key:
         api_key = os.environ.get('DEEPSEEK_API_KEY', '') or config.get('deepseekApiKey', '')
         if not api_key:
             print(f'[ERROR] --engine {args.engine} 需要 API key。请通过 --api-key、'
@@ -67,6 +68,8 @@ def main():
 
     # Step 1: biz_daily
     step1_args = [os.path.join(SCRIPTS_DIR, 'biz_daily.py'), '--engine', args.engine]
+    if args.no_ai:
+        step1_args.append('--no-ai')
     if api_key:
         step1_args += ['--api-key', api_key]
     if args.date:
@@ -75,7 +78,7 @@ def main():
         sys.exit(1)
 
     # Step 2: classify_daily（可选）
-    if not args.skip_classify:
+    if not args.skip_classify and not args.no_ai:
         step2_args = [
             os.path.join(SCRIPTS_DIR, 'classify_daily.py'),
             '--engine', args.engine,
@@ -102,7 +105,7 @@ def main():
             print(f'\n  Vault 同步: {file_count} 个文件 → {vault_dir}')
 
     # Step 4: wiki compile（可选）
-    if not args.skip_wiki:
+    if not args.skip_wiki and not args.no_ai:
         step3_args = [
             os.path.join(SCRIPTS_DIR, 'compile_wiki.py'),
             '--api-key', api_key if api_key else 'local',
@@ -126,7 +129,7 @@ def main():
              [os.path.join(SCRIPTS_DIR, 'create_reading_notes.py'), '--date', date_str])
 
     # Step 8: AI 深度阅读报告
-    if not args.skip_ai_report:
+    if not args.skip_ai_report and not args.no_ai:
         step8_args = [
             os.path.join(SCRIPTS_DIR, 'generate_ai_report.py'),
             '--engine', args.engine,

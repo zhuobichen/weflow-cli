@@ -401,6 +401,7 @@ def main():
     parser.add_argument('--limit', type=int, default=0, help='最多处理篇数 (0=不限制)')
     parser.add_argument('--api-key', help='AI API key (或设环境变量 DEEPSEEK_API_KEY)')
     parser.add_argument('--engine', default='deepseek', help='AI 引擎: local/deepseek/claude/ollama')
+    parser.add_argument('--no-ai', action='store_true', help='仅抓取和生成文件，不调用 AI')
     args = parser.parse_args()
 
     # Date
@@ -420,7 +421,7 @@ def main():
     # API key — only required for cloud engines
     engine = args.engine or 'deepseek'
     api_key = args.api_key or os.environ.get('DEEPSEEK_API_KEY', '') or config.get('deepseekApiKey', '')
-    if not args.dry_run and engine in ('deepseek', 'claude') and not api_key:
+    if not args.dry_run and not args.no_ai and engine in ('deepseek', 'claude') and not api_key:
         print(f'[ERROR] --engine {engine} 需要 API key。请通过 --api-key、环境变量或配置文件提供')
         sys.exit(1)
     # Auto-detect local engine if no api_key and engine is deepseek
@@ -548,7 +549,15 @@ def main():
             print(f'  无URL, 使用本地缓存')
 
     # ====== Phase 2: AI summary + topic classification ======
-    if api_key or engine != 'deepseek':
+    if args.no_ai:
+        for a in articles:
+            content = a.get('fetched_md') or a.get('local_text', '')
+            a['summary'] = a.get('digest', '') or content[:400]
+            a['topic'] = _guess_topic(a)
+            a['relevance'] = '中'
+            a['tags'] = [a['topic']]
+            a['concepts'] = []
+    elif api_key or engine != 'deepseek':
         print(f'\n=== Phase 2: AI 摘要 + 主题分类 (engine={engine}) ===\n')
         from _utils import call_ai
         for i, a in enumerate(articles):

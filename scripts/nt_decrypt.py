@@ -119,9 +119,10 @@ def scan_memory_keys(pid):
 
 # ========== NT Database Discovery ==========
 
-def find_nt_databases():
-    """Find all NT-format databases under xwechat_files (message + contact)."""
+def find_nt_databases(data_dir=None):
+    """Find NT-format databases under an xwechat_files directory."""
     candidates = [
+        data_dir,
         os.path.expandvars(r'%USERPROFILE%\xwechat_files'),
         os.path.expandvars(r'%USERPROFILE%\Documents\xwechat_files'),
     ]
@@ -135,56 +136,26 @@ def find_nt_databases():
 
     databases = []
     for wxid_dir in os.listdir(xwechat):
-        # Scan message databases
-        msg_storage = os.path.join(xwechat, wxid_dir, 'db_storage', 'message')
-        if os.path.isdir(msg_storage):
-            for f in os.listdir(msg_storage):
-                if f.endswith('.db') and not any(x in f for x in ['-shm', '-wal']):
-                    full_path = os.path.join(msg_storage, f)
-                    try:
-                        with open(full_path, 'rb') as fh:
-                            salt = fh.read(16)
-                        databases.append({
-                            "path": full_path,
-                            "name": f"message/{f}",
-                            "salt": salt.hex(),
-                            "size": os.path.getsize(full_path),
-                            "wxid": wxid_dir,
-                        })
-                    except:
-                        pass
-
-        # Scan contact database
-        contact_db = os.path.join(xwechat, wxid_dir, 'db_storage', 'contact', 'contact.db')
-        if os.path.isfile(contact_db):
-            try:
-                with open(contact_db, 'rb') as fh:
-                    salt = fh.read(16)
-                databases.append({
-                    "path": contact_db,
-                    "name": "contact/contact.db",
-                    "salt": salt.hex(),
-                    "size": os.path.getsize(contact_db),
-                    "wxid": wxid_dir,
-                })
-            except:
-                pass
-
-        # Scan SNS (朋友圈) database
-        sns_db = os.path.join(xwechat, wxid_dir, 'db_storage', 'sns', 'sns.db')
-        if os.path.isfile(sns_db):
-            try:
-                with open(sns_db, 'rb') as fh:
-                    salt = fh.read(16)
-                databases.append({
-                    "path": sns_db,
-                    "name": "sns/sns.db",
-                    "salt": salt.hex(),
-                    "size": os.path.getsize(sns_db),
-                    "wxid": wxid_dir,
-                })
-            except:
-                pass
+        for category in ('message', 'contact', 'sns', 'favorite'):
+            storage = os.path.join(xwechat, wxid_dir, 'db_storage', category)
+            if not os.path.isdir(storage):
+                continue
+            for f in os.listdir(storage):
+                if not f.endswith('.db') or any(x in f for x in ['-shm', '-wal', '_fts']):
+                    continue
+                full_path = os.path.join(storage, f)
+                try:
+                    with open(full_path, 'rb') as fh:
+                        salt = fh.read(16)
+                    databases.append({
+                        "path": full_path,
+                        "name": f"{category}/{f}",
+                        "salt": salt.hex(),
+                        "size": os.path.getsize(full_path),
+                        "wxid": wxid_dir,
+                    })
+                except:
+                    pass
 
     return databases
 
@@ -333,6 +304,24 @@ def get_sessions(conn):
     # Sort by timestamp descending
     sessions.sort(key=lambda s: s.get("sortTimestamp", 0), reverse=True)
     return {"sessions": sessions}
+
+
+def get_schema(conn):
+    """Return table and column names without reading user records."""
+    cursor = conn.cursor()
+    tables = cursor.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
+    ).fetchall()
+    return {
+        "success": True,
+        "tables": [
+            {
+                "name": name,
+                "columns": [row[1] for row in cursor.execute(f'PRAGMA table_info([{name}])').fetchall()],
+            }
+            for (name,) in tables
+        ],
+    }
 
 
 def get_messages(conn, talker, limit=100, offset=0, name_map=None, own_wxid=None):
@@ -666,6 +655,12 @@ def main():
     # scan command
     scan_parser = sub.add_parser('scan', help='Scan memory for keys and match NT databases')
     scan_parser.add_argument('--json', action='store_true', help='Output as JSON')
+    scan_parser.add_argument('--data-dir', help='Path to the xwechat_files directory')
+
+    schema_parser = sub.add_parser('schema', help='List table and column names only')
+    schema_parser.add_argument('--db', required=True, help='Path to NT database')
+    schema_parser.add_argument('--key', required=True, help='Key hex (64 chars)')
+    schema_parser.add_argument('--salt', required=True, help='Salt hex (32 chars)')
 
     # sessions command
     sessions_parser = sub.add_parser('sessions', help='List chat sessions')
@@ -741,7 +736,7 @@ def main():
         if not args.json:
             print(f"找到 {len(keys)} 个密钥")
 
-        databases = find_nt_databases()
+        databases = find_nt_databases(args.data_dir)
         if not args.json:
             print(f"找到 {len(databases)} 个 NT 数据库")
 
@@ -752,6 +747,7 @@ def main():
                 print(f"  {db['name']} ({db['size']/1024/1024:.1f}MB) key={db['key'][:16]}... salt={db['salt'][:16]}...")
         else:
             print(json.dumps({"keys": keys, "databases": databases, "matched": matched}))
+        return
 
     # Build contact name map once if contact db provided
     contact_name_map = {}
@@ -761,7 +757,12 @@ def main():
     if contact_db and contact_key and contact_salt:
         contact_name_map = load_contact_names(contact_db, contact_key, contact_salt)
 
-    if args.command == 'sessions':
+    if args.command == 'schema':
+        conn, _ = connect_nt_db(args.db, args.key, args.salt)
+        print(json.dumps(get_schema(conn), ensure_ascii=True))
+        conn.close()
+
+    elif args.command == 'sessions':
         conn, _ = connect_nt_db(args.db, args.key, args.salt)
         result = get_sessions(conn)
         if 'sessions' in result:
