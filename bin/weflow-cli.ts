@@ -652,8 +652,10 @@ program
   .command('export <talker> <format>')
   .description('导出聊天记录 (支持 wxid / 昵称 / 备注 / 序号)')
   .option('-o, --output <dir>', '输出目录', './output')
-  .option('-n, --limit <number>', '最大数量', '10000')
+  .option('-n, --limit <number>', '最大数量（0=全量导出）', '0')
   .option('-d, --date <YYYY-MM-DD>', '仅导出指定日期的消息（本地时间）')
+  .option('--from <date>', '起始日期或 ISO 时间')
+  .option('--to <date>', '结束日期或 ISO 时间')
   .action(async (talkerInput: string, format: string, opts) => {
     if (!configService.isConfigured()) {
       console.log(chalk.red('\n❌ 还没配置'))
@@ -674,19 +676,37 @@ program
 
     let result
     const limit = parseInt(opts.limit)
+    const parseDate = (value: string | undefined, endOfDay = false): number | undefined => {
+      if (!value) return undefined
+      const normalized = /^\d{4}-\d{2}-\d{2}$/.test(value)
+        ? `${value}T${endOfDay ? '23:59:59.999' : '00:00:00.000'}+08:00`
+        : value
+      const timestamp = Date.parse(normalized)
+      if (Number.isNaN(timestamp)) {
+        console.log(chalk.red(`无效日期: ${value}`))
+        process.exit(1)
+      }
+      return Math.floor(timestamp / 1000)
+    }
+    const from = parseDate(opts.from)
+    const to = parseDate(opts.to, true)
+    if (from !== undefined && to !== undefined && from > to) {
+      console.log(chalk.red('起始日期不能晚于结束日期'))
+      process.exit(1)
+    }
 
     switch (format) {
       case 'json':
-        result = await exportService.exportJson(talker, opts.output, limit)
+        result = await exportService.exportJson(talker, opts.output, limit, from, to)
         break
       case 'txt':
-        result = await exportService.exportTxt(talker, opts.output, limit)
+        result = await exportService.exportTxt(talker, opts.output, limit, from, to)
         break
       case 'html':
-        result = await exportService.exportHtml(talker, opts.output, limit, opts.date || '')
+        result = await exportService.exportHtml(talker, opts.output, limit, opts.date || '', from, to)
         break
       case 'excel':
-        result = await exportService.exportExcel(talker, opts.output, limit)
+        result = await exportService.exportExcel(talker, opts.output, limit, from, to)
         break
     }
 
