@@ -5,13 +5,15 @@ import { expandHomePath } from '../src/utils/pathUtils.js'
 import { maskMessageBodyText, redactText } from '../src/services/assistantPrivacy.js'
 import { buildEvidenceManifest, buildEvidenceReviewInput, writeEvidencePackage } from '../src/services/evidenceService.js'
 import { evaluateAssistantAccess, resolveInboundRouting } from '../src/services/assistantRouting.js'
-import { isCoverImage, safeChildPath, safeDate } from '../src/utils/mcpSecurity.js'
+import { isAllowedWeChatArticleUrl, isCoverImage, safeChildPath, safeDate } from '../src/utils/mcpSecurity.js'
 import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import type { Message } from '../src/types.js'
 import { DbPathService } from '../src/core/dbPathService.js'
+import { createWeFlowEnvelope } from '../src/services/messageContract.js'
+import { createPythonProcessEnv, safeSubprocessError } from '../src/utils/pythonProcessEnv.js'
 
 test('expands home directory prefixes without changing other paths', () => {
   assert.equal(expandHomePath('~'), homedir())
@@ -39,6 +41,8 @@ test('normalizes WeChat data, account, and database subdirectory paths', () => {
   assert.equal(service.resolveDataRoot(customParent), join(customParent, 'xwechat_files'))
   assert.equal(service.resolveDataRoot(join(root, 'missing')), null)
   assert.deepEqual(service.scanWxids(message).map(item => item.wxid), ['wxid_test_account'])
+  mkdirSync(join(root, 'not_an_account'), { recursive: true })
+  assert.equal(service.scanWxidCandidates(join(root, 'not_an_account')).length, 0)
 })
 
 test('discovers NT databases from a custom xwechat_files root', () => {
@@ -76,6 +80,65 @@ test('discovers NT databases from a custom xwechat_files root', () => {
   assert.ok(databases.some((db: { name: string }) => db.name === 'contact/contact.db'))
 })
 
+test('does not forward API keys in Python child-process arguments', () => {
+  const cliSource = readFileSync(join(process.cwd(), 'bin', 'weflow-cli.ts'), 'utf8')
+  const pipelineSource = readFileSync(join(process.cwd(), 'scripts', 'pipeline.py'), 'utf8')
+  const ntCoreSource = readFileSync(join(process.cwd(), 'src', 'core', 'ntCore.ts'), 'utf8')
+  const exportSource = readFileSync(join(process.cwd(), 'src', 'services', 'exportService.ts'), 'utf8')
+
+  assert.doesNotMatch(cliSource, /(?:args|a)\.push\(['"]--api-key['"]/)
+  assert.doesNotMatch(cliSource, /\[[^\]]*['"]--api-key['"][^\]]*(?:apiKey|opts\.apiKey)/)
+  assert.doesNotMatch(pipelineSource, /step\d+_args\s*\+=\s*\[['"]--api-key['"]/)
+  assert.doesNotMatch(ntCoreSource, /['"]--(?:key|salt|contact-key|contact-salt)['"]/)
+  assert.doesNotMatch(ntCoreSource, /['"]--root['"]/)
+  assert.doesNotMatch(exportSource, /['"]--(?:key|salt|passphrase|own-wxid)['"]/)
+  assert.doesNotMatch(ntCoreSource, /args\.push\(['"]--(?:keyword|usernames)['"]/)
+  assert.doesNotMatch(exportSource, /args\.push\(['"]--(?:name|out|cache-dir|account-dir|date)['"]/)
+  assert.doesNotMatch(cliSource, /args\.push\((?:query|question)/)
+  assert.doesNotMatch(cliSource, /args\.push\(['"]--talker['"]/)
+})
+
+test('Python worker environments clear stale internal secrets', () => {
+  const privateKeys = [
+    'WEFLOW_NT_KEY',
+    'WEFLOW_VAULT_QUESTION',
+    'WEFLOW_SEARCH_QUERY',
+    'WEFLOW_RAG_QUESTION',
+    'WEFLOW_RAG_TALKER',
+    'WEFLOW_REPORT_TALKERS',
+    'WEFLOW_SCAN_ROOT',
+    'WEFLOW_QUERY_KEYWORD',
+    'WEFLOW_QUERY_USERNAMES',
+    'WEFLOW_EXPORT_NAME',
+    'WEFLOW_EXPORT_OUTPUT',
+    'WEFLOW_EXPORT_CACHE_DIR',
+    'WEFLOW_EXPORT_ACCOUNT_DIR',
+    'WEFLOW_EXPORT_DATE',
+  ] as const
+  const previous = new Map(privateKeys.map(key => [key, process.env[key]]))
+  for (const key of privateKeys) process.env[key] = `stale-${key.toLowerCase()}`
+  try {
+    const cleared = createPythonProcessEnv()
+    const replaced = createPythonProcessEnv({ WEFLOW_NT_KEY: 'current-secret' })
+    for (const key of privateKeys) assert.equal(cleared[key], undefined)
+    assert.equal(replaced.WEFLOW_NT_KEY, 'current-secret')
+  } finally {
+    for (const key of privateKeys) {
+      const value = previous.get(key)
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
+  }
+})
+
+test('subprocess errors never repeat command arguments', () => {
+  const error = Object.assign(new Error('Command failed: python worker.py --key synthetic-secret'), { code: 7 })
+  const formatted = safeSubprocessError(error, 'worker failed')
+  assert.equal(formatted, 'worker failed (exit 7)')
+  assert.equal(formatted.includes('synthetic-secret'), false)
+  assert.equal(formatted.includes('worker.py'), false)
+})
+
 test('syncs daily favorites without touching other report files', () => {
   const root = mkdtempSync(join(tmpdir(), 'weflow-daily-favorites-'))
   const date = '2026-09-01'
@@ -96,6 +159,23 @@ test('syncs daily favorites without touching other report files', () => {
     assert.equal(remove.status, 0, remove.stderr || remove.stdout)
     assert.equal(readdirSync(join(root, date, '收藏')).length, 0)
     assert.equal(readFileSync(article, 'utf8'), '# Synthetic article\n')
+
+    const outside = join(root, 'outside.md')
+    const state = join(root, date, '.fav_state.json')
+    writeFileSync(outside, '# Must remain outside favorites\n', 'utf8')
+    writeFileSync(state, JSON.stringify(['../outside.md']), 'utf8')
+    const maliciousState = spawnSync(python, [script, '--date', date, '--root', root], { encoding: 'utf8' })
+    assert.equal(maliciousState.status, 0, maliciousState.stderr || maliciousState.stdout)
+    assert.equal(readdirSync(join(root, date, '收藏')).length, 0)
+
+    const maliciousAdd = spawnSync(python, [script, '--date', date, '--root', root, '--add', '../outside.md'], { encoding: 'utf8' })
+    assert.equal(maliciousAdd.status, 1, maliciousAdd.stderr || maliciousAdd.stdout)
+    assert.equal(readdirSync(join(root, date, '收藏')).length, 0)
+    assert.equal(readFileSync(outside, 'utf8'), '# Must remain outside favorites\n')
+
+    const missing = spawnSync(python, [script, '--date', '2026-09-02', '--root', root], { encoding: 'utf8' })
+    assert.equal(missing.status, 1, missing.stderr || missing.stdout)
+    assert.equal(missing.stdout.includes('收藏同步完成'), false)
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
@@ -167,6 +247,35 @@ test('rejects MCP path traversal and invalid dates', () => {
   assert.equal(safeDate('2026-08-27'), '2026-08-27')
   assert.equal(safeDate('2026-8-27'), null)
   assert.equal(safeDate('../secret'), null)
+})
+
+test('accepts only strict HTTPS WeChat article URLs', () => {
+  assert.equal(isAllowedWeChatArticleUrl('https://mp.weixin.qq.com/s/example'), true)
+  assert.equal(isAllowedWeChatArticleUrl('http://mp.weixin.qq.com/s/example'), false)
+  assert.equal(isAllowedWeChatArticleUrl('https://mp.weixin.qq.com.evil.test/s/example'), false)
+  assert.equal(isAllowedWeChatArticleUrl('https://evil.test/?next=mp.weixin.qq.com'), false)
+  assert.equal(isAllowedWeChatArticleUrl('https://user:pass@mp.weixin.qq.com/s/example'), false)
+})
+
+test('creates a bounded-compatible message contract and preserves unknown types', () => {
+  const envelope = createWeFlowEnvelope([{
+    localId: 1,
+    serverId: 'synthetic-server-id',
+    localType: 99999,
+    createTime: 1704067200,
+    isSend: 0,
+    senderUsername: null,
+    content: 'synthetic content',
+    rawContent: 'synthetic content',
+    parsedContent: 'synthetic content',
+  }], '2026-09-07T00:00:00.000Z')
+
+  assert.equal(envelope.schema, 'weflow-message/v1')
+  assert.equal(envelope.source, 'weflow-cli')
+  assert.equal(envelope.messages[0].messageType, 'other')
+  assert.equal(envelope.messages[0].localType, 99999)
+  assert.equal(JSON.stringify(envelope).includes('ntKey'), false)
+  assert.equal(JSON.stringify(envelope).includes('dbPath'), false)
 })
 
 test('accepts real image signatures and rejects non-images', () => {

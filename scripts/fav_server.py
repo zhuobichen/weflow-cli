@@ -79,7 +79,9 @@ class FavHandler(SimpleHTTPRequestHandler):
             if not self._is_local_origin():
                 self.send_error(403, 'Cross-origin request denied')
                 return
-            if self.path.startswith('/api/fav/list'):
+            if self.path == '/api/status':
+                self._send_json({'ok': True, 'service': 'weflow-daily-reader', 'date': self.date_str})
+            elif self.path.startswith('/api/fav/list'):
                 self._handle_fav_list()
             elif self.path == '/api/read/list':
                 self._handle_read_list()

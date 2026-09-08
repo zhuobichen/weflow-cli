@@ -1,23 +1,22 @@
-import { join, dirname } from 'path'
+import { join } from 'path'
 import { existsSync, copyFileSync, mkdirSync } from 'fs'
 import { execFile } from 'child_process'
 import { promisify } from 'util'
 import { createRequire } from 'module'
-import { fileURLToPath } from 'url'
 import os from 'os'
 import type { DbKeyResult } from '../types.js'
 import { configService } from '../services/configService.js'
 import { getPythonCommand } from '../utils/python.js'
+import { createPythonProcessEnv } from '../utils/pythonProcessEnv.js'
+import { resolvePackageRoot } from '../utils/packageRoot.js'
 
 const require = createRequire(import.meta.url)
 const execFileAsync = promisify(execFile)
-const __filename = fileURLToPath(import.meta.url)
-const __dirname = dirname(__filename)
+const PACKAGE_ROOT = resolvePackageRoot(import.meta.url)
 
 /** 基于模块位置定位包根目录（全局安装时 process.cwd() 不可靠） */
 function resolveScriptPath(scriptName: string): string {
-  // dist/src/core -> 包根
-  return join(__dirname, '..', '..', '..', 'scripts', scriptName)
+  return join(PACKAGE_ROOT, 'scripts', scriptName)
 }
 
 export class KeyService {
@@ -49,11 +48,10 @@ export class KeyService {
     }
 
     // 基于模块位置定位（全局安装时 cwd 不是包根）
-    const pkgRoot = join(__dirname, '..', '..', '..')
-    candidates.push(join(pkgRoot, 'resources', 'key', 'win32', archDir, 'wx_key.dll'))
-    candidates.push(join(pkgRoot, 'resources', 'key', 'win32', 'x64', 'wx_key.dll'))
-    candidates.push(join(pkgRoot, 'resources', 'key', 'win32', 'wx_key.dll'))
-    candidates.push(join(pkgRoot, 'resources', 'wx_key.dll'))
+    candidates.push(join(PACKAGE_ROOT, 'resources', 'key', 'win32', archDir, 'wx_key.dll'))
+    candidates.push(join(PACKAGE_ROOT, 'resources', 'key', 'win32', 'x64', 'wx_key.dll'))
+    candidates.push(join(PACKAGE_ROOT, 'resources', 'key', 'win32', 'wx_key.dll'))
+    candidates.push(join(PACKAGE_ROOT, 'resources', 'wx_key.dll'))
 
     // cwd 兜底（开发模式在项目根运行）
     const cwd = process.cwd()
@@ -385,12 +383,13 @@ export class KeyService {
               const scriptPath = resolveScriptPath('nt_decrypt.py')
               const { stdout } = await execFileAsync(getPythonCommand(), [
                 scriptPath, 'sns-stats',
-                '--db', snsDbPath,
-                '--key', key,
-                '--salt', snsSalt || '00000000000000000000000000000000',
               ], {
                 timeout: 15000, encoding: 'utf8',
-                env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
+                env: createPythonProcessEnv({
+                  WEFLOW_DB_PATH: snsDbPath,
+                  WEFLOW_NT_KEY: key,
+                  WEFLOW_NT_SALT: snsSalt || '00000000000000000000000000000000',
+                }),
               })
 
               const lines = stdout.trim().split('\n')

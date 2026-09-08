@@ -10,7 +10,7 @@
 与 HTML localStorage 的 weflow_fav_{date} 格式一致。
 """
 
-import sys, os, json
+import sys, os, json, re
 from pathlib import Path
 from datetime import datetime
 
@@ -18,12 +18,42 @@ SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
 SOURCE_ROOT = os.path.join(os.path.dirname(SCRIPTS_DIR), 'output', 'biz-daily')
 
 
-def sync_favorites(date_str: str, source_root: str = SOURCE_ROOT):
+def resolve_date_dir(date_str: str, source_root: str) -> Path:
+    if not re.fullmatch(r'\d{4}-\d{2}-\d{2}', date_str):
+        raise ValueError('日期必须是 YYYY-MM-DD')
+    root = Path(source_root).resolve()
+    date_dir = (root / date_str).resolve()
+    if date_dir.parent != root:
+        raise ValueError('日期目录超出日报根目录')
+    return date_dir
+
+
+def resolve_favorite_source(date_dir: Path, relative_path: object) -> tuple[str, Path] | None:
+    if not isinstance(relative_path, str) or not relative_path.strip():
+        return None
+    candidate = Path(relative_path)
+    if candidate.is_absolute() or candidate.suffix.lower() != '.md':
+        return None
+    source = (date_dir / candidate).resolve()
+    try:
+        normalized = source.relative_to(date_dir)
+    except ValueError:
+        return None
+    if not normalized.parts or normalized.parts[0] == '收藏' or not source.is_file():
+        return None
+    return normalized.as_posix(), source
+
+
+def sync_favorites(date_str: str, source_root: str = SOURCE_ROOT) -> bool:
     """读取 .fav_state.json 并同步 收藏/ 文件夹中的 symlink。"""
-    date_dir = Path(source_root) / date_str
+    try:
+        date_dir = resolve_date_dir(date_str, source_root)
+    except ValueError as error:
+        print(f'[ERROR] {error}')
+        return False
     if not date_dir.is_dir():
         print(f'[ERROR] 目录不存在: {date_dir}')
-        return
+        return False
 
     fav_dir = date_dir / '收藏'
     fav_state_file = date_dir / '.fav_state.json'
@@ -35,7 +65,7 @@ def sync_favorites(date_str: str, source_root: str = SOURCE_ROOT):
                 fav_list = json.load(f)
         except Exception:
             print(f'[ERROR] 无法解析 .fav_state.json')
-            return
+            return False
     else:
         fav_list = []
 
@@ -46,38 +76,38 @@ def sync_favorites(date_str: str, source_root: str = SOURCE_ROOT):
                 if link.is_symlink() or link.is_file():
                     link.unlink()
                     print(f'  移除: {link.name}')
-        return
+        return True
 
     # 创建收藏文件夹
     fav_dir.mkdir(parents=True, exist_ok=True)
 
     # 构建期望的链接集合
-    desired = set()
+    desired: dict[str, Path] = {}
     for rel_path in fav_list:
-        src = date_dir / rel_path
-        if src.exists():
-            desired.add(rel_path)
+        resolved = resolve_favorite_source(date_dir, rel_path)
+        if resolved:
+            normalized, source = resolved
+            desired[normalized] = source
         else:
-            print(f'[WARN] 源文件不存在: {rel_path}')
+            print('[WARN] 忽略无效或越界的收藏项')
 
     # 清理不在列表中的旧链接
     existing = set()
     for item in fav_dir.iterdir():
         if item.is_symlink():
             existing.add(item.name)
-            if item.name not in {Path(p).name for p in desired}:
+            if item.name not in {source.name for source in desired.values()}:
                 item.unlink()
                 print(f'  移除: {item.name}')
         elif item.is_file():
             # 非 symlink 的文件也清理
             existing.add(item.name)
-            if item.name not in {Path(p).name for p in desired}:
+            if item.name not in {source.name for source in desired.values()}:
                 item.unlink()
                 print(f'  移除: {item.name}')
 
     # 创建缺失的 symlink
-    for rel_path in desired:
-        src = date_dir / rel_path
+    for src in desired.values():
         link = fav_dir / src.name
         if not link.exists():
             try:
@@ -88,11 +118,19 @@ def sync_favorites(date_str: str, source_root: str = SOURCE_ROOT):
                 import shutil
                 shutil.copy2(src, link)
                 print(f'  复制: {src.name}')
+    return True
 
 
-def manage_fav(date_str: str, add: list = None, remove: list = None, source_root: str = SOURCE_ROOT):
+def manage_fav(date_str: str, add: list = None, remove: list = None, source_root: str = SOURCE_ROOT) -> bool:
     """手动添加/移除收藏项。"""
-    date_dir = Path(source_root) / date_str
+    try:
+        date_dir = resolve_date_dir(date_str, source_root)
+    except ValueError as error:
+        print(f'[ERROR] {error}')
+        return False
+    if not date_dir.is_dir():
+        print(f'[ERROR] 日报目录不存在')
+        return False
     fav_state_file = date_dir / '.fav_state.json'
 
     fav_list = []
@@ -104,18 +142,31 @@ def manage_fav(date_str: str, add: list = None, remove: list = None, source_root
             pass
 
     changed = False
+    invalid_input = False
     if add:
         for item in add:
-            if item not in fav_list:
-                fav_list.append(item)
-                print(f'  收藏: {item}')
+            resolved = resolve_favorite_source(date_dir, item)
+            if not resolved:
+                print('[WARN] 忽略无效或越界的收藏项')
+                invalid_input = True
+                continue
+            normalized, _ = resolved
+            if normalized not in fav_list:
+                fav_list.append(normalized)
+                print(f'  收藏: {normalized}')
                 changed = True
 
     if remove:
         for item in remove:
-            if item in fav_list:
-                fav_list.remove(item)
-                print(f'  取消收藏: {item}')
+            candidate = Path(item)
+            if candidate.is_absolute() or candidate.suffix.lower() != '.md' or '..' in candidate.parts:
+                print('[WARN] 忽略无效或越界的收藏项')
+                invalid_input = True
+                continue
+            normalized = candidate.as_posix()
+            if normalized in fav_list:
+                fav_list.remove(normalized)
+                print(f'  取消收藏: {normalized}')
                 changed = True
 
     if changed:
@@ -123,7 +174,8 @@ def manage_fav(date_str: str, add: list = None, remove: list = None, source_root
             json.dump(fav_list, f, ensure_ascii=False, indent=2)
         print(f'已更新 .fav_state.json ({len(fav_list)} 篇收藏)')
 
-    sync_favorites(date_str, source_root)
+    synced = sync_favorites(date_str, source_root)
+    return not invalid_input and synced
 
 
 def main():
@@ -137,9 +189,11 @@ def main():
     args = parser.parse_args()
 
     if args.add or args.remove:
-        manage_fav(args.date, args.add, args.remove, args.root)
+        if not manage_fav(args.date, args.add, args.remove, args.root):
+            sys.exit(1)
     else:
-        sync_favorites(args.date, args.root)
+        if not sync_favorites(args.date, args.root):
+            sys.exit(1)
         print(f'✓ 收藏同步完成')
 
 

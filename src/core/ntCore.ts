@@ -8,24 +8,17 @@
 import { execFile } from 'child_process'
 import { promisify } from 'util'
 import { existsSync, openSync, readSync, closeSync } from 'fs'
-import { join, dirname } from 'path'
-import { fileURLToPath } from 'url'
+import { join } from 'path'
 import crypto from 'crypto'
 import { configService } from '../services/configService.js'
 import { getPythonCommand } from '../utils/python.js'
+import { createPythonProcessEnv, safeSubprocessError } from '../utils/pythonProcessEnv.js'
+import { resolvePackageRoot } from '../utils/packageRoot.js'
 import type { ChatSession, Message, Contact } from '../types.js'
 
 const execFileAsync = promisify(execFile)
-const __filename = fileURLToPath(import.meta.url)
-const __dirname = dirname(__filename)
-
 function getPackageRoot(): string {
-  const candidates = [
-    join(__dirname, '..', '..', '..'), // dist/src/core
-    join(__dirname, '..', '..'),       // src/core (tsx)
-  ]
-  return candidates.find((candidate) => existsSync(join(candidate, 'scripts', 'nt_decrypt.py')))
-    || candidates[0]
+  return resolvePackageRoot(import.meta.url)
 }
 
 export interface NtResult {
@@ -51,6 +44,19 @@ export interface NtScanResult {
   keys?: Array<{ key: string; salt: string }>
   databases?: Array<{ path: string; name: string; salt: string; size: number; wxid: string }>
   matched?: Array<{ path: string; name: string; salt: string; size: number; wxid: string; key: string }>
+}
+
+interface NtPythonSecrets {
+  dbPath?: string
+  key?: string
+  salt?: string
+  contactDbPath?: string | null
+  contactKey?: string | null
+  contactSalt?: string | null
+  talker?: string
+  ownWxid?: string
+  keyword?: string
+  usernames?: string
 }
 
 export class NtCore {
@@ -95,12 +101,32 @@ export class NtCore {
     return join(getPackageRoot(), 'scripts', 'nt_decrypt.py')
   }
 
-  private async callPython(args: string[]): Promise<any> {
+  private async callPython(args: string[], secrets: NtPythonSecrets = {}): Promise<any> {
+    const values: NtPythonSecrets = {
+      dbPath: this.dbPath,
+      key: this.keyHex,
+      salt: this.saltHex,
+      contactDbPath: this.contactDbPath,
+      contactKey: this.contactKey,
+      contactSalt: this.contactSalt,
+      ...secrets,
+    }
     try {
       const { stdout } = await execFileAsync(getPythonCommand(), [this.scriptPath, ...args], {
         timeout: 120_000,
         maxBuffer: 50 * 1024 * 1024,
-        env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
+        env: createPythonProcessEnv({
+          WEFLOW_DB_PATH: values.dbPath,
+          WEFLOW_NT_KEY: values.key,
+          WEFLOW_NT_SALT: values.salt,
+          WEFLOW_CONTACT_DB: values.contactDbPath || undefined,
+          WEFLOW_CONTACT_KEY: values.contactKey || undefined,
+          WEFLOW_CONTACT_SALT: values.contactSalt || undefined,
+          WEFLOW_TALKER: values.talker,
+          WEFLOW_OWN_WXID: values.ownWxid,
+          WEFLOW_QUERY_KEYWORD: values.keyword,
+          WEFLOW_QUERY_USERNAMES: values.usernames,
+        }),
         encoding: 'utf-8',
       })
 
@@ -117,14 +143,13 @@ export class NtCore {
       }
       return { error: 'No valid JSON output from Python script' }
     } catch (e: any) {
-      const msg = e?.message || String(e)
-      if (msg.includes('ENOENT') || msg.includes('python')) {
+      if (e?.code === 'ENOENT') {
         return { error: 'Python not found. Install Python and sqlcipher3: pip install sqlcipher3' }
       }
-      if (msg.includes('ETIMEDOUT') || msg.includes('killed')) {
+      if (e?.code === 'ETIMEDOUT' || e?.killed || e?.signal) {
         return { error: 'NT database query timed out' }
       }
-      return { error: `NT database query failed: ${msg}` }
+      return { error: safeSubprocessError(e, 'NT database query failed') }
     }
   }
 
@@ -135,11 +160,11 @@ export class NtCore {
   static async scan(root?: string): Promise<NtScanResult> {
     try {
       const scriptPath = join(getPackageRoot(), 'scripts', 'nt_decrypt.py')
-      const scanArgs = root ? ['scan', '--json', '--root', root] : ['scan', '--json']
+      const scanArgs = ['scan', '--json']
       const { stdout } = await execFileAsync(getPythonCommand(), [scriptPath, ...scanArgs], {
         timeout: 300_000,
         maxBuffer: 10 * 1024 * 1024,
-        env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
+        env: createPythonProcessEnv(root ? { WEFLOW_SCAN_ROOT: root } : {}),
         encoding: 'utf-8',
       })
 
@@ -162,11 +187,10 @@ export class NtCore {
       }
       return { success: false, error: 'Scan produced no valid output' }
     } catch (e: any) {
-      const msg = e?.message || String(e)
-      if (msg.includes('ENOENT') || msg.includes('python')) {
+      if (e?.code === 'ENOENT') {
         return { success: false, error: 'Python not found. Install Python and add to PATH.' }
       }
-      return { success: false, error: `NT scan failed: ${msg}` }
+      return { success: false, error: safeSubprocessError(e, 'NT scan failed') }
     }
   }
 
@@ -183,10 +207,14 @@ export class NtCore {
     const scriptPath = join(getPackageRoot(), 'scripts', 'nt_decrypt.py')
     let stdout = ''
     try {
-      const r = await execFileAsync(getPythonCommand(), [scriptPath, 'verify', '--db', dbPath, '--key', keyHex, '--salt', saltHex], {
+      const r = await execFileAsync(getPythonCommand(), [scriptPath, 'verify'], {
         timeout: 60_000,
         maxBuffer: 1024 * 1024,
-        env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
+        env: createPythonProcessEnv({
+          WEFLOW_DB_PATH: dbPath,
+          WEFLOW_NT_KEY: keyHex,
+          WEFLOW_NT_SALT: saltHex,
+        }),
         encoding: 'utf-8',
       })
       stdout = r.stdout
@@ -194,7 +222,7 @@ export class NtCore {
       // 缺 sqlcipher3 等场景: 脚本打印 JSON 后 exit 1
       stdout = e?.stdout || ''
       if (!stdout.trim()) {
-        return { success: false, cannotVerify: true, error: `Python 调用失败: ${String(e?.message || e).split('\n')[0]}` }
+        return { success: false, cannotVerify: true, error: safeSubprocessError(e, 'Python 调用失败') }
       }
     }
     const lines = stdout.split('\n').filter((l: string) => l.trim())
@@ -215,19 +243,8 @@ export class NtCore {
   }
 
   async getSessions(keyword?: string): Promise<NtSessionsResult> {
-    const args: string[] = [
-      'sessions',
-      '--db', this.dbPath,
-      '--key', this.keyHex,
-      '--salt', this.saltHex,
-    ]
-    if (keyword) args.push('--keyword', keyword)
-    if (this.contactDbPath && this.contactKey && this.contactSalt) {
-      args.push('--contact-db', this.contactDbPath)
-      args.push('--contact-key', this.contactKey)
-      args.push('--contact-salt', this.contactSalt)
-    }
-    const result = await this.callPython(args)
+    const args: string[] = ['sessions']
+    const result = await this.callPython(args, { keyword })
     if (result.error) {
       return { success: false, error: result.error }
     }
@@ -237,22 +254,12 @@ export class NtCore {
   async getMessages(talker: string, limit = 100, offset = 0): Promise<NtMessagesResult> {
     const args: string[] = [
       'messages',
-      '--db', this.dbPath,
-      '--key', this.keyHex,
-      '--salt', this.saltHex,
-      '--talker', talker,
       '--limit', String(limit),
       '--offset', String(offset),
     ]
-    if (this.contactDbPath && this.contactKey && this.contactSalt) {
-      args.push('--contact-db', this.contactDbPath)
-      args.push('--contact-key', this.contactKey)
-      args.push('--contact-salt', this.contactSalt)
-    }
     // Pass own wxid from config for self-message detection
     const ownWxid = configService.get('wxid')
-    if (ownWxid) args.push('--own-wxid', ownWxid)
-    const result = await this.callPython(args)
+    const result = await this.callPython(args, { talker, ownWxid })
     if (result.error) {
       return { success: false, error: result.error }
     }
@@ -262,18 +269,9 @@ export class NtCore {
   async getContacts(keyword?: string, limit = 200): Promise<NtContactsResult> {
     const args: string[] = [
       'contacts',
-      '--db', this.dbPath,
-      '--key', this.keyHex,
-      '--salt', this.saltHex,
       '--limit', String(limit),
     ]
-    if (keyword) args.push('--keyword', keyword)
-    if (this.contactDbPath && this.contactKey && this.contactSalt) {
-      args.push('--contact-db', this.contactDbPath)
-      args.push('--contact-key', this.contactKey)
-      args.push('--contact-salt', this.contactSalt)
-    }
-    const result = await this.callPython(args)
+    const result = await this.callPython(args, { keyword })
     if (result.error) {
       return { success: false, error: result.error }
     }
@@ -289,44 +287,32 @@ export class NtCore {
   } = {}): Promise<{ success: boolean; timeline?: any[]; error?: string }> {
     const args: string[] = [
       'sns-timeline',
-      '--db', snsDbPath,
-      '--key', snsKey,
-      '--salt', snsSalt,
       '--limit', String(opts.limit ?? 20),
       '--offset', String(opts.offset ?? 0),
     ]
-    if (opts.usernames?.length) args.push('--usernames', JSON.stringify(opts.usernames))
-    if (opts.keyword) args.push('--keyword', opts.keyword)
     if (opts.startTime) args.push('--start-time', String(opts.startTime))
     if (opts.endTime) args.push('--end-time', String(opts.endTime))
-    const result = await this.callPython(args)
+    const result = await this.callPython(args, {
+      dbPath: snsDbPath,
+      key: snsKey,
+      salt: snsSalt,
+      keyword: opts.keyword,
+      usernames: opts.usernames?.length ? JSON.stringify(opts.usernames) : undefined,
+    })
     if (result.error) return { success: false, error: result.error }
     return { success: true, timeline: result.timeline || [] }
   }
 
   /** 获取朋友圈中有动态的用户列表 */
   async getSnsUsernames(snsDbPath: string, snsKey: string, snsSalt: string): Promise<{ success: boolean; usernames?: string[]; error?: string }> {
-    const args: string[] = [
-      'sns-usernames',
-      '--db', snsDbPath,
-      '--key', snsKey,
-      '--salt', snsSalt,
-    ]
-    const result = await this.callPython(args)
+    const result = await this.callPython(['sns-usernames'], { dbPath: snsDbPath, key: snsKey, salt: snsSalt })
     if (result.error) return { success: false, error: result.error }
     return { success: true, usernames: result.usernames || [] }
   }
 
   /** 获取朋友圈统计信息 */
   async getSnsExportStats(snsDbPath: string, snsKey: string, snsSalt: string, myWxid?: string): Promise<{ success: boolean; data?: { totalPosts: number; totalFriends: number; myPosts: number | null }; error?: string }> {
-    const args: string[] = [
-      'sns-stats',
-      '--db', snsDbPath,
-      '--key', snsKey,
-      '--salt', snsSalt,
-    ]
-    if (myWxid) args.push('--my-wxid', myWxid)
-    const result = await this.callPython(args)
+    const result = await this.callPython(['sns-stats'], { dbPath: snsDbPath, key: snsKey, salt: snsSalt, ownWxid: myWxid })
     if (result.error) return { success: false, error: result.error }
     return { success: true, data: result.data }
   }
@@ -368,14 +354,11 @@ export class NtCore {
   } = {}): Promise<{ success: boolean; favorites?: any[]; total?: number; error?: string }> {
     const args: string[] = [
       'fav-list',
-      '--db', favDbPath,
-      '--key', keyHex,
       '--limit', String(opts.limit ?? 100),
       '--offset', String(opts.offset ?? 0),
     ]
-    if (opts.keyword) args.push('--keyword', opts.keyword)
     if (opts.favType != null) args.push('--type', String(opts.favType))
-    const result = await this.callPython(args)
+    const result = await this.callPython(args, { dbPath: favDbPath, key: keyHex, salt: undefined, keyword: opts.keyword })
     if (result.error) return { success: false, error: result.error }
     return { success: true, favorites: result.favorites || [], total: result.total ?? 0 }
   }

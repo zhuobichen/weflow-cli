@@ -46,6 +46,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description='统计公众号推送与日报处理频率')
     parser.add_argument('--days', type=int, default=30, help='统计最近多少天，默认 30')
     parser.add_argument('--limit', type=int, default=30, help='最多显示多少个公众号，默认 30')
+    parser.add_argument('--json', action='store_true', help='输出 JSON')
     args = parser.parse_args()
     if args.days < 1 or args.days > 3650:
         parser.error('--days 必须在 1 到 3650 之间')
@@ -103,6 +104,20 @@ def main() -> None:
     for row in rows:
         row['processed'] = processed.get(row['name'], 0)
     rows.sort(key=lambda row: (-row['processed'], -row['pushed'], row['name']))
+
+    if args.json:
+        json_output = {
+            'success': True,
+            'period': {
+                'start': start_date.isoformat(),
+                'end': today.isoformat(),
+                'days': args.days,
+            },
+            'totalSources': len(rows),
+            'sources': rows[:args.limit],
+        }
+        print(json.dumps(json_output, ensure_ascii=False, indent=2))
+        return
 
     print(f'公众号频率统计（{start_date.isoformat()} 至 {today.isoformat()}）')
     print('说明：推送数是数据库中的文章数；处理数是已生成日报的文章数，不等同于打开次数。')

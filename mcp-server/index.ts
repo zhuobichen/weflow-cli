@@ -11,13 +11,35 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js'
-import { readFileSync, readdirSync, existsSync, statSync, writeFileSync, mkdirSync } from 'fs'
-import { join, resolve, dirname } from 'path'
-import { fileURLToPath } from 'url'
-import { deflateSync } from 'zlib'
-import { isCoverImage, safeChildPath, safeDate } from '../src/utils/mcpSecurity.js'
+import { readFileSync, readdirSync, existsSync, statSync } from 'fs'
+import { join } from 'path'
+import { isAllowedWeChatArticleUrl, safeChildPath, safeDate } from '../src/utils/mcpSecurity.js'
+import { resolvePackageRoot } from '../src/utils/packageRoot.js'
+import { chatService } from '../src/services/chatService.js'
+import { createWeFlowEnvelope } from '../src/services/messageContract.js'
 
 // ---- 微信公众号文章抓取 ----
+async function readResponseTextLimited(response: Response, maximumBytes: number): Promise<string> {
+  const contentLength = Number(response.headers.get('content-length') || 0)
+  if (contentLength > maximumBytes) throw new Error('RESPONSE_TOO_LARGE')
+  if (!response.body) return ''
+
+  const reader = response.body.getReader()
+  const chunks: Uint8Array[] = []
+  let size = 0
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    size += value.byteLength
+    if (size > maximumBytes) {
+      await reader.cancel()
+      throw new Error('RESPONSE_TOO_LARGE')
+    }
+    chunks.push(value)
+  }
+  return Buffer.concat(chunks).toString('utf8')
+}
+
 async function fetchWeChatArticle(url: string): Promise<{
   title: string
   author: string
@@ -25,16 +47,28 @@ async function fetchWeChatArticle(url: string): Promise<{
   content: string
   images: string[]
 }> {
-  const resp = await fetch(url, {
-    headers: {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-      'Accept': 'text/html,application/xhtml+xml',
-      'Accept-Language': 'zh-CN,zh;q=0.9',
-    },
-    redirect: 'follow',
-  })
+  let currentUrl = url
+  let resp: Response | null = null
+  for (let redirectCount = 0; redirectCount <= 3; redirectCount++) {
+    if (!isAllowedWeChatArticleUrl(currentUrl)) throw new Error('URL_NOT_ALLOWED')
+    resp = await fetch(currentUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Accept': 'text/html,application/xhtml+xml',
+        'Accept-Language': 'zh-CN,zh;q=0.9',
+      },
+      redirect: 'manual',
+      signal: AbortSignal.timeout(20_000),
+    })
+    if (resp.status < 300 || resp.status >= 400) break
+    const location = resp.headers.get('location')
+    if (!location) throw new Error('REDIRECT_WITHOUT_LOCATION')
+    currentUrl = new URL(location, currentUrl).toString()
+    resp = null
+  }
+  if (!resp) throw new Error('TOO_MANY_REDIRECTS')
   if (!resp.ok) throw new Error(`HTTP ${resp.status}: ${resp.statusText}`)
-  const html = await resp.text()
+  const html = await readResponseTextLimited(resp, 5 * 1024 * 1024)
 
   // 提取 meta 信息
   const title = html.match(/<meta[^>]*property="og:title"[^>]*content="([^"]+)"/i)?.[1]
@@ -112,7 +146,7 @@ function htmlToMarkdown(html: string): string {
   return md
 }
 import { formatWeChatArticle, listThemes } from '../src/services/wechat-formatter.js'
-import { TOOL_DEFS, executeTool } from '../src/services/assistantTools.js'
+import { boundedToolInteger, MCP_READ_ONLY_TOOL_DEFS, executeTool } from '../src/services/assistantTools.js'
 import { AssistantMemory } from '../src/services/assistantMemory.js'
 
 // ---- 本地微信数据工具 (复用 assistant 工具层, 微信 bot / MCP server 同源) ----
@@ -121,7 +155,7 @@ const mcpMemory = new AssistantMemory()
 const MCP_TOOL_CTX = { userId: 'mcp', memory: mcpMemory }
 
 /** assistant 工具 (OpenAI function 格式) → MCP 工具格式; get_stats 并入现有 wechat.get_stats */
-const ASSISTANT_TOOLS = TOOL_DEFS
+const ASSISTANT_TOOLS = MCP_READ_ONLY_TOOL_DEFS
   .filter(t => t.function.name !== 'get_stats')
   .map(t => ({
     name: `wechat.${t.function.name}`,
@@ -129,101 +163,53 @@ const ASSISTANT_TOOLS = TOOL_DEFS
     inputSchema: t.function.parameters,
   }))
 
-// ---- 微信公众号 API 辅助 ----
-const WECHAT_APP_ID = process.env.WECHAT_APPID || ''
-const WECHAT_APP_SECRET = process.env.WECHAT_APPSECRET || ''
-
-interface TokenCache {
-  token: string
-  expiresAt: number
-}
-let _tokenCache: TokenCache | null = null
-
-async function getWeChatToken(): Promise<string> {
-  if (_tokenCache && Date.now() < _tokenCache.expiresAt - 60000) {
-    return _tokenCache.token
-  }
-  if (!WECHAT_APP_ID || !WECHAT_APP_SECRET) {
-    throw new Error('请设置环境变量 WECHAT_APPID 和 WECHAT_APPSECRET')
-  }
-  const resp = await fetch(
-    `https://api.weixin.qq.com/cgi-bin/token?grant_type=client_credential&appid=${WECHAT_APP_ID}&secret=${WECHAT_APP_SECRET}`
-  )
-  const data = await resp.json() as any
-  if (data.errcode) {
-    throw new Error(`微信 Token 获取失败: ${data.errmsg} (${data.errcode})`)
-  }
-  _tokenCache = {
-    token: data.access_token,
-    expiresAt: Date.now() + (data.expires_in - 60) * 1000,
-  }
-  return _tokenCache.token
-}
-
-async function uploadWeChatImage(token: string, filePath: string): Promise<string> {
-  const buf = readFileSync(filePath)
-  const boundary = `----WeFlow${Date.now()}`
-  const filename = filePath.replace(/^.*[\\/]/, '')
-  const ext = filename.split('.').pop()?.toLowerCase() || 'png'
-  const mimeType = ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg' : 'image/png'
-
-  const header = [
-    `--${boundary}`,
-    `Content-Disposition: form-data; name="media"; filename="${filename}"`,
-    `Content-Type: ${mimeType}`,
-    '', '',
-  ].join('\r\n')
-  const trailer = `\r\n--${boundary}--\r\n`
-
-  const headerBytes = new TextEncoder().encode(header)
-  const trailerBytes = new TextEncoder().encode(trailer)
-  const body = new Uint8Array(headerBytes.length + buf.length + trailerBytes.length)
-  body.set(headerBytes, 0)
-  body.set(buf, headerBytes.length)
-  body.set(trailerBytes, headerBytes.length + buf.length)
-
-  const resp = await fetch(
-    `https://api.weixin.qq.com/cgi-bin/material/add_material?access_token=${token}&type=image`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': `multipart/form-data; boundary=${boundary}` },
-      body,
-    }
-  )
-  const data = await resp.json() as any
-  if (data.errcode) {
-    throw new Error(`上传封面图失败: ${data.errmsg} (${data.errcode})`)
-  }
-  return data.media_id
-}
-
-async function createWeChatDraft(token: string, articles: Array<{
-  title: string
-  author?: string
-  digest?: string
-  content: string
-  thumb_media_id?: string
-}>): Promise<string> {
-  const resp = await fetch(
-    `https://api.weixin.qq.com/cgi-bin/draft/add?access_token=${token}`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ articles }),
-    }
-  )
-  const data = await resp.json() as any
-  if (data.errcode) {
-    throw new Error(`创建草稿失败: ${data.errmsg} (${data.errcode})`)
-  }
-  return data.media_id
-}
-
-const PKG_ROOT = resolve(join(dirname(fileURLToPath(import.meta.url)), '..'))
+const PKG_ROOT = resolvePackageRoot(import.meta.url)
 const BIZ_DAILY = join(PKG_ROOT, 'output', 'biz-daily')
 const VAULT_WIKI = join(PKG_ROOT, 'output', 'wechat-vault', 'Wiki', 'Concepts')
 const VAULT_INDEX = join(PKG_ROOT, 'output', 'wechat-vault', 'Wiki', '00-Overview.md')
 const REVIEWS = join(PKG_ROOT, 'output', 'reviews', 'Daily')
+const MCP_MESSAGE_LIMIT_DEFAULT = 100
+const MCP_MESSAGE_LIMIT_MAX = 1000
+
+function parseMessageDate(value: unknown, label: string): number | undefined {
+  if (value === undefined || value === null || value === '') return undefined
+  const date = safeDate(value)
+  if (!date) throw new Error(`${label} 必须是有效的 YYYY-MM-DD 日期`)
+  const [year, month, day] = date.split('-').map(Number)
+  const start = new Date(year, month - 1, day)
+  if (start.getFullYear() !== year || start.getMonth() !== month - 1 || start.getDate() !== day) {
+    throw new Error(`${label} 必须是有效的日历日期`)
+  }
+  return Math.floor(start.getTime() / 1000)
+}
+
+async function resolveMcpTalker(input: unknown): Promise<string> {
+  const contact = String(input || '').trim()
+  if (!contact) throw new Error('contact 不能为空')
+  if (contact.startsWith('wxid_') || contact.includes('@chatroom') || contact.includes('@openim')) return contact
+
+  const sessions = await chatService.listSessions(contact, 20)
+  const exact = sessions.filter(session => session.username === contact || session.displayName === contact)
+  if (exact.length === 1) return exact[0].username
+  if (exact.length > 1 || sessions.length > 1) throw new Error('contact 匹配到多个会话，请使用会话 ID')
+  if (sessions.length === 1) return sessions[0].username
+  throw new Error('未找到对应会话，请使用会话 ID 或准确的会话名称')
+}
+
+async function exportMessagesForMcp(args: Record<string, any>): Promise<string> {
+  const limit = args.limit === undefined ? MCP_MESSAGE_LIMIT_DEFAULT : Number(args.limit)
+  if (!Number.isInteger(limit) || limit < 1 || limit > MCP_MESSAGE_LIMIT_MAX) {
+    throw new Error(`limit 必须是 1-${MCP_MESSAGE_LIMIT_MAX} 的整数`)
+  }
+  const from = parseMessageDate(args.from, 'from')
+  const toStart = parseMessageDate(args.to, 'to')
+  const to = toStart === undefined ? undefined : toStart + 24 * 60 * 60 - 1
+  if (from !== undefined && to !== undefined && from > to) throw new Error('from 不能晚于 to')
+
+  const talker = await resolveMcpTalker(args.contact)
+  const messages = await chatService.getMessagesInRange(talker, limit, from, to)
+  return JSON.stringify(createWeFlowEnvelope(messages), null, 2)
+}
 
 function parseFrontmatter(text: string): Record<string, any> {
   if (!text.startsWith('---')) return {}
@@ -286,72 +272,12 @@ function searchArticles(args: Record<string, any>): string {
   if (args.date) {
     articles = articles.filter(a => a.dateDir === args.date)
   }
-  const limit = Number(args.limit) || 20
+  const limit = boundedToolInteger(args.limit, 20, 100)
   const top = articles.slice(0, limit)
   if (!top.length) return '未找到匹配文章'
   return top.map(a =>
     `- [${a.date}] **${a.title || '(无标题)'}** — ${a.source || ''} [${a.topic || ''}] [${(a.tags || []).join(', ')}]\n  ${(a.description || '').slice(0, 120)}`
   ).join('\n\n')
-}
-
-/** 自动生成封面图（纯色主题渐变 PNG，无外部依赖） */
-function generateCoverImage(title: string, theme: string): string {
-  const colors: Record<string, [number, number, number]> = {
-    warm: [230, 126, 34],
-    default: [52, 152, 219],
-    minimal: [51, 51, 51],
-    green: [39, 174, 96],
-  }
-  const [r, g, b] = colors[theme] || colors.default
-  const w = 900, h = 500
-
-  function crc32(buf: Buffer): number {
-    let c = 0xffffffff
-    for (let i = 0; i < buf.length; i++) {
-      c ^= buf[i]
-      for (let j = 0; j < 8; j++) c = (c >>> 1) ^ (c & 1 ? 0xedb88320 : 0)
-    }
-    return (c ^ 0xffffffff) >>> 0
-  }
-  function chunk(type: string, data: Buffer): Buffer {
-    const head = Buffer.alloc(8)
-    head.writeUInt32BE(data.length, 0)
-    head.write(type, 4)
-    const crcBuf = Buffer.alloc(4)
-    crcBuf.writeUInt32BE(crc32(Buffer.concat([head.slice(4, 8), data])), 0)
-    return Buffer.concat([head, data, crcBuf])
-  }
-
-  const signature = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])
-  const ihdr = Buffer.alloc(13)
-  ihdr.writeUInt32BE(w, 0); ihdr.writeUInt32BE(h, 4)
-  ihdr[8] = 8; ihdr[9] = 2
-
-  const raw = Buffer.alloc(h * (1 + w * 3))
-  for (let y = 0; y < h; y++) {
-    const offset = y * (1 + w * 3)
-    raw[offset] = 0
-    for (let x = 0; x < w; x++) {
-      const px = offset + 1 + x * 3
-      const darken = 0.9 + 0.1 * (y / h)
-      raw[px] = Math.floor(r * darken)
-      raw[px + 1] = Math.floor(g * darken)
-      raw[px + 2] = Math.floor(b * darken)
-    }
-  }
-
-  const png = Buffer.concat([
-    signature,
-    chunk('IHDR', ihdr),
-    chunk('IDAT', deflateSync(raw)),
-    chunk('IEND', Buffer.alloc(0)),
-  ])
-
-  const tmpDir = join(PKG_ROOT, 'output', '.tmp')
-  if (!existsSync(tmpDir)) mkdirSync(tmpDir, { recursive: true })
-  const path = join(tmpDir, `cover-${Date.now()}.png`)
-  writeFileSync(path, png)
-  return path
 }
 
 async function main() {
@@ -429,22 +355,6 @@ async function main() {
         },
       },
       {
-        name: 'wechat.publish_article',
-        description: '排版并发布 Markdown 文章到微信公众号草稿箱。需要设置环境变量 WECHAT_APPID 和 WECHAT_APPSECRET',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            title: { type: 'string', description: '文章标题（≤64字符）' },
-            content: { type: 'string', description: 'Markdown 格式的文章内容' },
-            author: { type: 'string', description: '作者名（≤8字符），默认 "AI Assistant"' },
-            theme: { type: 'string', description: '排版主题: default | warm | minimal | green，默认 default' },
-            cover_image: { type: 'string', description: '封面图本地路径（可选）' },
-            preview_only: { type: 'boolean', description: '仅排版预览不发布草稿，默认 false' },
-          },
-          required: ['title', 'content'],
-        },
-      },
-      {
         name: 'wechat.list_themes',
         description: '列出微信公众号排版可用的所有主题',
         inputSchema: { type: 'object', properties: {} },
@@ -472,6 +382,20 @@ async function main() {
           required: ['url'],
         },
       },
+      {
+        name: 'wechat.export_messages',
+        description: '以 weflow-message/v1 JSON 返回指定会话的本地消息。只读，不返回数据库路径、密钥或配置。',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            contact: { type: 'string', description: '会话 ID，或唯一匹配的会话名称' },
+            limit: { type: 'number', description: '返回上限，默认 100，最大 1000' },
+            from: { type: 'string', description: '起始日期 YYYY-MM-DD（含当天）' },
+            to: { type: 'string', description: '结束日期 YYYY-MM-DD（含当天）' },
+          },
+          required: ['contact'],
+        },
+      },
       // ---- 本地微信数据 (与 weflow-cli assistant / 微信 bot 共享工具层) ----
       ...ASSISTANT_TOOLS,
     ],
@@ -487,6 +411,7 @@ async function main() {
 
         case 'wechat.get_daily': {
           const dates = existsSync(BIZ_DAILY) ? readdirSync(BIZ_DAILY).sort().reverse() : []
+          if (args.date && !safeDate(args.date)) return { content: [{ type: 'text', text: '日期无效，请使用 YYYY-MM-DD' }] }
           const date = safeDate(args.date) || dates.find(d => /^\d{4}-\d{2}-\d{2}$/.test(d)) || ''
           const readme = safeChildPath(BIZ_DAILY, join(date, 'README.md'))
           if (!readme || !existsSync(readme)) return { content: [{ type: 'text', text: `未找到 ${date} 的日报` }] }
@@ -564,79 +489,6 @@ async function main() {
           }
         }
 
-        case 'wechat.publish_article': {
-          const title = String(args.title || '').slice(0, 64)
-          const content = String(args.content || '')
-          const author = String(args.author || 'AI Assistant').slice(0, 8)
-          const theme = String(args.theme || 'default')
-          const coverImage = args.cover_image ? String(args.cover_image) : ''
-          const previewOnly = args.preview_only === true || args.preview_only === 'true'
-
-          if (!title || !content) {
-            return { content: [{ type: 'text', text: '错误: title 和 content 不能为空' }] }
-          }
-
-          // 1. 排版
-          const html = formatWeChatArticle(content, { theme: theme as any })
-          const wordCount = html.replace(/<[^>]*>/g, '').replace(/\s+/g, '').length
-
-          if (previewOnly) {
-            return {
-              content: [{
-                type: 'text',
-                text: [
-                  `[仅预览] 标题: ${title}`,
-                  `作者: ${author} | 主题: ${theme} | 字数: ${wordCount}`,
-                  `---`,
-                  html,
-                ].join('\n')
-              }]
-            }
-          }
-
-          // 2. 发布到草稿箱
-          try {
-            const token = await getWeChatToken()
-
-            // 上传封面图（如果提供，否则自动生成）
-            let thumbMediaId = ''
-            const selectedCover = coverImage ? resolve(coverImage) : null
-            if (selectedCover && isCoverImage(selectedCover)) {
-              thumbMediaId = await uploadWeChatImage(token, selectedCover)
-            } else {
-              // 自动生成封面图
-              const autoCover = generateCoverImage(title, theme)
-              thumbMediaId = await uploadWeChatImage(token, autoCover)
-            }
-
-            // 创建草稿
-            const mediaId = await createWeChatDraft(token, [{
-              title,
-              author,
-              digest: html.replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').slice(0, 120),
-              content: html,
-              thumb_media_id: thumbMediaId || undefined,
-            }])
-
-            return {
-              content: [{
-                type: 'text',
-                text: [
-                  `✅ 已发布到公众号草稿箱`,
-                  `media_id: ${mediaId}`,
-                  `标题: ${title}`,
-                  `作者: ${author} | 主题: ${theme} | 字数: ${wordCount}`,
-                  `封面图: ${thumbMediaId ? '已上传' : '未提供（使用默认）'}`,
-                  '',
-                  `请登录 mp.weixin.qq.com 草稿箱查看和正式发布。`,
-                ].join('\n')
-              }]
-            }
-          } catch (e: any) {
-            return { content: [{ type: 'text', text: `发布失败: ${e.message}\n\n——以下为排版预览——\n\n${html}` }] }
-          }
-        }
-
         case 'wechat.get_stats': {
           const articles = scanArticles()
           const dates = [...new Set(articles.map(a => a.dateDir))].sort()
@@ -660,7 +512,12 @@ async function main() {
         case 'wechat.search_public': {
           const keyword = String(args.keyword || '').trim()
           if (!keyword) return { content: [{ type: 'text', text: '错误: keyword 不能为空' }] }
-          const limit = Number(args.limit) || 10
+          let limit = 10
+          try {
+            limit = boundedToolInteger(args.limit, 10, 20)
+          } catch {
+            return { content: [{ type: 'text', text: '错误: limit 必须是 1-20 的整数' }] }
+          }
 
           try {
             // 使用搜狗微信搜索
@@ -671,11 +528,12 @@ async function main() {
                   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
                   'Referer': 'https://weixin.sogou.com/',
                   'Accept': 'text/html',
-                  'Accept-Language': 'zh-CN,zh;q=0.9',
+                'Accept-Language': 'zh-CN,zh;q=0.9',
                 },
+                signal: AbortSignal.timeout(20_000),
               }
             )
-            const html = await resp.text()
+            const html = await readResponseTextLimited(resp, 2 * 1024 * 1024)
 
             // 从搜狗结果中提取标题、公众号名、摘要
             // 搜狗将结果放在 li 标签中，每篇文章包含标题链接 + 摘要
@@ -739,16 +597,16 @@ async function main() {
                 ].join('\n')
               }]
             }
-          } catch (e: any) {
-            return { content: [{ type: 'text', text: `搜索失败: ${e.message}` }] }
+          } catch {
+            return { content: [{ type: 'text', text: '搜索失败，请检查网络连接后重试' }] }
           }
         }
 
         case 'wechat.fetch_article': {
           const url = String(args.url || '').trim()
           if (!url) return { content: [{ type: 'text', text: '错误: url 不能为空' }] }
-          if (!url.includes('mp.weixin.qq.com')) {
-            return { content: [{ type: 'text', text: '错误: 仅支持微信公众号文章链接 (mp.weixin.qq.com)' }] }
+          if (!isAllowedWeChatArticleUrl(url)) {
+            return { content: [{ type: 'text', text: '错误: 仅支持 HTTPS 微信公众号文章链接 (mp.weixin.qq.com)' }] }
           }
 
           try {
@@ -765,9 +623,13 @@ async function main() {
                 ].join('\n')
               }]
             }
-          } catch (e: any) {
-            return { content: [{ type: 'text', text: `抓取失败: ${e.message}\n\n提示: 部分文章需要微信客户端环境才能访问，可尝试在微信中打开后复制链接。` }] }
+          } catch {
+            return { content: [{ type: 'text', text: '抓取失败，请检查链接和网络连接。部分文章需要微信客户端环境才能访问。' }] }
           }
+        }
+
+        case 'wechat.export_messages': {
+          return { content: [{ type: 'text', text: await exportMessagesForMcp(args) }] }
         }
 
         default: {
@@ -779,8 +641,8 @@ async function main() {
           return { content: [{ type: 'text', text: `未知工具: ${name}` }] }
         }
       }
-    } catch (e: any) {
-      return { content: [{ type: 'text', text: `错误: ${e.message}` }] }
+    } catch {
+      return { content: [{ type: 'text', text: '工具执行失败，请检查输入、本地配置或运行状态' }] }
     }
   })
 

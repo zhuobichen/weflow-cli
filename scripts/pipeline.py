@@ -68,12 +68,13 @@ def main():
                   f'环境变量 DEEPSEEK_API_KEY 或 ~/.weflow-cli/config.json 提供')
             sys.exit(1)
 
+    if api_key:
+        os.environ['DEEPSEEK_API_KEY'] = api_key
+
     started = time.time()
 
     # Step 1: biz_daily
     step1_args = [os.path.join(SCRIPTS_DIR, 'biz_daily.py'), '--engine', args.engine]
-    if api_key:
-        step1_args += ['--api-key', api_key]
     if args.date:
         step1_args += ['--date', args.date]
     for source in args.source:
@@ -89,8 +90,6 @@ def main():
             os.path.join(SCRIPTS_DIR, 'classify_daily.py'),
             '--engine', args.engine,
         ]
-        if api_key:
-            step2_args += ['--api-key', api_key]
         step2_args += ['--interest', args.interest]
         if args.date:
             step2_args.insert(1, args.date)
@@ -114,7 +113,6 @@ def main():
     if not args.skip_wiki and not args.no_ai:
         step3_args = [
             os.path.join(SCRIPTS_DIR, 'compile_wiki.py'),
-            '--api-key', api_key if api_key else 'local',
             '--limit', str(args.wiki_limit),
         ]
         run_step('wiki compile — 概念编译', step3_args)
@@ -141,8 +139,6 @@ def main():
             '--engine', args.engine,
             '--range', str(args.ai_report_range),
         ]
-        if api_key:
-            step8_args += ['--api-key', api_key]
         if args.date and args.ai_report_range == 1:
             step8_args += ['--date', args.date]
         run_step('generate_ai_report — AI 阅读日报', step8_args)

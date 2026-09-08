@@ -2,8 +2,8 @@
 import { Command } from 'commander'
 import chalk from 'chalk'
 import inquirer from 'inquirer'
-import { join } from 'path'
-import { existsSync, readFileSync, writeFileSync } from 'fs'
+import { basename, join } from 'path'
+import { existsSync, readFileSync, statSync, writeFileSync } from 'fs'
 import { homedir } from 'os'
 import { dbPathService } from '../src/core/dbPathService.js'
 import { keyService } from '../src/core/keyService.js'
@@ -14,12 +14,106 @@ import { exportService } from '../src/services/exportService.js'
 import { writeEvidencePackage } from '../src/services/evidenceService.js'
 import { resolveTalker as resolveTalkerCore } from '../src/utils/talkerUtils.js'
 import { getPythonCommand } from '../src/utils/python.js'
+import { createPythonProcessEnv, safeSubprocessError } from '../src/utils/pythonProcessEnv.js'
+import { DateRangeError, parseLocalDateOrIso, resolveExportDateRange } from '../src/utils/dateRange.js'
+import { resolvePackageRoot as resolvePackageRootFrom } from '../src/utils/packageRoot.js'
 import { WechatMessageService } from '../src/services/wechatMessageService.js'
 import { whitelistService, MAX_TEXT_LENGTH } from '../src/services/whitelistService.js'
 import { applyDerivedNtKeys, enableFavorites, detectFavDbPath } from '../src/services/initKeyService.js'
 import type { ChatSession } from '../src/types.js'
 
 const program = new Command()
+
+function resolvePackageRoot(): string {
+  return resolvePackageRootFrom(import.meta.url)
+}
+
+function pythonProcessEnv(apiKey?: string, variable = 'DEEPSEEK_API_KEY'): NodeJS.ProcessEnv {
+  return createPythonProcessEnv(apiKey ? { [variable]: apiKey } : {})
+}
+
+function parseCliInteger(value: unknown, field: string, minimum: number, maximum: number, json = false): number {
+  const parsed = Number(value)
+  if (Number.isInteger(parsed) && parsed >= minimum && parsed <= maximum) return parsed
+  const error = `${field} 必须是 ${minimum}-${maximum} 的整数`
+  if (json) console.log(JSON.stringify({ success: false, code: 'INVALID_ARGUMENT', field, error }))
+  else console.log(chalk.red(error))
+  process.exit(1)
+}
+
+function requireCliDate(value: string, json = false): string {
+  try {
+    parseLocalDateOrIso(value)
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) throw new DateRangeError('INVALID_DATE', '日期无效')
+    return value
+  } catch {
+    if (json) console.log(JSON.stringify({ success: false, code: 'INVALID_DATE', field: 'date' }))
+    else console.log(chalk.red('date 必须是有效的 YYYY-MM-DD 日期'))
+    process.exit(1)
+  }
+}
+
+async function runConfirmedPythonMutation(options: {
+  action: string
+  script: string
+  args: string[]
+  cliOptions: { dryRun?: boolean; yes?: boolean; json?: boolean }
+  preview: Record<string, unknown>
+  confirmationMessage: string
+  apiKey?: string
+  apiKeyVariable?: string
+  timeout?: number
+}): Promise<void> {
+  const preview = { success: true, dryRun: true, action: options.action, ...options.preview }
+  if (options.cliOptions.dryRun) {
+    if (options.cliOptions.json) console.log(JSON.stringify(preview))
+    else console.log(chalk.cyan(options.confirmationMessage.replace(/^确认/, '预览：')))
+    return
+  }
+  if (!options.cliOptions.yes) {
+    if (options.cliOptions.json) {
+      console.log(JSON.stringify({ ...preview, success: false, dryRun: false, code: 'CONFIRMATION_REQUIRED' }))
+      process.exit(1)
+    }
+    const { confirmed } = await inquirer.prompt([{
+      type: 'confirm',
+      name: 'confirmed',
+      message: options.confirmationMessage,
+      default: false,
+    }])
+    if (!confirmed) {
+      console.log(chalk.gray('已取消'))
+      return
+    }
+  }
+
+  const { execFile } = await import('child_process')
+  const { promisify } = await import('util')
+  try {
+    const { stdout } = await promisify(execFile)(getPythonCommand(), [options.script, ...options.args], {
+      timeout: options.timeout || 120_000,
+      maxBuffer: 50 * 1024 * 1024,
+      env: pythonProcessEnv(options.apiKey, options.apiKeyVariable || 'DEEPSEEK_API_KEY'),
+    })
+    if (options.cliOptions.json) console.log(JSON.stringify({ success: true, action: options.action }))
+    else console.log(stdout)
+  } catch (error) {
+    if (options.cliOptions.json) {
+      console.log(JSON.stringify({ success: false, code: 'PYTHON_MUTATION_FAILED', action: options.action, error: safeSubprocessError(error) }))
+    } else {
+      console.error(chalk.red(`\n✗ ${safeSubprocessError(error)}`))
+    }
+    process.exit(1)
+  }
+}
+
+async function openLocalUrl(url: string): Promise<void> {
+  const { spawn } = await import('child_process')
+  const command = process.platform === 'win32' ? 'rundll32.exe' : process.platform === 'darwin' ? 'open' : 'xdg-open'
+  const args = process.platform === 'win32' ? ['url.dll,FileProtocolHandler', url] : [url]
+  const child = spawn(command, args, { detached: true, stdio: 'ignore', windowsHide: true })
+  child.unref()
+}
 
 /**
  * 尝试从 WeFlow 桌面版配置中读取已保存的密钥
@@ -71,11 +165,11 @@ function tryReadWeFlowKey(): string | null {
  * CLI 包装的 talker 解析 (wxid / 昵称 / 备注名 / 序号)。
  * 委托给 src/utils/talkerUtils 的核心实现，外加 chalk 友好输出。
  */
-async function resolveTalker(input: string): Promise<string> {
+async function resolveTalker(input: string, quiet = false, nonInteractive = false): Promise<string> {
   try {
-    const result = await resolveTalkerCore(input)
+    const result = await resolveTalkerCore(input, { interactive: !nonInteractive })
     // 显示解析结果（已知格式跳过打印）
-    if (!input.startsWith('wxid_') && !input.includes('@chatroom') && !input.includes('@openim')) {
+    if (!quiet && !input.startsWith('wxid_') && !input.includes('@chatroom') && !input.includes('@openim')) {
       const isNum = /^\[?\d+\]?$/.test(input)
       const sessions = await chatService.listSessions(undefined, 50)
       const match = sessions.find(s => s.username === result)
@@ -86,6 +180,10 @@ async function resolveTalker(input: string): Promise<string> {
     }
     return result
   } catch (e: any) {
+    if (quiet) {
+      console.log(JSON.stringify({ success: false, code: 'TALKER_RESOLUTION_FAILED', error: e.message }))
+      process.exit(1)
+    }
     console.log(chalk.red(`\n❌ ${e.message}\n`))
     process.exit(1)
   }
@@ -101,6 +199,236 @@ program
   .description('WeFlow CLI - 微信聊天记录命令行查询与导出工具')
   .version('1.5.1')
 
+program
+  .command('capabilities')
+  .description('输出 AI 可调用的功能能力清单')
+  .option('--json', '输出 JSON 格式')
+  .action((opts) => {
+    const data = {
+      schema: 'weflow-capabilities/v1',
+      version: '1.5.1',
+      read: {
+        sessions: { cli: 'sessions --json', mcp: 'wechat.list_sessions' },
+        messages: { cli: 'messages <talker> --json', mcp: 'wechat.export_messages' },
+        contacts: { cli: 'contacts --json' },
+        exports: { cli: 'export <talker> <json|txt|html|excel>', mcp: 'wechat.export_messages' },
+        favorites: {
+          cli: 'fav list --json',
+          export: 'fav export <markdown|json> --json-result --output <local-file>',
+          mcp: 'wechat.search_favorites',
+        },
+        configuration: { cli: 'config show --json', secretsIncluded: false },
+        accessControl: {
+          whitelist: 'whitelist list --json',
+          blacklist: 'blacklist list --json',
+          sensitiveLocalIdentifiers: true,
+        },
+        moments: {
+          timeline: 'sns timeline --json',
+          users: 'sns users --json',
+          stats: 'sns stats --json',
+        },
+        daily: {
+          preview: 'daily --no-ai --dry-run --json',
+          execute: 'daily --no-ai --yes --json',
+          confirmationRequired: true,
+          logs: 'stderr',
+          result: 'stdout',
+        },
+        dailyReader: { cli: 'daily-server --status --json' },
+        dailyStats: { cli: 'daily-stats --json' },
+        diagnostics: { cli: 'check --json' },
+        todos: { cli: 'todos list --json' },
+        knowledge: { cli: 'search <query> --yes --json', preview: 'search <query> --dry-run --json', output: 'json', mcp: 'wechat.search_articles' },
+      },
+      workflows: {
+        initialization: {
+          preview: 'init --dry-run --json',
+          execute: 'init',
+          interactiveRequired: true,
+          machineExecutionAllowed: false,
+          previewExposesPaths: false,
+        },
+        evidencePackage: { cli: 'evidence <talker> --json --non-interactive', localOnly: true },
+        aiAnalysis: {
+          preview: 'evidence-review <talker> --dry-run --json',
+          execute: 'evidence-review <talker> --yes --json',
+          explicitOptIn: true,
+          cloudRequiresAllowCloud: true,
+          confirmationRequired: true,
+        },
+        messaging: {
+          preview: 'send <target> <message> --dry-run --json',
+          execute: 'send <target> <message> --yes --json',
+          confirmationRequired: true,
+          channel: 'official-bot-existing-conversation',
+        },
+        todoMutations: {
+          preview: 'todos <done|undone|rm> <id> --dry-run --json',
+          execute: 'todos <done|undone|rm> <id> --yes --json',
+          confirmationRequired: true,
+        },
+        accessControlMutations: {
+          preview: '<whitelist|blacklist> <add|rm> <target> --dry-run --json',
+          execute: '<whitelist|blacklist> <add|rm> <target> --yes --json',
+          confirmationRequired: true,
+          sensitiveLocalIdentifiers: true,
+        },
+        secretConfiguration: {
+          preview: 'config set-env <key> <environment> --dry-run --json',
+          execute: 'config set-env <key> <environment> --yes --json',
+          favoriteKeyPreview: 'fav set-key --from-env <environment> --dry-run --json',
+          favoriteKeyExecute: 'fav set-key --from-env <environment> --yes --json',
+          valuesInArguments: false,
+          confirmationRequired: true,
+        },
+        databaseKeyReset: {
+          preview: 'config forget-keys --dry-run --json',
+          cli: 'config forget-keys --yes --json',
+          confirmationRequired: true,
+        },
+        assistantDaemon: {
+          status: 'assistant status --json',
+          preview: 'assistant <start|stop> --dry-run --json',
+          execute: 'assistant <start|stop> --yes --json',
+          confirmationRequired: true,
+        },
+        messageChannelAuthentication: {
+          loginPreview: 'login-wechat --dry-run --json',
+          loginExecute: 'login-wechat --yes',
+          loginInteractiveRequired: true,
+          logoutPreview: 'logout-wechat --dry-run --json',
+          logoutExecute: 'logout-wechat --yes --json',
+          confirmationRequired: true,
+        },
+        interactiveKeyCapture: {
+          previews: ['dbkey --dry-run --json', 'sns capture-key --dry-run --json'],
+          executes: ['dbkey --yes', 'sns capture-key --yes'],
+          interactiveRequired: true,
+          machineExecutionAllowed: false,
+        },
+        foregroundMessageProcesses: {
+          previews: ['listen --dry-run --json', 'assistant run --dry-run --json'],
+          executes: ['listen --yes', 'assistant run --yes'],
+          interactiveRequired: true,
+          machineExecutionAllowed: false,
+        },
+        vaultSync: {
+          preview: 'vault sync --dry-run --json',
+          execute: 'vault sync --yes --json',
+          confirmationRequired: true,
+          previewExposesFileNames: false,
+          resultExposesRemote: false,
+        },
+        vaultInitialization: {
+          preview: 'vault init --path <local-directory> --dry-run --json',
+          execute: 'vault init --path <local-directory> --yes --json',
+          confirmationRequired: true,
+          previewExposesPaths: false,
+          overwritesManagedFiles: true,
+        },
+        semanticIndex: {
+          preview: 'search-index --dry-run --json',
+          execute: 'search-index --yes --json',
+          fullRebuild: 'search-index --full --yes --json',
+          confirmationRequired: true,
+          sendsTextToEmbeddingProvider: true,
+        },
+        knowledgePipeline: {
+          preview: 'pipeline run --no-ai --dry-run --json',
+          execute: 'pipeline run --no-ai --yes --json',
+          confirmationRequired: true,
+          supportsSourceFilter: true,
+          aiCanBeDisabled: true,
+        },
+        vaultContentMutations: {
+          commands: ['vault enrich', 'vault notes', 'vault tag', 'vault sync-weread', 'vault promote ideas', 'vault promote all', 'wiki compile'],
+          previewFlag: '--dry-run --json',
+          executeFlag: '--yes --json',
+          confirmationRequired: true,
+          aiRequiresExplicitOptIn: true,
+        },
+        dailyFavoriteMutations: {
+          commands: ['daily favorites sync', 'daily favorites add', 'daily favorites remove'],
+          previewFlag: '--dry-run --json',
+          executeFlag: '--yes --json',
+          confirmationRequired: true,
+          previewExposesArticleNames: false,
+        },
+        dailyReader: {
+          status: 'daily-server --status --json',
+          previewStart: 'daily-server --dry-run --json',
+          executeStart: 'daily-server --yes --json',
+          confirmationRequired: true,
+          loopbackOnly: true,
+        },
+        reportGeneration: {
+          commands: ['report', 'review', 'annual-report', 'chat-stats'],
+          previewFlag: '--dry-run --json',
+          executeFlag: '--yes --json',
+          confirmationRequired: true,
+          resultExposesContent: false,
+        },
+        todoExtraction: {
+          preview: 'todos extract --days <n> --dry-run --json',
+          execute: 'todos extract --days <n> --yes --json',
+          confirmationRequired: true,
+          sendsSelectedChatToAi: true,
+          resultExposesTodoText: false,
+        },
+        vaultRag: {
+          preview: 'vault rag <question> --dry-run --json',
+          execute: 'vault rag <question> --yes --json',
+          confirmationRequired: true,
+          sendsSelectedKnowledgeToAi: true,
+          questionInProcessArguments: false,
+        },
+        semanticQuery: {
+          preview: 'search <query> --dry-run --json',
+          execute: 'search <query> --yes --json',
+          confirmationRequired: true,
+          mayUseCloudEmbedding: true,
+          queryInProcessArguments: false,
+        },
+        ragChat: {
+          preview: 'chat <question> --dry-run --json',
+          execute: 'chat <question> --yes --json',
+          confirmationRequired: true,
+          sendsSelectedKnowledgeToAi: true,
+          questionInProcessArguments: false,
+          interactiveModeMachineExecutionAllowed: false,
+        },
+        diagnostics: {
+          accountScan: 'scan --json',
+          assistantLogStatus: 'assistant log --json',
+          sensitiveValuesInStatus: false,
+        },
+        mcpConfiguration: {
+          read: 'mcp-config',
+          previewWrite: 'mcp-config --output <file> --dry-run --json-result',
+          executeWrite: 'mcp-config --output <file> --yes --json-result',
+          confirmationRequired: true,
+        },
+        destructiveClear: {
+          commands: ['config clear', 'whitelist clear', 'blacklist clear', 'audit clear'],
+          previewFlag: '--dry-run --json',
+          confirmationFlag: '--yes',
+          confirmationRequired: true,
+          previewExposesEntries: false,
+        },
+      },
+      safety: {
+        localByDefault: true,
+        aiDisabledByDefaultForExport: true,
+        unknownMessageTypesPreserved: true,
+        nonInteractiveTalkerResolution: true,
+        mcpDefaultReadOnly: true,
+        mcpMessageLimit: { default: 100, max: 1000 },
+      },
+    }
+    console.log(JSON.stringify(data, null, 2))
+  })
+
 // ==================== init ====================
 program
   .command('init')
@@ -110,7 +438,32 @@ program
   .option('--full-scan', '目录名被修改时，使用深度磁盘结构扫描（耗时较长）')
   .option('--refresh', '忽略已有配置并重新初始化')
   .option('--test-missing-keys', '仅在本次运行模拟密钥缺失，不修改已保存配置')
+  .option('--dry-run', '仅预览，不连接数据库、扫描磁盘、捕获密钥或修改配置')
+  .option('--json', '输出机器可读预览；实际初始化必须在交互终端执行')
   .action(async (opts) => {
+    const preview = {
+      success: true,
+      dryRun: true,
+      action: 'initialize',
+      interactiveRequired: true,
+      configured: configService.isConfigured(),
+      refreshRequested: Boolean(opts.refresh),
+      explicitPathProvided: Boolean(opts.path),
+      driveSearchRequested: Boolean(opts.searchDrives),
+      fullScanRequested: Boolean(opts.fullScan),
+      missingKeyTestRequested: Boolean(opts.testMissingKeys),
+      mayScanProcessMemory: true,
+      mayWriteConfiguration: true,
+    }
+    if (opts.dryRun) {
+      if (opts.json) console.log(JSON.stringify(preview))
+      else console.log(chalk.cyan('初始化预览：可能检查数据库、搜索数据目录、捕获密钥并更新本地配置。'))
+      return
+    }
+    if (opts.json) {
+      console.log(JSON.stringify({ ...preview, success: false, dryRun: false, code: 'INTERACTIVE_REQUIRED' }))
+      process.exit(1)
+    }
     console.log(chalk.cyan('🔧 WeFlow CLI 初始化\n'))
 
     if (opts.testMissingKeys) {
@@ -477,11 +830,86 @@ const configCmd = program
   .command('config')
   .description('查看或修改配置')
 
+const configurableKeys = [
+  'dbPath', 'decryptKey', 'dbPath3x', 'decryptKey3x', 'dataVersion', 'wxid',
+  'ntDbPath', 'ntKey', 'ntSalt', 'contactDbPath', 'contactKey', 'contactSalt',
+  'vaultRepo', 'aiEngine', 'aiBaseUrl', 'aiModel', 'deepseekApiKey', 'wereadApiKey',
+  'assistantPrivacy', 'assistantWhitelist', 'assistantGroupWhitelist',
+  'assistantGroupRequireMention', 'dailySources', 'dailySourceCategories', 'dailyAiEnabled',
+] as const
+
+function setConfigValue(key: string, value: string, quiet = false): void {
+  if (!configurableKeys.includes(key as typeof configurableKeys[number])) {
+    console.log(chalk.red(`无效的配置项: ${key}`))
+    console.log(chalk.gray(`可用: ${configurableKeys.join(', ')}`))
+    process.exit(1)
+  }
+  const configValue = key === 'dailySourceCategories' && value.startsWith('base64:')
+    ? Buffer.from(value.slice('base64:'.length), 'base64').toString('utf8')
+    : value
+  configService.set(key as any, configValue)
+  if (!quiet) console.log(chalk.green(`✓ 已设置 ${key}`))
+}
+
+function ensureConfigurableKey(key: string, json: boolean): void {
+  if (configurableKeys.includes(key as typeof configurableKeys[number])) return
+  if (json) console.log(JSON.stringify({ success: false, code: 'INVALID_CONFIG_KEY', error: '配置项不可写', key }))
+  else {
+    console.log(chalk.red(`无效的配置项: ${key}`))
+    console.log(chalk.gray(`可用: ${configurableKeys.join(', ')}`))
+  }
+  process.exit(1)
+}
+
 configCmd
   .command('show')
   .description('显示当前配置')
-  .action(() => {
+  .option('--json', '输出脱敏 JSON，不返回路径、账号或密钥')
+  .action((opts) => {
     const config = configService.getAll()
+    if (opts.json) {
+      let sourceCategoryCount = 0
+      try {
+        const categories = JSON.parse(String(configService.get('dailySourceCategories') || '{}'))
+        sourceCategoryCount = categories && typeof categories === 'object' && !Array.isArray(categories)
+          ? Object.keys(categories).length
+          : 0
+      } catch {}
+      const dailySources = String(configService.get('dailySources') || '')
+        .split(/[,;\n]+/)
+        .map(value => value.trim())
+        .filter(Boolean)
+      console.log(JSON.stringify({
+        success: true,
+        schema: 'weflow-config-status/v1',
+        initialized: configService.isConfigured(),
+        dataVersion: config.dataVersion || null,
+        databases: {
+          legacyConfigured: !!config.dbPath3x && !!config.decryptKey3x,
+          messageConfigured: !!config.ntDbPath && !!config.ntKey,
+          contactsConfigured: !!config.contactDbPath && !!config.contactKey,
+          momentsConfigured: !!configService.get('snsDbPath') && !!configService.get('snsKey'),
+          favoritesConfigured: !!configService.get('favDbPath') && (!!configService.get('favKey') || !!configService.get('favPassphrase')),
+        },
+        ai: {
+          engine: configService.get('aiEngine') || 'deepseek',
+          configured: ['ollama', 'lmstudio'].includes(String(configService.get('aiEngine') || 'deepseek')) || !!configService.get('deepseekApiKey'),
+          dailyEnabled: configService.get('dailyAiEnabled') !== 'false',
+        },
+        daily: {
+          restrictedSources: dailySources.length > 0,
+          sourceCount: dailySources.length,
+          categorizedSourceCount: sourceCategoryCount,
+        },
+        assistant: {
+          privacyMode: configService.get('assistantPrivacy') || 'strict',
+          directWhitelistConfigured: !!String(configService.get('assistantWhitelist') || '').trim(),
+          groupWhitelistConfigured: !!String(configService.get('assistantGroupWhitelist') || '').trim(),
+          groupMentionRequired: configService.get('assistantGroupRequireMention') !== 'false',
+        },
+      }, null, 2))
+      return
+    }
     console.log(chalk.cyan('当前配置:\n'))
     console.log(`数据版本: ${config.dataVersion || chalk.gray('(自动检测)')}`)
     console.log(`4.x 数据目录: ${config.dbPath || chalk.gray('(未设置)')}`)
@@ -500,34 +928,113 @@ configCmd
 configCmd
   .command('set <key> <value>')
   .description('设置配置项')
-  .action((key: string, value: string) => {
-    const validKeys = ['dbPath', 'decryptKey', 'dbPath3x', 'decryptKey3x', 'dataVersion', 'wxid', 'ntDbPath', 'ntKey', 'ntSalt', 'contactDbPath', 'contactKey', 'contactSalt', 'vaultRepo', 'aiEngine', 'aiBaseUrl', 'aiModel', 'assistantPrivacy', 'assistantWhitelist', 'assistantGroupWhitelist', 'assistantGroupRequireMention', 'dailySources', 'dailySourceCategories', 'dailyAiEnabled']
-    if (!validKeys.includes(key)) {
-      console.log(chalk.red(`无效的配置项: ${key}`))
-      console.log(chalk.gray(`可用: ${validKeys.join(', ')}`))
+  .option('--dry-run', '仅预览，不修改配置')
+  .option('--yes', '确认执行')
+  .option('--json', '输出 JSON 格式，不返回配置值')
+  .action((key: string, value: string, opts) => {
+    ensureConfigurableKey(key, !!opts.json)
+    const preview = { action: 'config.set', key, source: 'argument' }
+    if (opts.dryRun) {
+      if (opts.json) console.log(JSON.stringify({ success: true, dryRun: true, ...preview }))
+      else console.log(chalk.cyan(`将设置配置项 ${key}`))
+      return
+    }
+    if (opts.json && !opts.yes) {
+      console.log(JSON.stringify({ success: false, code: 'CONFIRMATION_REQUIRED', error: '使用 --yes 确认修改配置', ...preview }))
       process.exit(1)
     }
-    const configValue = key === 'dailySourceCategories' && value.startsWith('base64:')
-      ? Buffer.from(value.slice('base64:'.length), 'base64').toString('utf8')
-      : value
-    configService.set(key as any, configValue)
-    console.log(chalk.green(`✓ 已设置 ${key}`))
+    setConfigValue(key, value, !!opts.json)
+    if (opts.json) console.log(JSON.stringify({ success: true, changed: true, ...preview }))
+  })
+
+configCmd
+  .command('set-env <key> <environment>')
+  .description('从环境变量读取值并保存，避免秘密出现在命令参数中')
+  .option('--dry-run', '仅预览，不修改配置')
+  .option('--yes', '确认执行')
+  .option('--json', '输出 JSON 格式，不返回环境变量值')
+  .action((key: string, environment: string, opts) => {
+    ensureConfigurableKey(key, !!opts.json)
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(environment)) {
+      if (opts.json) console.log(JSON.stringify({ success: false, code: 'INVALID_ENVIRONMENT_NAME', error: '环境变量名称无效' }))
+      else console.log(chalk.red('环境变量名称无效'))
+      process.exit(1)
+    }
+    const value = process.env[environment]
+    if (!value) {
+      if (opts.json) console.log(JSON.stringify({ success: false, code: 'ENVIRONMENT_VALUE_MISSING', error: `环境变量 ${environment} 未设置或为空` }))
+      else console.log(chalk.red(`环境变量 ${environment} 未设置或为空`))
+      process.exit(1)
+    }
+    const preview = { action: 'config.set-env', key, environment }
+    if (opts.dryRun) {
+      if (opts.json) console.log(JSON.stringify({ success: true, dryRun: true, ...preview }))
+      else console.log(chalk.cyan(`将从环境变量 ${environment} 设置配置项 ${key}`))
+      return
+    }
+    if (opts.json && !opts.yes) {
+      console.log(JSON.stringify({ success: false, code: 'CONFIRMATION_REQUIRED', error: '使用 --yes 确认修改配置', ...preview }))
+      process.exit(1)
+    }
+    setConfigValue(key, value, !!opts.json)
+    if (opts.json) console.log(JSON.stringify({ success: true, changed: true, ...preview }))
   })
 
 configCmd
   .command('clear')
   .description('清除所有配置')
-  .action(() => {
+  .option('--dry-run', '仅预览，不清除配置')
+  .option('--yes', '确认清除全部配置')
+  .option('--json', '输出 JSON 格式')
+  .action(async (opts) => {
+    if (opts.dryRun) {
+      const preview = { success: true, dryRun: true, action: 'config.clear', hasConfiguration: Object.keys(configService.getAll()).length > 0 }
+      if (opts.json) console.log(JSON.stringify(preview))
+      else console.log(chalk.cyan('配置清除预览：将删除数据库访问、AI、日报、访问控制和助手设置。'))
+      return
+    }
+    if (!opts.yes) {
+      if (opts.json) {
+        console.log(JSON.stringify({ success: false, code: 'CONFIRMATION_REQUIRED', error: '使用 --yes 确认清除全部配置' }))
+        process.exit(1)
+      }
+      const { confirmed } = await inquirer.prompt([{
+        type: 'confirm',
+        name: 'confirmed',
+        message: '将清除数据库访问、AI、日报、白名单和机器人等全部配置。继续吗？',
+        default: false,
+      }])
+      if (!confirmed) {
+        console.log(chalk.gray('已取消，未修改配置。'))
+        return
+      }
+    }
     configService.clear()
+    if (opts.json) {
+      console.log(JSON.stringify({ success: true, action: 'config.clear' }))
+      return
+    }
     console.log(chalk.green('✓ 配置已清除'))
   })
 
 configCmd
   .command('forget-keys')
   .description('仅清除本机数据库访问密钥，用于重新初始化测试')
+  .option('--dry-run', '仅预览，不清除数据库访问密钥')
   .option('--yes', '跳过确认')
+  .option('--json', '输出 JSON 格式')
   .action(async (opts) => {
+    if (opts.dryRun) {
+      const preview = { success: true, dryRun: true, action: 'config.forget-keys', preservesNonDatabaseSettings: true }
+      if (opts.json) console.log(JSON.stringify(preview))
+      else console.log(chalk.cyan('数据库密钥清除预览：保留数据目录、AI、日报、访问控制和助手设置。'))
+      return
+    }
     if (!opts.yes) {
+      if (opts.json) {
+        console.log(JSON.stringify({ success: false, code: 'CONFIRMATION_REQUIRED', error: '使用 --yes 确认清除数据库访问密钥' }))
+        process.exit(1)
+      }
       const { confirmed } = await inquirer.prompt([{
         type: 'confirm',
         name: 'confirmed',
@@ -541,6 +1048,10 @@ configCmd
     }
 
     configService.clearDatabaseKeys()
+    if (opts.json) {
+      console.log(JSON.stringify({ success: true, action: 'config.forget-keys' }))
+      return
+    }
     console.log(chalk.green('✓ 已清除数据库访问密钥。'))
     console.log(chalk.gray('  数据目录、AI、日报、白名单和机器人设置均已保留。'))
     console.log(chalk.gray('  现在可运行 weflow-cli init 测试首次初始化流程。'))
@@ -552,18 +1063,26 @@ program
   .description('查看会话列表')
   .option('-k, --keyword <keyword>', '搜索关键词')
   .option('-n, --limit <number>', '最大数量', '30')
+  .option('--json', '输出 JSON 格式')
   .action(async (opts) => {
+    const limit = parseCliInteger(opts.limit, 'limit', 1, 1000, !!opts.json)
     if (!configService.isConfigured()) {
+      if (opts.json) { console.log(JSON.stringify({ success: false, error: '未完成初始化' })); process.exit(1) }
       console.log(chalk.red('请先运行 weflow-cli init'))
       process.exit(1)
     }
 
-    const sessions = await chatService.listSessions(opts.keyword, parseInt(opts.limit))
+    const sessions = await chatService.listSessions(opts.keyword, limit)
     if (sessions.length === 0) {
+      if (opts.json) { console.log(JSON.stringify({ success: true, sessions: [] })); return }
       console.log(chalk.gray('未找到会话'))
       return
     }
 
+    if (opts.json) {
+      console.log(JSON.stringify({ success: true, sessions }, null, 2))
+      return
+    }
     console.log(chalk.cyan(`会话列表 (${sessions.length} 条):\n`))
     console.log(chalk.gray('序号  会话ID                昵称            最后消息'))
     console.log(chalk.gray('─'.repeat(70)))
@@ -586,26 +1105,41 @@ program
   .option('-o, --offset <number>', '偏移量', '0')
   .option('-s, --start <timestamp>', '开始时间戳')
   .option('-e, --end <timestamp>', '结束时间戳')
+  .option('--json', '输出 JSON 格式')
+  .option('--non-interactive', '禁止交互选择；匹配不唯一时返回错误')
   .action(async (talkerInput: string, opts) => {
+    const limit = parseCliInteger(opts.limit, 'limit', 1, 5000, !!opts.json)
+    const offset = parseCliInteger(opts.offset, 'offset', 0, 1_000_000, !!opts.json)
+    const start = opts.start === undefined ? undefined : parseCliInteger(opts.start, 'start', 0, Number.MAX_SAFE_INTEGER, !!opts.json)
+    const end = opts.end === undefined ? undefined : parseCliInteger(opts.end, 'end', 0, Number.MAX_SAFE_INTEGER, !!opts.json)
+    if (start !== undefined && end !== undefined && start > end) {
+      if (opts.json) console.log(JSON.stringify({ success: false, code: 'INVALID_ARGUMENT', field: 'start', error: 'start 不能晚于 end' }))
+      else console.log(chalk.red('start 不能晚于 end'))
+      process.exit(1)
+    }
     if (!configService.isConfigured()) {
+      if (opts.json) { console.log(JSON.stringify({ success: false, error: '未完成初始化' })); process.exit(1) }
       console.log(chalk.red('\n❌ 还没配置'))
       console.log(chalk.gray('  运行: weflow-cli init\n'))
       process.exit(1)
     }
 
-    const talker = await resolveTalker(talkerInput)
+    const talker = await resolveTalker(talkerInput, opts.json, opts.nonInteractive || opts.json)
 
-    const messages = await chatService.getMessages(
-      talker,
-      parseInt(opts.limit),
-      parseInt(opts.offset)
-    )
+    const messages = start !== undefined || end !== undefined
+      ? (await chatService.getMessagesInRange(talker, limit + offset, start, end)).slice(offset, offset + limit)
+      : await chatService.getMessages(talker, limit, offset)
 
     if (messages.length === 0) {
+      if (opts.json) { console.log(JSON.stringify({ success: true, talker, messages: [] })); return }
       console.log(chalk.gray('未找到消息'))
       return
     }
 
+    if (opts.json) {
+      console.log(JSON.stringify({ success: true, talker, messages }, null, 2))
+      return
+    }
     console.log(chalk.cyan(`消息记录 - ${talker} (${messages.length} 条):\n`))
 
     for (const m of messages) {
@@ -622,18 +1156,26 @@ program
   .description('查看联系人列表')
   .option('-k, --keyword <keyword>', '搜索关键词 (自动扩大搜索范围)')
   .option('-n, --limit <number>', '最大数量', '500')
+  .option('--json', '输出 JSON 格式')
   .action(async (opts) => {
+    const limit = parseCliInteger(opts.limit, 'limit', 1, 5000, !!opts.json)
     if (!configService.isConfigured()) {
+      if (opts.json) { console.log(JSON.stringify({ success: false, error: '未完成初始化' })); process.exit(1) }
       console.log(chalk.red('请先运行 weflow-cli init'))
       process.exit(1)
     }
 
-    const contacts = await chatService.listContacts(opts.keyword, parseInt(opts.limit))
+    const contacts = await chatService.listContacts(opts.keyword, limit)
     if (contacts.length === 0) {
+      if (opts.json) { console.log(JSON.stringify({ success: true, contacts: [] })); return }
       console.log(chalk.gray('未找到联系人'))
       return
     }
 
+    if (opts.json) {
+      console.log(JSON.stringify({ success: true, contacts }, null, 2))
+      return
+    }
     console.log(chalk.cyan(`联系人列表 (${contacts.length} 条):\n`))
     console.log(chalk.gray('序号  用户ID                昵称/备注'))
     console.log(chalk.gray('─'.repeat(60)))
@@ -656,54 +1198,68 @@ program
   .option('-d, --date <YYYY-MM-DD>', '仅导出指定日期的消息（本地时间）')
   .option('--from <date>', '起始日期或 ISO 时间')
   .option('--to <date>', '结束日期或 ISO 时间')
+  .option('--contract <name>', 'JSON 数据契约：raw 或 weflow-v1', 'raw')
+  .option('--json', '输出机器可读的导出结果，不改变导出文件格式')
+  .option('--non-interactive', '禁止交互选择；匹配不唯一时返回错误')
   .action(async (talkerInput: string, format: string, opts) => {
-    if (!configService.isConfigured()) {
-      console.log(chalk.red('\n❌ 还没配置'))
-      console.log(chalk.gray('  运行: weflow-cli init\n'))
-      process.exit(1)
-    }
-
-    const talker = await resolveTalker(talkerInput)
-
     const validFormats = ['json', 'txt', 'html', 'excel']
     if (!validFormats.includes(format)) {
-      console.log(chalk.red(`无效格式: ${format}`))
-      console.log(chalk.gray(`可用: ${validFormats.join(', ')}`))
+      if (opts.json) console.log(JSON.stringify({ success: false, code: 'INVALID_FORMAT', error: '导出格式无效', supported: validFormats }))
+      else {
+        console.log(chalk.red(`无效格式: ${format}`))
+        console.log(chalk.gray(`可用: ${validFormats.join(', ')}`))
+      }
+      process.exit(1)
+    }
+    const limit = parseCliInteger(opts.limit, 'limit', 0, 1_000_000, !!opts.json)
+    if (!configService.isConfigured()) {
+      if (opts.json) console.log(JSON.stringify({ success: false, code: 'NOT_INITIALIZED', error: '未完成初始化' }))
+      else {
+        console.log(chalk.red('\n❌ 还没配置'))
+        console.log(chalk.gray('  运行: weflow-cli init\n'))
+      }
       process.exit(1)
     }
 
-    console.log(chalk.cyan(`正在导出 ${talker} 的聊天记录 (${format})...\n`))
+    const talker = await resolveTalker(talkerInput, !!opts.json, opts.nonInteractive || opts.json)
+
+    if (!opts.json) console.log(chalk.cyan(`正在导出 ${talker} 的聊天记录 (${format})...\n`))
 
     let result
-    const limit = parseInt(opts.limit)
-    const parseDate = (value: string | undefined, endOfDay = false): number | undefined => {
-      if (!value) return undefined
-      const normalized = /^\d{4}-\d{2}-\d{2}$/.test(value)
-        ? `${value}T${endOfDay ? '23:59:59.999' : '00:00:00.000'}+08:00`
-        : value
-      const timestamp = Date.parse(normalized)
-      if (Number.isNaN(timestamp)) {
-        console.log(chalk.red(`无效日期: ${value}`))
-        process.exit(1)
-      }
-      return Math.floor(timestamp / 1000)
-    }
-    const from = parseDate(opts.from)
-    const to = parseDate(opts.to, true)
-    if (from !== undefined && to !== undefined && from > to) {
-      console.log(chalk.red('起始日期不能晚于结束日期'))
+    let from: number | undefined
+    let to: number | undefined
+    try {
+      const range = resolveExportDateRange({
+        date: opts.date,
+        from: opts.from,
+        to: opts.to,
+        preserveDateForRichHtml: format === 'html',
+      })
+      from = range.from
+      to = range.to
+    } catch (error) {
+      const dateError = error instanceof DateRangeError ? error : new DateRangeError('INVALID_DATE', '导出日期无效')
+      if (opts.json) console.log(JSON.stringify({ success: false, code: dateError.code, error: dateError.message }))
+      else console.log(chalk.red(dateError.message))
       process.exit(1)
     }
-
+    if (!['raw', 'weflow-v1'].includes(opts.contract)) {
+      if (opts.json) console.log(JSON.stringify({ success: false, code: 'INVALID_CONTRACT', error: '数据契约无效', supported: ['raw', 'weflow-v1'] }))
+      else {
+        console.log(chalk.red(`不支持的数据契约: ${opts.contract}`))
+        console.log(chalk.gray('可用: raw, weflow-v1'))
+      }
+      process.exit(1)
+    }
     switch (format) {
       case 'json':
-        result = await exportService.exportJson(talker, opts.output, limit, from, to)
+        result = await exportService.exportJson(talker, opts.output, limit, from, to, opts.contract)
         break
       case 'txt':
         result = await exportService.exportTxt(talker, opts.output, limit, from, to)
         break
       case 'html':
-        result = await exportService.exportHtml(talker, opts.output, limit, opts.date || '', from, to)
+        result = await exportService.exportHtml(talker, opts.output, limit, opts.date || '', from, to, !!opts.json)
         break
       case 'excel':
         result = await exportService.exportExcel(talker, opts.output, limit, from, to)
@@ -711,9 +1267,11 @@ program
     }
 
     if (result?.success) {
-      console.log(chalk.green(`✓ 导出成功: ${result.path}`))
+      if (opts.json) console.log(JSON.stringify({ success: true, format, contract: format === 'json' ? opts.contract : null, path: result.path, count: result.count ?? null }, null, 2))
+      else console.log(chalk.green(`✓ 导出成功: ${result.path}`))
     } else {
-      console.log(chalk.red(`✗ 导出失败: ${result?.error}`))
+      if (opts.json) console.log(JSON.stringify({ success: false, code: 'EXPORT_FAILED', error: result?.error || '导出失败' }))
+      else console.log(chalk.red(`✗ 导出失败: ${result?.error}`))
       process.exit(1)
     }
   })
@@ -725,19 +1283,31 @@ program
   .option('-o, --output <dir>', '证据包输出目录', './output/evidence')
   .option('-n, --limit <number>', '最多包含消息数', '10000')
   .option('--case <note>', '案件或争议说明（仅保存在本地证据包）')
+  .option('--json', '输出 JSON 格式')
+  .option('--non-interactive', '禁止交互选择；匹配不唯一时返回错误')
   .action(async (talkerInput: string, opts) => {
     if (!configService.isConfigured()) {
+      if (opts.json) {
+        console.log(JSON.stringify({ success: false, code: 'NOT_INITIALIZED', error: '未完成初始化' }))
+        process.exit(1)
+      }
       console.log(chalk.red('\n❌ 还没配置'))
       console.log(chalk.gray('  运行: weflow-cli init\n'))
       process.exit(1)
     }
-    const talker = await resolveTalker(talkerInput)
-    const messages = await chatService.getMessages(talker, parseInt(opts.limit, 10))
+    const talker = await resolveTalker(talkerInput, opts.json, opts.nonInteractive || opts.json)
+    const limit = parseCliInteger(opts.limit, 'limit', 1, 100000, opts.json)
+    const messages = await chatService.getMessages(talker, limit)
     if (messages.length === 0) {
+      if (opts.json) { console.log(JSON.stringify({ success: false, code: 'NO_MESSAGES', error: '未找到消息' })); return }
       console.log(chalk.gray('未找到消息，未创建证据包'))
       return
     }
     const result = writeEvidencePackage(opts.output, talker, messages, opts.case)
+    if (opts.json) {
+      console.log(JSON.stringify({ success: true, path: result.path, manifest: result.manifest }, null, 2))
+      return
+    }
     console.log(chalk.green(`✓ 证据包已创建: ${result.path}`))
     console.log(chalk.gray(`  消息: ${result.manifest.messageCount} 条`))
     console.log(chalk.gray(`  SHA-256: ${result.manifest.messagesSha256}`))
@@ -750,16 +1320,55 @@ program
   .option('-o, --output <dir>', '分析结果输出目录', './output/evidence-review')
   .option('-n, --limit <number>', '最多分析消息数', '500')
   .option('--allow-cloud', '明确允许将按隐私模式处理后的内容发送到云端 AI')
+  .option('--dry-run', '仅预览，不读取聊天、调用 AI 或写入分析结果')
+  .option('--yes', '确认读取聊天并生成分析结果')
+  .option('--json', '输出机器可读结果，不返回分析正文')
   .action(async (talkerInput: string, opts) => {
+    const limit = parseCliInteger(opts.limit, 'limit', 1, 5000, !!opts.json)
+    const preview = {
+      success: true,
+      dryRun: true,
+      action: 'evidence-review',
+      limit,
+      readsLocalChat: true,
+      usesAi: true,
+      cloudAllowed: Boolean(opts.allowCloud),
+      writesLocalResult: true,
+    }
+    if (opts.dryRun) {
+      if (opts.json) console.log(JSON.stringify(preview))
+      else console.log(chalk.cyan(`预览：将读取最多 ${limit} 条指定会话消息，调用${opts.allowCloud ? '已授权的云端或本地' : '本地'}模型并写入分析结果。`))
+      return
+    }
+    if (!opts.yes) {
+      if (opts.json) {
+        console.log(JSON.stringify({ ...preview, success: false, dryRun: false, code: 'CONFIRMATION_REQUIRED' }))
+        process.exit(1)
+      }
+      const { confirmed } = await inquirer.prompt([{
+        type: 'confirm',
+        name: 'confirmed',
+        message: `确认读取指定会话并使用${opts.allowCloud ? '已授权的云端或本地' : '本地'}模型生成争议线索分析吗？`,
+        default: false,
+      }])
+      if (!confirmed) {
+        console.log(chalk.gray('已取消'))
+        return
+      }
+    }
     if (!configService.isConfigured()) {
-      console.log(chalk.red('\n❌ 还没配置'))
-      console.log(chalk.gray('  运行: weflow-cli init\n'))
+      if (opts.json) console.log(JSON.stringify({ success: false, code: 'NOT_INITIALIZED', error: '未完成初始化' }))
+      else {
+        console.log(chalk.red('\n❌ 还没配置'))
+        console.log(chalk.gray('  运行: weflow-cli init\n'))
+      }
       process.exit(1)
     }
-    const talker = await resolveTalker(talkerInput)
-    const messages = await chatService.getMessages(talker, parseInt(opts.limit, 10))
+    const talker = await resolveTalker(talkerInput, !!opts.json, !!opts.json)
+    const messages = await chatService.getMessages(talker, limit)
     if (messages.length === 0) {
-      console.log(chalk.gray('未找到消息，未创建分析结果'))
+      if (opts.json) console.log(JSON.stringify({ success: false, code: 'NO_MESSAGES', error: '未找到消息，未创建分析结果' }))
+      else console.log(chalk.gray('未找到消息，未创建分析结果'))
       return
     }
     const { AssistantService } = await import('../src/services/assistantService.js')
@@ -777,6 +1386,18 @@ program
       '---', '',
       '本文件仅供线索整理，不是法律意见，不代表违法认定或法院必然采信。请保留原设备、原始数据和完整上下文，并咨询专业人士。',
     ].join('\n'), 'utf8')
+    if (opts.json) {
+      console.log(JSON.stringify({
+        success: true,
+        action: 'evidence-review',
+        count: messages.length,
+        outputCreated: true,
+        localInference: result.localInference,
+        redactions: result.redactions,
+        cloudAllowed: Boolean(opts.allowCloud),
+      }, null, 2))
+      return
+    }
     console.log(chalk.green(`✓ 分析结果已保存: ${outputPath}`))
     console.log(chalk.yellow(`  ${result.localInference ? '使用本地模型，聊天正文未离开本机' : '已使用云端模型，请确认隐私模式和授权范围'}`))
   })
@@ -787,14 +1408,53 @@ program
   .description('从运行中的微信进程提取数据库解密密钥 (自动检测版本)')
   .option('-t, --timeout <ms>', '超时时间(毫秒)', '60000')
   .option('--force', '即使已有本地配置也执行捕获')
+  .option('--dry-run', '仅预览，不扫描进程内存或捕获密钥')
+  .option('--yes', '确认启动人工密钥捕获流程')
+  .option('--json', '输出机器可读预览；实际捕获必须在交互终端执行')
   .action(async (opts) => {
-    console.log(chalk.cyan('🔑 提取微信数据库密钥\n'))
-    if (!opts.force && configService.isConfigured()) {
+    const configured = configService.isConfigured()
+    const preview = {
+      success: true,
+      dryRun: true,
+      action: 'dbkey.capture',
+      interactiveRequired: true,
+      scansProcessMemory: true,
+      captureRequired: Boolean(opts.force || !configured),
+      writesConfiguration: false,
+    }
+    if (opts.dryRun) {
+      if (opts.json) console.log(JSON.stringify(preview))
+      else console.log(chalk.cyan(`密钥捕获预览：${preview.captureRequired ? '将扫描运行中的微信进程' : '已有本地配置，默认不会重复捕获'}`))
+      return
+    }
+    if (!opts.force && configured) {
+      if (opts.json) {
+        console.log(JSON.stringify({ success: true, action: 'dbkey.reuse', captureSkipped: true }))
+        return
+      }
+      console.log(chalk.cyan('🔑 提取微信数据库密钥\n'))
       console.log(chalk.green('✓ 已检测到本地数据库访问配置，未重复捕获密钥。'))
       console.log(chalk.gray('  可直接运行 weflow-cli sessions 验证访问。'))
       console.log(chalk.gray('  仅在需要排障时使用 --force。'))
       return
     }
+    if (opts.json) {
+      console.log(JSON.stringify({ ...preview, success: false, dryRun: false, code: 'INTERACTIVE_REQUIRED' }))
+      process.exit(1)
+    }
+    if (!opts.yes) {
+      const { confirmed } = await inquirer.prompt([{
+        type: 'confirm',
+        name: 'confirmed',
+        message: '确认启动需要人工配合的数据库密钥捕获流程吗？',
+        default: false,
+      }])
+      if (!confirmed) {
+        console.log(chalk.gray('已取消'))
+        return
+      }
+    }
+    console.log(chalk.cyan('🔑 提取微信数据库密钥\n'))
     console.log(chalk.gray('请确保微信已登录且正在运行。\n'))
 
     if (process.platform === 'linux') {
@@ -838,7 +1498,8 @@ program
         process.exit(1)
       }
     } else {
-      const result = await keyService.autoGetDbKey(parseInt(opts.timeout, 10), (msg) => {
+      const timeout = parseCliInteger(opts.timeout, 'timeout', 1000, 600000)
+      const result = await keyService.autoGetDbKey(timeout, (msg) => {
         console.log(chalk.gray(`  ${msg}`))
       })
       if (result.success && result.key) {
@@ -856,11 +1517,15 @@ program
   .command('scan')
   .description('扫描微信数据目录中的账号')
   .option('-p, --path <path>', '数据目录路径')
+  .option('--json', '输出机器可读摘要，不返回路径、账号标识或昵称')
   .action(async (opts) => {
     const path = opts.path || configService.get('dbPath') || dbPathService.getDefaultPath()
-    console.log(chalk.cyan(`扫描目录: ${path}\n`))
-
     const wxids = dbPathService.scanWxidCandidates(path)
+    if (opts.json) {
+      console.log(JSON.stringify({ success: wxids.length > 0, accountCount: wxids.length }))
+      return
+    }
+    console.log(chalk.cyan(`扫描目录: ${path}\n`))
     if (wxids.length === 0) {
       console.log(chalk.gray('未找到账号'))
       return
@@ -879,17 +1544,36 @@ program
   .command('login-wechat')
   .description('微信扫码登录，获取消息收发权限')
   .option('--base-url <url>', 'ilink 服务地址')
+  .option('--dry-run', '仅预览，不请求二维码或修改登录状态')
+  .option('--yes', '确认启动人工扫码登录流程')
+  .option('--json', '输出机器可读预览；实际登录必须在交互终端执行')
   .action(async (opts) => {
     const token = configService.get('wechatOcToken')
-    if (token) {
-      const { reconfirm } = await inquirer.prompt([{
+    const preview = {
+      success: true,
+      dryRun: true,
+      action: 'wechat-channel.login',
+      interactiveRequired: true,
+      replacesExistingSession: !!token,
+    }
+    if (opts.dryRun) {
+      if (opts.json) console.log(JSON.stringify(preview))
+      else console.log(chalk.cyan(`登录预览：需要人工扫码${token ? '，成功后将替换现有消息通道登录' : ''}`))
+      return
+    }
+    if (opts.json) {
+      console.log(JSON.stringify({ ...preview, success: false, dryRun: false, code: 'INTERACTIVE_REQUIRED' }))
+      process.exit(1)
+    }
+    if (!opts.yes) {
+      const { confirmed } = await inquirer.prompt([{
         type: 'confirm',
-        name: 'reconfirm',
-        message: '已有登录状态，要重新登录吗？',
+        name: 'confirmed',
+        message: token ? '已有登录状态，确认启动重新登录吗？' : '确认启动人工扫码登录吗？',
         default: false,
       }])
-      if (!reconfirm) {
-        console.log(chalk.gray('保持当前登录状态'))
+      if (!confirmed) {
+        console.log(chalk.gray(token ? '保持当前登录状态' : '已取消'))
         return
       }
     }
@@ -914,7 +1598,7 @@ program
 
       if (session.status === 'confirmed') {
         console.log(chalk.green('\n✓ 登录成功!'))
-        console.log(chalk.gray(`  account_id: ${session.accountId || '未知'}`))
+        console.log(chalk.gray('  消息通道登录状态已安全保存'))
       } else {
         console.log(chalk.red(`\n✗ 登录失败: ${session.error || '超时'}`))
       }
@@ -927,13 +1611,46 @@ program
 program
   .command('logout-wechat')
   .description('退出微信消息通道登录')
-  .action(() => {
+  .option('--dry-run', '仅预览，不清除登录状态')
+  .option('--yes', '确认退出并清除消息通道状态')
+  .option('--json', '输出机器可读结果')
+  .action(async (opts) => {
+    const loggedIn = !!configService.get('wechatOcToken')
+    const preview = {
+      success: true,
+      dryRun: true,
+      action: 'wechat-channel.logout',
+      loggedIn,
+      clearsContextTokens: true,
+    }
+    if (opts.dryRun) {
+      if (opts.json) console.log(JSON.stringify(preview))
+      else console.log(chalk.cyan(`登出预览：${loggedIn ? '将清除消息通道登录和会话令牌' : '当前未登录，执行后状态不变'}`))
+      return
+    }
+    if (!opts.yes) {
+      if (opts.json) {
+        console.log(JSON.stringify({ ...preview, success: false, dryRun: false, code: 'CONFIRMATION_REQUIRED' }))
+        process.exit(1)
+      }
+      const { confirmed } = await inquirer.prompt([{
+        type: 'confirm',
+        name: 'confirmed',
+        message: '确认退出消息通道并清除本地会话令牌？',
+        default: false,
+      }])
+      if (!confirmed) {
+        console.log(chalk.gray('已取消'))
+        return
+      }
+    }
     configService.set('wechatOcToken', '')
     configService.set('wechatOcAccountId', '')
     configService.set('wechatOcSyncBuf', '')
     // 登出后历史 context_token 失效, 一并清空
     configService.setContextTokens({})
-    console.log(chalk.green('✓ 已退出登录'))
+    if (opts.json) console.log(JSON.stringify({ success: true, action: 'wechat-channel.logout', changed: loggedIn }))
+    else console.log(chalk.green('✓ 已退出登录'))
   })
 
 // ==================== whitelist ====================
@@ -965,7 +1682,10 @@ whitelistCmd
 whitelistCmd
   .command('add <target>')
   .description('添加白名单 (支持 wxid/昵称/备注名/序号)')
-  .action(async (target: string) => {
+  .option('--dry-run', '仅预览，不修改白名单')
+  .option('--yes', '确认执行')
+  .option('--json', '输出 JSON 格式')
+  .action(async (target: string, opts) => {
     // 解析目标
     let wxid: string
     let displayName = target
@@ -978,76 +1698,146 @@ whitelistCmd
         const match = sessions.find(s => s.username === wxid)
         if (match) displayName = match.displayName || target
       } catch (e: any) {
-        console.log(chalk.red(`✗ ${e.message}`))
+        if (opts.json) console.log(JSON.stringify({ success: false, code: 'TALKER_RESOLUTION_FAILED', error: e.message }))
+        else console.log(chalk.red(`✗ ${e.message}`))
+        if (opts.json) process.exit(1)
         return
       }
     }
 
     // 检查是否已在名单中
     if (whitelistService.isAllowed(wxid)) {
-      console.log(chalk.yellow(`"${displayName}" (${wxid}) 已在白名单中`))
+      if (opts.json) console.log(JSON.stringify({ success: true, action: 'whitelist.add', changed: false, target: { wxid, displayName } }))
+      else console.log(chalk.yellow(`"${displayName}" (${wxid}) 已在白名单中`))
       return
     }
 
     // 黑名单中的目标禁止加入白名单
     if (whitelistService.isBlocked(wxid)) {
+      if (opts.json) {
+        console.log(JSON.stringify({ success: false, code: 'TARGET_BLOCKED', error: '目标位于黑名单中', target: { wxid, displayName } }))
+        process.exit(1)
+      }
       console.log(chalk.red(`\n❌ "${displayName}" (${wxid}) 在黑名单中, 禁止加入白名单`))
       console.log(chalk.gray(`  先解除: weflow-cli blacklist rm ${wxid}\n`))
       return
     }
 
+    const preview = { action: 'whitelist.add', target: { wxid, displayName } }
+    if (opts.dryRun) {
+      if (opts.json) console.log(JSON.stringify({ success: true, dryRun: true, ...preview }))
+      else console.log(chalk.cyan(`将添加 "${displayName}" (${wxid}) 到白名单`))
+      return
+    }
+    if (opts.json && !opts.yes) {
+      console.log(JSON.stringify({ success: false, code: 'CONFIRMATION_REQUIRED', error: '使用 --yes 确认添加白名单', ...preview }))
+      process.exit(1)
+    }
+
     // 三重确认
-    console.log(chalk.cyan(`\n⚠️  即将添加以下联系人到白名单:`))
-    console.log(chalk.white(`  昵称: ${displayName}`))
-    console.log(chalk.gray(`  wxid: ${wxid}`))
-    console.log(chalk.yellow(`  添加后，该联系人可向你收发消息\n`))
+    if (!opts.yes) {
+      console.log(chalk.cyan(`\n⚠️  即将添加以下联系人到白名单:`))
+      console.log(chalk.white(`  昵称: ${displayName}`))
+      console.log(chalk.gray(`  wxid: ${wxid}`))
+      console.log(chalk.yellow(`  添加后，该联系人可向你收发消息\n`))
 
-    const { q1 } = await inquirer.prompt([{
-      type: 'confirm',
-      name: 'q1',
-      message: `确认添加 "${displayName}" 到白名单？`,
-      default: false,
-    }])
-    if (!q1) { console.log(chalk.gray('已取消')); return }
+      const { q1 } = await inquirer.prompt([{
+        type: 'confirm',
+        name: 'q1',
+        message: `确认添加 "${displayName}" 到白名单？`,
+        default: false,
+      }])
+      if (!q1) { console.log(chalk.gray('已取消')); return }
 
-    // 再确认一次（防止误操作）
-    const { q2 } = await inquirer.prompt([{
-      type: 'input',
-      name: 'q2',
-      message: `请输入 "确认" 以继续:`,
-    }])
-    if (q2 !== '确认') { console.log(chalk.gray('已取消')); return }
+      const { q2 } = await inquirer.prompt([{
+        type: 'input',
+        name: 'q2',
+        message: `请输入 "确认" 以继续:`,
+      }])
+      if (q2 !== '确认') { console.log(chalk.gray('已取消')); return }
+    }
 
     whitelistService.addDirect(wxid, displayName)
-    console.log(chalk.green(`\n✓ 已添加 "${displayName}" (${wxid}) 到白名单`))
+    if (opts.json) console.log(JSON.stringify({ success: true, changed: true, ...preview }))
+    else console.log(chalk.green(`\n✓ 已添加 "${displayName}" (${wxid}) 到白名单`))
   })
 
 whitelistCmd
   .command('rm <wxid>')
   .description('移除白名单中的 wxid')
-  .action((wxid: string) => {
+  .option('--dry-run', '仅预览，不修改白名单')
+  .option('--yes', '确认执行')
+  .option('--json', '输出 JSON 格式')
+  .action(async (wxid: string, opts) => {
     const name = whitelistService.lookupName(wxid)
+    const exists = whitelistService.isAllowed(wxid)
+    const preview = { action: 'whitelist.remove', target: { wxid, displayName: name } }
+    if (!exists) {
+      if (opts.json) console.log(JSON.stringify({ success: false, code: 'NOT_FOUND', error: '目标不在白名单中', ...preview }))
+      else console.log(chalk.yellow(`未找到: ${wxid}`))
+      if (opts.json) process.exit(1)
+      return
+    }
+    if (opts.dryRun) {
+      if (opts.json) console.log(JSON.stringify({ success: true, dryRun: true, ...preview }))
+      else console.log(chalk.cyan(`将从白名单移除: ${name} (${wxid})`))
+      return
+    }
+    if (opts.json && !opts.yes) {
+      console.log(JSON.stringify({ success: false, code: 'CONFIRMATION_REQUIRED', error: '使用 --yes 确认移除白名单', ...preview }))
+      process.exit(1)
+    }
+    if (!opts.yes) {
+      const { confirmed } = await inquirer.prompt([{
+        type: 'confirm', name: 'confirmed', message: `确认从白名单移除 "${name}"？`, default: false,
+      }])
+      if (!confirmed) { console.log(chalk.gray('已取消')); return }
+    }
     if (whitelistService.remove(wxid)) {
-      console.log(chalk.green(`✓ 已移除: ${name} (${wxid})`))
-    } else {
-      console.log(chalk.yellow(`未找到: ${wxid}`))
+      if (opts.json) console.log(JSON.stringify({ success: true, changed: true, ...preview }))
+      else console.log(chalk.green(`✓ 已移除: ${name} (${wxid})`))
     }
   })
 
 whitelistCmd
   .command('clear')
   .description('清空白名单')
-  .action(async () => {
-    const { confirm } = await inquirer.prompt([{
-      type: 'confirm',
-      name: 'confirm',
-      message: '确定要清空所有白名单吗？',
-      default: false,
-    }])
-    if (confirm) {
-      whitelistService.clear()
-      console.log(chalk.green('✓ 白名单已清空'))
+  .option('--dry-run', '仅预览，不清空白名单')
+  .option('--yes', '确认清空白名单')
+  .option('--json', '输出 JSON 格式')
+  .action(async (opts) => {
+    if (opts.dryRun) {
+      const preview = { success: true, dryRun: true, action: 'whitelist.clear', entryCount: whitelistService.getWhitelistEntries().length }
+      if (opts.json) console.log(JSON.stringify(preview))
+      else console.log(chalk.cyan(`白名单清空预览：将移除 ${preview.entryCount} 项。`))
+      return
     }
+    if (!opts.yes) {
+      if (opts.json) {
+        console.log(JSON.stringify({ success: false, code: 'CONFIRMATION_REQUIRED', error: '使用 --yes 确认清空白名单' }))
+        process.exit(1)
+      }
+      const { confirm } = await inquirer.prompt([{
+        type: 'confirm',
+        name: 'confirm',
+        message: '确定要清空所有白名单吗？',
+        default: false,
+      }])
+      if (!confirm) return
+    }
+    whitelistService.clear()
+    if (opts.json) console.log(JSON.stringify({ success: true, action: 'whitelist.clear' }))
+    else console.log(chalk.green('✓ 白名单已清空'))
+  })
+
+whitelistCmd
+  .command('list')
+  .description('以机器可读格式显示白名单')
+  .option('--json', '输出 JSON 格式，包含本地敏感标识')
+  .action((opts) => {
+    const entries = whitelistService.getWhitelistEntries()
+    if (opts.json) console.log(JSON.stringify({ success: true, entries }, null, 2))
+    else console.log(entries.map(entry => `${entry.wxid}\t${entry.displayName || ''}`).join('\n'))
   })
 
 // ==================== blacklist ====================
@@ -1080,6 +1870,9 @@ blacklistCmd
   .command('add <target>')
   .description('添加到黑名单 (自动从白名单移除)')
   .option('-r, --reason <text>', '拉黑原因 (可选)')
+  .option('--dry-run', '仅预览，不修改黑名单')
+  .option('--yes', '确认执行')
+  .option('--json', '输出 JSON 格式')
   .action(async (target: string, opts) => {
     let wxid: string
     let displayName = target
@@ -1092,60 +1885,127 @@ blacklistCmd
         const match = sessions.find(s => s.username === wxid)
         if (match) displayName = match.displayName || target
       } catch (e: any) {
-        console.log(chalk.red(`✗ ${e.message}`))
+        if (opts.json) console.log(JSON.stringify({ success: false, code: 'TALKER_RESOLUTION_FAILED', error: e.message }))
+        else console.log(chalk.red(`✗ ${e.message}`))
+        if (opts.json) process.exit(1)
         return
       }
     }
 
     if (whitelistService.isBlocked(wxid)) {
-      console.log(chalk.yellow(`"${displayName}" (${wxid}) 已在黑名单中`))
+      if (opts.json) console.log(JSON.stringify({ success: true, action: 'blacklist.add', changed: false, target: { wxid, displayName } }))
+      else console.log(chalk.yellow(`"${displayName}" (${wxid}) 已在黑名单中`))
       return
     }
 
-    console.log(chalk.cyan(`\n⚠️  即将拉黑以下联系人:`))
-    console.log(chalk.white(`  昵称: ${displayName}`))
-    console.log(chalk.gray(`  wxid: ${wxid}`))
-    if (opts.reason) console.log(chalk.gray(`  原因: ${opts.reason}`))
-    console.log(chalk.yellow(`  拉黑后, 该联系人绝对禁止收发消息 (即使误加白名单也拦截)\n`))
+    const preview = { action: 'blacklist.add', target: { wxid, displayName }, reason: opts.reason || null }
+    if (opts.dryRun) {
+      if (opts.json) console.log(JSON.stringify({ success: true, dryRun: true, ...preview }))
+      else console.log(chalk.cyan(`将添加 "${displayName}" (${wxid}) 到黑名单`))
+      return
+    }
+    if (opts.json && !opts.yes) {
+      console.log(JSON.stringify({ success: false, code: 'CONFIRMATION_REQUIRED', error: '使用 --yes 确认添加黑名单', ...preview }))
+      process.exit(1)
+    }
 
-    const { q1 } = await inquirer.prompt([{
-      type: 'confirm',
-      name: 'q1',
-      message: `确认拉黑 "${displayName}"？`,
-      default: false,
-    }])
-    if (!q1) { console.log(chalk.gray('已取消')); return }
+    if (!opts.yes) {
+      console.log(chalk.cyan(`\n⚠️  即将拉黑以下联系人:`))
+      console.log(chalk.white(`  昵称: ${displayName}`))
+      console.log(chalk.gray(`  wxid: ${wxid}`))
+      if (opts.reason) console.log(chalk.gray(`  原因: ${opts.reason}`))
+      console.log(chalk.yellow(`  拉黑后, 该联系人绝对禁止收发消息 (即使误加白名单也拦截)\n`))
+
+      const { q1 } = await inquirer.prompt([{
+        type: 'confirm',
+        name: 'q1',
+        message: `确认拉黑 "${displayName}"？`,
+        default: false,
+      }])
+      if (!q1) { console.log(chalk.gray('已取消')); return }
+    }
 
     whitelistService.blockDirect(wxid, displayName, opts.reason)
-    console.log(chalk.green(`\n✓ 已拉黑 "${displayName}" (${wxid})`))
+    if (opts.json) console.log(JSON.stringify({ success: true, changed: true, ...preview }))
+    else console.log(chalk.green(`\n✓ 已拉黑 "${displayName}" (${wxid})`))
   })
 
 blacklistCmd
   .command('rm <wxid>')
   .description('从黑名单移除')
-  .action((wxid: string) => {
+  .option('--dry-run', '仅预览，不修改黑名单')
+  .option('--yes', '确认执行')
+  .option('--json', '输出 JSON 格式')
+  .action(async (wxid: string, opts) => {
     const name = whitelistService.lookupName(wxid)
+    const exists = whitelistService.isBlocked(wxid)
+    const preview = { action: 'blacklist.remove', target: { wxid, displayName: name } }
+    if (!exists) {
+      if (opts.json) console.log(JSON.stringify({ success: false, code: 'NOT_FOUND', error: '目标不在黑名单中', ...preview }))
+      else console.log(chalk.yellow(`未在黑名单中找到: ${wxid}`))
+      if (opts.json) process.exit(1)
+      return
+    }
+    if (opts.dryRun) {
+      if (opts.json) console.log(JSON.stringify({ success: true, dryRun: true, ...preview }))
+      else console.log(chalk.cyan(`将从黑名单移除: ${name} (${wxid})`))
+      return
+    }
+    if (opts.json && !opts.yes) {
+      console.log(JSON.stringify({ success: false, code: 'CONFIRMATION_REQUIRED', error: '使用 --yes 确认移除黑名单', ...preview }))
+      process.exit(1)
+    }
+    if (!opts.yes) {
+      const { confirmed } = await inquirer.prompt([{
+        type: 'confirm', name: 'confirmed', message: `确认从黑名单移除 "${name}"？`, default: false,
+      }])
+      if (!confirmed) { console.log(chalk.gray('已取消')); return }
+    }
     if (whitelistService.unblock(wxid)) {
-      console.log(chalk.green(`✓ 已从黑名单移除: ${name} (${wxid})`))
-    } else {
-      console.log(chalk.yellow(`未在黑名单中找到: ${wxid}`))
+      if (opts.json) console.log(JSON.stringify({ success: true, changed: true, ...preview }))
+      else console.log(chalk.green(`✓ 已从黑名单移除: ${name} (${wxid})`))
     }
   })
 
 blacklistCmd
   .command('clear')
   .description('清空黑名单')
-  .action(async () => {
-    const { confirm } = await inquirer.prompt([{
-      type: 'confirm',
-      name: 'confirm',
-      message: '确定要清空所有黑名单吗？',
-      default: false,
-    }])
-    if (confirm) {
-      whitelistService.clearBlacklist()
-      console.log(chalk.green('✓ 黑名单已清空'))
+  .option('--dry-run', '仅预览，不清空黑名单')
+  .option('--yes', '确认清空黑名单')
+  .option('--json', '输出 JSON 格式')
+  .action(async (opts) => {
+    if (opts.dryRun) {
+      const preview = { success: true, dryRun: true, action: 'blacklist.clear', entryCount: whitelistService.getBlacklistEntries().length }
+      if (opts.json) console.log(JSON.stringify(preview))
+      else console.log(chalk.cyan(`黑名单清空预览：将移除 ${preview.entryCount} 项。`))
+      return
     }
+    if (!opts.yes) {
+      if (opts.json) {
+        console.log(JSON.stringify({ success: false, code: 'CONFIRMATION_REQUIRED', error: '使用 --yes 确认清空黑名单' }))
+        process.exit(1)
+      }
+      const { confirm } = await inquirer.prompt([{
+        type: 'confirm',
+        name: 'confirm',
+        message: '确定要清空所有黑名单吗？',
+        default: false,
+      }])
+      if (!confirm) return
+    }
+    whitelistService.clearBlacklist()
+    if (opts.json) console.log(JSON.stringify({ success: true, action: 'blacklist.clear' }))
+    else console.log(chalk.green('✓ 黑名单已清空'))
+  })
+
+blacklistCmd
+  .command('list')
+  .description('以机器可读格式显示黑名单')
+  .option('--json', '输出 JSON 格式，包含本地敏感标识')
+  .action((opts) => {
+    const entries = whitelistService.getBlacklistEntries()
+    if (opts.json) console.log(JSON.stringify({ success: true, entries }, null, 2))
+    else console.log(entries.map(entry => `${entry.wxid}\t${entry.displayName || ''}`).join('\n'))
   })
 
 // ==================== audit (发送审计日志) ====================
@@ -1160,6 +2020,7 @@ auditCmd
   .option('--all', '显示全部 (含失败)')
   .option('--failed', '只看失败')
   .option('--target <wxid>', '按目标 wxid 过滤')
+  .option('--json', '输出 JSON 格式，不返回审计文件路径')
   .action((opts) => {
     const filter = (e: any) => {
       if (opts.target && e.targetWxid !== opts.target) return false
@@ -1170,8 +2031,13 @@ auditCmd
       }
       return true
     }
-    const entries = whitelistService.readAudit(parseInt(opts.limit), filter)
+    const limit = parseCliInteger(opts.limit, 'limit', 1, 10000, opts.json)
+    const entries = whitelistService.readAudit(limit, filter)
     const logPath = join(homedir(), '.weflow-cli', 'audit-send.log')
+    if (opts.json) {
+      console.log(JSON.stringify({ success: true, entries }, null, 2))
+      return
+    }
     if (entries.length === 0) {
       console.log(chalk.gray('无审计记录'))
       console.log(chalk.gray(`日志文件: ${logPath}`))
@@ -1192,9 +2058,11 @@ auditCmd
 auditCmd
   .command('stats')
   .description('审计统计 (成功/失败次数, 热门目标)')
-  .action(() => {
+  .option('--json', '输出 JSON 格式')
+  .action((opts) => {
     const entries = whitelistService.readAudit()
     if (entries.length === 0) {
+      if (opts.json) { console.log(JSON.stringify({ success: true, total: 0, succeeded: 0, failed: 0, topTargets: [] })); return }
       console.log(chalk.gray('无审计记录'))
       return
     }
@@ -1206,6 +2074,18 @@ auditCmd
       byTarget.set(key, (byTarget.get(key) || 0) + 1)
     }
     const top = [...byTarget.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10)
+
+    if (opts.json) {
+      console.log(JSON.stringify({
+        success: true,
+        total: entries.length,
+        succeeded: success,
+        failed,
+        topTargets: top.map(([target, count]) => ({ target, count })),
+        sizeBytes: whitelistService.auditSize(),
+      }, null, 2))
+      return
+    }
 
     console.log(chalk.cyan('发送审计统计:\n'))
     console.log(`  总记录: ${entries.length}`)
@@ -1221,19 +2101,41 @@ auditCmd
 auditCmd
   .command('clear')
   .description('清空审计日志')
-  .action(async () => {
-    const { confirm } = await inquirer.prompt([{
-      type: 'confirm',
-      name: 'confirm',
-      message: '确定要清空所有审计记录吗？',
-      default: false,
-    }])
-    if (confirm) {
-      try {
-        const { writeFileSync } = await import('fs')
-        writeFileSync(join(homedir(), '.weflow-cli', 'audit-send.log'), '', 'utf8')
-        console.log(chalk.green('✓ 审计日志已清空'))
-      } catch (e: any) {
+  .option('--dry-run', '仅预览，不清空审计日志')
+  .option('--yes', '确认清空审计日志')
+  .option('--json', '输出 JSON 格式')
+  .action(async (opts) => {
+    if (opts.dryRun) {
+      const preview = { success: true, dryRun: true, action: 'audit.clear', entryCount: whitelistService.readAudit().length }
+      if (opts.json) console.log(JSON.stringify(preview))
+      else console.log(chalk.cyan(`审计日志清空预览：将移除 ${preview.entryCount} 条记录。`))
+      return
+    }
+    if (!opts.yes) {
+      if (opts.json) {
+        console.log(JSON.stringify({ success: false, code: 'CONFIRMATION_REQUIRED', error: '使用 --yes 确认清空审计日志' }))
+        process.exit(1)
+      }
+      const { confirm } = await inquirer.prompt([{
+        type: 'confirm',
+        name: 'confirm',
+        message: '确定要清空所有审计记录吗？',
+        default: false,
+      }])
+      if (!confirm) return
+    }
+    try {
+      const { mkdirSync, writeFileSync } = await import('fs')
+      const stateDir = join(homedir(), '.weflow-cli')
+      mkdirSync(stateDir, { recursive: true })
+      writeFileSync(join(stateDir, 'audit-send.log'), '', 'utf8')
+      if (opts.json) console.log(JSON.stringify({ success: true, action: 'audit.clear' }))
+      else console.log(chalk.green('✓ 审计日志已清空'))
+    } catch (e: any) {
+      if (opts.json) {
+        console.log(JSON.stringify({ success: false, code: 'AUDIT_CLEAR_FAILED', error: '无法清空审计日志' }))
+        process.exit(1)
+      } else {
         console.log(chalk.red(`✗ 清空失败: ${e.message}`))
       }
     }
@@ -1253,8 +2155,10 @@ snsCmd
   .option('-o, --offset <number>', '偏移量', '0')
   .option('--start <timestamp>', '开始时间戳 (秒)')
   .option('--end <timestamp>', '结束时间戳 (秒)')
+  .option('--json', '输出 JSON 格式')
   .action(async (opts) => {
     if (!configService.isConfigured()) {
+      if (opts.json) { console.log(JSON.stringify({ success: false, code: 'NOT_INITIALIZED', error: '未完成初始化' })); process.exit(1) }
       console.log(chalk.red('\n❌ 还没配置\n  运行: weflow-cli init\n'))
       process.exit(1)
     }
@@ -1262,10 +2166,12 @@ snsCmd
     // 先建立连接 (chatService 内部首次调用会自动 connect)
     const conn = await chatService.connect()
     if (!conn.success) {
+      if (opts.json) { console.log(JSON.stringify({ success: false, code: 'DATABASE_CONNECTION_FAILED', error: '数据库连接失败' })); process.exit(1) }
       console.log(chalk.red(`\n❌ 数据库连接失败: ${conn.error}\n`))
       process.exit(1)
     }
     if (!chatService.isSnsSupported()) {
+      if (opts.json) { console.log(JSON.stringify({ success: false, code: 'SNS_UNAVAILABLE', error: '当前数据通道不支持朋友圈查询' })); process.exit(1) }
       console.log(chalk.red('\n❌ 当前数据通道不支持朋友圈查询'))
       console.log(chalk.gray('  支持: 4.x + WCDB API, 或 NT 连接 + sns.db 密钥'))
       console.log(chalk.gray('  NT 用户请先运行: weflow-cli sns capture-key'))
@@ -1274,21 +2180,30 @@ snsCmd
     }
 
     const usernames = Array.isArray(opts.user) ? opts.user : (opts.user ? [opts.user] : undefined)
+    const limit = parseCliInteger(opts.limit, 'limit', 1, 1000, opts.json)
+    const offset = parseCliInteger(opts.offset, 'offset', 0, 1000000, opts.json)
+    const startTime = opts.start ? parseCliInteger(opts.start, 'start', 0, Number.MAX_SAFE_INTEGER, opts.json) : undefined
+    const endTime = opts.end ? parseCliInteger(opts.end, 'end', 0, Number.MAX_SAFE_INTEGER, opts.json) : undefined
     const result = await chatService.getSnsTimeline({
-      limit: parseInt(opts.limit),
-      offset: parseInt(opts.offset),
+      limit,
+      offset,
       usernames,
       keyword: opts.keyword,
-      startTime: opts.start ? parseInt(opts.start) : undefined,
-      endTime: opts.end ? parseInt(opts.end) : undefined,
+      startTime,
+      endTime,
     })
 
     if (!result.success || !result.timeline || result.timeline.length === 0) {
+      if (opts.json) { console.log(JSON.stringify({ success: result.success, timeline: [], error: result.error || null })); return }
       console.log(chalk.gray(`未找到朋友圈动态${result.error ? `: ${result.error}` : ''}`))
       console.log(chalk.gray('提示: 在微信客户端打开朋友圈让数据落盘后再查询'))
       return
     }
 
+    if (opts.json) {
+      console.log(JSON.stringify({ success: true, timeline: result.timeline }, null, 2))
+      return
+    }
     console.log(chalk.cyan(`朋友圈时间线 (${result.timeline.length} 条):\n`))
     for (const item of result.timeline) {
       const ts = item.create_time || item.createTime || item.timestamp
@@ -1302,27 +2217,36 @@ snsCmd
 snsCmd
   .command('users')
   .description('列出本地缓存中有朋友圈动态的 wxid')
-  .action(async () => {
+  .option('--json', '输出 JSON 格式')
+  .action(async (opts) => {
     if (!configService.isConfigured()) {
+      if (opts.json) { console.log(JSON.stringify({ success: false, code: 'NOT_INITIALIZED', error: '未完成初始化' })); process.exit(1) }
       console.log(chalk.red('\n❌ 还没配置\n  运行: weflow-cli init\n'))
       process.exit(1)
     }
     const conn = await chatService.connect()
     if (!conn.success) {
+      if (opts.json) { console.log(JSON.stringify({ success: false, code: 'DATABASE_CONNECTION_FAILED', error: '数据库连接失败' })); process.exit(1) }
       console.log(chalk.red(`\n❌ 数据库连接失败: ${conn.error}\n`))
       process.exit(1)
     }
     if (!chatService.isSnsSupported()) {
+      if (opts.json) { console.log(JSON.stringify({ success: false, code: 'SNS_UNAVAILABLE', error: '当前数据通道不支持朋友圈查询' })); process.exit(1) }
       console.log(chalk.red('\n❌ 当前数据通道不支持朋友圈查询\n'))
       process.exit(1)
     }
 
     const result = await chatService.getSnsUsernames()
     if (!result.success || !result.usernames || result.usernames.length === 0) {
+      if (opts.json) { console.log(JSON.stringify({ success: result.success, usernames: [], error: result.error || null })); return }
       console.log(chalk.gray('本地缓存中无朋友圈动态'))
       return
     }
 
+    if (opts.json) {
+      console.log(JSON.stringify({ success: true, usernames: result.usernames }, null, 2))
+      return
+    }
     console.log(chalk.cyan(`朋友圈用户 (${result.usernames.length}):\n`))
     for (let i = 0; i < result.usernames.length; i++) {
       console.log(`  ${String(i + 1).padStart(3)}. ${result.usernames[i]}`)
@@ -1332,17 +2256,21 @@ snsCmd
 snsCmd
   .command('stats')
   .description('朋友圈本地缓存统计')
-  .action(async () => {
+  .option('--json', '输出 JSON 格式')
+  .action(async (opts) => {
     if (!configService.isConfigured()) {
+      if (opts.json) { console.log(JSON.stringify({ success: false, code: 'NOT_INITIALIZED', error: '未完成初始化' })); process.exit(1) }
       console.log(chalk.red('\n❌ 还没配置\n  运行: weflow-cli init\n'))
       process.exit(1)
     }
     const conn = await chatService.connect()
     if (!conn.success) {
+      if (opts.json) { console.log(JSON.stringify({ success: false, code: 'DATABASE_CONNECTION_FAILED', error: '数据库连接失败' })); process.exit(1) }
       console.log(chalk.red(`\n❌ 数据库连接失败: ${conn.error}\n`))
       process.exit(1)
     }
     if (!chatService.isSnsSupported()) {
+      if (opts.json) { console.log(JSON.stringify({ success: false, code: 'SNS_UNAVAILABLE', error: '当前数据通道不支持朋友圈查询' })); process.exit(1) }
       console.log(chalk.red('\n❌ 当前数据通道不支持朋友圈查询\n'))
       process.exit(1)
     }
@@ -1350,11 +2278,16 @@ snsCmd
     const myWxid = configService.get('wxid') || undefined
     const result = await chatService.getSnsExportStats(myWxid)
     if (!result.success || !result.data) {
+      if (opts.json) { console.log(JSON.stringify({ success: false, code: 'SNS_STATS_FAILED', error: result.error || '获取统计失败' })); return }
       console.log(chalk.gray(`获取统计失败${result.error ? `: ${result.error}` : ''}`))
       return
     }
 
     const d = result.data
+    if (opts.json) {
+      console.log(JSON.stringify({ success: true, stats: d }, null, 2))
+      return
+    }
     console.log(chalk.cyan('朋友圈本地缓存统计:\n'))
     console.log(`  本地缓存动态总数: ${d.totalPosts}`)
     console.log(`  涉及好友数:       ${d.totalFriends}`)
@@ -1367,22 +2300,44 @@ snsCmd
 snsCmd
   .command('capture-key')
   .description('从微信进程捕获 sns.db 解密密钥 (需打开微信朋友圈触发)')
-  .action(async () => {
+  .option('--dry-run', '仅预览，不扫描进程或修改配置')
+  .option('--yes', '确认启动人工密钥捕获流程')
+  .option('--json', '输出机器可读预览；实际捕获必须在交互终端执行')
+  .action(async (opts) => {
+    const preview = {
+      success: true,
+      dryRun: true,
+      action: 'sns.capture-key',
+      interactiveRequired: true,
+      scansProcessMemory: true,
+      writesEncryptedConfiguration: true,
+    }
+    if (opts.dryRun) {
+      if (opts.json) console.log(JSON.stringify(preview))
+      else console.log(chalk.cyan('捕获预览：需要管理员终端，并由用户在微信中打开朋友圈触发'))
+      return
+    }
+    if (opts.json) {
+      console.log(JSON.stringify({ ...preview, success: false, dryRun: false, code: 'INTERACTIVE_REQUIRED' }))
+      process.exit(1)
+    }
     console.log(chalk.cyan('\n🔑 捕获 sns.db 解密密钥\n'))
     console.log(chalk.yellow('准备工作:'))
     console.log('  1. 确保微信 4.x (Weixin.exe) 已登录运行')
     console.log('  2. 确保当前终端以管理员身份运行')
     console.log('  3. 准备好点击微信中的"朋友圈"标签\n')
 
-    const { confirm } = await inquirer.prompt([{
-      type: 'confirm',
-      name: 'confirm',
-      message: '准备好了吗？点击确认后请立即打开微信朋友圈',
-      default: true,
-    }])
-    if (!confirm) {
-      console.log(chalk.gray('已取消'))
-      return
+    if (!opts.yes) {
+      const { confirm } = await inquirer.prompt([{
+        type: 'confirm',
+        name: 'confirm',
+        message: '准备好了吗？点击确认后请立即打开微信朋友圈',
+        default: false,
+      }])
+      if (!confirm) {
+        console.log(chalk.gray('已取消'))
+        return
+      }
     }
 
     // Check sns.db path
@@ -1462,8 +2417,11 @@ favCmd
   .option('-o, --offset <number>', '偏移量', '0')
   .option('--json', '输出 JSON 格式')
   .action(async (opts) => {
+    const limit = parseCliInteger(opts.limit, 'limit', 1, 5000, !!opts.json)
+    const offset = parseCliInteger(opts.offset, 'offset', 0, 1_000_000, !!opts.json)
     if (!configService.isConfigured()) {
-      console.log(chalk.red('\n❌ 还没配置\n  运行: weflow-cli init\n'))
+      if (opts.json) console.log(JSON.stringify({ success: false, code: 'NOT_INITIALIZED', error: '未完成初始化' }))
+      else console.log(chalk.red('\n❌ 还没配置\n  运行: weflow-cli init\n'))
       process.exit(1)
     }
 
@@ -1472,16 +2430,21 @@ favCmd
       const favPath = detectFavDbPath()
       if (favPath) {
         configService.set('favDbPath', favPath)
-        console.log(chalk.green(`✓ 自动发现收藏数据库: ${favPath}\n`))
+        if (!opts.json) console.log(chalk.green(`✓ 自动发现收藏数据库: ${favPath}\n`))
       }
     }
 
     const conn = await chatService.connect()
     if (!conn.success) {
-      console.log(chalk.red(`\n❌ 数据库连接失败: ${conn.error}\n`))
+      if (opts.json) console.log(JSON.stringify({ success: false, code: 'DATABASE_CONNECTION_FAILED', error: '数据库连接失败' }))
+      else console.log(chalk.red(`\n❌ 数据库连接失败: ${conn.error}\n`))
       process.exit(1)
     }
     if (!chatService.isFavSupported()) {
+      if (opts.json) {
+        console.log(JSON.stringify({ success: false, code: 'FAVORITES_UNAVAILABLE', error: '当前数据通道不支持收藏查询' }))
+        process.exit(1)
+      }
       console.log(chalk.red('\n❌ 当前数据通道不支持收藏查询 (需 4.x NT 连接)'))
       console.log(chalk.gray('  请先配置收藏密钥: weflow-cli fav set-key <64位hex密钥>'))
       console.log(chalk.gray('  或设置全库 passphrase: weflow-cli fav set-key --passphrase <64位hex>\n'))
@@ -1492,21 +2455,27 @@ favCmd
     if (opts.type) {
       favType = FAV_TYPE_IDS[opts.type.toLowerCase()]
       if (!favType) {
-        console.log(chalk.red(`❌ 未知类型: ${opts.type}`))
-        console.log(chalk.gray('  可选: text image video article chatrecord'))
+        if (opts.json) console.log(JSON.stringify({ success: false, code: 'INVALID_FAVORITE_TYPE', error: '收藏类型无效' }))
+        else {
+          console.log(chalk.red(`❌ 未知类型: ${opts.type}`))
+          console.log(chalk.gray('  可选: text image video article chatrecord'))
+        }
         process.exit(1)
       }
     }
 
     const result = await chatService.getFavorites({
-      limit: parseInt(opts.limit),
-      offset: parseInt(opts.offset),
+      limit,
+      offset,
       keyword: opts.keyword,
       favType,
     })
 
     if (!result.success || !result.favorites || result.favorites.length === 0) {
-      console.log(chalk.gray(`未找到收藏内容${result.error ? `: ${result.error}` : ''}`))
+      if (opts.json) {
+        console.log(JSON.stringify({ success: result.success, favorites: [], total: result.total || 0, error: result.error || null }))
+        if (!result.success) process.exit(1)
+      } else console.log(chalk.gray(`未找到收藏内容${result.error ? `: ${result.error}` : ''}`))
       return
     }
 
@@ -1536,13 +2505,17 @@ favCmd
   .option('-k, --keyword <kw>', '关键词搜索')
   .option('-n, --limit <number>', '最大数量', '1000')
   .option('-o, --output <file>', '输出文件路径')
+  .option('--json-result', '输出机器可读的导出结果，不改变文件格式')
   .action(async (format: string, opts) => {
     if (format !== 'markdown' && format !== 'json') {
-      console.log(chalk.red('❌ 格式仅支持: markdown | json'))
+      if (opts.jsonResult) console.log(JSON.stringify({ success: false, code: 'INVALID_FORMAT', error: '格式仅支持 markdown 或 json' }))
+      else console.log(chalk.red('❌ 格式仅支持: markdown | json'))
       process.exit(1)
     }
+    const limit = parseCliInteger(opts.limit, 'limit', 0, 1_000_000, !!opts.jsonResult)
     if (!configService.isConfigured()) {
-      console.log(chalk.red('\n❌ 还没配置\n  运行: weflow-cli init\n'))
+      if (opts.jsonResult) console.log(JSON.stringify({ success: false, code: 'NOT_INITIALIZED', error: '未完成初始化' }))
+      else console.log(chalk.red('\n❌ 还没配置\n  运行: weflow-cli init\n'))
       process.exit(1)
     }
 
@@ -1553,12 +2526,16 @@ favCmd
 
     const conn = await chatService.connect()
     if (!conn.success) {
-      console.log(chalk.red(`\n❌ 数据库连接失败: ${conn.error}\n`))
+      if (opts.jsonResult) console.log(JSON.stringify({ success: false, code: 'DATABASE_CONNECTION_FAILED', error: '数据库连接失败' }))
+      else console.log(chalk.red(`\n❌ 数据库连接失败: ${conn.error}\n`))
       process.exit(1)
     }
     if (!chatService.isFavSupported()) {
-      console.log(chalk.red('\n❌ 当前数据通道不支持收藏查询 (需 4.x NT 连接)'))
-      console.log(chalk.gray('  请先配置收藏密钥: weflow-cli fav set-key <64位hex密钥>\n'))
+      if (opts.jsonResult) console.log(JSON.stringify({ success: false, code: 'FAVORITES_UNAVAILABLE', error: '当前数据通道不支持收藏查询' }))
+      else {
+        console.log(chalk.red('\n❌ 当前数据通道不支持收藏查询 (需 4.x NT 连接)'))
+        console.log(chalk.gray('  请先配置收藏密钥: weflow-cli fav set-key <64位hex密钥>\n'))
+      }
       process.exit(1)
     }
 
@@ -1566,20 +2543,22 @@ favCmd
     if (opts.type) {
       favType = FAV_TYPE_IDS[opts.type.toLowerCase()]
       if (!favType) {
-        console.log(chalk.red(`❌ 未知类型: ${opts.type}`))
+        if (opts.jsonResult) console.log(JSON.stringify({ success: false, code: 'INVALID_FAVORITE_TYPE', error: '收藏类型无效' }))
+        else console.log(chalk.red(`❌ 未知类型: ${opts.type}`))
         process.exit(1)
       }
     }
 
     // 全量导出: limit 为 0 时取全部
     const result = await chatService.getFavorites({
-      limit: parseInt(opts.limit),
+      limit,
       offset: 0,
       keyword: opts.keyword,
       favType,
     })
     if (!result.success || !result.favorites) {
-      console.log(chalk.red(`导出失败: ${result.error || '无内容'}`))
+      if (opts.jsonResult) console.log(JSON.stringify({ success: false, code: 'EXPORT_FAILED', error: result.error || '无内容' }))
+      else console.log(chalk.red(`导出失败: ${result.error || '无内容'}`))
       process.exit(1)
     }
 
@@ -1608,34 +2587,72 @@ favCmd
 
     const outPath = opts.output || `favorites_${Date.now()}.${format === 'json' ? 'json' : 'md'}`
     writeFileSync(outPath, content, 'utf8')
-    console.log(chalk.green(`✓ 已导出 ${items.length} 条收藏到 ${outPath}`))
+    if (opts.jsonResult) console.log(JSON.stringify({ success: true, format, path: outPath, count: items.length }, null, 2))
+    else console.log(chalk.green(`✓ 已导出 ${items.length} 条收藏到 ${outPath}`))
   })
 
 favCmd
-  .command('set-key <key>')
+  .command('set-key [key]')
   .description('设置收藏数据库密钥 (默认 raw key; --passphrase 表示全库共用 passphrase)')
   .option('--passphrase', '输入的是全库共用 passphrase (自动派生 favorite.db 密钥)')
-  .action(async (key: string, opts) => {
-    if (!/^[0-9a-fA-F]{64}$/.test(key)) {
-      console.log(chalk.red('❌ 密钥格式错误: 需要 64 位十六进制字符串'))
+  .option('--from-env <name>', '从环境变量读取密钥，避免密钥出现在命令参数中', 'WEFLOW_FAV_KEY')
+  .option('--dry-run', '仅验证输入并预览，不修改配置')
+  .option('--yes', '确认执行')
+  .option('--json', '输出 JSON 格式，不返回密钥或数据库路径')
+  .action(async (key: string | undefined, opts) => {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(opts.fromEnv)) {
+      if (opts.json) console.log(JSON.stringify({ success: false, code: 'INVALID_ENVIRONMENT_NAME', error: '环境变量名称无效' }))
+      else console.log(chalk.red('环境变量名称无效'))
+      process.exit(1)
+    }
+    const resolvedKey = key || process.env[opts.fromEnv]
+    if (!resolvedKey) {
+      if (opts.json) console.log(JSON.stringify({ success: false, code: 'KEY_MISSING', error: `环境变量 ${opts.fromEnv} 未设置且未提供密钥` }))
+      else console.log(chalk.red(`✗ 未提供密钥；请设置环境变量 ${opts.fromEnv} 或传入 key`))
+      process.exit(1)
+    }
+    if (!/^[0-9a-fA-F]{64}$/.test(resolvedKey)) {
+      if (opts.json) console.log(JSON.stringify({ success: false, code: 'INVALID_KEY_FORMAT', error: '密钥必须是 64 位十六进制字符串' }))
+      else console.log(chalk.red('❌ 密钥格式错误: 需要 64 位十六进制字符串'))
+      process.exit(1)
+    }
+    const preview = {
+      action: 'favorites.set-key',
+      mode: opts.passphrase ? 'passphrase' : 'raw-key',
+      source: key ? 'argument' : 'environment',
+      environment: key ? null : opts.fromEnv,
+    }
+    if (opts.dryRun) {
+      if (opts.json) console.log(JSON.stringify({ success: true, dryRun: true, ...preview }))
+      else console.log(chalk.cyan(`将保存收藏数据库${opts.passphrase ? '全库 passphrase' : '密钥'}`))
+      return
+    }
+    if (opts.json && !opts.yes) {
+      console.log(JSON.stringify({ success: false, code: 'CONFIRMATION_REQUIRED', error: '使用 --yes 确认保存收藏数据库密钥', ...preview }))
       process.exit(1)
     }
     if (opts.passphrase) {
-      configService.set('favPassphrase', key)
+      configService.set('favPassphrase', resolvedKey)
       configService.set('favKey', '') // 清空旧 raw key, 下次查询时重新派生
-      console.log(chalk.green('✓ 已保存全库 passphrase'))
+      if (!opts.json) console.log(chalk.green('✓ 已保存全库 passphrase'))
     } else {
-      configService.set('favKey', key)
-      console.log(chalk.green('✓ 已保存 favorite.db raw key'))
+      configService.set('favKey', resolvedKey)
+      if (!opts.json) console.log(chalk.green('✓ 已保存 favorite.db raw key'))
     }
+    let databaseDetected = !!configService.get('favDbPath')
     if (!configService.get('favDbPath')) {
       const favPath = detectFavDbPath()
       if (favPath) {
         configService.set('favDbPath', favPath)
-        console.log(chalk.green(`✓ 自动发现收藏数据库: ${favPath}`))
-      } else {
+        databaseDetected = true
+        if (!opts.json) console.log(chalk.green(`✓ 自动发现收藏数据库: ${favPath}`))
+      } else if (!opts.json) {
         console.log(chalk.yellow('⚠ 未自动发现 favorite.db, 请手动设置: weflow-cli config set favDbPath <path>'))
       }
+    }
+    if (opts.json) {
+      console.log(JSON.stringify({ success: true, changed: true, databaseDetected, ...preview }))
+      return
     }
     console.log(chalk.cyan('\n现在可以使用收藏功能:'))
     console.log(chalk.gray('  weflow-cli fav list'))
@@ -1649,16 +2666,24 @@ program
   .option('--image <path>', '发图片')
   .option('--file <path>', '发文件')
   .option('--dry-run', '仅预览不实际发送')
-  .option('--yes', '跳过二次确认 (危险, 仅脚本使用)')
+  .option('--yes', '确认实际发送')
+  .option('--json', '输出 JSON 格式；实际发送仍需 --yes')
   .option('--rate-window <ms>', '速率窗口毫秒', '60000')
   .option('--rate-max <n>', '窗口内最大发送条数', '10')
   .action(async (target: string, message: string, opts) => {
+    if (opts.image && opts.file) {
+      if (opts.json) console.log(JSON.stringify({ success: false, code: 'CONFLICTING_MEDIA', error: '--image 与 --file 不能同时使用' }))
+      else console.log(chalk.red('--image 与 --file 不能同时使用'))
+      process.exit(1)
+    }
+
     // Resolve target
     let wxid: string
     try {
-      wxid = await resolveTalker(target)
+      wxid = await resolveTalker(target, !!opts.json, !!opts.json)
     } catch (e: any) {
-      console.log(chalk.red(`${e.message}`))
+      if (opts.json) console.log(JSON.stringify({ success: false, code: 'TALKER_RESOLUTION_FAILED', error: e.message }))
+      else console.log(chalk.red(`${e.message}`))
       process.exit(1)
     }
 
@@ -1674,14 +2699,27 @@ program
 
     // 类型与预览
     const kind: 'text' | 'image' | 'file' = opts.image ? 'image' : opts.file ? 'file' : 'text'
-    const preview = kind === 'text'
-      ? message.slice(0, 80) + (message.length > 80 ? '...' : '')
-      : `[${kind}] ${opts.image || opts.file}`
+    let preview = message.slice(0, 80) + (message.length > 80 ? '...' : '')
+    if (kind !== 'text') {
+      const mediaPath = String(opts.image || opts.file)
+      try {
+        const mediaStat = statSync(mediaPath)
+        if (!mediaStat.isFile() || mediaStat.size === 0) throw new Error('invalid media')
+        preview = `[${kind}] ${basename(mediaPath)} (${mediaStat.size} bytes)`
+      } catch {
+        if (opts.json) console.log(JSON.stringify({ success: false, code: 'INVALID_MEDIA_FILE', kind }))
+        else console.log(chalk.red('媒体路径必须指向可读取的非空文件'))
+        process.exit(1)
+      }
+    }
 
     // 文本长度限制 (仅文本)
     if (kind === 'text' && message.length > MAX_TEXT_LENGTH) {
-      console.log(chalk.red(`\n❌ 文本过长 (${message.length} 字符), 上限 ${MAX_TEXT_LENGTH}`))
-      console.log(chalk.gray('  过长内容请拆分多条或使用 --file 发送文件\n'))
+      if (opts.json) console.log(JSON.stringify({ success: false, code: 'MESSAGE_TOO_LONG', error: `文本上限为 ${MAX_TEXT_LENGTH} 字符` }))
+      else {
+        console.log(chalk.red(`\n❌ 文本过长 (${message.length} 字符), 上限 ${MAX_TEXT_LENGTH}`))
+        console.log(chalk.gray('  过长内容请拆分多条或使用 --file 发送文件\n'))
+      }
       whitelistService.auditSend({
         timestamp: Date.now(), action: 'send', targetWxid: wxid, targetName: displayName,
         kind, success: false, preview, error: `text too long (${message.length})`,
@@ -1691,9 +2729,12 @@ program
 
     // 黑名单优先拦截
     if (whitelistService.isBlocked(wxid)) {
-      console.log(chalk.red('\n❌ 目标在黑名单中，绝对禁止发送'))
-      console.log(chalk.gray(`  wxid: ${wxid}`))
-      console.log(chalk.gray(`  解除: weflow-cli blacklist rm ${wxid}\n`))
+      if (opts.json) console.log(JSON.stringify({ success: false, code: 'TARGET_BLOCKED', error: '目标在黑名单中', target: { wxid, displayName } }))
+      else {
+        console.log(chalk.red('\n❌ 目标在黑名单中，绝对禁止发送'))
+        console.log(chalk.gray(`  wxid: ${wxid}`))
+        console.log(chalk.gray(`  解除: weflow-cli blacklist rm ${wxid}\n`))
+      }
       whitelistService.auditSend({
         timestamp: Date.now(), action: 'send', targetWxid: wxid, targetName: displayName,
         kind, success: false, preview, error: 'blocked by blacklist',
@@ -1703,19 +2744,31 @@ program
 
     // Whitelist check
     if (!whitelistService.isAllowed(wxid)) {
-      console.log(chalk.red('\n❌ 目标不在白名单中，拒绝发送'))
-      console.log(chalk.gray(`  先运行: weflow-cli whitelist add ${target}`))
-      console.log(chalk.gray(`  查看名单: weflow-cli whitelist\n`))
+      if (opts.json) console.log(JSON.stringify({ success: false, code: 'TARGET_NOT_ALLOWED', error: '目标不在白名单中', target: { wxid, displayName } }))
+      else {
+        console.log(chalk.red('\n❌ 目标不在白名单中，拒绝发送'))
+        console.log(chalk.gray(`  先运行: weflow-cli whitelist add ${target}`))
+        console.log(chalk.gray(`  查看名单: weflow-cli whitelist\n`))
+      }
       process.exit(1)
     }
 
     // 速率限制 (dry-run 不计入, 不检查也行, 但保持一致检查)
-    const windowMs = parseInt(opts.rateWindow)
-    const max = parseInt(opts.rateMax)
+    const windowMs = Number(opts.rateWindow)
+    const max = Number(opts.rateMax)
+    if (!Number.isInteger(windowMs) || windowMs < 1000 || windowMs > 3_600_000 ||
+        !Number.isInteger(max) || max < 1 || max > 100) {
+      if (opts.json) console.log(JSON.stringify({ success: false, code: 'INVALID_RATE_LIMIT', error: 'rate-window 必须为 1000-3600000，rate-max 必须为 1-100' }))
+      else console.log(chalk.red('速率参数无效：rate-window 必须为 1000-3600000，rate-max 必须为 1-100'))
+      process.exit(1)
+    }
     const rate = whitelistService.checkRateLimit(windowMs, max)
     if (!rate.allowed) {
-      console.log(chalk.red(`\n❌ 触发速率限制: 最近 ${rate.windowMs / 1000}s 内已发送 ${rate.count} 条 (上限 ${rate.max})`))
-      console.log(chalk.gray('  请稍后再试, 或调整 --rate-window / --rate-max\n'))
+      if (opts.json) console.log(JSON.stringify({ success: false, code: 'RATE_LIMITED', error: '触发发送速率限制', rateLimit: rate }))
+      else {
+        console.log(chalk.red(`\n❌ 触发速率限制: 最近 ${rate.windowMs / 1000}s 内已发送 ${rate.count} 条 (上限 ${rate.max})`))
+        console.log(chalk.gray('  请稍后再试, 或调整 --rate-window / --rate-max\n'))
+      }
       whitelistService.auditSend({
         timestamp: Date.now(), action: 'send', targetWxid: wxid, targetName: displayName,
         kind, success: false, preview, error: `rate limited (${rate.count}/${rate.max})`,
@@ -1724,16 +2777,31 @@ program
     }
 
     // 二次确认 — 同时显示 wxid + displayName + 消息预览
-    console.log(chalk.cyan('\n⚠️  即将发送:'))
-    console.log(chalk.white(`  目标: ${displayName}`))
-    console.log(chalk.gray(`  wxid: ${wxid}`))
-    console.log(chalk.gray(`  类型: ${kind}`))
-    console.log(chalk.gray(`  预览: ${preview}`))
-    console.log(chalk.gray(`  速率: ${rate.count}/${rate.max} (窗口 ${rate.windowMs / 1000}s)\n`))
+    const actionPreview = {
+      action: 'send',
+      target: { wxid, displayName },
+      kind,
+      preview,
+      rateLimit: { count: rate.count, max: rate.max, windowMs: rate.windowMs },
+    }
+    if (!opts.json) {
+      console.log(chalk.cyan('\n⚠️  即将发送:'))
+      console.log(chalk.white(`  目标: ${displayName}`))
+      console.log(chalk.gray(`  wxid: ${wxid}`))
+      console.log(chalk.gray(`  类型: ${kind}`))
+      console.log(chalk.gray(`  预览: ${preview}`))
+      console.log(chalk.gray(`  速率: ${rate.count}/${rate.max} (窗口 ${rate.windowMs / 1000}s)\n`))
+    }
 
     if (opts.dryRun) {
-      console.log(chalk.yellow('⚠️  --dry-run 模式, 不实际发送'))
+      if (opts.json) console.log(JSON.stringify({ success: true, dryRun: true, ...actionPreview }))
+      else console.log(chalk.yellow('⚠️  --dry-run 模式, 不实际发送'))
       return
+    }
+
+    if (opts.json && !opts.yes) {
+      console.log(JSON.stringify({ success: false, code: 'CONFIRMATION_REQUIRED', error: '使用 --yes 确认发送', ...actionPreview }))
+      process.exit(1)
     }
 
     if (!opts.yes) {
@@ -1752,8 +2820,11 @@ program
     // Login check
     const token = configService.get('wechatOcToken')
     if (!token) {
-      console.log(chalk.red('\n❌ 未登录消息通道'))
-      console.log(chalk.gray('  先运行: weflow-cli login-wechat\n'))
+      if (opts.json) console.log(JSON.stringify({ success: false, code: 'MESSAGE_CHANNEL_NOT_LOGGED_IN', error: '消息通道未登录' }))
+      else {
+        console.log(chalk.red('\n❌ 未登录消息通道'))
+        console.log(chalk.gray('  先运行: weflow-cli login-wechat\n'))
+      }
       process.exit(1)
     }
 
@@ -1769,8 +2840,8 @@ program
       } else {
         success = await service.sendText(wxid, message)
       }
-    } catch (e: any) {
-      errorMsg = e?.message || String(e)
+    } catch {
+      errorMsg = '消息通道调用失败'
     }
 
     if (!success && !errorMsg) {
@@ -1794,9 +2865,12 @@ program
     })
 
     if (success) {
-      console.log(chalk.green('✓ 发送成功'))
+      if (opts.json) console.log(JSON.stringify({ success: true, ...actionPreview }))
+      else console.log(chalk.green('✓ 发送成功'))
     } else {
-      console.log(chalk.red(`✗ 发送失败 — ${errorMsg}`))
+      if (opts.json) console.log(JSON.stringify({ success: false, code: 'SEND_FAILED', error: errorMsg, ...actionPreview }))
+      else console.log(chalk.red(`✗ 发送失败 — ${errorMsg}`))
+      if (opts.json) process.exit(1)
     }
   })
 
@@ -1805,7 +2879,39 @@ program
   .command('listen')
   .description('监听微信消息 (Ctrl+C 退出)')
   .option('--target <wxid>', '只显示指定用户的消息')
+  .option('--dry-run', '仅预览，不连接消息通道或输出消息')
+  .option('--yes', '确认启动人工前台监听')
+  .option('--json', '输出机器可读预览；实际监听必须在交互终端执行')
   .action(async (opts) => {
+    const preview = {
+      success: true,
+      dryRun: true,
+      action: 'wechat-channel.listen',
+      interactiveRequired: true,
+      outputsMessageContent: true,
+      targetRestricted: !!opts.target,
+    }
+    if (opts.dryRun) {
+      if (opts.json) console.log(JSON.stringify(preview))
+      else console.log(chalk.cyan('监听预览：将前台持续接收并显示白名单消息，需 Ctrl+C 退出'))
+      return
+    }
+    if (opts.json) {
+      console.log(JSON.stringify({ ...preview, success: false, dryRun: false, code: 'INTERACTIVE_REQUIRED' }))
+      process.exit(1)
+    }
+    if (!opts.yes) {
+      const { confirmed } = await inquirer.prompt([{
+        type: 'confirm',
+        name: 'confirmed',
+        message: '确认在当前终端持续监听并显示白名单消息？',
+        default: false,
+      }])
+      if (!confirmed) {
+        console.log(chalk.gray('已取消'))
+        return
+      }
+    }
     const token = configService.get('wechatOcToken')
     if (!token) {
       console.log(chalk.red('\n❌ 未登录消息通道'))
@@ -1821,10 +2927,10 @@ program
       console.log(chalk.gray('  运行: weflow-cli whitelist add <昵称>\n'))
       process.exit(1)
     }
-    console.log(chalk.gray(`当前白名单: ${wl.join(', ')}`))
+    console.log(chalk.gray(`当前白名单: ${wl.length} 项`))
     const bl = whitelistService.getBlacklist()
     if (bl.length > 0) {
-      console.log(chalk.gray(`当前黑名单: ${bl.join(', ')} (绝对拦截)`))
+      console.log(chalk.gray(`当前黑名单: ${bl.length} 项 (绝对拦截)`))
     }
 
     const service = new WechatMessageService({ token })
@@ -1842,7 +2948,7 @@ program
 
       const time = new Date(msg.timestampMs).toLocaleString('zh-CN')
       const kind = msg.messageKind !== 'text' ? ` [${msg.messageKind}]` : ''
-      console.log(chalk.gray(`[${time}]`) + ` ${chalk.blue(msg.senderNickname || msg.fromUserId)}:${kind} ${msg.messageStr}`)
+      console.log(chalk.gray(`[${time}]`) + ` ${chalk.blue(msg.senderNickname || '未知发送者')}:${kind} ${msg.messageStr}`)
     })
 
     // Graceful shutdown
@@ -1860,49 +2966,85 @@ program
   .command('report')
   .description('生成聊天月报（AI 分析任务和回复）')
   .option('--month <YYYY-MM>', '指定月份')
-  .option('--talker <昵称>', '指定联系人（可多次使用）')
+  .option('--talker <昵称>', '指定联系人（可多次使用）', (value: string, previous: string[]) => [...previous, value], [] as string[])
   .option('--from-whitelist', '使用白名单中的联系人')
   .option('--api-key <key>', 'DeepSeek API key')
   .option('--no-ai', '仅统计，不调用 AI')
   .option('-o, --output <dir>', '输出目录', './output')
+  .option('--dry-run', '仅预览，不读取聊天、调用 AI 或写入报告')
+  .option('--yes', '确认生成报告')
+  .option('--json', '输出机器可读结果，不返回联系人或本地路径')
   .action(async (opts) => {
+    if (opts.month && !/^\d{4}-(0[1-9]|1[0-2])$/.test(opts.month)) {
+      if (opts.json) console.log(JSON.stringify({ success: false, code: 'INVALID_DATE', field: 'month' }))
+      else console.log(chalk.red('month 必须是有效的 YYYY-MM 月份'))
+      process.exit(1)
+    }
+    const talkers = opts.talker as string[]
+    const noAi = opts.ai === false
+    const preview = {
+      success: true,
+      dryRun: true,
+      action: 'report.generate',
+      monthSpecified: !!opts.month,
+      talkerCount: talkers.length,
+      fromWhitelist: !!opts.fromWhitelist,
+      aiEnabled: !noAi,
+    }
+    if (opts.dryRun) {
+      if (opts.json) console.log(JSON.stringify(preview))
+      else console.log(chalk.cyan(`月报预览：${talkers.length || (opts.fromWhitelist ? '白名单' : '默认')} 个指定对象，AI ${noAi ? '关闭' : '开启'}`))
+      return
+    }
+    if (!opts.yes) {
+      if (opts.json) {
+        console.log(JSON.stringify({ ...preview, success: false, dryRun: false, code: 'CONFIRMATION_REQUIRED' }))
+        process.exit(1)
+      }
+      const { confirmed } = await inquirer.prompt([{
+        type: 'confirm',
+        name: 'confirmed',
+        message: `确认生成聊天月报？${noAi ? '仅执行本地统计。' : '所选聊天内容将发送到已配置的 AI 服务。'}`,
+        default: false,
+      }])
+      if (!confirmed) {
+        console.log(chalk.gray('已取消'))
+        return
+      }
+    }
     if (!configService.isConfigured()) {
-      console.log(chalk.red('\n❌ 还没配置\n  运行: weflow-cli init\n'))
+      if (opts.json) console.log(JSON.stringify({ success: false, code: 'NOT_INITIALIZED' }))
+      else console.log(chalk.red('\n❌ 还没配置\n  运行: weflow-cli init\n'))
       process.exit(1)
     }
 
     const { execFile } = await import('child_process')
     const { promisify } = await import('util')
     const execFileAsync = promisify(execFile)
-    const { fileURLToPath } = await import('url')
-    const { dirname } = await import('path')
-    const __filename = fileURLToPath(import.meta.url)
-    const __dirname = dirname(__filename)
-    const pkgRoot = join(__dirname, '..', '..')
+    const pkgRoot = resolvePackageRoot()
     const script = join(pkgRoot, 'scripts', 'chat_report.py')
 
     const args: string[] = [script]
     if (opts.month) args.push('--month', opts.month)
-    if (opts.talker) {
-      // commander collects repeated --talker into array, single value is string
-      const talkers = Array.isArray(opts.talker) ? opts.talker : [opts.talker]
-      for (const t of talkers) args.push('--talker', t)
-    }
     if (opts.fromWhitelist) args.push('--from-whitelist')
-    if (opts.apiKey) args.push('--api-key', opts.apiKey)
-    if (opts.ai === false) args.push('--no-ai')
+    if (noAi) args.push('--no-ai')
     if (opts.output) args.push('--output', opts.output)
 
     try {
-      console.log(chalk.cyan('正在生成月报...\n'))
+      if (!opts.json) console.log(chalk.cyan('正在生成月报...\n'))
       const { stdout } = await execFileAsync(getPythonCommand(), args, {
         timeout: 600_000,
         maxBuffer: 50 * 1024 * 1024,
-        env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
+        env: {
+          ...pythonProcessEnv(opts.apiKey),
+          ...(talkers.length > 0 ? { WEFLOW_REPORT_TALKERS: JSON.stringify(talkers) } : {}),
+        },
       })
-      console.log(stdout)
+      if (opts.json) console.log(JSON.stringify({ success: true, action: 'report.generate' }))
+      else console.log(stdout)
     } catch (e: any) {
-      console.error(chalk.red(`\n✗ 生成失败: ${e.message}`))
+      if (opts.json) console.log(JSON.stringify({ success: false, code: 'REPORT_FAILED', error: safeSubprocessError(e, '生成失败') }))
+      else console.error(chalk.red(`\n✗ ${safeSubprocessError(e, '生成失败')}`))
       process.exit(1)
     }
   })
@@ -1915,14 +3057,14 @@ program
       new Command('init')
         .description('初始化 Obsidian Vault 目录结构')
         .option('-p, --path <dir>', 'Vault 路径', './output/wechat-vault')
+        .option('--dry-run', '仅预览将创建或覆盖的项目，不修改文件')
+        .option('--yes', '确认创建目录并写入模板文件')
+        .option('--json', '输出 JSON 格式，不返回本地路径或文件名')
         .action(async (opts) => {
           const { mkdirSync, writeFileSync } = await import('fs')
           const { join } = await import('path')
 
           const vaultPath = opts.path
-          console.log(chalk.cyan(`\n🔧 初始化 Obsidian Vault: ${vaultPath}\n`))
-
-          // Directory structure
           const dirs = [
             '.obsidian',
             'Templates',
@@ -1944,111 +3086,168 @@ program
             'Wiki/Entities',
             'Wiki/Topics',
           ]
-          for (const d of dirs) {
-            mkdirSync(join(vaultPath, d), { recursive: true })
-            console.log(`  ✓ ${d}/`)
+          const files = [
+            {
+              relativePath: join('.obsidian', 'app.json'),
+              content: JSON.stringify({
+                newFileLocation: 'folder',
+                newFileFolderPath: 'Sources',
+                attachmentFolderPath: 'Assets',
+                showInlineTitle: false,
+              }, null, 2),
+            },
+            {
+              relativePath: join('Templates', 'article.md'),
+              content: [
+                '---',
+                'title: "{{title}}"',
+                'source: ""',
+                'date: {{date}}',
+                'topic: AI',
+                'tags: []',
+                'created: {{date}}',
+                '---',
+                '',
+                '# {{title}}',
+                '',
+                '> 来源：  ',
+                '> 时间：{{date}}  ',
+                '',
+                '---',
+                '',
+                '## AI 摘要',
+                '',
+                '',
+                '## 相关概念',
+                '',
+                '',
+                '---',
+                '',
+                '## 正文',
+                '',
+              ].join('\n'),
+            },
+            {
+              relativePath: 'README.md',
+              content: [
+                '# WeChat Knowledge Vault',
+                '',
+                '> 由 weflow-cli 自动生成，兼容 Obsidian。',
+                '',
+                '## 目录结构',
+                '',
+                '| 目录 | 说明 |',
+                '|------|------|',
+                '| `Sources/WeChat/` | 公众号文章（按日期+主题分类） |',
+                '| `Wiki/Concepts/` | 概念页（手动或 AI 生成） |',
+                '| `Wiki/Entities/` | 实体页（公众号、作者等） |',
+                '| `Wiki/Topics/` | 主题总览页 |',
+                '| `Templates/` | 模板文件 |',
+                '',
+                '## 快速查询',
+                '',
+                '使用 Obsidian Dataview 插件：',
+                '',
+                '```dataview',
+                'TABLE date, topic, tags',
+                'FROM "Sources/WeChat"',
+                'WHERE topic = "AI"',
+                'SORT date DESC',
+                '```',
+                '',
+                '```dataview',
+                'TABLE length(rows) as "篇数"',
+                'FROM "Sources/WeChat"',
+                'GROUP BY topic',
+                'SORT rows.length DESC',
+                '```',
+                '',
+                '## 每日更新',
+                '',
+                '```bash',
+                '# 生成今日日报',
+                'python scripts/biz_daily.py --api-key <key>',
+                '',
+                '# 后处理（广告清洗+深度摘要）',
+                'python scripts/classify_daily.py --api-key <key> --interest AI',
+                '',
+                '# 同步到 GitHub',
+                '# (见 OPERATIONS.md)',
+                '```',
+                '',
+                '---',
+                '',
+                '*由 weflow-cli vault init 生成*',
+              ].join('\n'),
+            },
+            {
+              relativePath: '.gitignore',
+              content: [
+                '.obsidian/workspace*.json',
+                '.obsidian/hotkeys.json',
+                '.trash/',
+                '.DS_Store',
+              ].join('\n'),
+            },
+          ]
+          const directoryCreateCount = dirs.filter(dir => !existsSync(join(vaultPath, dir))).length
+          const fileCreateCount = files.filter(file => !existsSync(join(vaultPath, file.relativePath))).length
+          const overwriteCount = files.length - fileCreateCount
+          const preview = {
+            success: true,
+            dryRun: true,
+            action: 'vault.init',
+            directoryCreateCount,
+            fileCreateCount,
+            overwriteCount,
           }
 
-          // .obsidian/app.json
-          writeFileSync(join(vaultPath, '.obsidian', 'app.json'), JSON.stringify({
-            "newFileLocation": "folder",
-            "newFileFolderPath": "Sources",
-            "attachmentFolderPath": "Assets",
-            "showInlineTitle": false,
-          }, null, 2), 'utf-8')
+          if (opts.dryRun) {
+            if (opts.json) console.log(JSON.stringify(preview))
+            else {
+              console.log(chalk.cyan(`Vault 初始化预览：新建 ${directoryCreateCount} 个目录、${fileCreateCount} 个文件，覆盖 ${overwriteCount} 个文件`))
+            }
+            return
+          }
 
-          // Templates/article.md
-          writeFileSync(join(vaultPath, 'Templates', 'article.md'), [
-            '---',
-            'title: "{{title}}"',
-            'source: ""',
-            'date: {{date}}',
-            'topic: AI',
-            'tags: []',
-            'created: {{date}}',
-            '---',
-            '',
-            '# {{title}}',
-            '',
-            '> 来源：  ',
-            '> 时间：{{date}}  ',
-            '',
-            '---',
-            '',
-            '## AI 摘要',
-            '',
-            '',
-            '## 相关概念',
-            '',
-            '',
-            '---',
-            '',
-            '## 正文',
-            '',
-          ].join('\n'), 'utf-8')
+          if (!opts.yes) {
+            if (opts.json) {
+              console.log(JSON.stringify({ ...preview, success: false, dryRun: false, code: 'CONFIRMATION_REQUIRED' }))
+              process.exit(1)
+            }
+            const { confirmed } = await inquirer.prompt([{
+              type: 'confirm',
+              name: 'confirmed',
+              message: `确认初始化 Vault？将新建 ${directoryCreateCount} 个目录、${fileCreateCount} 个文件，并覆盖 ${overwriteCount} 个已有文件。`,
+              default: false,
+            }])
+            if (!confirmed) {
+              console.log(chalk.gray('已取消'))
+              return
+            }
+          }
 
-          // README.md
-          writeFileSync(join(vaultPath, 'README.md'), [
-            '# WeChat Knowledge Vault',
-            '',
-            '> 由 weflow-cli 自动生成，兼容 Obsidian。',
-            '',
-            '## 目录结构',
-            '',
-            '| 目录 | 说明 |',
-            '|------|------|',
-            '| `Sources/WeChat/` | 公众号文章（按日期+主题分类） |',
-            '| `Wiki/Concepts/` | 概念页（手动或 AI 生成） |',
-            '| `Wiki/Entities/` | 实体页（公众号、作者等） |',
-            '| `Wiki/Topics/` | 主题总览页 |',
-            '| `Templates/` | 模板文件 |',
-            '',
-            '## 快速查询',
-            '',
-            '使用 Obsidian Dataview 插件：',
-            '',
-            '```dataview',
-            'TABLE date, topic, tags',
-            'FROM "Sources/WeChat"',
-            'WHERE topic = "AI"',
-            'SORT date DESC',
-            '```',
-            '',
-            '```dataview',
-            'TABLE length(rows) as "篇数"',
-            'FROM "Sources/WeChat"',
-            'GROUP BY topic',
-            'SORT rows.length DESC',
-            '```',
-            '',
-            '## 每日更新',
-            '',
-            '```bash',
-            '# 生成今日日报',
-            'python scripts/biz_daily.py --api-key <key>',
-            '',
-            '# 后处理（广告清洗+深度摘要）',
-            'python scripts/classify_daily.py --api-key <key> --interest AI',
-            '',
-            '# 同步到 GitHub',
-            '# (见 OPERATIONS.md)',
-            '```',
-            '',
-            '---',
-            '',
-            '*由 weflow-cli vault init 生成*',
-          ].join('\n'), 'utf-8')
+          if (!opts.json) console.log(chalk.cyan(`\n🔧 初始化 Obsidian Vault: ${vaultPath}\n`))
+          for (const dir of dirs) {
+            mkdirSync(join(vaultPath, dir), { recursive: true })
+            if (!opts.json) console.log(`  ✓ ${dir}/`)
+          }
+          for (const file of files) {
+            writeFileSync(join(vaultPath, file.relativePath), file.content, 'utf8')
+          }
 
-          // .gitignore
-          writeFileSync(join(vaultPath, '.gitignore'), [
-            '.obsidian/workspace*.json',
-            '.obsidian/hotkeys.json',
-            '.trash/',
-            '.DS_Store',
-          ].join('\n'), 'utf-8')
-
-          console.log(chalk.green(`\n✓ Vault 创建完成!`))
-          console.log(`  用 Obsidian 打开: File → Open Vault → ${vaultPath}`)
+          if (opts.json) {
+            console.log(JSON.stringify({
+              success: true,
+              action: 'vault.init',
+              directoryCreateCount,
+              fileCreateCount,
+              overwriteCount,
+            }))
+          } else {
+            console.log(chalk.green(`\n✓ Vault 创建完成!`))
+            console.log(`  用 Obsidian 打开: File → Open Vault → ${vaultPath}`)
+          }
         })
     )
 
@@ -2063,32 +3262,24 @@ program
         .option('--source <dir>', '文章目录', './output/biz-daily')
         .option('-o, --output <dir>', '概念页输出目录', './output/wechat-vault/Wiki/Concepts')
         .option('--api-key <key>', 'DeepSeek API key')
+        .option('--dry-run', '仅预览，不读取文章、调用 AI 或写入概念页')
+        .option('--yes', '确认调用 AI 并生成概念页')
+        .option('--json', '输出机器可读结果，不返回概念或本地路径')
         .action(async (opts) => {
-          const { execFile } = await import('child_process')
-          const { promisify } = await import('util')
-          const execFileAsync = promisify(execFile)
-          const { fileURLToPath } = await import('url')
-          const { dirname } = await import('path')
-          const __filename = fileURLToPath(import.meta.url)
-          const __dirname = dirname(__filename)
-          const pkgRoot = join(__dirname, '..', '..')
+          const pkgRoot = resolvePackageRoot()
           const script = join(pkgRoot, 'scripts', 'compile_wiki.py')
 
-          const args: string[] = [script, '--limit', opts.limit, '--source', opts.source, '--output', opts.output]
-          if (opts.apiKey) args.push('--api-key', opts.apiKey)
-
-          try {
-            console.log(chalk.cyan('正在编译概念图谱...\n'))
-            const { stdout } = await execFileAsync(getPythonCommand(), args, {
-              timeout: 300_000,
-              maxBuffer: 10 * 1024 * 1024,
-              env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
-            })
-            console.log(stdout)
-          } catch (e: any) {
-            console.error(chalk.red(`\n✗ 编译失败: ${e.message}`))
-            process.exit(1)
-          }
+          const limit = parseCliInteger(opts.limit, 'limit', 1, 1000, opts.json)
+          await runConfirmedPythonMutation({
+            action: 'wiki.compile',
+            script,
+            args: ['--limit', String(limit), '--source', opts.source, '--output', opts.output],
+            cliOptions: opts,
+            preview: { limit, readsLocalArticles: true, usesAi: true, writesConceptPages: true },
+            confirmationMessage: `确认调用 AI 并生成最多 ${limit} 个概念页？`,
+            apiKey: opts.apiKey,
+            timeout: 300_000,
+          })
         })
     )
 
@@ -2101,32 +3292,111 @@ program
         .description('一键运行 biz_daily → classify → wiki compile')
         .option('--date <YYYY-MM-DD>', '日期')
         .option('--api-key <key>', 'DeepSeek API key')
+        .option('--engine <name>', 'AI 引擎: deepseek / claude / ollama / local', 'deepseek')
         .option('--interest <topic>', '兴趣主题', 'AI')
         .option('--wiki-limit <n>', '概念编译数', '20')
+        .option('--source <name>', '仅处理指定公众号，可重复使用', (value: string, previous: string[]) => [...previous, value], [] as string[])
+        .option('--skip-classify', '跳过 AI 后处理')
+        .option('--skip-wiki', '跳过概念编译')
+        .option('--skip-vault', '跳过 Vault 副本同步')
+        .option('--skip-html', '跳过 HTML 阅读器生成')
+        .option('--skip-ai-report', '跳过 AI 深度阅读报告')
+        .option('--no-ai', '关闭全部 AI 调用，保留抓取和本地输出')
+        .option('--ai-report-range <n>', 'AI 报告覆盖最近 N 天', '1')
+        .option('--dry-run', '仅预览步骤，不读取聊天数据、调用网络或写入文件')
+        .option('--yes', '确认运行流水线')
+        .option('--json', '输出机器可读结果，不返回本地路径')
         .action(async (opts) => {
+          const allowedEngines = new Set(['deepseek', 'claude', 'ollama', 'local'])
+          if (!allowedEngines.has(opts.engine)) {
+            if (opts.json) console.log(JSON.stringify({ success: false, code: 'INVALID_ARGUMENT', field: 'engine' }))
+            else console.log(chalk.red('engine 必须是 deepseek、claude、ollama 或 local'))
+            process.exit(1)
+          }
+          if (opts.date) {
+            try {
+              parseLocalDateOrIso(opts.date)
+              if (!/^\d{4}-\d{2}-\d{2}$/.test(opts.date)) throw new DateRangeError('INVALID_DATE', '日期无效')
+            } catch {
+              if (opts.json) console.log(JSON.stringify({ success: false, code: 'INVALID_DATE', field: 'date' }))
+              else console.log(chalk.red('date 必须是有效的 YYYY-MM-DD 日期'))
+              process.exit(1)
+            }
+          }
+          const wikiLimit = parseCliInteger(opts.wikiLimit, 'wiki-limit', 1, 1000, opts.json)
+          const aiReportRange = parseCliInteger(opts.aiReportRange, 'ai-report-range', 1, 365, opts.json)
+          const sources = opts.source as string[]
+          const noAi = opts.ai === false
+          const preview = {
+            success: true,
+            dryRun: true,
+            action: 'pipeline.run',
+            dateSpecified: !!opts.date,
+            sourceCount: sources.length,
+            engine: opts.engine,
+            aiEnabled: !noAi,
+            cloudAiEnabled: !noAi && ['deepseek', 'claude'].includes(opts.engine),
+            vaultSyncEnabled: !opts.skipVault,
+            htmlEnabled: !opts.skipHtml,
+            wikiEnabled: !opts.skipWiki && !noAi,
+            classifyEnabled: !opts.skipClassify && !noAi,
+            aiReportEnabled: !opts.skipAiReport && !noAi,
+          }
+          if (opts.dryRun) {
+            if (opts.json) console.log(JSON.stringify(preview))
+            else console.log(chalk.cyan(`流水线预览：${sources.length || '全部'} 个指定来源，AI ${noAi ? '关闭' : '开启'}，Vault 同步 ${opts.skipVault ? '关闭' : '开启'}`))
+            return
+          }
+          if (!opts.yes) {
+            if (opts.json) {
+              console.log(JSON.stringify({ ...preview, success: false, dryRun: false, code: 'CONFIRMATION_REQUIRED' }))
+              process.exit(1)
+            }
+            const { confirmed } = await inquirer.prompt([{
+              type: 'confirm',
+              name: 'confirmed',
+              message: `确认运行流水线？将抓取内容并写入本地输出${opts.skipVault ? '' : '，同时替换当天 Vault 副本'}。`,
+              default: false,
+            }])
+            if (!confirmed) {
+              console.log(chalk.gray('已取消'))
+              return
+            }
+          }
           const { execFile } = await import('child_process')
           const { promisify } = await import('util')
           const execFileAsync = promisify(execFile)
-          const { fileURLToPath } = await import('url')
-          const { dirname } = await import('path')
-          const __filename = fileURLToPath(import.meta.url)
-          const __dirname = dirname(__filename)
-          const pkgRoot = join(__dirname, '..', '..')
+          const pkgRoot = resolvePackageRoot()
           const script = join(pkgRoot, 'scripts', 'pipeline.py')
 
-          const args: string[] = [script, '--api-key', opts.apiKey, '--interest', opts.interest, '--wiki-limit', opts.wikiLimit]
+          const args: string[] = [
+            script,
+            '--engine', opts.engine,
+            '--interest', opts.interest,
+            '--wiki-limit', String(wikiLimit),
+            '--ai-report-range', String(aiReportRange),
+          ]
           if (opts.date) args.push('--date', opts.date)
+          for (const source of sources) args.push('--source', source)
+          if (opts.skipClassify) args.push('--skip-classify')
+          if (opts.skipWiki) args.push('--skip-wiki')
+          if (opts.skipVault) args.push('--skip-vault')
+          if (opts.skipHtml) args.push('--skip-html')
+          if (opts.skipAiReport) args.push('--skip-ai-report')
+          if (noAi) args.push('--no-ai')
 
           try {
-            console.log(chalk.cyan('\n启动端到端流水线...\n'))
+            if (!opts.json) console.log(chalk.cyan('\n启动端到端流水线...\n'))
             const { stdout } = await execFileAsync(getPythonCommand(), args, {
               timeout: 600_000,
               maxBuffer: 50 * 1024 * 1024,
-              env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
+              env: pythonProcessEnv(opts.apiKey),
             })
-            console.log(stdout)
+            if (opts.json) console.log(JSON.stringify({ success: true, action: 'pipeline.run' }))
+            else console.log(stdout)
           } catch (e: any) {
-            console.error(chalk.red(`\n✗ 流水线失败: ${e.message}`))
+            if (opts.json) console.log(JSON.stringify({ success: false, code: 'PIPELINE_FAILED', error: safeSubprocessError(e, '流水线失败') }))
+            else console.error(chalk.red(`\n✗ ${safeSubprocessError(e, '流水线失败')}`))
             process.exit(1)
           }
         })
@@ -2140,7 +3410,9 @@ program
         .description('增量提交 Vault 并推送到远端仓库')
         .option('-r, --repo <url>', '远端 Git 仓库地址')
         .option('-b, --branch <name>', '分支名', 'main')
-        .option('--include-chat', '包含聊天记录（默认不同步）')
+        .option('--dry-run', '仅预览变更数量，不提交或推送')
+        .option('--yes', '确认提交并推送')
+        .option('--json', '输出 JSON 格式，不返回远端地址或文件名')
         .action(async (opts) => {
           const { execFile } = await import('child_process')
           const { promisify } = await import('util')
@@ -2149,43 +3421,96 @@ program
 
           const repo = opts.repo || configService.get('vaultRepo')
           if (!repo) {
+            if (opts.json) {
+              console.log(JSON.stringify({ success: false, code: 'VAULT_REMOTE_REQUIRED' }))
+              process.exit(1)
+            }
             console.error(chalk.red('\n❌ 未指定远端仓库。运行: weflow-cli config set vaultRepo <url> 或使用 --repo 参数\n'))
             process.exit(1)
           }
 
           try {
-            // Ensure vault is a git repo
             const gitDir = join(vaultPath, '.git')
-            const { existsSync } = await import('fs')
-            if (!existsSync(gitDir)) {
-              console.log(chalk.cyan('初始化 Vault Git 仓库...'))
-              await execFileAsync('git', ['init'], { cwd: vaultPath })
-              await execFileAsync('git', ['remote', 'add', 'origin', repo], { cwd: vaultPath })
+            const { existsSync, readdirSync } = await import('fs')
+            if (!existsSync(vaultPath)) {
+              if (opts.json) console.log(JSON.stringify({ success: false, code: 'VAULT_NOT_FOUND' }))
+              else console.error(chalk.red('Vault 不存在，请先运行 weflow-cli vault init'))
+              process.exit(1)
             }
 
-            // Check for changes
-            try {
-              await execFileAsync('git', ['diff', '--cached', '--quiet'], { cwd: vaultPath })
-              await execFileAsync('git', ['diff', '--quiet'], { cwd: vaultPath })
-              console.log(chalk.yellow('没有变更，跳过同步'))
+            const initialized = existsSync(gitDir)
+            const countFiles = (dir: string): number => readdirSync(dir, { withFileTypes: true }).reduce((total, entry) => {
+              if (entry.name === '.git') return total
+              return total + (entry.isDirectory() ? countFiles(join(dir, entry.name)) : 1)
+            }, 0)
+            const status = initialized
+              ? (await execFileAsync('git', ['status', '--porcelain'], { cwd: vaultPath })).stdout
+              : ''
+            const changeCount = initialized
+              ? status.split(/\r?\n/).filter(Boolean).length
+              : countFiles(vaultPath)
+            const preview = {
+              success: true,
+              dryRun: true,
+              action: 'vault.sync',
+              branch: opts.branch,
+              initialized,
+              changeCount,
+            }
+
+            if (opts.dryRun) {
+              if (opts.json) console.log(JSON.stringify(preview))
+              else console.log(chalk.cyan(`Vault 同步预览：${changeCount} 个文件状态将被处理`))
               return
-            } catch {
-              // Has changes, proceed
+            }
+            if (changeCount === 0) {
+              if (opts.json) console.log(JSON.stringify({ success: true, action: 'vault.sync', changed: false, pushed: false }))
+              else console.log(chalk.yellow('没有变更，跳过同步'))
+              return
+            }
+            if (!opts.yes) {
+              if (opts.json) {
+                console.log(JSON.stringify({ success: false, code: 'CONFIRMATION_REQUIRED', action: 'vault.sync', changeCount }))
+                process.exit(1)
+              }
+              const { confirmed } = await inquirer.prompt([{
+                type: 'confirm',
+                name: 'confirmed',
+                message: `确认提交并推送 Vault 的 ${changeCount} 个文件状态？`,
+                default: false,
+              }])
+              if (!confirmed) {
+                console.log(chalk.gray('已取消'))
+                return
+              }
+            }
+
+            if (!existsSync(gitDir)) {
+              if (!opts.json) console.log(chalk.cyan('初始化 Vault Git 仓库...'))
+              await execFileAsync('git', ['init'], { cwd: vaultPath })
+              await execFileAsync('git', ['remote', 'add', 'origin', repo], { cwd: vaultPath })
+            } else {
+              try {
+                await execFileAsync('git', ['remote', 'get-url', 'origin'], { cwd: vaultPath })
+              } catch {
+                await execFileAsync('git', ['remote', 'add', 'origin', repo], { cwd: vaultPath })
+              }
             }
 
             const dateStr = new Date().toISOString().slice(0, 10)
-            const { stdout: statOut } = await execFileAsync('git', ['diff', '--stat'], { cwd: vaultPath })
-
-            console.log(chalk.cyan('提交变更...'))
             await execFileAsync('git', ['add', '-A'], { cwd: vaultPath })
+            const { stdout: statOut } = await execFileAsync('git', ['diff', '--cached', '--stat'], { cwd: vaultPath })
+            if (!opts.json) console.log(chalk.cyan('提交变更...'))
             await execFileAsync('git', ['commit', '-m', `vault sync: ${dateStr} | ${statOut.split('\n').length} files`], { cwd: vaultPath })
 
-            console.log(chalk.cyan('推送到远端...'))
+            if (!opts.json) console.log(chalk.cyan('推送到远端...'))
             await execFileAsync('git', ['push', '-u', 'origin', opts.branch], { cwd: vaultPath, timeout: 60_000 })
 
-            console.log(chalk.green(`\n✓ Vault 已同步到 ${repo} (${opts.branch})`))
+            if (opts.json) console.log(JSON.stringify({ success: true, action: 'vault.sync', changed: true, pushed: true, branch: opts.branch, changeCount }))
+            else console.log(chalk.green(`\n✓ Vault 已同步 (${opts.branch})`))
           } catch (e: any) {
-            console.error(chalk.red(`\n✗ 同步失败: ${e.message}`))
+            if (opts.json) console.log(JSON.stringify({ success: false, code: 'VAULT_SYNC_FAILED', error: safeSubprocessError(e, '同步失败') }))
+            else console.error(chalk.red(`\n✗ ${safeSubprocessError(e, '同步失败')}`))
             process.exit(1)
           }
         })
@@ -2198,18 +3523,26 @@ program
       new Command('enrich')
         .description('增强双向链接 — 为文章添加相关阅读段落')
         .option('--date <YYYY-MM-DD>', '日期（默认今天）')
+        .option('--source <dir>', '文章目录', './output/biz-daily')
+        .option('--dry-run', '仅预览，不读取或修改文章')
+        .option('--yes', '确认修改文章')
+        .option('--json', '输出机器可读结果，不返回本地路径')
         .action(async (opts) => {
-          const { fileURLToPath } = await import('url')
-          const { dirname } = await import('path')
-          const __filename = fileURLToPath(import.meta.url)
-          const __dirname = dirname(__filename)
-          const pkgRoot = join(__dirname, '..', '..')
+          const pkgRoot = resolvePackageRoot()
           const script = join(pkgRoot, 'scripts', 'enrich_backlinks.py')
           if (!opts.date) {
             const now = new Date()
             opts.date = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`
           }
-          await runPythonCmd(script, ['--date', opts.date])
+          requireCliDate(opts.date, opts.json)
+          await runConfirmedPythonMutation({
+            action: 'vault.enrich',
+            script,
+            args: ['--date', opts.date, '--source', opts.source],
+            cliOptions: opts,
+            preview: { dateSpecified: true, modifiesArticles: true, usesAi: false },
+            confirmationMessage: '确认向当日文章写入相关阅读链接？',
+          })
         })
     )
 
@@ -2220,19 +3553,27 @@ program
       new Command('notes')
         .description('创建阅读笔记 — 为文章生成 Vault 笔记页')
         .option('--date <YYYY-MM-DD>', '日期（默认今天）')
+        .option('--source <dir>', '文章目录', './output/biz-daily')
         .option('--vault <path>', 'Vault 路径', './output/wechat-vault')
+        .option('--dry-run', '仅预览，不读取文章或写入笔记')
+        .option('--yes', '确认生成阅读笔记')
+        .option('--json', '输出机器可读结果，不返回本地路径')
         .action(async (opts) => {
-          const { fileURLToPath } = await import('url')
-          const { dirname } = await import('path')
-          const __filename = fileURLToPath(import.meta.url)
-          const __dirname = dirname(__filename)
-          const pkgRoot = join(__dirname, '..', '..')
+          const pkgRoot = resolvePackageRoot()
           const script = join(pkgRoot, 'scripts', 'create_reading_notes.py')
           if (!opts.date) {
             const now = new Date()
             opts.date = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`
           }
-          await runPythonCmd(script, ['--date', opts.date, '--vault', opts.vault])
+          requireCliDate(opts.date, opts.json)
+          await runConfirmedPythonMutation({
+            action: 'vault.notes',
+            script,
+            args: ['--date', opts.date, '--source', opts.source, '--vault', opts.vault],
+            cliOptions: opts,
+            preview: { dateSpecified: true, createsNotes: true, usesAi: false },
+            confirmationMessage: '确认从当日文章生成 Vault 阅读笔记？',
+          })
         })
     )
 
@@ -2243,15 +3584,26 @@ program
       new Command('tag')
         .description('自动标签 — AI 为文章补充标签')
         .option('--date <YYYY-MM-DD>', '日期（默认今天）')
+        .option('--source <dir>', '文章目录', './output/biz-daily')
+        .option('--force', '覆盖已有标签')
+        .option('--api-key <key>', 'DeepSeek API key')
+        .option('--dry-run', '仅预览，不读取文章、调用 AI 或修改标签')
+        .option('--yes', '确认调用 AI 并修改文章标签')
+        .option('--json', '输出机器可读结果，不返回本地路径或文章名')
         .action(async (opts) => {
-          const { fileURLToPath } = await import('url')
-          const { dirname } = await import('path')
-          const __filename = fileURLToPath(import.meta.url)
-          const __dirname = dirname(__filename)
-          const pkgRoot = join(__dirname, '..', '..')
+          const pkgRoot = resolvePackageRoot()
           const script = join(pkgRoot, 'scripts', 'auto_tag.py')
           if (!opts.date) { const n=new Date(); opts.date=`${n.getFullYear()}-${String(n.getMonth()+1).padStart(2,'0')}-${String(n.getDate()).padStart(2,'0')}` }
-          await runPythonCmd(script, ['--date', opts.date])
+          requireCliDate(opts.date, opts.json)
+          await runConfirmedPythonMutation({
+            action: 'vault.tag',
+            script,
+            args: ['--date', opts.date, '--source', opts.source, ...(opts.force ? ['--force'] : [])],
+            cliOptions: opts,
+            preview: { dateSpecified: true, force: !!opts.force, modifiesArticles: true, usesAi: true },
+            confirmationMessage: `确认调用 AI 为当日文章生成标签${opts.force ? '并覆盖已有标签' : ''}？`,
+            apiKey: opts.apiKey,
+          })
         })
     )
 
@@ -2265,13 +3617,14 @@ program
         .option('--type <type>', 'all / article / concept / note', 'all')
         .option('--top-k <n>', '返回数量', '10')
         .action(async (query, opts) => {
-          const { fileURLToPath } = await import('url')
-          const { dirname } = await import('path')
-          const __filename = fileURLToPath(import.meta.url)
-          const __dirname = dirname(__filename)
-          const pkgRoot = join(__dirname, '..', '..')
+          const pkgRoot = resolvePackageRoot()
           const script = join(pkgRoot, 'scripts', 'vault_search.py')
-          await runPythonCmd(script, [query, '--type', opts.type, '--top-k', opts.topK, '--json'])
+          if (!['all', 'article', 'concept', 'note'].includes(opts.type)) {
+            console.log(chalk.red('type 必须是 all、article、concept 或 note'))
+            process.exit(1)
+          }
+          const topK = parseCliInteger(opts.topK, 'top-k', 1, 100)
+          await runPythonCmd(script, [query, '--type', opts.type, '--top-k', String(topK), '--json'])
         })
     )
 
@@ -2283,14 +3636,63 @@ program
         .description('Vault 问答 — 基于知识库的 AI 对话')
         .argument('<question>', '问题')
         .option('--top-k <n>', '检索条数', '8')
+        .option('--api-key <key>', 'DeepSeek API key')
+        .option('--dry-run', '仅预览，不读取知识库或调用 AI')
+        .option('--yes', '确认读取本地知识并发送筛选后的上下文到 AI')
+        .option('--json', '输出机器可读结果；执行仍需 --yes')
         .action(async (question, opts) => {
-          const { fileURLToPath } = await import('url')
-          const { dirname } = await import('path')
-          const __filename = fileURLToPath(import.meta.url)
-          const __dirname = dirname(__filename)
-          const pkgRoot = join(__dirname, '..', '..')
+          const pkgRoot = resolvePackageRoot()
           const script = join(pkgRoot, 'scripts', 'vault_rag.py')
-          await runPythonCmd(script, [question, '--top-k', opts.topK])
+          const topK = parseCliInteger(opts.topK, 'top-k', 1, 100, opts.json)
+          const preview = {
+            success: true,
+            dryRun: true,
+            action: 'vault.rag',
+            topK,
+            readsLocalKnowledge: true,
+            usesAi: true,
+            sendsSelectedContextToAi: true,
+          }
+          if (opts.dryRun) {
+            if (opts.json) console.log(JSON.stringify(preview))
+            else console.log(chalk.cyan('预览：将检索本地知识库，并把最多指定条数的相关上下文发送到已配置的 AI 服务。'))
+            return
+          }
+          if (!opts.yes) {
+            if (opts.json) {
+              console.log(JSON.stringify({ ...preview, success: false, dryRun: false, code: 'CONFIRMATION_REQUIRED' }))
+              process.exit(1)
+            }
+            const { confirmed } = await inquirer.prompt([{
+              type: 'confirm',
+              name: 'confirmed',
+              message: '确认读取本地知识库并将筛选后的上下文发送到 AI 服务吗？',
+              default: false,
+            }])
+            if (!confirmed) {
+              console.log(chalk.gray('已取消'))
+              return
+            }
+          }
+          const args = ['--top-k', String(topK)]
+          if (opts.json) args.push('--json')
+          const { execFile } = await import('child_process')
+          const { promisify } = await import('util')
+          try {
+            const { stdout } = await promisify(execFile)(getPythonCommand(), [script, ...args], {
+              timeout: 120_000,
+              maxBuffer: 5 * 1024 * 1024,
+              env: {
+                ...pythonProcessEnv(opts.apiKey),
+                WEFLOW_VAULT_QUESTION: question,
+              },
+            })
+            console.log(stdout)
+          } catch (error) {
+            if (opts.json) console.log(JSON.stringify({ success: false, code: 'VAULT_RAG_FAILED', error: safeSubprocessError(error) }))
+            else console.error(chalk.red(`\n✗ ${safeSubprocessError(error)}`))
+            process.exit(1)
+          }
         })
     )
 
@@ -2301,37 +3703,59 @@ program
       new Command('sync-weread')
         .description('微信读书同步到 Vault')
         .option('--type <type>', 'all / shelf / notes', 'all')
+        .option('--vault <path>', 'Vault 路径', './output/wechat-vault')
+        .option('--dry-run', '仅预览，不请求微信读书或写入 Vault')
+        .option('--yes', '确认同步微信读书数据')
+        .option('--json', '输出机器可读结果，不返回书籍或本地路径')
         .action(async (opts) => {
-          const { fileURLToPath } = await import('url')
-          const { dirname } = await import('path')
-          const __filename = fileURLToPath(import.meta.url)
-          const __dirname = dirname(__filename)
-          const pkgRoot = join(__dirname, '..', '..')
+          if (!['all', 'shelf', 'notes'].includes(opts.type)) {
+            if (opts.json) console.log(JSON.stringify({ success: false, code: 'INVALID_ARGUMENT', field: 'type' }))
+            else console.log(chalk.red('type 必须是 all、shelf 或 notes'))
+            process.exit(1)
+          }
+          const pkgRoot = resolvePackageRoot()
           const script = join(pkgRoot, 'scripts', 'sync_weread.py')
-          await runPythonCmd(script, ['--type', opts.type])
+          await runConfirmedPythonMutation({
+            action: 'vault.sync-weread',
+            script,
+            args: ['--type', opts.type, '--vault', opts.vault],
+            cliOptions: opts,
+            preview: { syncType: opts.type, readsWereadCloud: true, writesVault: true },
+            confirmationMessage: '确认从微信读书服务读取数据并写入本地 Vault？',
+            apiKeyVariable: 'WEREAD_API_KEY',
+          })
         })
     )
 
   const vaultPromoteCmd = new Command('promote')
     .description('从 Vault 阅读笔记生成知识索引、想法和长期笔记')
 
-  const runVaultPromotion = async (scriptName: string, opts: { vault: string, withAi?: boolean, apiKey?: string }) => {
-    const { fileURLToPath } = await import('url')
-    const { dirname } = await import('path')
-    const __filename = fileURLToPath(import.meta.url)
-    const pkgRoot = join(dirname(__filename), '..', '..')
+  const runVaultPromotion = async (
+    scriptName: string,
+    action: string,
+    opts: { vault: string, withAi?: boolean, apiKey?: string, dryRun?: boolean, yes?: boolean, json?: boolean },
+  ) => {
+    const pkgRoot = resolvePackageRoot()
     const args = ['--vault', opts.vault]
-    if (opts.withAi) {
-      const apiKey = opts.apiKey || process.env.DEEPSEEK_API_KEY
+    const apiKey = opts.apiKey || process.env.DEEPSEEK_API_KEY
+    if (opts.withAi && !opts.dryRun) {
       if (!apiKey) {
-        console.error(chalk.red('启用 AI 升级需要 --api-key 或 DEEPSEEK_API_KEY。'))
+        if (opts.json) console.log(JSON.stringify({ success: false, code: 'AI_KEY_REQUIRED', action }))
+        else console.error(chalk.red('启用 AI 升级需要 --api-key 或 DEEPSEEK_API_KEY。'))
         process.exit(1)
       }
-      args.push('--api-key', apiKey)
     } else {
       args.push('--skip-ai')
     }
-    await runPythonCmd(join(pkgRoot, 'scripts', scriptName), args)
+    await runConfirmedPythonMutation({
+      action,
+      script: join(pkgRoot, 'scripts', scriptName),
+      args,
+      cliOptions: opts,
+      preview: { usesAi: !!opts.withAi, writesVault: true },
+      confirmationMessage: `确认生成 Vault 知识提升内容？${opts.withAi ? '选定笔记内容将发送到已配置的 AI 服务。' : '仅执行本地确定性处理。'}`,
+      apiKey: opts.withAi ? apiKey : undefined,
+    })
   }
 
   vaultPromoteCmd
@@ -2340,8 +3764,11 @@ program
     .option('--vault <path>', 'Vault 路径', './output/wechat-vault')
     .option('--with-ai', '允许 AI 生成研究想法')
     .option('--api-key <key>', 'AI API key，仅与 --with-ai 一起使用')
+    .option('--dry-run', '仅预览，不读取笔记、调用 AI 或写入 Vault')
+    .option('--yes', '确认生成知识提升内容')
+    .option('--json', '输出机器可读结果，不返回笔记或本地路径')
     .action(async (opts) => {
-      await runVaultPromotion('promote_ideas.py', opts)
+      await runVaultPromotion('promote_ideas.py', 'vault.promote.ideas', opts)
     })
 
   vaultPromoteCmd
@@ -2350,8 +3777,11 @@ program
     .option('--vault <path>', 'Vault 路径', './output/wechat-vault')
     .option('--with-ai', '允许 AI 生成永久笔记和项目提案')
     .option('--api-key <key>', 'AI API key，仅与 --with-ai 一起使用')
+    .option('--dry-run', '仅预览，不读取笔记、调用 AI 或写入 Vault')
+    .option('--yes', '确认生成知识提升内容')
+    .option('--json', '输出机器可读结果，不返回笔记或本地路径')
     .action(async (opts) => {
-      await runVaultPromotion('promote_all.py', opts)
+      await runVaultPromotion('promote_all.py', 'vault.promote.all', opts)
     })
 
   program.commands.find(c => c.name() === 'vault')?.addCommand(vaultPromoteCmd)
@@ -2363,29 +3793,34 @@ program
     .option('--period <week|month>', '报告周期', 'week')
     .option('--month <YYYY-MM>', '指定月份（覆盖 --period）')
     .option('-o, --output <path>', '输出路径')
+    .option('--dry-run', '仅预览，不读取聊天或写入报告')
+    .option('--yes', '确认生成消费报告')
+    .option('--json', '输出机器可读结果，不返回统计正文或本地路径')
     .action(async (opts) => {
-      const { execFile } = await import('child_process')
-      const { promisify } = await import('util')
-      const execFileAsync = promisify(execFile)
-      const { fileURLToPath } = await import('url')
-      const { dirname } = await import('path')
-      const __filename = fileURLToPath(import.meta.url)
-      const __dirname = dirname(__filename)
-      const pkgRoot = join(__dirname, '..', '..')
-      const script = join(pkgRoot, 'scripts', 'chat_stats.py')
-      const args: string[] = [script, '--period', opts.period]
-      if (opts.month) { args.push('--month', opts.month) }
-      if (opts.output) { args.push('--output', opts.output) }
-      try {
-        const { stdout } = await execFileAsync(getPythonCommand(), args, {
-          timeout: 600_000, maxBuffer: 50 * 1024 * 1024,
-          env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
-        })
-        console.log(stdout)
-      } catch (e: any) {
-        console.error(chalk.red(`\n✗ 失败: ${e.message}`))
+      if (!['week', 'month'].includes(opts.period)) {
+        if (opts.json) console.log(JSON.stringify({ success: false, code: 'INVALID_ARGUMENT', field: 'period' }))
+        else console.log(chalk.red('period 必须是 week 或 month'))
         process.exit(1)
       }
+      if (opts.month && !/^\d{4}-(0[1-9]|1[0-2])$/.test(opts.month)) {
+        if (opts.json) console.log(JSON.stringify({ success: false, code: 'INVALID_DATE', field: 'month' }))
+        else console.log(chalk.red('month 必须是有效的 YYYY-MM 月份'))
+        process.exit(1)
+      }
+      const pkgRoot = resolvePackageRoot()
+      const script = join(pkgRoot, 'scripts', 'chat_stats.py')
+      const args: string[] = ['--period', opts.period]
+      if (opts.month) { args.push('--month', opts.month) }
+      if (opts.output) { args.push('--output', opts.output) }
+      await runConfirmedPythonMutation({
+        action: 'chat-stats.generate',
+        script,
+        args,
+        cliOptions: opts,
+        preview: { period: opts.month ? 'specified-month' : opts.period, readsLocalChat: true, includesPaymentStats: true },
+        confirmationMessage: '确认读取本地聊天、支付与转账数据并生成消费报告？',
+        timeout: 600_000,
+      })
     })
 
   // generate-review
@@ -2394,27 +3829,75 @@ program
     .description('生成 AI 学习日报')
     .option('--date <YYYY-MM-DD>', '日期')
     .option('--api-key <key>', 'DeepSeek API key')
+    .option('--engine <name>', 'AI 引擎: deepseek / claude / ollama', 'deepseek')
+    .option('--source <dir>', '文章目录', './output/biz-daily')
+    .option('--output <dir>', '输出目录', './output/reviews')
+    .option('--dry-run', '仅预览，不读取文章、调用 AI 或写入日报')
+    .option('--yes', '确认生成学习日报')
+    .option('--json', '输出机器可读结果，不返回本地路径')
     .action(async (opts) => {
+      if (!['deepseek', 'claude', 'ollama'].includes(opts.engine)) {
+        if (opts.json) console.log(JSON.stringify({ success: false, code: 'INVALID_ARGUMENT', field: 'engine' }))
+        else console.log(chalk.red('engine 必须是 deepseek、claude 或 ollama'))
+        process.exit(1)
+      }
+      if (opts.date) {
+        try {
+          parseLocalDateOrIso(opts.date)
+          if (!/^\d{4}-\d{2}-\d{2}$/.test(opts.date)) throw new DateRangeError('INVALID_DATE', '日期无效')
+        } catch {
+          if (opts.json) console.log(JSON.stringify({ success: false, code: 'INVALID_DATE', field: 'date' }))
+          else console.log(chalk.red('date 必须是有效的 YYYY-MM-DD 日期'))
+          process.exit(1)
+        }
+      }
+      const preview = {
+        success: true,
+        dryRun: true,
+        action: 'review.generate',
+        dateSpecified: !!opts.date,
+        engine: opts.engine,
+        readsLocalArticles: true,
+        usesAi: true,
+      }
+      if (opts.dryRun) {
+        if (opts.json) console.log(JSON.stringify(preview))
+        else console.log(chalk.cyan(`学习日报预览：使用 ${opts.engine} 分析本地文章并写入报告`))
+        return
+      }
+      if (!opts.yes) {
+        if (opts.json) {
+          console.log(JSON.stringify({ ...preview, success: false, dryRun: false, code: 'CONFIRMATION_REQUIRED' }))
+          process.exit(1)
+        }
+        const { confirmed } = await inquirer.prompt([{
+          type: 'confirm',
+          name: 'confirmed',
+          message: '确认生成 AI 学习日报？文章摘要将发送到已配置的 AI 服务。',
+          default: false,
+        }])
+        if (!confirmed) {
+          console.log(chalk.gray('已取消'))
+          return
+        }
+      }
       const { execFile } = await import('child_process')
       const { promisify } = await import('util')
       const execFileAsync = promisify(execFile)
-      const { fileURLToPath } = await import('url')
-      const { dirname } = await import('path')
-      const __filename = fileURLToPath(import.meta.url)
-      const __dirname = dirname(__filename)
-      const pkgRoot = join(__dirname, '..', '..')
+    const pkgRoot = resolvePackageRoot()
       const script = join(pkgRoot, 'scripts', 'generate_review.py')
-      const args: string[] = [script]
+      const args: string[] = [script, '--engine', opts.engine, '--source', opts.source, '--output', opts.output]
       if (opts.date) args.push('--date', opts.date)
-      if (opts.apiKey) args.push('--api-key', opts.apiKey)
       try {
         const { stdout } = await execFileAsync(getPythonCommand(), args, {
           timeout: 120_000, maxBuffer: 10 * 1024 * 1024,
-          env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
+          env: pythonProcessEnv(opts.apiKey),
         })
-        console.log(stdout)
+        if (opts.json) console.log(JSON.stringify({ success: true, action: 'review.generate' }))
+        else console.log(stdout)
       } catch (e: any) {
-        console.error(chalk.red(`\n✗ 失败: ${e.message}`))
+        if (opts.json) console.log(JSON.stringify({ success: false, code: 'REVIEW_FAILED', error: safeSubprocessError(e) }))
+        else console.error(chalk.red(`\n✗ ${safeSubprocessError(e)}`))
         process.exit(1)
       }
     })
@@ -2422,17 +3905,16 @@ program
   // fav-server
   program
     .command('fav-server')
-    .description('启动收藏服务器 — 浏览器访问 localhost 实时同步收藏夹')
+    .description('启动收藏服务器 — daily-server 的兼容入口')
     .option('--date <YYYY-MM-DD>', '日期（默认今天）')
     .option('--port <number>', '端口', '8765')
     .option('--open', '自动打开浏览器')
+    .option('--dry-run', '仅预览，不启动服务或打开浏览器')
+    .option('--yes', '确认启动本地服务')
+    .option('--json', '输出机器可读状态；启动仍需 --yes')
     .action(async (opts) => {
       const { spawn } = await import('child_process')
-      const { fileURLToPath } = await import('url')
-      const { dirname } = await import('path')
-      const __filename = fileURLToPath(import.meta.url)
-      const __dirname = dirname(__filename)
-      const pkgRoot = join(__dirname, '..', '..')
+    const pkgRoot = resolvePackageRoot()
       const script = join(pkgRoot, 'scripts', 'fav_server.py')
 
       if (!opts.date) {
@@ -2442,19 +3924,51 @@ program
         const dd = String(now.getDate()).padStart(2, '0')
         opts.date = `${yyyy}-${mm}-${dd}`
       }
+      requireCliDate(opts.date, opts.json)
 
-      const args = [script, '--date', opts.date, '--port', opts.port]
+      const port = parseCliInteger(opts.port, 'port', 1, 65535, opts.json)
+      const args = [script, '--date', opts.date, '--port', String(port)]
+      const preview = {
+        success: true,
+        dryRun: true,
+        action: 'daily-reader.start',
+        compatibilityAlias: 'fav-server',
+        date: opts.date,
+        port,
+        loopbackOnly: true,
+        opensBrowser: Boolean(opts.open),
+      }
+      if (opts.dryRun) {
+        if (opts.json) console.log(JSON.stringify(preview))
+        else console.log(chalk.cyan(`收藏服务启动预览：${opts.date}，本机端口 ${port}${opts.open ? '，并打开浏览器' : ''}。`))
+        return
+      }
+      if (opts.json && !opts.yes) {
+        console.log(JSON.stringify({ ...preview, success: false, dryRun: false, code: 'CONFIRMATION_REQUIRED' }))
+        process.exit(1)
+      }
+      if (opts.json) {
+        const child = spawn(getPythonCommand(), args, {
+          detached: true,
+          stdio: 'ignore',
+          windowsHide: true,
+          env: pythonProcessEnv(),
+        })
+        child.unref()
+        if (opts.open) await openLocalUrl(`http://localhost:${port}`)
+        console.log(JSON.stringify({ success: true, action: 'daily-reader.start', started: true, date: opts.date, port, openedBrowser: Boolean(opts.open) }))
+        return
+      }
       console.log(chalk.cyan(`⭐ 启动收藏服务器 (${opts.date})\n`))
-      console.log(chalk.gray(`  按住 Ctrl 并点击: http://localhost:${opts.port}`))
+      console.log(chalk.gray(`  按住 Ctrl 并点击: http://localhost:${port}`))
 
       if (opts.open) {
-        const { exec } = await import('child_process')
-        exec(`start http://localhost:${opts.port}`)
+        await openLocalUrl(`http://localhost:${port}`)
       }
 
       const child = spawn(getPythonCommand(), args, {
         stdio: 'inherit',
-        env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
+        env: pythonProcessEnv(),
       })
       await new Promise<void>((resolve) => child.on('exit', (code) => {
         if (code !== 0 && code !== null) process.exit(code)
@@ -2548,13 +4062,14 @@ program
     .option('--json', 'JSON 输出')
     .action(async (opts) => {
       const weread = await getWereadService()
+      const limit = parseCliInteger(opts.limit, 'limit', 1, 100, opts.json)
       if (opts.bookId) {
-        const res = await weread.bookmarks(opts.bookId, parseInt(opts.limit))
+        const res = await weread.bookmarks(opts.bookId, limit)
         if (!res.ok) { console.log(chalk.red(`✗ ${res.error}`)); process.exit(1) }
         const d = res.data!
         if (opts.json) { console.log(JSON.stringify(d, null, 2)); return }
         console.log(chalk.cyan(`📝 划线笔记 (${d.updated?.length || 0} 条):\n`))
-        for (let i = 0; i < Math.min((d.updated || []).length, parseInt(opts.limit)); i++) {
+        for (let i = 0; i < Math.min((d.updated || []).length, limit); i++) {
           const n = d.updated[i]
           const icon = n.type === 1 ? '💬' : '📌'
           console.log(`${chalk.gray(`  [${i + 1}]`)} ${icon} ${n.markText?.slice(0, 60) || ''}`)
@@ -2584,7 +4099,8 @@ program
     .option('--json', 'JSON 输出')
     .action(async (keyword, opts) => {
       const weread = await getWereadService()
-      const res = await weread.search(keyword, parseInt(opts.limit))
+      const limit = parseCliInteger(opts.limit, 'limit', 1, 100, opts.json)
+      const res = await weread.search(keyword, limit)
       if (!res.ok) { console.log(chalk.red(`✗ ${res.error}`)); process.exit(1) }
       const d = res.data!
       if (opts.json) { console.log(JSON.stringify(d, null, 2)); return }
@@ -2633,7 +4149,8 @@ program
     .option('--json', 'JSON 输出')
     .action(async (bookId, opts) => {
       const weread = await getWereadService()
-      const res = await weread.reviews(bookId, parseInt(opts.limit))
+      const limit = parseCliInteger(opts.limit, 'limit', 1, 100, opts.json)
+      const res = await weread.reviews(bookId, limit)
       if (!res.ok) { console.log(chalk.red(`✗ ${res.error}`)); process.exit(1) }
       const d = res.data!
       if (opts.json) { console.log(JSON.stringify(d, null, 2)); return }
@@ -2656,9 +4173,10 @@ program
     .option('--json', 'JSON 输出')
     .action(async (opts) => {
       const weread = await getWereadService()
+      const limit = parseCliInteger(opts.limit, 'limit', 1, 100, opts.json)
       const res = opts.bookId
-        ? await weread.similar(opts.bookId, parseInt(opts.limit))
-        : await weread.recommend(parseInt(opts.limit))
+        ? await weread.similar(opts.bookId, limit)
+        : await weread.recommend(limit)
       if (!res.ok) { console.log(chalk.red(`✗ ${res.error}`)); process.exit(1) }
       const d = res.data!
       if (opts.json) { console.log(JSON.stringify(d, null, 2)); return }
@@ -2693,18 +4211,19 @@ program
     })
 
   // 辅助函数
-  async function runPythonCmd(script: string, args: string[]) {
+  async function runPythonCmd(script: string, args: string[], apiKey?: string, apiKeyVariable = 'DEEPSEEK_API_KEY') {
     const { execFile } = await import('child_process')
     const { promisify } = await import('util')
     const execFileAsync = promisify(execFile)
     try {
       const { stdout } = await execFileAsync(getPythonCommand(), [script, ...args], {
         timeout: 120_000, maxBuffer: 5 * 1024 * 1024,
-        env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
+        env: pythonProcessEnv(apiKey, apiKeyVariable),
       })
       console.log(stdout)
     } catch (e: any) {
-      console.error(chalk.red(`\n✗ 失败: ${e.message}`))
+      console.error(chalk.red(`\n✗ ${safeSubprocessError(e)}`))
+      process.exit(1)
     }
   }
 
@@ -2720,27 +4239,58 @@ program
     .description('语义搜索知识库（聊天记录 + 文章）')
     .argument('<query>', '搜索关键词')
     .option('--top-k <n>', '返回数量', '10')
-    .option('--api-key <key>', 'DeepSeek API key')
+    .option('--api-key <key>', 'DashScope embedding API key')
+    .option('--dry-run', '仅预览，不读取索引或调用向量服务')
+    .option('--yes', '确认执行可能调用云端向量服务的搜索')
+    .option('--json', '输出机器可读结果；执行仍需 --yes')
     .action(async (query, opts) => {
       const { execFile } = await import('child_process')
       const { promisify } = await import('util')
       const execFileAsync = promisify(execFile)
-      const { fileURLToPath } = await import('url')
-      const { dirname } = await import('path')
-      const __filename = fileURLToPath(import.meta.url)
-      const __dirname = dirname(__filename)
-      const pkgRoot = join(__dirname, '..')
+    const pkgRoot = resolvePackageRoot()
       const script = join(pkgRoot, 'scripts', 'semantic_search.py')
-      const args: string[] = [script, 'search', query, '--top-k', opts.topK]
-      if (opts.apiKey) args.push('--api-key', opts.apiKey)
+      const topK = parseCliInteger(opts.topK, 'top-k', 1, 100, opts.json)
+      const preview = {
+        success: true,
+        dryRun: true,
+        action: 'semantic-search.query',
+        topK,
+        readsLocalIndex: true,
+        mayUseCloudEmbedding: true,
+      }
+      if (opts.dryRun) {
+        if (opts.json) console.log(JSON.stringify(preview))
+        else console.log(chalk.cyan('预览：将读取本地语义索引，并可能把查询发送到已配置的向量服务。'))
+        return
+      }
+      if (!opts.yes) {
+        if (opts.json) {
+          console.log(JSON.stringify({ ...preview, success: false, dryRun: false, code: 'CONFIRMATION_REQUIRED' }))
+          process.exit(1)
+        }
+        const { confirmed } = await inquirer.prompt([{
+          type: 'confirm',
+          name: 'confirmed',
+          message: '确认执行搜索吗？查询可能发送到已配置的云端向量服务。',
+          default: false,
+        }])
+        if (!confirmed) {
+          console.log(chalk.gray('已取消'))
+          return
+        }
+      }
+      const args: string[] = [script, 'search', '--top-k', String(topK)]
       try {
         const { stdout } = await execFileAsync(getPythonCommand(), args, {
           timeout: 60_000, maxBuffer: 10 * 1024 * 1024,
-          env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
+          env: {
+            ...pythonProcessEnv(opts.apiKey, 'DASHSCOPE_API_KEY'),
+            WEFLOW_SEARCH_QUERY: query,
+          },
         })
         console.log(stdout)
       } catch (e: any) {
-        console.error(chalk.red(`\n✗ 搜索失败: ${e.message}`))
+        console.error(chalk.red(`\n✗ ${safeSubprocessError(e, '搜索失败')}`))
         process.exit(1)
       }
     })
@@ -2749,28 +4299,57 @@ program
     .command('search-index')
     .description('构建语义搜索索引')
     .option('--full', '全量重建')
-    .option('--api-key <key>', 'DeepSeek API key')
+    .option('--api-key <key>', 'DashScope embedding API key')
+    .option('--dry-run', '仅预览，不读取数据库、调用网络或写入索引')
+    .option('--yes', '确认构建或重建索引')
+    .option('--json', '输出 JSON 格式')
     .action(async (opts) => {
+      const preview = {
+        success: true,
+        dryRun: true,
+        action: 'search-index.build',
+        mode: opts.full ? 'full' : 'incremental',
+        readsLocalData: true,
+        usesCloudEmbedding: true,
+        replacesExistingIndex: !!opts.full,
+      }
+      if (opts.dryRun) {
+        if (opts.json) console.log(JSON.stringify(preview))
+        else console.log(chalk.cyan(`语义索引预览：${opts.full ? '全量重建' : '增量构建'}，将读取本地数据并调用向量服务`))
+        return
+      }
+      if (!opts.yes) {
+        if (opts.json) {
+          console.log(JSON.stringify({ ...preview, success: false, dryRun: false, code: 'CONFIRMATION_REQUIRED' }))
+          process.exit(1)
+        }
+        const { confirmed } = await inquirer.prompt([{
+          type: 'confirm',
+          name: 'confirmed',
+          message: `确认${opts.full ? '全量重建' : '增量构建'}语义索引？本地文本将发送到已配置的向量服务。`,
+          default: false,
+        }])
+        if (!confirmed) {
+          console.log(chalk.gray('已取消'))
+          return
+        }
+      }
       const { execFile } = await import('child_process')
       const { promisify } = await import('util')
       const execFileAsync = promisify(execFile)
-      const { fileURLToPath } = await import('url')
-      const { dirname } = await import('path')
-      const __filename = fileURLToPath(import.meta.url)
-      const __dirname = dirname(__filename)
-      const pkgRoot = join(__dirname, '..')
+    const pkgRoot = resolvePackageRoot()
       const script = join(pkgRoot, 'scripts', 'semantic_search.py')
       const args: string[] = [script, 'build']
       if (opts.full) args.push('--full')
-      if (opts.apiKey) args.push('--api-key', opts.apiKey)
       try {
         const { stdout } = await execFileAsync(getPythonCommand(), args, {
           timeout: 300_000, maxBuffer: 10 * 1024 * 1024,
-          env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
+          env: pythonProcessEnv(opts.apiKey, 'DASHSCOPE_API_KEY'),
         })
-        console.log(stdout)
+        if (opts.json) console.log(stdout.trim())
+        else console.log(stdout)
       } catch (e: any) {
-        console.error(chalk.red(`\n✗ 失败: ${e.message}`))
+        console.error(chalk.red(`\n✗ ${safeSubprocessError(e)}`))
         process.exit(1)
       }
     })
@@ -2783,41 +4362,80 @@ program
     .option('--top-k <n>', '检索数量', '10')
     .option('--talker <name>', '限定联系人/群聊')
     .option('--api-key <key>', 'AI API key')
-    .option('--json', 'JSON 输出')
+    .option('--dry-run', '仅预览，不读取知识库或调用 AI')
+    .option('--yes', '确认读取本地知识并发送筛选后的上下文到 AI')
+    .option('--json', 'JSON 输出；单次执行仍需 --yes，交互模式不可由机器启动')
     .action(async (question, opts) => {
       const { execFile, spawn } = await import('child_process')
       const { promisify } = await import('util')
       const execFileAsync = promisify(execFile)
-      const { fileURLToPath } = await import('url')
-      const { dirname } = await import('path')
-      const __filename = fileURLToPath(import.meta.url)
-      const __dirname = dirname(__filename)
-      const pkgRoot = join(__dirname, '..')
+    const pkgRoot = resolvePackageRoot()
       const script = join(pkgRoot, 'scripts', 'rag_chat.py')
+      const topK = parseCliInteger(opts.topK, 'top-k', 1, 100, opts.json)
+      const preview = {
+        success: true,
+        dryRun: true,
+        action: 'rag-chat.query',
+        topK,
+        interactiveRequired: !question,
+        readsLocalKnowledge: true,
+        usesCloudEmbedding: true,
+        usesAi: true,
+        sendsSelectedContextToAi: true,
+        conversationRestricted: Boolean(opts.talker),
+      }
+      if (opts.dryRun) {
+        if (opts.json) console.log(JSON.stringify(preview))
+        else console.log(chalk.cyan(`预览：将读取本地知识并调用 AI${question ? '' : '；未提供问题时会进入人工交互模式'}。`))
+        return
+      }
+      if (!question && opts.json) {
+        console.log(JSON.stringify({ ...preview, success: false, dryRun: false, code: 'INTERACTIVE_REQUIRED' }))
+        process.exit(1)
+      }
+      if (!opts.yes) {
+        if (opts.json) {
+          console.log(JSON.stringify({ ...preview, success: false, dryRun: false, code: 'CONFIRMATION_REQUIRED' }))
+          process.exit(1)
+        }
+        const { confirmed } = await inquirer.prompt([{
+          type: 'confirm',
+          name: 'confirmed',
+          message: '确认读取本地知识并将筛选后的上下文发送到 AI 服务吗？',
+          default: false,
+        }])
+        if (!confirmed) {
+          console.log(chalk.gray('已取消'))
+          return
+        }
+      }
       const args: string[] = [script]
       if (question) {
-        args.push(question, '--top-k', opts.topK)
-        if (opts.talker) args.push('--talker', opts.talker)
-        if (opts.apiKey) args.push('--api-key', opts.apiKey)
+        args.push('--top-k', String(topK))
         if (opts.json) args.push('--json')
         try {
           const { stdout } = await execFileAsync(getPythonCommand(), args, {
             timeout: 120_000, maxBuffer: 10 * 1024 * 1024,
-            env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
+            env: {
+              ...pythonProcessEnv(opts.apiKey),
+              WEFLOW_RAG_QUESTION: question,
+              ...(opts.talker ? { WEFLOW_RAG_TALKER: opts.talker } : {}),
+            },
           })
           console.log(stdout)
         } catch (e: any) {
-          console.error(chalk.red(`\n✗ 对话失败: ${e.message}`))
+          console.error(chalk.red(`\n✗ ${safeSubprocessError(e, '对话失败')}`))
           process.exit(1)
         }
       } else {
         // 交互模式：使用 spawn 保持终端交互
-        args.push('--interactive', '--top-k', opts.topK)
-        if (opts.talker) args.push('--talker', opts.talker)
-        if (opts.apiKey) args.push('--api-key', opts.apiKey)
+        args.push('--interactive', '--top-k', String(topK))
         const child = spawn(getPythonCommand(), args, {
           stdio: 'inherit',
-          env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
+          env: {
+            ...pythonProcessEnv(opts.apiKey),
+            ...(opts.talker ? { WEFLOW_RAG_TALKER: opts.talker } : {}),
+          },
         })
         await new Promise<void>((resolve) => child.on('exit', (code) => {
           if (code !== 0) process.exit(code || 1);
@@ -2827,24 +4445,20 @@ program
     })
 
   // Helper: run a Python script
-  async function runPython(script: string, args: string[]): Promise<void> {
+  async function runPython(script: string, args: string[], apiKey?: string): Promise<void> {
     const { execFile } = await import('child_process')
     const { promisify } = await import('util')
     const execFileAsync = promisify(execFile)
-    const { fileURLToPath } = await import('url')
-    const { dirname } = await import('path')
-    const __filename = fileURLToPath(import.meta.url)
-    const __dirname = dirname(__filename)
-    const pkgRoot = join(__dirname, '..')
+    const pkgRoot = resolvePackageRoot()
     const pyArgs = [join(pkgRoot, script), ...args]
     try {
       const { stdout } = await execFileAsync(getPythonCommand(), pyArgs, {
         timeout: 120_000, maxBuffer: 5 * 1024 * 1024,
-        env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
+        env: pythonProcessEnv(apiKey),
       })
       console.log(stdout)
     } catch (e: any) {
-      console.error(chalk.red(`\n✗ 失败: ${e.message}`))
+      console.error(chalk.red(`\n✗ ${safeSubprocessError(e)}`))
       process.exit(1)
     }
   }
@@ -2857,12 +4471,63 @@ program
     .option('--share', '分享模式（紧凑卡片）')
     .option('--api-key <key>', 'DeepSeek API key')
     .option('--skip-ai', '跳过 AI 总结')
+    .option('--output <file>', '输出文件')
+    .option('--dry-run', '仅预览，不读取数据、调用 AI 或写入报告')
+    .option('--yes', '确认生成年度报告')
+    .option('--json', '输出机器可读结果，不返回本地路径')
     .action(async (year, opts) => {
-      const a = [year || String(new Date().getFullYear())]
+      const reportYear = parseCliInteger(year || String(new Date().getFullYear()), 'year', 1970, 2100, opts.json)
+      const preview = {
+        success: true,
+        dryRun: true,
+        action: 'annual-report.generate',
+        year: reportYear,
+        shareMode: !!opts.share,
+        aiEnabled: !opts.skipAi,
+        readsLocalData: true,
+      }
+      if (opts.dryRun) {
+        if (opts.json) console.log(JSON.stringify(preview))
+        else console.log(chalk.cyan(`${reportYear} 年度报告预览：AI ${opts.skipAi ? '关闭' : '开启'}`))
+        return
+      }
+      if (!opts.yes) {
+        if (opts.json) {
+          console.log(JSON.stringify({ ...preview, success: false, dryRun: false, code: 'CONFIRMATION_REQUIRED' }))
+          process.exit(1)
+        }
+        const { confirmed } = await inquirer.prompt([{
+          type: 'confirm',
+          name: 'confirmed',
+          message: `确认生成 ${reportYear} 年度报告？${opts.skipAi ? '仅执行本地统计。' : '统计摘要可能发送到已配置的 AI 服务。'}`,
+          default: false,
+        }])
+        if (!confirmed) {
+          console.log(chalk.gray('已取消'))
+          return
+        }
+      }
+      const a = [String(reportYear)]
       if (opts.share) a.push('--share')
-      if (opts.apiKey) a.push('--api-key', opts.apiKey)
       if (opts.skipAi) a.push('--skip-ai')
-      await runPython('scripts/annual_report.py', a)
+      if (opts.output) a.push('--output', opts.output)
+      if (opts.json) {
+        const { execFile } = await import('child_process')
+        const { promisify } = await import('util')
+        try {
+          await promisify(execFile)(getPythonCommand(), [join(resolvePackageRoot(), 'scripts/annual_report.py'), ...a], {
+            timeout: 120_000,
+            maxBuffer: 5 * 1024 * 1024,
+            env: pythonProcessEnv(opts.apiKey),
+          })
+          console.log(JSON.stringify({ success: true, action: 'annual-report.generate', year: reportYear }))
+        } catch (error) {
+          console.log(JSON.stringify({ success: false, code: 'ANNUAL_REPORT_FAILED', error: safeSubprocessError(error) }))
+          process.exit(1)
+        }
+      } else {
+        await runPython('scripts/annual_report.py', a, opts.apiKey)
+      }
     })
 
   // todos
@@ -2870,13 +4535,54 @@ program
     .command('todos')
     .description('待办提取与任务追踪')
 
+  async function runTodoMutation(action: 'done' | 'undone' | 'remove', id: string, opts: { dryRun?: boolean; yes?: boolean; json?: boolean }): Promise<void> {
+    if (opts.dryRun) {
+      await runPython('scripts/extract_todos.py', ['preview', id, '--action', action])
+      return
+    }
+    if (!opts.yes) {
+      if (opts.json) {
+        console.log(JSON.stringify({
+          success: false,
+          code: 'CONFIRMATION_REQUIRED',
+          error: '先使用 --dry-run --json 预览，再由用户确认后使用 --yes --json 执行',
+        }))
+        process.exit(1)
+      }
+      const { confirmed } = await inquirer.prompt([{
+        type: 'confirm',
+        name: 'confirmed',
+        message: `确认执行待办操作 ${action} (${id})？`,
+        default: false,
+      }])
+      if (!confirmed) {
+        console.log(chalk.gray('已取消'))
+        return
+      }
+    }
+    const command = action === 'remove' ? 'rm' : action
+    await runPython('scripts/extract_todos.py', [command, id, ...(opts.json ? ['--json'] : [])])
+  }
+
   todosCmd
     .command('extract')
     .description('AI 扫描聊天记录提取待办')
     .option('--days <n>', '扫描天数', '7')
     .option('--api-key <key>', 'DeepSeek API key')
+    .option('--dry-run', '仅预览，不读取聊天、调用 AI 或写入待办')
+    .option('--yes', '确认提取并写入待办')
+    .option('--json', '输出机器可读结果，不返回聊天或待办正文')
     .action(async (opts) => {
-      await runPython('scripts/extract_todos.py', ['extract', '--days', opts.days, ...(opts.apiKey ? ['--api-key', opts.apiKey] : [])])
+      const days = parseCliInteger(opts.days, 'days', 1, 365, opts.json)
+      await runConfirmedPythonMutation({
+        action: 'todos.extract',
+        script: join(resolvePackageRoot(), 'scripts', 'extract_todos.py'),
+        args: ['extract', '--days', String(days)],
+        cliOptions: opts,
+        preview: { days, readsLocalChat: true, usesAi: true, writesTodos: true },
+        confirmationMessage: `确认读取最近 ${days} 天聊天并发送到已配置的 AI 服务以提取待办？`,
+        apiKey: opts.apiKey,
+      })
     })
 
   todosCmd
@@ -2897,31 +4603,41 @@ program
     .command('done')
     .description('标记待办为已完成')
     .argument('<id>', '待办 ID')
-    .action(async (id) => {
-      await runPython('scripts/extract_todos.py', ['done', id])
+    .option('--dry-run', '仅预览，不修改待办')
+    .option('--yes', '确认执行修改')
+    .option('--json', '输出 JSON 格式')
+    .action(async (id, opts) => {
+      await runTodoMutation('done', id, opts)
     })
 
   todosCmd
     .command('undone')
     .description('取消已完成标记')
     .argument('<id>', '待办 ID')
-    .action(async (id) => {
-      await runPython('scripts/extract_todos.py', ['undone', id])
+    .option('--dry-run', '仅预览，不修改待办')
+    .option('--yes', '确认执行修改')
+    .option('--json', '输出 JSON 格式')
+    .action(async (id, opts) => {
+      await runTodoMutation('undone', id, opts)
     })
 
   todosCmd
     .command('rm')
     .description('删除待办')
     .argument('<id>', '待办 ID')
-    .action(async (id) => {
-      await runPython('scripts/extract_todos.py', ['rm', id])
+    .option('--dry-run', '仅预览，不删除待办')
+    .option('--yes', '确认执行删除')
+    .option('--json', '输出 JSON 格式')
+    .action(async (id, opts) => {
+      await runTodoMutation('remove', id, opts)
     })
 
   todosCmd
     .command('remind')
     .description('查看待办提醒')
-    .action(async () => {
-      await runPython('scripts/extract_todos.py', ['remind'])
+    .option('--json', '输出 JSON 格式')
+    .action(async (opts) => {
+      await runPython('scripts/extract_todos.py', ['remind', ...(opts.json ? ['--json'] : [])])
     })
 
 // ==================== daily ====================
@@ -2933,15 +4649,13 @@ program
   .option('--api-key <key>', 'DeepSeek API key（或设环境变量 DEEPSEEK_API_KEY）')
   .option('--skip-classify', '跳过后处理')
   .option('--dry-run', '仅预览文章，不调用 AI 或写入日报')
+  .option('--yes', '确认执行日报生成；JSON 模式需要此选项')
   .option('--no-ai', '关闭本次日报的所有 AI 处理')
+  .option('--json', '输出机器可读的最终结果；运行日志写入 stderr')
   .action(async (opts) => {
     const { spawn } = await import('child_process')
     const { existsSync, statSync } = await import('fs')
-    const { fileURLToPath } = await import('url')
-    const { dirname, join } = await import('path')
-    const __filename = fileURLToPath(import.meta.url)
-    const __dirname = dirname(__filename)
-    const pkgRoot = join(__dirname, '..')
+    const pkgRoot = resolvePackageRoot()
     const pipeline = join(pkgRoot, 'scripts', 'pipeline.py')
     const bizDaily = join(pkgRoot, 'scripts', 'biz_daily.py')
 
@@ -2950,28 +4664,37 @@ program
     const date = opts.date || localDate
     const apiKey = opts.apiKey || process.env.DEEPSEEK_API_KEY || ''
     const noAi = opts.ai === false || configService.get('dailyAiEnabled') === 'false'
+    const dailyLog = (...values: any[]) => opts.json ? console.error(...values) : console.log(...values)
 
-    const isComplete = (targetDate: string): boolean => {
+    const artifactStatus = (targetDate: string) => {
       const outputDir = join(pkgRoot, 'output', 'biz-daily', targetDate)
-      const requiredFiles = ['README.md', '.articles.json', 'index.html']
-      return requiredFiles.every((file) => {
+      const hasFile = (file: string) => {
         const path = join(outputDir, file)
         try { return existsSync(path) && statSync(path).size > 0 } catch { return false }
-      })
+      }
+      return {
+        readme: hasFile('README.md'),
+        articleIndex: hasFile('.articles.json'),
+        reader: hasFile('index.html'),
+      }
     }
+    const isComplete = (targetDate: string): boolean => Object.values(artifactStatus(targetDate)).every(Boolean)
 
     const runPipeline = (targetDate: string): Promise<number> => new Promise((resolve) => {
       const args = [pipeline, '--date', targetDate, '--engine', noAi ? 'local' : 'deepseek', '--interest', 'AI', '--skip-wiki']
-      if (apiKey) args.push('--api-key', apiKey)
       if (noAi) args.push('--no-ai')
       for (const source of opts.source || []) args.push('--source', source)
       if (opts.skipClassify) args.push('--skip-classify')
 
-      console.log(chalk.cyan(`\n📰 正在生成 ${targetDate} 公众号日报${noAi ? '（AI 已关闭）' : ''}...\n`))
+      dailyLog(chalk.cyan(`\n📰 正在生成 ${targetDate} 公众号日报${noAi ? '（AI 已关闭）' : ''}...\n`))
       const child = spawn(getPythonCommand(), args, {
-        stdio: 'inherit',
-        env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
+        stdio: opts.json ? ['ignore', 'pipe', 'pipe'] : 'inherit',
+        env: pythonProcessEnv(apiKey),
       })
+      if (opts.json) {
+        child.stdout?.pipe(process.stderr)
+        child.stderr?.pipe(process.stderr)
+      }
       child.on('error', () => resolve(1))
       child.on('exit', (code) => resolve(code || 0))
     })
@@ -2980,14 +4703,36 @@ program
       const dryRunArgs = [bizDaily, '--date', date, '--engine', 'local', '--dry-run']
       for (const source of opts.source || []) dryRunArgs.push('--source', source)
       const child = spawn(getPythonCommand(), dryRunArgs, {
-        stdio: 'inherit',
-        env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
+        stdio: opts.json ? ['ignore', 'pipe', 'pipe'] : 'inherit',
+        env: pythonProcessEnv(),
       })
-      child.on('exit', (code) => process.exit(code || 0))
+      if (opts.json) {
+        child.stdout?.pipe(process.stderr)
+        child.stderr?.pipe(process.stderr)
+      }
+      child.on('exit', (code) => {
+        if (opts.json) console.log(JSON.stringify({ success: code === 0, dryRun: true, date, aiEnabled: false }))
+        process.exit(code || 0)
+      })
       return
     }
 
+    if (opts.json && !opts.yes) {
+      console.log(JSON.stringify({
+        success: false,
+        code: 'CONFIRMATION_REQUIRED',
+        action: 'daily.generate',
+        date,
+        aiEnabled: !noAi,
+      }))
+      process.exit(1)
+    }
+
     if (!apiKey && !noAi) {
+      if (opts.json) {
+        console.log(JSON.stringify({ success: false, code: 'AI_KEY_REQUIRED', error: 'AI 已启用但未配置 API key' }))
+        process.exit(1)
+      }
       console.log(chalk.red('\n❌ 缺少 DeepSeek API key'))
       console.log(chalk.gray('  用法: weflow-cli daily --api-key <key>'))
       console.log(chalk.gray('  或设环境变量: set DEEPSEEK_API_KEY=<key>\n'))
@@ -2999,21 +4744,39 @@ program
       previous.setDate(previous.getDate() - 1)
       const previousDate = `${previous.getFullYear()}-${String(previous.getMonth() + 1).padStart(2, '0')}-${String(previous.getDate()).padStart(2, '0')}`
       if (!opts.dryRun && !isComplete(previousDate)) {
-        console.log(chalk.yellow(`\n⚠️ 昨日报不完整，先补生成 ${previousDate}...`))
+        dailyLog(chalk.yellow(`\n⚠️ 昨日报不完整，先补生成 ${previousDate}...`))
         const previousCode = await runPipeline(previousDate)
         if (previousCode !== 0 || !isComplete(previousDate)) {
+          if (opts.json) {
+            console.log(JSON.stringify({ success: false, code: 'PREVIOUS_DAILY_INCOMPLETE', date, previousDate }))
+            process.exit(previousCode || 1)
+          }
           console.log(chalk.red(`\n✗ 昨日报补生成失败或仍不完整，已停止当天日报生成。`))
           process.exit(previousCode || 1)
         }
-        console.log(chalk.green(`\n✓ 昨日报已补齐: output/biz-daily/${previousDate}/`))
+        dailyLog(chalk.green(`\n✓ 昨日报已补齐: output/biz-daily/${previousDate}/`))
       }
     }
 
     const code = await runPipeline(date)
     if (code === 0) {
+      const complete = isComplete(date)
+      if (opts.json) {
+        console.log(JSON.stringify({
+          success: complete,
+          code: complete ? null : 'DAILY_OUTPUT_INCOMPLETE',
+          date,
+          aiEnabled: !noAi,
+          output: `output/biz-daily/${date}`,
+          artifacts: artifactStatus(date),
+        }, null, 2))
+        if (!complete) process.exit(1)
+        return
+      }
       console.log(chalk.green(`\n✓ 日报已生成: output/biz-daily/${date}/`))
       console.log(chalk.gray(`  HTML 阅读器: weflow-cli daily-server --date ${date}`))
     } else {
+      if (opts.json) console.log(JSON.stringify({ success: false, code: 'DAILY_PIPELINE_FAILED', date, aiEnabled: !noAi }))
       process.exit(code || 1)
     }
   })
@@ -3026,23 +4789,33 @@ const defaultDailyDate = () => {
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
 }
 
-const runDailyFavorites = async (date: string, root: string, changes: string[] = []) => {
-  const { execFile } = await import('child_process')
-  const { promisify } = await import('util')
-  const { fileURLToPath } = await import('url')
-  const { dirname } = await import('path')
-  const __filename = fileURLToPath(import.meta.url)
-  const script = join(dirname(__filename), '..', 'scripts', 'sync_fav.py')
-  try {
-    const { stdout } = await promisify(execFile)(getPythonCommand(), [script, '--date', date, '--root', root, ...changes], {
-      timeout: 120_000,
-      maxBuffer: 5 * 1024 * 1024,
-      env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
-    })
-    console.log(stdout)
-  } catch (error: any) {
-    console.error(chalk.red(`收藏同步失败: ${error.message}`))
-    process.exit(1)
+const runDailyFavorites = async (
+  date: string,
+  root: string,
+  changes: string[],
+  action: string,
+  opts: { dryRun?: boolean; yes?: boolean; json?: boolean },
+) => {
+  requireCliDate(date, opts.json)
+  const script = join(resolvePackageRoot(), 'scripts', 'sync_fav.py')
+  const itemCount = changes.length > 0 ? Math.max(0, changes.length - 1) : 0
+  await runConfirmedPythonMutation({
+    action,
+    script,
+    args: ['--date', date, '--root', root, ...changes],
+    cliOptions: opts,
+    preview: { dateSpecified: true, itemCount, modifiesFavoriteState: true },
+    confirmationMessage: `确认更新当日日报收藏${itemCount ? `（${itemCount} 项）` : ''}？`,
+  })
+}
+
+const dailyFavoriteOptions = (command: Command, opts: Record<string, any>): Record<string, any> => {
+  const dailyOpts = command.parent?.parent?.opts() || {}
+  return {
+    ...opts,
+    date: opts.date || dailyOpts.date,
+    dryRun: !!(opts.dryRun || dailyOpts.dryRun),
+    json: !!(opts.json || dailyOpts.json),
   }
 }
 
@@ -3051,26 +4824,42 @@ dailyFavoritesCmd
   .description('按阅读器保存的收藏状态同步本地收藏目录')
   .option('-d, --date <YYYY-MM-DD>', '日报日期')
   .option('--root <dir>', '日报输出根目录', './output/biz-daily')
-  .action(async (opts) => {
-    await runDailyFavorites(opts.date || defaultDailyDate(), opts.root)
+  .option('--dry-run', '仅预览，不读取状态或修改收藏目录')
+  .option('--yes', '确认同步收藏目录')
+  .option('--json', '输出机器可读结果，不返回文章或本地路径')
+  .action(async (opts, command) => {
+    const merged = dailyFavoriteOptions(command, opts)
+    await runDailyFavorites(merged.date || defaultDailyDate(), merged.root, [], 'daily.favorites.sync', merged)
   })
 
 dailyFavoritesCmd
-  .command('add <article...>')
+  .command('add <article>')
   .description('添加日报文章到本地收藏')
+  .option('--article <path>', '额外添加一篇文章，可重复使用', (value: string, previous: string[]) => [...previous, value], [] as string[])
   .option('-d, --date <YYYY-MM-DD>', '日报日期')
   .option('--root <dir>', '日报输出根目录', './output/biz-daily')
-  .action(async (articles, opts) => {
-    await runDailyFavorites(opts.date || defaultDailyDate(), opts.root, ['--add', ...articles])
+  .option('--dry-run', '仅预览，不修改收藏')
+  .option('--yes', '确认添加收藏')
+  .option('--json', '输出机器可读结果，不返回文章或本地路径')
+  .action(async (article, opts, command) => {
+    const merged = dailyFavoriteOptions(command, opts)
+    const articles = [article, ...(merged.article as string[])]
+    await runDailyFavorites(merged.date || defaultDailyDate(), merged.root, ['--add', ...articles], 'daily.favorites.add', merged)
   })
 
 dailyFavoritesCmd
-  .command('remove <article...>')
+  .command('remove <article>')
   .description('从本地收藏中移除日报文章')
+  .option('--article <path>', '额外移除一篇文章，可重复使用', (value: string, previous: string[]) => [...previous, value], [] as string[])
   .option('-d, --date <YYYY-MM-DD>', '日报日期')
   .option('--root <dir>', '日报输出根目录', './output/biz-daily')
-  .action(async (articles, opts) => {
-    await runDailyFavorites(opts.date || defaultDailyDate(), opts.root, ['--remove', ...articles])
+  .option('--dry-run', '仅预览，不修改收藏')
+  .option('--yes', '确认移除收藏')
+  .option('--json', '输出机器可读结果，不返回文章或本地路径')
+  .action(async (article, opts, command) => {
+    const merged = dailyFavoriteOptions(command, opts)
+    const articles = [article, ...(merged.article as string[])]
+    await runDailyFavorites(merged.date || defaultDailyDate(), merged.root, ['--remove', ...articles], 'daily.favorites.remove', merged)
   })
 
 program.commands.find(c => c.name() === 'daily')?.addCommand(dailyFavoritesCmd)
@@ -3083,9 +4872,29 @@ const assistantCmd = program
 assistantCmd
   .command('start')
   .description('后台启动守护进程 (重启电脑前持续在线)')
-  .action(async () => {
+  .option('--dry-run', '仅预览，不启动守护进程')
+  .option('--yes', '确认启动')
+  .option('--json', '输出 JSON 格式；启动仍需 --yes')
+  .action(async (opts) => {
+    const preview = { action: 'assistant.start', sideEffects: ['background-process', 'message-processing', 'possible-ai-usage'] }
+    if (opts.dryRun) {
+      if (opts.json) console.log(JSON.stringify({ success: true, dryRun: true, ...preview }))
+      else console.log(chalk.cyan('将后台启动第二大脑守护进程'))
+      return
+    }
+    if (opts.json && !opts.yes) {
+      console.log(JSON.stringify({ success: false, code: 'CONFIRMATION_REQUIRED', error: '使用 --yes 确认启动助手', ...preview }))
+      process.exit(1)
+    }
     const { startDaemon } = await import('../src/services/assistantDaemon.js')
     const r = startDaemon()
+    if (opts.json) {
+      console.log(JSON.stringify(r.started
+        ? { success: true, started: true, pid: r.pid, ...preview }
+        : { success: false, code: 'ASSISTANT_START_FAILED', started: false, error: '助手启动失败或已经运行', ...preview }))
+      if (!r.started) process.exit(1)
+      return
+    }
     if (r.started) {
       console.log(chalk.green(`✓ 守护进程已启动 (pid ${r.pid})`))
       console.log(chalk.gray('  在微信 ClawBot 对话里直接说话即可'))
@@ -3099,28 +4908,61 @@ assistantCmd
 assistantCmd
   .command('stop')
   .description('停止守护进程')
-  .action(async () => {
+  .option('--dry-run', '仅预览，不停止守护进程')
+  .option('--yes', '确认停止')
+  .option('--json', '输出 JSON 格式；停止仍需 --yes')
+  .action(async (opts) => {
+    const preview = { action: 'assistant.stop', sideEffects: ['background-process'] }
+    if (opts.dryRun) {
+      if (opts.json) console.log(JSON.stringify({ success: true, dryRun: true, ...preview }))
+      else console.log(chalk.cyan('将停止第二大脑守护进程'))
+      return
+    }
+    if (opts.json && !opts.yes) {
+      console.log(JSON.stringify({ success: false, code: 'CONFIRMATION_REQUIRED', error: '使用 --yes 确认停止助手', ...preview }))
+      process.exit(1)
+    }
     const { stopDaemon } = await import('../src/services/assistantDaemon.js')
     const r = stopDaemon()
+    if (opts.json) {
+      console.log(JSON.stringify({ success: r.stopped, stopped: r.stopped, code: r.stopped ? null : 'ASSISTANT_STOP_FAILED', ...preview }))
+      if (!r.stopped) process.exit(1)
+      return
+    }
     console.log(r.stopped ? chalk.green(`✓ ${r.message}`) : chalk.yellow(`⚠ ${r.message}`))
   })
 
 assistantCmd
   .command('status')
   .description('查看运行状态')
-  .action(async () => {
+  .option('--json', '输出 JSON 格式，不返回令牌、成员或日志内容')
+  .action(async (opts) => {
     const { isDaemonAlive, tailLog, rotateLogIfNeeded } = await import('../src/services/assistantDaemon.js')
     const { alive, pid } = isDaemonAlive()
-    console.log(`守护进程: ${alive ? chalk.green(`运行中 (pid ${pid})`) : chalk.gray('未运行')}`)
     const token = configService.get('wechatOcToken')
-    console.log(`消息通道: ${token ? chalk.green('已登录') : chalk.red('未登录 (先 login-wechat)')}`)
     const aiKey = configService.get('deepseekApiKey')
-    console.log(`LLM 大脑: ${aiKey ? chalk.green('DeepSeek 已配置') : chalk.gray('未配置 (config set deepseekApiKey)')}`)
     const { privacyGate } = await import('../src/services/assistantPrivacy.js')
-    console.log(`隐私模式: ${chalk.cyan(privacyGate.mode())}${privacyGate.isLocalInference() ? chalk.green(' (本地推理, 数据不出境)') : chalk.gray(' (工具结果脱敏后出境)')}`)
     const wl = String(configService.get('assistantWhitelist') || '').trim()
-    console.log(`白名单: ${wl ? chalk.green(`${wl.split(/[,;\s]+/).filter(Boolean).length} 人`) : chalk.red('未设置 (默认拒绝所有人; config set assistantWhitelist "<@im.wechat ID>")')}`)
     const groups = String(configService.get('assistantGroupWhitelist') || '').trim()
+    if (opts.json) {
+      console.log(JSON.stringify({
+        success: true,
+        daemonRunning: alive,
+        messageChannelLoggedIn: !!token,
+        aiConfigured: privacyGate.isLocalInference() || !!aiKey,
+        localInference: privacyGate.isLocalInference(),
+        privacyMode: privacyGate.mode(),
+        whitelistCount: wl ? wl.split(/[,;\s]+/).filter(Boolean).length : 0,
+        groupWhitelistCount: groups ? groups.split(/[,;\s]+/).filter(Boolean).length : 0,
+        groupMentionRequired: configService.get('assistantGroupRequireMention') !== 'false',
+      }, null, 2))
+      return
+    }
+    console.log(`守护进程: ${alive ? chalk.green(`运行中 (pid ${pid})`) : chalk.gray('未运行')}`)
+    console.log(`消息通道: ${token ? chalk.green('已登录') : chalk.red('未登录 (先 login-wechat)')}`)
+    console.log(`LLM 大脑: ${aiKey ? chalk.green('DeepSeek 已配置') : chalk.gray('未配置 (config set deepseekApiKey)')}`)
+    console.log(`隐私模式: ${chalk.cyan(privacyGate.mode())}${privacyGate.isLocalInference() ? chalk.green(' (本地推理, 数据不出境)') : chalk.gray(' (工具结果脱敏后出境)')}`)
+    console.log(`白名单: ${wl ? chalk.green(`${wl.split(/[,;\s]+/).filter(Boolean).length} 人`) : chalk.red('未设置 (默认拒绝所有人; config set assistantWhitelist "<@im.wechat ID>")')}`)
     console.log(`群聊实验: ${groups ? chalk.yellow(`${groups.split(/[,;\s]+/).filter(Boolean).length} 个已配置，等待上游群事件`) : chalk.gray('未配置（默认拒绝所有群）')}`)
     console.log(`群聊 @ 门槛: ${configService.get('assistantGroupRequireMention') === 'false' ? chalk.red('已关闭') : chalk.green('已开启')}`)
     console.log(`用量护栏: ${chalk.cyan('100 条/天')} (微信内发「记忆」可查今日用量)`)
@@ -3133,15 +4975,60 @@ assistantCmd
   .command('log')
   .description('查看守护进程日志 (最近 N 行)')
   .option('-n, --lines <number>', '行数', '30')
+  .option('--json', '仅输出日志可用状态和行数，不返回日志内容')
   .action(async (opts) => {
     const { tailLog } = await import('../src/services/assistantDaemon.js')
-    console.log(tailLog(parseInt(opts.lines)))
+    const lines = parseCliInteger(opts.lines, 'lines', 1, 1000, opts.json)
+    const content = tailLog(lines)
+    if (opts.json) {
+      const available = !content.startsWith('(')
+      console.log(JSON.stringify({
+        success: true,
+        available,
+        requestedLines: lines,
+        returnedLineCount: available ? content.split(/\r?\n/).length : 0,
+      }))
+      return
+    }
+    console.log(content)
   })
 
 assistantCmd
   .command('run')
   .description('前台运行 (调试用; 常驻请用 start)')
-  .action(async () => {
+  .option('--dry-run', '仅预览，不连接消息通道或调用 AI')
+  .option('--yes', '确认启动人工前台调试')
+  .option('--json', '输出机器可读预览；实际调试必须在交互终端执行')
+  .action(async (opts) => {
+    const preview = {
+      success: true,
+      dryRun: true,
+      action: 'assistant.run',
+      interactiveRequired: true,
+      handlesMessages: true,
+      mayUseAi: true,
+    }
+    if (opts.dryRun) {
+      if (opts.json) console.log(JSON.stringify(preview))
+      else console.log(chalk.cyan('前台助手预览：将持续处理消息并可能调用 AI，需 Ctrl+C 退出'))
+      return
+    }
+    if (opts.json) {
+      console.log(JSON.stringify({ ...preview, success: false, dryRun: false, code: 'INTERACTIVE_REQUIRED' }))
+      process.exit(1)
+    }
+    if (!opts.yes) {
+      const { confirmed } = await inquirer.prompt([{
+        type: 'confirm',
+        name: 'confirmed',
+        message: '确认在当前终端运行助手调试流程？',
+        default: false,
+      }])
+      if (!confirmed) {
+        console.log(chalk.gray('已取消'))
+        return
+      }
+    }
     const { AssistantService } = await import('../src/services/assistantService.js')
     const assistant = new AssistantService()
     console.log(chalk.cyan('第二大脑前台运行中... (Ctrl+C 退出)'))
@@ -3153,25 +5040,34 @@ program
   .description('统计公众号推送频率与日报处理频率')
   .option('--days <number>', '统计最近多少天', '30')
   .option('--limit <number>', '最多显示多少个公众号', '30')
+  .option('--json', '输出 JSON 格式')
   .action(async (opts) => {
     const { execFile } = await import('child_process')
     const { promisify } = await import('util')
     const execFileAsync = promisify(execFile)
-    const { fileURLToPath } = await import('url')
-    const { dirname } = await import('path')
-    const __filename = fileURLToPath(import.meta.url)
-    const __dirname = dirname(__filename)
-    const script = join(__dirname, '..', 'scripts', 'daily_stats.py')
+    const script = join(resolvePackageRoot(), 'scripts', 'daily_stats.py')
+    const days = parseCliInteger(opts.days, 'days', 1, 3650, opts.json)
+    const limit = parseCliInteger(opts.limit, 'limit', 1, 1000, opts.json)
 
     try {
-      const { stdout } = await execFileAsync(getPythonCommand(), [script, '--days', opts.days, '--limit', opts.limit], {
+      const args = [script, '--days', String(days), '--limit', String(limit)]
+      if (opts.json) args.push('--json')
+      const { stdout } = await execFileAsync(getPythonCommand(), args, {
         timeout: 300_000,
         maxBuffer: 10 * 1024 * 1024,
-        env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
+        env: pythonProcessEnv(),
       })
       console.log(stdout)
     } catch (e: any) {
-      console.error(chalk.red(`\n统计失败: ${e.message}`))
+      if (opts.json) {
+        console.log(JSON.stringify({
+          success: false,
+          code: 'DAILY_STATS_FAILED',
+          error: '公众号统计不可用，请运行 check --json 检查配置和依赖',
+        }))
+        process.exit(1)
+      }
+      console.error(chalk.red(`\n${safeSubprocessError(e, '统计失败')}`))
       process.exit(1)
     }
   })
@@ -3183,28 +5079,75 @@ program
   .option('-d, --date <YYYY-MM-DD>', '日期')
   .option('-p, --port <n>', '端口', '8765')
   .option('--open', '自动打开浏览器')
+  .option('--status', '仅检查阅读器状态，不启动服务')
+  .option('--dry-run', '仅预览，不启动服务或打开浏览器')
+  .option('--yes', '确认启动本地阅读器')
+  .option('--json', '输出机器可读状态；启动仍需 --yes')
   .action(async (opts) => {
-    const { spawn, exec } = await import('child_process')
-    const { fileURLToPath } = await import('url')
-    const { dirname } = await import('path')
-    const __filename = fileURLToPath(import.meta.url)
-    const __dirname = dirname(__filename)
-    const pkgRoot = join(__dirname, '..')
+    const { spawn } = await import('child_process')
+    const pkgRoot = resolvePackageRoot()
     const favServer = join(pkgRoot, 'scripts', 'fav_server.py')
+    const port = parseCliInteger(opts.port, 'port', 1, 65535, opts.json)
+    if (opts.date) requireCliDate(opts.date, opts.json)
 
-    const date = opts.date || new Date().toISOString().slice(0, 10)
+    if (opts.status) {
+      try {
+        const response = await fetch(`http://127.0.0.1:${port}/api/status`, { signal: AbortSignal.timeout(2000) })
+        const status = await response.json() as { ok?: boolean; service?: string; date?: string }
+        const data = { success: response.ok && status.ok === true, running: response.ok, port, date: status.date || null }
+        if (opts.json) console.log(JSON.stringify(data, null, 2))
+        else console.log(data.running ? chalk.green(`阅读器正在运行 (${data.date || '日期未知'})`) : chalk.gray('阅读器未运行'))
+      } catch {
+        const data = { success: true, running: false, port, date: null }
+        if (opts.json) console.log(JSON.stringify(data, null, 2))
+        else console.log(chalk.gray('阅读器未运行'))
+      }
+      return
+    }
+
+    const date = opts.date || defaultDailyDate()
+    const preview = {
+      success: true,
+      dryRun: true,
+      action: 'daily-reader.start',
+      date,
+      port,
+      loopbackOnly: true,
+      opensBrowser: Boolean(opts.open),
+    }
+    if (opts.dryRun) {
+      if (opts.json) console.log(JSON.stringify(preview))
+      else console.log(chalk.cyan(`阅读器启动预览：${date}，本机端口 ${port}${opts.open ? '，并打开浏览器' : ''}。`))
+      return
+    }
+    if (opts.json && !opts.yes) {
+      console.log(JSON.stringify({ ...preview, success: false, dryRun: false, code: 'CONFIRMATION_REQUIRED' }))
+      process.exit(1)
+    }
+    if (opts.json) {
+      const child = spawn(getPythonCommand(), [favServer, '--date', date, '--port', String(port)], {
+        detached: true,
+        stdio: 'ignore',
+        windowsHide: true,
+        env: pythonProcessEnv(),
+      })
+      child.unref()
+      if (opts.open) await openLocalUrl(`http://localhost:${port}`)
+      console.log(JSON.stringify({ success: true, action: 'daily-reader.start', started: true, date, port, openedBrowser: Boolean(opts.open) }))
+      return
+    }
     console.log(chalk.cyan(`⭐ 启动日报阅读器\n`))
     console.log(chalk.gray(`  日期: ${date}`))
-    console.log(chalk.gray(`  地址: http://localhost:${opts.port}`))
+    console.log(chalk.gray(`  地址: http://localhost:${port}`))
     console.log()
 
     if (opts.open) {
-      exec(`start http://localhost:${opts.port}`)
+      await openLocalUrl(`http://localhost:${port}`)
     }
 
-    const child = spawn(getPythonCommand(), [favServer, '--date', date, '--port', String(opts.port)], {
+    const child = spawn(getPythonCommand(), [favServer, '--date', date, '--port', String(port)], {
       stdio: 'inherit',
-      env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
+      env: pythonProcessEnv(),
     })
     process.on('SIGINT', () => child.kill())
   })
@@ -3213,8 +5156,10 @@ program
 program
   .command('mcp-config')
   .description('输出 MCP Server 配置，粘贴到 .mcp.json 即可让 AI 操作本工具')
-  .option('--port <n>', 'MCP Server 端口', '0')
   .option('-o, --output <file>', '写入文件', '')
+  .option('--dry-run', '仅预览文件写入，不修改文件')
+  .option('--yes', '确认写入配置文件')
+  .option('--json-result', '写入模式输出 JSON 结果，不返回本地路径')
   .action(async (opts) => {
     const { writeFileSync } = await import('fs')
     const config = {
@@ -3228,7 +5173,33 @@ program
     }
     const json = JSON.stringify(config, null, 2)
     if (opts.output) {
+      const preview = { success: true, dryRun: true, action: 'mcp-config.write', overwrite: existsSync(opts.output) }
+      if (opts.dryRun) {
+        if (opts.jsonResult) console.log(JSON.stringify(preview))
+        else console.log(chalk.cyan(`MCP 配置写入预览：${preview.overwrite ? '将覆盖现有文件' : '将创建新文件'}`))
+        return
+      }
+      if (!opts.yes) {
+        if (opts.jsonResult) {
+          console.log(JSON.stringify({ success: false, code: 'CONFIRMATION_REQUIRED', action: 'mcp-config.write', overwrite: preview.overwrite }))
+          process.exit(1)
+        }
+        const { confirmed } = await inquirer.prompt([{
+          type: 'confirm',
+          name: 'confirmed',
+          message: `${preview.overwrite ? '覆盖' : '创建'} MCP 配置文件？`,
+          default: false,
+        }])
+        if (!confirmed) {
+          console.log(chalk.gray('已取消'))
+          return
+        }
+      }
       writeFileSync(opts.output, json, 'utf-8')
+      if (opts.jsonResult) {
+        console.log(JSON.stringify({ success: true, action: 'mcp-config.write', changed: true, overwrite: preview.overwrite }))
+        return
+      }
       console.log(chalk.green(`✓ 已写入 ${opts.output}`))
       console.log(chalk.gray('AI 助手现在可以使用以下工具：'))
     } else {
@@ -3246,12 +5217,12 @@ program
       ['wechat.list_themes', '排版主题列表'],
       ['wechat.fetch_article', '抓取公众号文章'],
       ['wechat.search_public', '搜索全网公众号文章'],
-      ['wechat.publish_article', '发布到公众号草稿箱'],
+      ['wechat.export_messages', '按稳定数据契约读取会话消息'],
     ]
-    const { TOOL_DEFS } = await import('../src/services/assistantTools.js')
+    const { MCP_READ_ONLY_TOOL_DEFS } = await import('../src/services/assistantTools.js')
     const all = [
       ...STATIC_TOOLS,
-      ...TOOL_DEFS.filter(t => t.function.name !== 'get_stats')
+      ...MCP_READ_ONLY_TOOL_DEFS.filter(t => t.function.name !== 'get_stats')
         .map(t => [`wechat.${t.function.name}`, t.function.description.split(/[。(]/)[0]] as [string, string]),
     ]
     for (const [n, d] of all) {
@@ -3269,17 +5240,70 @@ program
 program
   .command('check')
   .description('检查运行环境（Python、pip 依赖、数据库配置）')
-  .action(async () => {
+  .option('--json', '输出 JSON 格式，不包含数据库路径或密钥')
+  .action(async (opts) => {
+    if (opts.json) {
+      const { execFileSync } = await import('child_process')
+      const requiredDependencies = ['sqlcipher3', 'html2text', 'zstandard', 'cryptography']
+      const optionalDependencies = ['scrapling']
+      let pythonVersion = ''
+      try {
+        pythonVersion = execFileSync(getPythonCommand(), ['--version'], { encoding: 'utf8', timeout: 5000 }).trim()
+      } catch {}
+      const dependencyStatus = (name: string): boolean => {
+        if (!pythonVersion) return false
+        try {
+          execFileSync(getPythonCommand(), ['-c', `import ${name}`], { stdio: 'ignore', timeout: 5000 })
+          return true
+        } catch {
+          return false
+        }
+      }
+      let daemonAlive = false
+      try {
+        const { isDaemonAlive } = await import('../src/services/assistantDaemon.js')
+        daemonAlive = isDaemonAlive().alive
+      } catch {}
+      const engine = String(configService.get('aiEngine') || 'deepseek')
+      const data = {
+        success: true,
+        schema: 'weflow-check/v1',
+        runtime: {
+          node: { available: true, version: process.versions.node },
+          python: { available: !!pythonVersion, version: pythonVersion },
+        },
+        dependencies: {
+          required: Object.fromEntries(requiredDependencies.map(name => [name, dependencyStatus(name)])),
+          optional: Object.fromEntries(optionalDependencies.map(name => [name, dependencyStatus(name)])),
+        },
+        configuration: {
+          initialized: configService.isConfigured(),
+          messageDatabase: !!configService.get('ntDbPath') && existsSync(configService.get('ntDbPath')),
+          momentsDatabase: !!configService.get('snsDbPath') && existsSync(configService.get('snsDbPath')),
+          favoritesDatabase: !!configService.get('favDbPath') && existsSync(configService.get('favDbPath')),
+        },
+        assistant: {
+          engine,
+          localInference: ['ollama', 'lmstudio'].includes(engine),
+          aiConfigured: ['ollama', 'lmstudio'].includes(engine) || !!configService.get('deepseekApiKey'),
+          messageChannelLoggedIn: !!configService.get('wechatOcToken'),
+          daemonRunning: daemonAlive,
+        },
+      }
+      console.log(JSON.stringify(data, null, 2))
+      return
+    }
     console.log(chalk.cyan('🔍 WeFlow CLI 环境检查\n'))
 
     // 1. Node.js
     console.log(chalk.white('Node.js:'), chalk.green(`v${process.versions.node}`))
 
     // 2. Python
-    const { execSync } = await import('child_process')
+    const { execFileSync } = await import('child_process')
+    const pythonCommand = getPythonCommand()
     let pythonOk = false
     try {
-      const pyVer = execSync(`${getPythonCommand()} --version 2>&1`, { encoding: 'utf-8', timeout: 5000 }).trim()
+      const pyVer = execFileSync(pythonCommand, ['--version'], { encoding: 'utf-8', timeout: 5000 }).trim()
       console.log(chalk.white('Python: '), chalk.green(pyVer))
       pythonOk = true
     } catch {
@@ -3293,7 +5317,7 @@ program
       let allOk = true
       for (const dep of deps) {
         try {
-          execSync(`${getPythonCommand()} -c "import ${dep}"`, { timeout: 5000 })
+          execFileSync(pythonCommand, ['-c', `import ${dep}`], { stdio: 'ignore', timeout: 5000 })
           console.log(`  ${dep.padEnd(20)} ${chalk.green('✓')}`)
         } catch {
           console.log(`  ${dep.padEnd(20)} ${chalk.red('✗ 缺失')}`)
@@ -3314,7 +5338,7 @@ program
       console.log(chalk.white('\n可选依赖（提升抓取成功率）:'))
       for (const dep of optDeps) {
         try {
-          execSync(`${getPythonCommand()} -c "import ${dep}"`, { timeout: 5000 })
+          execFileSync(pythonCommand, ['-c', `import ${dep}`], { stdio: 'ignore', timeout: 5000 })
           console.log(`  ${dep.padEnd(20)} ${chalk.green('✓')}`)
         } catch {
           console.log(`  ${dep.padEnd(20)} ${chalk.gray('○ (pip install scrapling)')}`)
@@ -3500,21 +5524,17 @@ async function showInteractiveMenu() {
     const { execFile } = await import('child_process')
     const { promisify } = await import('util')
     const execFileAsync = promisify(execFile)
-    const { fileURLToPath } = await import('url')
-    const { dirname } = await import('path')
-    const __filename = fileURLToPath(import.meta.url)
-    const __dirname = dirname(__filename)
-    const pkgRoot = join(__dirname, '..', '..')
+    const pkgRoot = resolvePackageRoot()
     const script = join(pkgRoot, 'scripts', scriptName)
     console.log(chalk.cyan(`正在${label}...\n`))
     try {
       const { stdout } = await execFileAsync(getPythonCommand(), [script], {
         timeout: 600_000, maxBuffer: 50 * 1024 * 1024,
-        env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
+        env: pythonProcessEnv(),
       })
       console.log(stdout)
     } catch (e: any) {
-      console.error(chalk.red(`${label}失败: ${e.message}`))
+      console.error(chalk.red(safeSubprocessError(e, `${label}失败`)))
     }
   }
 
@@ -3572,15 +5592,11 @@ async function showInteractiveMenu() {
       const dd = String(now.getDate()).padStart(2, '0')
       const dateStr = `${yyyy}-${mm}-${dd}`
       const { spawn } = await import('child_process')
-      const { fileURLToPath } = await import('url')
-      const { dirname } = await import('path')
-      const fn = fileURLToPath(import.meta.url)
-      const pkgs = join(dirname(fn), '..')
-      const pipeline = join(pkgs, 'scripts', 'pipeline.py')
+      const pipeline = join(resolvePackageRoot(), 'scripts', 'pipeline.py')
       console.log(chalk.cyan(`\n📰 正在生成 ${dateStr} 公众号日报...\n`))
-      const child = spawn(getPythonCommand(), [pipeline, '--date', dateStr, '--api-key', apiKey, '--interest', 'AI', '--skip-wiki'], {
+      const child = spawn(getPythonCommand(), [pipeline, '--date', dateStr, '--interest', 'AI', '--skip-wiki'], {
         stdio: 'inherit',
-        env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
+        env: pythonProcessEnv(apiKey),
       })
       await new Promise<void>((resolve) => child.on('exit', () => resolve()))
       break

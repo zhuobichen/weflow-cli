@@ -12,6 +12,18 @@ export function safeDate(value: unknown): string | null {
   return /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : null
 }
 
+export function isAllowedWeChatArticleUrl(value: unknown): boolean {
+  try {
+    const url = new URL(String(value || ''))
+    return url.protocol === 'https:' &&
+      url.hostname === 'mp.weixin.qq.com' &&
+      !url.username &&
+      !url.password
+  } catch {
+    return false
+  }
+}
+
 export function isCoverImage(path: string): boolean {
   try {
     const stat = statSync(path)

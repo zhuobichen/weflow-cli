@@ -96,7 +96,8 @@ def main():
     parser.add_argument('--json', action='store_true', help='JSON 输出')
     args = parser.parse_args()
 
-    if not args.question:
+    question = args.question or os.environ.get('WEFLOW_VAULT_QUESTION', '')
+    if not question:
         print('请提供问题')
         sys.exit(1)
 
@@ -106,19 +107,19 @@ def main():
         sys.exit(1)
 
     top_k = int(args.top_k)
-    context = collect_context(args.vault, args.biz_daily, args.question, top_k)
+    context = collect_context(args.vault, args.biz_daily, question, top_k)
 
     if args.json:
-        output = {'question': args.question, 'sources': [{'source': c['source'], 'title': c['title'], 'score': c['score']} for c in context]}
+        output = {'question': question, 'sources': [{'source': c['source'], 'title': c['title'], 'score': c['score']} for c in context]}
         if context:
-            prompt = build_prompt(args.question, context)
+            prompt = build_prompt(question, context)
             output['answer'] = call_deepseek(prompt, api_key, max_tokens=800)
         else:
             output['answer'] = '知识库中没有相关信息'
         print(json.dumps(output, ensure_ascii=False, indent=2))
         return
 
-    print(f'🔍 "{args.question}"\n')
+    print(f'🔍 "{question}"\n')
     if not context:
         print('未找到相关内容')
         return
@@ -128,7 +129,7 @@ def main():
         icon = {'concept': '🧠', 'note': '📝', 'article': '📄'}.get(c['source'], '📎')
         print(f'  {i+1}. {icon} [{c["source"]}] {c["title"]}')
 
-    prompt = build_prompt(args.question, context)
+    prompt = build_prompt(question, context)
     print(f'\n{"="*50}')
     answer = call_deepseek(prompt, api_key, max_tokens=800)
     print(answer)

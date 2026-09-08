@@ -1,6 +1,6 @@
 # Project State
 
-> Last reviewed: 2026-09-06. This is the current maintenance snapshot, not a release note. Keep it factual and update it with meaningful project changes.
+> Last reviewed: 2026-09-08. This is the current maintenance snapshot, not a release note. Keep it factual and update it with meaningful project changes.
 
 ## Purpose
 
@@ -11,8 +11,10 @@ WeFlow CLI is a local-first command-line tool and MCP server for user-authorized
 - Source package version: `1.5.1`. The npm registry may remain on an earlier version until a maintainer publishes a release.
 - Runtime: Node.js 18+; Python 3.10+ is required for database and daily-reading workflows.
 - Main development command: `npm run dev -- <command>`.
+- Compiled/package command: `node cli.cjs <command>`; CLI, MCP, database, export, and assistant services resolve resources from the same package root in both source and compiled layouts.
 - Build check: `npm run build`.
 - Regression check: `npm test`.
+- Downstream data contract: local JSON export is the first compatibility boundary for `she-love-me` and future consumers; see `docs/DATA_CONTRACT.md`.
 - Supported focus: Windows WeChat 4.x; Linux WeChat 4.x has an NT database path; macOS requires user-provided local access credentials for initialization.
 
 ## Verified Capabilities
@@ -23,12 +25,14 @@ WeFlow CLI is a local-first command-line tool and MCP server for user-authorized
 | Initialization | Verify and reuse existing local database access by default; refresh only when needed. Missing-key tests can run without changing saved configuration. | `init`, `init --refresh`, `init --test-missing-keys`, `config forget-keys`, `check` |
 | Official-account daily | Filter configured sources, preserve source categories, backfill incomplete yesterday output before an unqualified today run, fetch articles, create summaries, generate a local HTML reader, and synchronize reader favorites into local files. | `daily`, `daily favorites`, `daily-stats`, `daily-server` |
 | Knowledge workflows | Wiki compilation, semantic search, RAG, WeRead sync, reviews, reading notes, and staged Vault promotion. | `wiki`, `vault`, `search`, `chat`, `weread`, `review` |
-| MCP | Local stdio MCP server exposes daily, knowledge, and local-data tools. | `mcp-config`, `mcp-server/index.ts` |
+| MCP | Local stdio MCP server exposes bounded read and local transformation tools, including the `wechat.export_messages` versioned message contract. Publishing, messaging, memory writes, todo mutation, configuration changes, and deletion are excluded. | `mcp-config`, `mcp-server/index.ts` |
 | Assistant | Optional WeChat Bot-channel assistant with local memory and privacy gates. | `login-wechat`, `assistant` |
 
-The current regression suite covers home-path expansion, custom NT data-root discovery, daily-favorites synchronization, no-AI Vault promotion, outbound PII redaction, local-inference bypass, strict message-body masking, MCP path/date validation, evidence-package safety, assistant routing, and cover-image signature validation. CI runs both the build and this suite on Node 20 with Python 3.10 available for path-discovery coverage.
+The 66-test TypeScript regression suite covers home-path expansion, custom NT data-root discovery, bounded daily-favorites synchronization, confirmed no-AI daily generation, no-AI Vault promotion, Vault content mutation previews, Vault initialization and synchronization confirmation, MCP configuration write confirmation, source/compiled Python resource lookup, outbound PII redaction, local-inference bypass, strict message-body masking, MCP path/date/URL validation and live tool discovery, message-contract preservation, local-date export bounds, export result metadata, evidence-package safety, assistant routing and lifecycle confirmation, message-channel authentication confirmation, todo and access-control mutation confirmation, message-send preview/confirmation, local-reader port validation, redacted configuration status, access-list JSON, database-key reset confirmation, human-gated initialization and key capture, content-free account-scan and assistant-log diagnostics, confirmed Vault RAG, confirmed semantic search and RAG chat, structured todo reminders, strict knowledge limits, report previews, and cover-image signature validation. Core automation entry points now include `capabilities --json`, `config show --json`, `whitelist list --json`, `blacklist list --json`, `check --json`, `init --dry-run --json`, `scan --json`, `dbkey --dry-run --json`, `sessions --json`, `messages --json`, `contacts --json`, `export ... --json`, `fav export ... --json-result`, `sns ... --json`, `daily-stats --json`, `daily --no-ai --dry-run --json`, `daily-server --status --json`, `assistant status --json`, `assistant log --json`, `todos list --json`, `todos remind --json`, `evidence --json`, `evidence-review --dry-run --json`, Vault mutation previews, confirmed `vault rag`, confirmed `search` and `chat`, daily-favorite previews, `search-index --dry-run --json`, `pipeline run --dry-run --json`, report-generator previews, login/logout previews, and `mcp-config --output <file> --dry-run --json-result`. CI runs both the build and this suite on Node 20 with Python 3.10 available for path-discovery coverage.
 
-The daily workflow supports `dailyAiEnabled=false` for a persistent no-AI mode, or `daily --no-ai` for a single run. Both the CLI and direct Python entry points honor the setting. Fetching, HTML generation, and local indexes remain available in that mode.
+The daily workflow supports `dailyAiEnabled=false` for a persistent no-AI mode, or `daily --no-ai` for a single run. Both the CLI and direct Python entry points honor the setting. Fetching, HTML generation, and local indexes remain available in that mode. Machine execution requires `daily --yes --json`; it keeps progress logs on stderr and returns a machine-readable completion result on stdout after checking the required local artifacts.
+
+Date-bounded message exports and `wechat.export_messages` page through the selected conversation before applying the result limit. Older matching dates are therefore not hidden by a newer, nonmatching first page.
 
 ## Security Baseline
 
@@ -37,7 +41,17 @@ The daily workflow supports `dailyAiEnabled=false` for a persistent no-AI mode, 
 - The daily reader binds to `127.0.0.1`; its API rejects cross-origin mutations, validates local paths, and restricts image proxy requests.
 - The assistant denies all senders until `assistantWhitelist` is explicitly configured. Group routing is experimental and remains denied unless the upstream explicitly supplies group metadata, the group and sender are both allowlisted, and the bot is mentioned. New or incomplete configurations use `strict` privacy mode for cloud inference.
 - MCP path inputs are constrained to their expected data roots. MCP clients remain trusted local integrations and must be reviewed before configuration.
+- The default MCP tool list is read-only: it excludes publishing, messaging, assistant-memory writes, todo mutation, configuration changes, and deletion. Conversation display names must resolve uniquely before chat data is read.
 - Public reports and commits must not contain databases, keys, tokens, wxid values, real chat content, or unredacted logs.
+- Todo status changes and deletion use a preview/confirm protocol. Machine callers receive `CONFIRMATION_REQUIRED` unless the user-approved execution includes `--yes`.
+- AI and database credentials, selected-conversation identifiers, private queries and filters, export locations and display names, and NT scan roots are inherited by workers through environment variables and are not copied into child-process command arguments. Long-lived worker environments clear unrelated internal values before startup.
+- `config set-env` and `fav set-key --from-env` provide command-history-safe secret input. Their JSON workflows require a read-only preview followed by explicit `--yes`, and never return secret values or discovered database paths. Bulk clearing of configuration, access lists, or audit history requires interactive confirmation or explicit `--yes`.
+- Core JSON reads validate pagination before database access. `messages --start/--end` now applies its Unix-second time range before offset and limit instead of silently ignoring the options.
+- `scan --json` and `assistant log --json` return metadata only. They intentionally omit local paths, account identifiers, nicknames, and log content. `evidence-review` requires preview and confirmation, and its machine result omits both analysis text and the output path.
+- `init --dry-run --json` exposes a content-free plan. JSON execution returns `INTERACTIVE_REQUIRED`; database verification, directory discovery, key capture, and configuration writes remain an explicit terminal workflow.
+- `vault rag` requires a read-only preview and explicit confirmation before reading local knowledge or calling the configured AI provider. The question is inherited by the Python worker through the environment rather than copied into process arguments.
+- `search` and `chat` use the same preview/confirmation boundary. Queries, questions, and optional conversation restrictions are inherited through the worker environment instead of appearing in process arguments; machine callers cannot start interactive RAG chat.
+- `daily-server --status --json` remains read-only. Machine startup uses `daily-server --dry-run --json` followed by `daily-server --yes --json`; the confirmed process is detached and remains bound to loopback. The legacy `fav-server` compatibility entry enforces the same preview and confirmation rules.
 
 Documentation was synchronized with the `1.5.1` source baseline on 2026-09-06. Command behavior is defined by `bin/weflow-cli.ts`; release packages can lag behind the GitHub source until published.
 
@@ -50,7 +64,8 @@ Documentation was synchronized with the `1.5.1` source baseline on 2026-09-06. C
 - The OC Bot channel is separate from a personal WeChat message stream. `send` can only reply through an already established Bot-channel conversation with a valid context token; it cannot initiate messages to existing personal contacts, post as the user's personal account, or send into ordinary personal WeChat groups.
 - The current official OC/iLink payload model has not been verified to support group events or group invitations. The project does not implement client automation or protocol bypasses to add a bot to groups.
 - Cloud AI workflows may transmit user-selected, privacy-filtered input to the configured provider. Local inference avoids that network transfer.
-- `vault promote ideas` and `vault promote all` run without AI by default. AI generation requires explicit `--with-ai` and an API key. `vault init` creates both the existing article-sync folders and the structured directories required by promotion workflows.
+- `vault promote ideas` and `vault promote all` run without AI by default. AI generation requires explicit `--with-ai` and an API key. CLI execution also requires preview and confirmation. `vault init` creates both the existing article-sync folders and the structured directories required by promotion workflows.
+- `vault init`, semantic-index construction, the knowledge pipeline, and report generators require preview and confirmation for machine execution. Preview JSON contains counts and behavior flags but omits local paths, conversation names, and generated content.
 - Automatic data-directory discovery checks common user locations only. Cross-drive name search requires `init --search-drives`; structural disk search requires `init --full-scan`. Both can be slow on large, removable, or network-attached volumes.
 - Dependency audit findings must be reviewed before dependency upgrades; do not run breaking `npm audit fix --force` without validation.
 
@@ -73,4 +88,6 @@ For projects such as Yance, WeFlow CLI remains an independent local data-access 
 - Security and reporting: [SECURITY.md](../SECURITY.md)
 - MCP surface: [MCP.md](MCP.md)
 - Design rationale: [DECISIONS.md](DECISIONS.md)
+- Partner integration record: [PARTNERS.md](PARTNERS.md)
+- AI integration surface: [AI_INTERFACE.md](AI_INTERFACE.md)
 - User-visible releases: [CHANGELOG.md](../CHANGELOG.md)

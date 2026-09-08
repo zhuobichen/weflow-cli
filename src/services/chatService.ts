@@ -1,11 +1,12 @@
-import { join, dirname } from 'path'
-import { fileURLToPath } from 'url'
+import { join } from 'path'
 import { existsSync } from 'fs'
 import { WcdbCore } from '../core/wcdbCore.js'
 import { SqlcipherCore } from '../core/sqlcipherCore.js'
 import { NtCore } from '../core/ntCore.js'
 import { configService } from './configService.js'
 import type { ChatSession, Message, Contact, DataVersion } from '../types.js'
+import { collectMessagesInRange } from './messageQuery.js'
+import { resolvePackageRoot } from '../utils/packageRoot.js'
 
 // 创建单例
 const wcdbCore = new WcdbCore()
@@ -114,7 +115,7 @@ export class ChatService {
 
     // 方案 4: 尝试 WCDB API 连接 (需要 db_storage/session.db 结构，仅 3.x 兼容)
     // Use package root instead of cwd for global install support
-    const pkgRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
+    const pkgRoot = resolvePackageRoot(import.meta.url)
     const resourcesPath = join(pkgRoot, 'resources')
     wcdbCore.setPaths(resourcesPath, '')
 
@@ -236,6 +237,22 @@ export class ChatService {
     }
 
     return []
+  }
+
+  async getMessagesInRange(
+    talker: string,
+    limit = 0,
+    from?: number,
+    to?: number,
+  ): Promise<Message[]> {
+    if (from === undefined && to === undefined) {
+      return this.getMessages(talker, limit)
+    }
+    return collectMessagesInRange(
+      (pageLimit, offset) => this.getMessages(talker, pageLimit, offset),
+      limit,
+      { from, to },
+    )
   }
 
   async listContacts(keyword?: string, limit = 200): Promise<Contact[]> {

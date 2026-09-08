@@ -152,6 +152,16 @@ def main():
     p.add_argument('--output', '-o', default=OUTPUT_ROOT)
     args = p.parse_args()
 
+    env_talkers = os.environ.get('WEFLOW_REPORT_TALKERS', '')
+    if env_talkers and not args.talker:
+        try:
+            parsed_talkers = json.loads(env_talkers)
+            if isinstance(parsed_talkers, list):
+                args.talker = [str(item) for item in parsed_talkers if str(item).strip()]
+        except (TypeError, ValueError, json.JSONDecodeError):
+            print('[ERROR] invalid report talker selection')
+            sys.exit(1)
+
     # Time range
     tz = timezone(timedelta(hours=8))
     if args.month:

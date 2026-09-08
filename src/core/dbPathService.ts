@@ -371,6 +371,7 @@ export class DbPathService {
           const lower = entry.toLowerCase()
           if (lower === 'all_users') continue
           if (!entry.includes('_')) continue
+          if (!this.isAccountDir(entryPath)) continue
           wxids.push({ wxid: entry, modifiedTime: stat.mtimeMs })
         }
       }
@@ -378,7 +379,7 @@ export class DbPathService {
 
       if (wxids.length === 0) {
         const rootName = basename(resolvedRootPath)
-        if (rootName.includes('_') && rootName.toLowerCase() !== 'all_users') {
+        if (rootName.includes('_') && rootName.toLowerCase() !== 'all_users' && this.isAccountDir(resolvedRootPath)) {
           const rootStat = statSync(resolvedRootPath)
           wxids.push({ wxid: rootName, modifiedTime: rootStat.mtimeMs })
         }

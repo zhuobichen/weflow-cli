@@ -2,45 +2,44 @@ import { join, basename, dirname } from 'path'
 import { existsSync, mkdirSync, writeFileSync } from 'fs'
 import { execFile } from 'child_process'
 import { promisify } from 'util'
-import { fileURLToPath } from 'url'
 import { chatService } from './chatService.js'
 import { configService } from './configService.js'
 import { getPythonCommand } from '../utils/python.js'
+import { createPythonProcessEnv, safeSubprocessError } from '../utils/pythonProcessEnv.js'
 import type { Message } from '../types.js'
+import { createWeFlowEnvelope } from './messageContract.js'
+import { parseLocalDateOrIso } from '../utils/dateRange.js'
+import { resolvePackageRoot } from '../utils/packageRoot.js'
+
+export type ExportContract = 'raw' | 'weflow-v1'
+export interface ExportResult { success: boolean; path?: string; count?: number; error?: string }
 
 const execFileAsync = promisify(execFile)
-const __filename = fileURLToPath(import.meta.url)
-const __dirname = dirname(__filename)
-
 function getPackageRoot(): string {
-  const candidates = [
-    join(__dirname, '..', '..', '..'),
-    join(__dirname, '..', '..'),
-  ]
-  return candidates.find(candidate => existsSync(join(candidate, 'scripts', 'export_chat_html.py')))
-    || candidates[0]
+  return resolvePackageRoot(import.meta.url)
 }
 
 export class ExportService {
-  async exportJson(talker: string, outputDir: string, limit = 0, from?: number, to?: number): Promise<{ success: boolean; path?: string; error?: string }> {
+  async exportJson(talker: string, outputDir: string, limit = 0, from?: number, to?: number, contract: ExportContract = 'raw'): Promise<ExportResult> {
     try {
-      const messages = this.filterByTime(await chatService.getMessages(talker, limit), from, to)
+      const messages = await chatService.getMessagesInRange(talker, limit, from, to)
       if (messages.length === 0) {
         return { success: false, error: '未找到消息' }
       }
 
       const dir = this.ensureOutputDir(outputDir)
       const filePath = join(dir, `${talker}_messages.json`)
-      writeFileSync(filePath, JSON.stringify(messages, null, 2), 'utf8')
-      return { success: true, path: filePath }
-    } catch (e) {
-      return { success: false, error: String(e) }
+      const payload = contract === 'weflow-v1' ? createWeFlowEnvelope(messages) : messages
+      writeFileSync(filePath, JSON.stringify(payload, null, 2), 'utf8')
+      return { success: true, path: filePath, count: messages.length }
+    } catch {
+      return { success: false, error: 'JSON 导出失败' }
     }
   }
 
-  async exportTxt(talker: string, outputDir: string, limit = 0, from?: number, to?: number): Promise<{ success: boolean; path?: string; error?: string }> {
+  async exportTxt(talker: string, outputDir: string, limit = 0, from?: number, to?: number): Promise<ExportResult> {
     try {
-      const messages = this.filterByTime(await chatService.getMessages(talker, limit), from, to)
+      const messages = await chatService.getMessagesInRange(talker, limit, from, to)
       if (messages.length === 0) {
         return { success: false, error: '未找到消息' }
       }
@@ -55,13 +54,13 @@ export class ExportService {
       const dir = this.ensureOutputDir(outputDir)
       const filePath = join(dir, `${talker}_messages.txt`)
       writeFileSync(filePath, lines.join('\n'), 'utf8')
-      return { success: true, path: filePath }
-    } catch (e) {
-      return { success: false, error: String(e) }
+      return { success: true, path: filePath, count: messages.length }
+    } catch {
+      return { success: false, error: '文本导出失败' }
     }
   }
 
-  async exportHtml(talker: string, outputDir: string, limit = 0, date = '', from?: number, to?: number): Promise<{ success: boolean; path?: string; error?: string }> {
+  async exportHtml(talker: string, outputDir: string, limit = 0, date = '', from?: number, to?: number, quiet = false): Promise<ExportResult> {
     try {
       if (from !== undefined || to !== undefined) {
         return this.exportHtmlBasic(talker, outputDir, limit, from, to)
@@ -75,7 +74,13 @@ export class ExportService {
 
       if (!db || !key || !salt) {
         // Fallback: basic HTML
-        return this.exportHtmlBasic(talker, outputDir, limit, from, to)
+        let fallbackFrom: number | undefined = from
+        let fallbackTo: number | undefined = to
+        if (date && fallbackFrom === undefined && fallbackTo === undefined) {
+          fallbackFrom = parseLocalDateOrIso(date)
+          fallbackTo = parseLocalDateOrIso(date, true)
+        }
+        return this.exportHtmlBasic(talker, outputDir, limit, fallbackFrom, fallbackTo)
       }
 
       // Resolve Python script path (dist/src/services → package root)
@@ -101,38 +106,29 @@ export class ExportService {
 
       const args: string[] = [
         script,
-        '--db', db,
-        '--key', key,
-        '--salt', salt,
-        '--talker', talker,
-        '--out', outputDir || `./output`,
         '--single',
         '--parts', '1',
       ]
       const ownWxid = String(cfg.wxid || '').trim()
-      if (ownWxid) {
-        args.push('--own-wxid', ownWxid)
-      }
-      if (displayName) {
-        args.push('--name', displayName)
-      }
-      if (cacheDir && existsSync(cacheDir)) {
-        args.push('--cache-dir', cacheDir)
-      }
-      if (accountDir && existsSync(accountDir)) {
-        args.push('--account-dir', accountDir)
-      }
-      if (date) {
-        args.push('--date', date)
-      }
-      if (passphrase) {
-        args.push('--passphrase', passphrase)
-      }
-
-      console.log(`  Exporting HTML via Python...`)
+      const exportCacheDir = cacheDir && existsSync(cacheDir) ? cacheDir : undefined
+      const exportAccountDir = accountDir && existsSync(accountDir) ? accountDir : undefined
+      if (!quiet) console.log(`  Exporting HTML via Python...`)
       const { stdout } = await execFileAsync(getPythonCommand(), args, {
         timeout: 300_000,
         maxBuffer: 50 * 1024 * 1024,
+        env: createPythonProcessEnv({
+          WEFLOW_DB_PATH: db,
+          WEFLOW_NT_KEY: key,
+          WEFLOW_NT_SALT: salt,
+          WEFLOW_TALKER: talker,
+          WEFLOW_OWN_WXID: ownWxid || undefined,
+          WEFLOW_NT_PASSPHRASE: passphrase || undefined,
+          WEFLOW_EXPORT_NAME: displayName || undefined,
+          WEFLOW_EXPORT_OUTPUT: outputDir || './output',
+          WEFLOW_EXPORT_CACHE_DIR: exportCacheDir,
+          WEFLOW_EXPORT_ACCOUNT_DIR: exportAccountDir,
+          WEFLOW_EXPORT_DATE: date || undefined,
+        }),
       })
 
       // Parse JSON result from Python output
@@ -141,24 +137,26 @@ export class ExportService {
         try {
           const result = JSON.parse(lines[i])
           if (result.success && result.files?.length > 0) {
-            return { success: true, path: result.files[0] }
+            const total = Number(result.total)
+            return { success: true, path: result.files[0], count: Number.isFinite(total) ? total : undefined }
           }
         } catch {}
       }
 
       return { success: false, error: 'Python export succeeded but no output found' }
     } catch (e: any) {
-      console.error(`  Python export failed: ${e.message}`)
+      const failure = safeSubprocessError(e, 'Python export failed')
+      if (!quiet) console.error(`  ${failure}`)
       if (date) {
-        return { success: false, error: `指定日期导出失败: ${e.message}` }
+        return { success: false, error: `指定日期导出失败: ${failure}` }
       }
       // Fallback to basic HTML
       return this.exportHtmlBasic(talker, outputDir, limit, from, to)
     }
   }
 
-  private async exportHtmlBasic(talker: string, outputDir: string, limit = 0, from?: number, to?: number): Promise<{ success: boolean; path?: string; error?: string }> {
-    const messages = this.filterByTime(await chatService.getMessages(talker, limit), from, to)
+  private async exportHtmlBasic(talker: string, outputDir: string, limit = 0, from?: number, to?: number): Promise<ExportResult> {
+    const messages = await chatService.getMessagesInRange(talker, limit, from, to)
     if (messages.length === 0) {
       return { success: false, error: '未找到消息' }
     }
@@ -167,13 +165,13 @@ export class ExportService {
     const dir = this.ensureOutputDir(outputDir)
     const filePath = join(dir, `${talker}_messages.html`)
     writeFileSync(filePath, html, 'utf8')
-    return { success: true, path: filePath }
+    return { success: true, path: filePath, count: messages.length }
   }
 
-  async exportExcel(talker: string, outputDir: string, limit = 0, from?: number, to?: number): Promise<{ success: boolean; path?: string; error?: string }> {
+  async exportExcel(talker: string, outputDir: string, limit = 0, from?: number, to?: number): Promise<ExportResult> {
     try {
       const ExcelJS = await import('exceljs')
-      const messages = this.filterByTime(await chatService.getMessages(talker, limit), from, to)
+      const messages = await chatService.getMessagesInRange(talker, limit, from, to)
       if (messages.length === 0) {
         return { success: false, error: '未找到消息' }
       }
@@ -202,20 +200,10 @@ export class ExportService {
       const dir = this.ensureOutputDir(outputDir)
       const filePath = join(dir, `${talker}_messages.xlsx`)
       await workbook.xlsx.writeFile(filePath)
-      return { success: true, path: filePath }
-    } catch (e) {
-      return { success: false, error: String(e) }
+      return { success: true, path: filePath, count: messages.length }
+    } catch {
+      return { success: false, error: 'Excel 导出失败' }
     }
-  }
-
-  private filterByTime(messages: Message[], from?: number, to?: number): Message[] {
-    if (from === undefined && to === undefined) return messages
-    return messages.filter((message) => {
-      const timestamp = Number(message.createTime)
-      return Number.isFinite(timestamp) &&
-        (from === undefined || timestamp >= from) &&
-        (to === undefined || timestamp <= to)
-    })
   }
 
   private buildHtml(talker: string, messages: Message[]): string {

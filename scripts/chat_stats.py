@@ -639,7 +639,7 @@ def main():
     keys = get_biz_keys(config)
     name_map = get_name_map(keys['contact_db'], keys['contact_key'], keys['contact_salt'])
     own_wxid = get_own_wxid(nt_db, nt_key, nt_salt)
-    print(f'联系人映射: {len(name_map)} | 自己: {own_wxid[:20]}...')
+    print(f'联系人映射: {len(name_map)} | 本人账号: 已识别，未显示')
 
     # Collect chat stats
     print(f'\n统计聊天消息...')

@@ -164,6 +164,9 @@ def main():
     parser.add_argument('--json', action='store_true', help='JSON 输出')
     args = parser.parse_args()
 
+    question = args.question or os.environ.get('WEFLOW_RAG_QUESTION', '')
+    talker = args.talker or os.environ.get('WEFLOW_RAG_TALKER', '') or None
+
     config = load_config()
     embed_key = os.environ.get('DASHSCOPE_API_KEY', '') or config.get('dashscopeApiKey', '')
     chat_key = args.api_key or os.environ.get('DEEPSEEK_API_KEY', '') or config.get('deepseekApiKey', '')
@@ -175,10 +178,10 @@ def main():
         print('[ERROR] 缺少 AI API key。请在 ~/.weflow-cli/config.json 中设置 deepseekApiKey')
         sys.exit(1)
 
-    if args.interactive or not args.question:
+    if args.interactive or not question:
         interactive_mode(embed_key, chat_key)
     else:
-        result = query_rag(args.question, embed_key, chat_key, top_k=args.top_k, talker=args.talker)
+        result = query_rag(question, embed_key, chat_key, top_k=args.top_k, talker=talker)
         if args.json:
             print(json.dumps(result, ensure_ascii=False, indent=2))
         else:

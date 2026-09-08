@@ -17,12 +17,6 @@ import sys, os, json, hashlib, argparse
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
-try:
-    from sqlcipher3 import dbapi2 as sqlcipher
-except ImportError:
-    print(json.dumps({"error": "请安装: pip install sqlcipher3"}))
-    sys.exit(1)
-
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _utils import load_config, decrypt_lock, call_deepseek
 
@@ -46,6 +40,10 @@ TODO_EXTRACT_PROMPT = """你是一个任务提取助手。分析微信聊天记�
 # ====== Database ======
 
 def open_db(db_path, key_hex, salt_hex):
+    try:
+        from sqlcipher3 import dbapi2 as sqlcipher
+    except ImportError as exc:
+        raise RuntimeError('请安装: pip install sqlcipher3') from exc
     raw_key = f"x'{key_hex}{salt_hex}'"
     conn = sqlcipher.connect(db_path)
     c = conn.cursor()
@@ -251,6 +249,13 @@ def list_todos(status: str = None, urgency: str = None):
     return todos
 
 
+def find_todo(todo_id: str):
+    for todo in load_todos():
+        if todo['id'] == todo_id or todo['id'].startswith(todo_id):
+            return todo
+    return None
+
+
 def toggle_todo(todo_id: str, status: str):
     todos = load_todos()
     for t in todos:
@@ -308,17 +313,25 @@ def main():
     # done
     p = subparsers.add_parser('done', help='标记待办为已完成')
     p.add_argument('id', help='待办 ID（或前缀）')
+    p.add_argument('--json', action='store_true', help='JSON 输出')
 
     # undone
     p = subparsers.add_parser('undone', help='取消已完成标记')
     p.add_argument('id', help='待办 ID（或前缀）')
+    p.add_argument('--json', action='store_true', help='JSON 输出')
 
     # rm
     p = subparsers.add_parser('rm', help='删除待办')
     p.add_argument('id', help='待办 ID（或前缀）')
+    p.add_argument('--json', action='store_true', help='JSON 输出')
+
+    p = subparsers.add_parser('preview', help='预览待办写操作，不修改数据')
+    p.add_argument('id', help='待办 ID（或前缀）')
+    p.add_argument('--action', required=True, choices=['done', 'undone', 'remove'])
 
     # remind
-    subparsers.add_parser('remind', help='查看待办提醒')
+    p = subparsers.add_parser('remind', help='查看待办提醒')
+    p.add_argument('--json', action='store_true', help='JSON 输出')
 
     args = parser.parse_args()
 
@@ -326,10 +339,9 @@ def main():
         parser.print_help()
         sys.exit(1)
 
-    config = load_config()
-    api_key = getattr(args, 'api_key', None) or os.environ.get('DEEPSEEK_API_KEY', '') or config.get('deepseekApiKey', '')
-
     if args.command == 'extract':
+        config = load_config()
+        api_key = getattr(args, 'api_key', None) or os.environ.get('DEEPSEEK_API_KEY', '') or config.get('deepseekApiKey', '')
         if not api_key:
             print('[ERROR] 缺少 DeepSeek API key')
             sys.exit(1)
@@ -356,6 +368,11 @@ def main():
 
     elif args.command == 'done':
         t = toggle_todo(args.id, 'done')
+        if args.json:
+            print(json.dumps({'success': bool(t), 'action': 'done', 'todo': t}, ensure_ascii=False, indent=2))
+            if not t:
+                sys.exit(1)
+            return
         if t:
             print(f'✅ 已标记完成: {t["task"]}')
         else:
@@ -363,6 +380,11 @@ def main():
 
     elif args.command == 'undone':
         t = toggle_todo(args.id, 'pending')
+        if args.json:
+            print(json.dumps({'success': bool(t), 'action': 'undone', 'todo': t}, ensure_ascii=False, indent=2))
+            if not t:
+                sys.exit(1)
+            return
         if t:
             print(f'🔄 已恢复: {t["task"]}')
         else:
@@ -370,13 +392,32 @@ def main():
 
     elif args.command == 'rm':
         t = delete_todo(args.id)
+        if args.json:
+            print(json.dumps({'success': bool(t), 'action': 'remove', 'todo': t}, ensure_ascii=False, indent=2))
+            if not t:
+                sys.exit(1)
+            return
         if t:
             print(f'🗑️ 已删除: {t["task"]}')
         else:
             print(f'未找到待办: {args.id}')
 
+    elif args.command == 'preview':
+        todo = find_todo(args.id)
+        print(json.dumps({
+            'success': bool(todo),
+            'dryRun': True,
+            'action': args.action,
+            'todo': todo,
+        }, ensure_ascii=False, indent=2))
+        if not todo:
+            sys.exit(1)
+
     elif args.command == 'remind':
         result = remind()
+        if args.json:
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            return
         print(f'\n📋 待办提醒 — {datetime.now(TZ).strftime("%Y-%m-%d %H:%M")}')
         print(f'   共 {result["total_pending"]} 项未完成\n')
         if result['high']:

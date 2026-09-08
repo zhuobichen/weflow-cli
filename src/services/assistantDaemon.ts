@@ -6,8 +6,8 @@ import { join } from 'path'
 import { existsSync, readFileSync, writeFileSync, rmSync, mkdirSync, appendFileSync, statSync } from 'fs'
 import os from 'os'
 import { spawn, type ChildProcess } from 'child_process'
-import { fileURLToPath } from 'url'
-import { dirname } from 'path'
+import { resolvePackageRoot } from '../utils/packageRoot.js'
+import { createPythonProcessEnv } from '../utils/pythonProcessEnv.js'
 
 const DIR = join(os.homedir(), '.weflow-cli')
 const PID_FILE = join(DIR, 'assistant.pid')
@@ -61,18 +61,20 @@ export function startDaemon(): { started: boolean; pid?: number; error?: string 
   const { alive, pid } = isDaemonAlive()
   if (alive) return { started: false, pid: pid!, error: `已在运行 (pid ${pid})` }
 
-  const __dirname = dirname(fileURLToPath(import.meta.url))
-  // dist/src/services -> dist/bin/weflow-cli
-  const entry = join(__dirname, '..', '..', 'bin', 'weflow-cli.js')
+  const packageRoot = resolvePackageRoot(import.meta.url)
+  const compiledEntry = join(packageRoot, 'dist', 'bin', 'weflow-cli.js')
+  const sourceEntry = join(packageRoot, 'bin', 'weflow-cli.ts')
+  const entry = existsSync(compiledEntry) ? compiledEntry : sourceEntry
 
   if (!existsSync(entry)) return { started: false, error: `入口不存在: ${entry}` }
 
   try {
     appendLog(`--- ${new Date().toLocaleString('zh-CN')} daemon starting ---`)
-    const child: ChildProcess = spawn(process.execPath, [entry, 'assistant', 'run'], {
+    const entryArgs = entry === sourceEntry ? ['--import', 'tsx', entry] : [entry]
+    const child: ChildProcess = spawn(process.execPath, [...entryArgs, 'assistant', 'run'], {
       detached: true,
       stdio: ['ignore', 'pipe', 'pipe'],
-      env: { ...process.env, [MARKER]: '1' },
+      env: createPythonProcessEnv({ [MARKER]: '1' }),
       windowsHide: true,
     })
 

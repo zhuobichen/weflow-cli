@@ -1525,7 +1525,7 @@ function exportFav() {{
             for (const [k,v] of Object.entries(serverState)) {{
                 if (!local[k]) local[k] = true;  // 只补充，不删除
             }}
-            // 本地���也同步到服务端
+            // 本地已读也同步到服务端
             for (const [k,v] of Object.entries(local)) {{
                 if (!(k in serverState)) {{
                     fetch('/api/read/toggle', {{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{id:k}})}}).catch(()=>{{}});

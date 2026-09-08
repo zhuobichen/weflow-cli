@@ -6,13 +6,14 @@ import { chatService } from './chatService.js'
 import type { AssistantMemory } from './assistantMemory.js'
 import { privacyGate } from './assistantPrivacy.js'
 import { existsSync, readFileSync, readdirSync } from 'fs'
-import { join, dirname } from 'path'
-import { fileURLToPath } from 'url'
+import { join } from 'path'
 import { execFile } from 'child_process'
 import { promisify } from 'util'
+import { createPythonProcessEnv, safeSubprocessError } from '../utils/pythonProcessEnv.js'
+import { resolvePackageRoot } from '../utils/packageRoot.js'
 
 const execFileAsync = promisify(execFile)
-const PKG_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
+const PKG_ROOT = resolvePackageRoot(import.meta.url)
 const BIZ_DAILY_DIR = join(PKG_ROOT, 'output', 'biz-daily')
 const VAULT_WIKI_DIR = join(PKG_ROOT, 'output', 'wechat-vault', 'Wiki', 'Concepts')
 
@@ -113,13 +114,48 @@ async function ensureDb(): Promise<void> {
   await chatService.connect()
 }
 
+interface TalkerCandidate {
+  username: string
+  displayName?: string | null
+}
+
+class ToolInputError extends Error {}
+
+export function boundedToolInteger(value: unknown, fallback: number, maximum: number, field = 'limit'): number {
+  if (value === undefined || value === null || value === '') return fallback
+  const parsed = Number(value)
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > maximum) {
+    throw new ToolInputError(`${field} 必须是 1-${maximum} 的整数`)
+  }
+  return parsed
+}
+
+export function resolveUniqueTalker(name: string, sessions: TalkerCandidate[]): string {
+  const query = name.trim()
+  if (!query) throw new ToolInputError('contact 不能为空')
+
+  const unique = (matches: TalkerCandidate[]) => [...new Set(matches.map(item => item.username))]
+  const usernameMatches = unique(sessions.filter(item => item.username === query))
+  if (usernameMatches.length === 1) return usernameMatches[0]
+
+  const exactNameMatches = unique(sessions.filter(item => item.displayName === query))
+  if (exactNameMatches.length === 1) return exactNameMatches[0]
+  if (exactNameMatches.length > 1) {
+    throw new ToolInputError(`会话名称“${query}”对应多个会话，请改用会话 ID`)
+  }
+
+  const partialMatches = unique(sessions.filter(item => item.displayName?.includes(query)))
+  if (partialMatches.length === 1) return partialMatches[0]
+  if (partialMatches.length > 1) {
+    throw new ToolInputError(`会话名称“${query}”匹配多个会话，请提供更完整名称或会话 ID`)
+  }
+  return query
+}
+
 /** 显示名 → username 解析 (会话表里两者都有) */
 async function resolveTalker(name: string): Promise<string> {
   const sessions = await chatService.listSessions(undefined, 300)
-  const hit = sessions.find(s =>
-    s.displayName === name || s.username === name ||
-    (s.displayName && s.displayName.includes(name)))
-  return hit ? hit.username : name
+  return resolveUniqueTalker(name, sessions)
 }
 
 export const TOOL_DEFS: ToolDef[] = [
@@ -290,12 +326,14 @@ export const TOOL_DEFS: ToolDef[] = [
   },
 ]
 
+export const MCP_READ_ONLY_TOOL_DEFS = TOOL_DEFS.filter(tool => tool.function.name !== 'save_memory')
+
 export async function executeTool(name: string, args: Record<string, any>, ctx: ToolContext): Promise<string> {
   try {
     switch (name) {
       case 'list_sessions': {
         await ensureDb()
-        const limit = Math.min(args.limit || 15, 30)
+        const limit = boundedToolInteger(args.limit, 15, 30)
         const sessions = await chatService.listSessions(undefined, limit)
         if (!sessions.length) return '(未查到会话, 数据库可能未连接)'
         return sessions.map(s =>
@@ -304,7 +342,7 @@ export async function executeTool(name: string, args: Record<string, any>, ctx: 
       case 'get_messages': {
         const contact = String(args.contact || '')
         if (!contact) return '(缺少 contact 参数)'
-        const limit = Math.min(args.limit || 20, 50)
+        const limit = boundedToolInteger(args.limit, 20, 50)
         const talker = await resolveTalker(contact)
         const msgs = await chatService.getMessages(talker, limit)
         if (!msgs.length) return `(没找到「${contact}」的消息)`
@@ -317,7 +355,7 @@ export async function executeTool(name: string, args: Record<string, any>, ctx: 
         await ensureDb()
         const keyword = String(args.keyword || '')
         if (!keyword) return '(缺少 keyword 参数)'
-        const limit = Math.min(args.limit || 8, 15)
+        const limit = boundedToolInteger(args.limit, 8, 15)
         const r = await chatService.getFavorites({ keyword, limit })
         if (!r.success || !r.favorites?.length) {
           return r.error ? `(查询失败: ${r.error})` : `(收藏中未搜到「${keyword}」)`
@@ -332,7 +370,7 @@ export async function executeTool(name: string, args: Record<string, any>, ctx: 
         await ensureDb()
         const keyword = String(args.keyword || '')
         if (!keyword) return '(缺少 keyword 参数)'
-        const maxChars = Math.min(args.max_chars || 3000, 6000)
+        const maxChars = boundedToolInteger(args.max_chars, 3000, 6000, 'max_chars')
         const r = await chatService.getFavorites({ keyword, limit: 5 })
         if (!r.success || !r.favorites?.length) {
           return `(收藏中未找到「${keyword}」)`
@@ -394,7 +432,7 @@ export async function executeTool(name: string, args: Record<string, any>, ctx: 
           list = list.filter(a =>
             (a.title || '').toLowerCase().includes(kw) || (a.summary || '').toLowerCase().includes(kw))
         }
-        const limit = Math.min(args.limit || 15, 30)
+        const limit = boundedToolInteger(args.limit, 15, 30)
         if (!list.length) return `(${date} 日报共 ${all.length} 篇, 过滤后无匹配)`
         const byTopic: Record<string, number> = {}
         for (const a of all) byTopic[a.topic] = (byTopic[a.topic] || 0) + 1
@@ -413,7 +451,7 @@ export async function executeTool(name: string, args: Record<string, any>, ctx: 
           const d = r.data!
           return `朋友圈统计: 总动态 ${d.totalPosts} 条, 发布过动态的好友 ${d.totalFriends} 人${d.myPosts != null ? `, 用户自己发过 ${d.myPosts} 条` : ''}`
         }
-        const limit = Math.min(args.limit || 10, 20)
+        const limit = boundedToolInteger(args.limit, 10, 20)
         const r = await chatService.getSnsTimeline({ limit })
         if (!r.success || !r.timeline?.length) return r.error ? `(朋友圈查询失败: ${r.error})` : '(朋友圈暂无缓存数据)'
         return `最新 ${r.timeline.length} 条朋友圈:\n` + r.timeline.slice(0, limit).map((p: any) => {
@@ -448,8 +486,8 @@ export async function executeTool(name: string, args: Record<string, any>, ctx: 
           return `书架共 ${books.length} 本, 在读 ${reading.length} 本:\n` +
             (reading.length ? reading.slice(0, 10).map((b: any) =>
               `· ${b.title} (${b.author}) — 已读 ${b.progress || 0}%`).join('\n') : books.slice(0, 10).map((b: any) => `· ${b.title}`).join('\n'))
-        } catch (e: any) {
-          return `(微信读书接口失败: ${String(e.message).slice(0, 100)})`
+        } catch {
+          return '(微信读书接口失败，请检查网络和本地配置)'
         }
       }
       case 'get_todos': {
@@ -457,14 +495,17 @@ export async function executeTool(name: string, args: Record<string, any>, ctx: 
         try {
           const { getPythonCommand } = await import('../utils/python.js')
           const py = await getPythonCommand()
-          const { stdout } = await execFileAsync(py, [join(PKG_ROOT, 'scripts', 'extract_todos.py'), 'list', '--status', status, '--json'], { timeout: 30_000 })
+          const { stdout } = await execFileAsync(py, [join(PKG_ROOT, 'scripts', 'extract_todos.py'), 'list', '--status', status, '--json'], {
+            timeout: 30_000,
+            env: createPythonProcessEnv(),
+          })
           const todos = JSON.parse(stdout.trim())
           if (!Array.isArray(todos) || !todos.length) return `(没有${status === 'done' ? '已完成' : '待办'}任务)`
           return `${status === 'done' ? '已完成' : '待办'} ${todos.length} 项:\n` +
             todos.slice(0, 15).map((t: any) =>
               `· [${t.urgency || '中'}] ${t.task || t.content || t.text || t.title}${t.deadline && t.deadline !== '未提及' ? ` (截止 ${t.deadline})` : ''}`).join('\n')
-        } catch (e: any) {
-          return `(待办查询失败: ${String(e.message || e).split('\n')[0].slice(0, 100)})`
+        } catch (error) {
+          return `(${safeSubprocessError(error, '待办查询失败')})`
         }
       }
       case 'search_knowledge': {
@@ -501,7 +542,8 @@ export async function executeTool(name: string, args: Record<string, any>, ctx: 
       default:
         return `(未知工具: ${name})`
     }
-  } catch (e: any) {
-    return `(工具执行失败: ${e.message?.slice(0, 100)})`
+  } catch (error) {
+    if (error instanceof ToolInputError) return `(参数错误: ${error.message})`
+    return '(工具执行失败，请检查本地配置或运行状态)'
   }
 }

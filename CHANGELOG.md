@@ -25,6 +25,35 @@ All notable user-facing changes are recorded here. This project follows [Semanti
 - Avoid printing database salts, account identifiers, and message paths in `dbkey` diagnostics.
 - Added `daily favorites` commands to synchronize and manage reader favorites as local files.
 - Added `vault promote ideas` and `vault promote all`; both default to no-AI local generation and require explicit opt-in for AI outputs.
+- Keep the default MCP surface read-only and require unique conversation-name resolution with bounded query limits.
+- Require preview and explicit confirmation for machine-driven messaging, configuration, access-control, todo, assistant lifecycle, MCP configuration, key reset, and Vault synchronization changes.
+- Require preview and explicit confirmation for Vault initialization, semantic indexing, knowledge pipelines, and report generation; expose no-AI/source filtering and strict bounded parameters for Agent use.
+- Validate local-reader ports before process startup and open browser URLs without shell interpolation.
+- Restrict MCP article fetching to bounded HTTPS requests on the exact WeChat article host, including redirect revalidation.
+- Validate outbound media files and remove full local paths from message previews and audit records.
+- Resolve bundled Python scripts consistently from both source and compiled package layouts, and propagate worker failures through nonzero exit codes.
+- Remove the ineffective `mcp-config --port` option; the MCP server uses stdio and does not bind a network port.
+- Reject absolute, non-Markdown, symlink-escaping, and parent-traversal entries in daily favorite state before linking or copying files.
+- Add preview, confirmation, and content-free JSON results to Vault content mutations, WeRead synchronization, daily favorites, and personal consumption reports.
+- Add preview and confirmation to Wiki compilation and AI todo extraction; keep process-memory key capture explicitly human-gated.
+- Add a machine-safe preview for database-key capture and require an interactive terminal for execution.
+- Add a content-free initialization preview while keeping actual database discovery and key capture human-gated.
+- Require preview and confirmation before Vault RAG reads local knowledge or sends selected context to AI.
+- Require preview and confirmation for semantic search and RAG chat, and keep their private inputs out of child-process arguments.
+- Keep report conversation selections and NT scan roots out of child-process arguments, and clear unrelated internal values from long-lived worker environments.
+- Require preview and confirmation for evidence review, with content-free and path-free machine results.
+
+### Agent interfaces
+
+- Added `capabilities --json`, redacted configuration status, structured export results, reader status, diagnostics, access-list JSON, and no-AI daily JSON output.
+- Added the versioned `weflow-message/v1` contract to CLI exports and the read-only `wechat.export_messages` MCP tool for downstream projects.
+- Added bounded local evidence-package and explicitly authorized evidence-review commands.
+- Applied message date ranges before pagination and preserved unknown message types in downstream contracts.
+- Added content-free JSON summaries for account scanning and assistant logs, plus structured todo reminders.
+- Added preview and confirmed background startup for Agent-controlled local daily readers.
+- Apply the same startup confirmation to the legacy `fav-server` compatibility command.
+- Require explicit confirmation for machine-driven daily generation, including no-AI runs, while preserving human and scheduled non-JSON commands.
+- Add content-free previews for configuration, key, access-list, and audit-log clearing before confirmed deletion.
 
 ### Documentation and packaging
 

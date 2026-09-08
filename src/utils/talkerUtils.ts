@@ -13,7 +13,11 @@ import type { ChatSession } from '../types.js'
  *
  * @throws {Error} 当输入无法解析到任何会话时
  */
-export async function resolveTalker(input: string): Promise<string> {
+export interface ResolveTalkerOptions {
+  interactive?: boolean
+}
+
+export async function resolveTalker(input: string, options: ResolveTalkerOptions = {}): Promise<string> {
   // 1. 已知格式直接返回
   if (input.startsWith('wxid_') || input.includes('@chatroom') || input.includes('@openim')) {
     return input
@@ -48,7 +52,15 @@ export async function resolveTalker(input: string): Promise<string> {
     return sessions[0].username
   }
 
-  // 多个匹配 — 交互选择
+  if (options.interactive === false) {
+    const candidates = sessions.slice(0, 20).map(session => ({
+      username: session.username,
+      displayName: session.displayName || '',
+    }))
+    throw new Error(`会话名称不唯一，请使用会话 ID。候选: ${JSON.stringify(candidates)}`)
+  }
+
+  // 多个匹配 - 交互选择
   const choices = sessions.slice(0, 20).map(s => ({
     name: `${s.displayName}  (${s.username})`,
     value: s.username,

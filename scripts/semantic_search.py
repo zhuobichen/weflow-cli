@@ -407,7 +407,7 @@ def main():
 
     # search
     p = subparsers.add_parser('search')
-    p.add_argument('query')
+    p.add_argument('query', nargs='?')
     p.add_argument('--api-key', help='DeepSeek API key（向量搜索时需要，关键词 fallback 不需要）')
     p.add_argument('--top-k', type=int, default=10)
 
@@ -420,7 +420,11 @@ def main():
     elif args.command == 'update':
         result = build_index(api_key, full=False)
     elif args.command == 'search':
-        result = search(args.query, api_key, top_k=args.top_k)
+        query = args.query or os.environ.get('WEFLOW_SEARCH_QUERY', '')
+        if not query:
+            result = {"error": "missing search query"}
+        else:
+            result = search(query, api_key, top_k=args.top_k)
     else:
         result = {"error": f"未知命令: {args.command}"}
 

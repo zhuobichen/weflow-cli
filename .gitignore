@@ -36,5 +36,8 @@ scripts/regen_wsl_keys.mjs
 !docs/PROJECT_STATE.md
 !docs/DECISIONS.md
 !docs/EVIDENCE_GUIDE.md
+!docs/DATA_CONTRACT.md
+!docs/AI_INTERFACE.md
+!docs/PARTNERS.md
 .DS_Store
 Thumbs.db
