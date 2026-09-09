@@ -128,6 +128,10 @@ test('local reader commands reject unsafe ports before starting a process', () =
     const invalidStats = runCli(home, ['daily-stats', '--days', '999999', '--json'])
     assert.equal(invalidStats.status, 1, invalidStats.stderr || invalidStats.stdout)
     assert.equal(JSON.parse(invalidStats.stdout).code, 'INVALID_ARGUMENT')
+
+    const missingReaderDate = runCli(home, ['daily-server', '--date', '2099-01-01', '--port', '18765', '--yes', '--json'])
+    assert.equal(missingReaderDate.status, 1, missingReaderDate.stderr || missingReaderDate.stdout)
+    assert.equal(JSON.parse(missingReaderDate.stdout).code, 'DAILY_READER_DATE_NOT_FOUND')
   } finally {
     rmSync(home, { recursive: true, force: true })
   }

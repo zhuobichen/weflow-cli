@@ -115,6 +115,56 @@ async function openLocalUrl(url: string): Promise<void> {
   child.unref()
 }
 
+async function getDailyReaderStatus(port: number): Promise<{ running: boolean; date: string | null }> {
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/api/status`, { signal: AbortSignal.timeout(500) })
+    const status = await response.json() as { ok?: boolean; service?: string; date?: string }
+    const running = response.ok && status.ok === true && status.service === 'weflow-daily-reader'
+    return { running, date: running && status.date ? status.date : null }
+  } catch {
+    return { running: false, date: null }
+  }
+}
+
+async function startDetachedDailyReader(script: string, date: string, port: number): Promise<{
+  success: boolean
+  started: boolean
+  alreadyRunning?: boolean
+  code?: string
+}> {
+  const existing = await getDailyReaderStatus(port)
+  if (existing.running) {
+    if (existing.date === date) return { success: true, started: false, alreadyRunning: true }
+    return { success: false, started: false, code: 'DAILY_READER_PORT_IN_USE' }
+  }
+
+  const dateDir = join(resolvePackageRoot(), 'output', 'biz-daily', date)
+  if (!existsSync(dateDir)) return { success: false, started: false, code: 'DAILY_READER_DATE_NOT_FOUND' }
+
+  const { spawn } = await import('child_process')
+  const child = spawn(getPythonCommand(), [script, '--date', date, '--port', String(port)], {
+    detached: true,
+    stdio: 'ignore',
+    windowsHide: true,
+    env: pythonProcessEnv(),
+  })
+  let spawnFailed = false
+  child.once('error', () => { spawnFailed = true })
+
+  for (let attempt = 0; attempt < 30; attempt++) {
+    if (spawnFailed || child.exitCode !== null) break
+    const status = await getDailyReaderStatus(port)
+    if (status.running && status.date === date) {
+      child.unref()
+      return { success: true, started: true }
+    }
+    await new Promise(resolve => setTimeout(resolve, 100))
+  }
+
+  if (child.exitCode === null && !child.killed) child.kill()
+  return { success: false, started: false, code: 'DAILY_READER_START_FAILED' }
+}
+
 /**
  * 尝试从 WeFlow 桌面版配置中读取已保存的密钥
  */
@@ -3948,15 +3998,16 @@ program
         process.exit(1)
       }
       if (opts.json) {
-        const child = spawn(getPythonCommand(), args, {
-          detached: true,
-          stdio: 'ignore',
-          windowsHide: true,
-          env: pythonProcessEnv(),
-        })
-        child.unref()
-        if (opts.open) await openLocalUrl(`http://localhost:${port}`)
-        console.log(JSON.stringify({ success: true, action: 'daily-reader.start', started: true, date: opts.date, port, openedBrowser: Boolean(opts.open) }))
+        const result = await startDetachedDailyReader(script, opts.date, port)
+        if (result.success && opts.open) await openLocalUrl(`http://localhost:${port}`)
+        console.log(JSON.stringify({
+          ...result,
+          action: 'daily-reader.start',
+          date: opts.date,
+          port,
+          openedBrowser: result.success && Boolean(opts.open),
+        }))
+        if (!result.success) process.exit(1)
         return
       }
       console.log(chalk.cyan(`⭐ 启动收藏服务器 (${opts.date})\n`))
@@ -5125,15 +5176,16 @@ program
       process.exit(1)
     }
     if (opts.json) {
-      const child = spawn(getPythonCommand(), [favServer, '--date', date, '--port', String(port)], {
-        detached: true,
-        stdio: 'ignore',
-        windowsHide: true,
-        env: pythonProcessEnv(),
-      })
-      child.unref()
-      if (opts.open) await openLocalUrl(`http://localhost:${port}`)
-      console.log(JSON.stringify({ success: true, action: 'daily-reader.start', started: true, date, port, openedBrowser: Boolean(opts.open) }))
+      const result = await startDetachedDailyReader(favServer, date, port)
+      if (result.success && opts.open) await openLocalUrl(`http://localhost:${port}`)
+      console.log(JSON.stringify({
+        ...result,
+        action: 'daily-reader.start',
+        date,
+        port,
+        openedBrowser: result.success && Boolean(opts.open),
+      }))
+      if (!result.success) process.exit(1)
       return
     }
     console.log(chalk.cyan(`⭐ 启动日报阅读器\n`))

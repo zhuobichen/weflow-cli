@@ -53,7 +53,7 @@ Date-bounded message exports and `wechat.export_messages` page through the selec
 - `search` and `chat` use the same preview/confirmation boundary. Queries, questions, and optional conversation restrictions are inherited through the worker environment instead of appearing in process arguments; machine callers cannot start interactive RAG chat.
 - `daily-server --status --json` remains read-only. Machine startup uses `daily-server --dry-run --json` followed by `daily-server --yes --json`; the confirmed process is detached and remains bound to loopback. The legacy `fav-server` compatibility entry enforces the same preview and confirmation rules.
 
-Documentation was synchronized with the `1.5.1` source baseline on 2026-09-06. Command behavior is defined by `bin/weflow-cli.ts`; release packages can lag behind the GitHub source until published.
+Documentation was synchronized with the `1.5.1` source baseline on 2026-09-09. Command behavior is defined by `bin/weflow-cli.ts`; detached reader startup waits for service readiness, and release packages can lag behind the GitHub source until published.
 
 ## Active Constraints
 
