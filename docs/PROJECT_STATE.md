@@ -68,6 +68,7 @@ Documentation was synchronized with the `1.5.1` source baseline on 2026-09-09. C
 - `vault init`, semantic-index construction, the knowledge pipeline, and report generators require preview and confirmation for machine execution. Preview JSON contains counts and behavior flags but omits local paths, conversation names, and generated content.
 - Automatic data-directory discovery checks common user locations only. Cross-drive name search requires `init --search-drives`; structural disk search requires `init --full-scan`. Both can be slow on large, removable, or network-attached volumes.
 - Dependency audit findings must be reviewed before dependency upgrades; do not run breaking `npm audit fix --force` without validation.
+- The WCDB native query entry point has no parameter-binding ABI. Calls that supply parameters are rejected rather than falling back to interpolated SQL; existing internal callers are unchanged.
 
 ## Current Priorities
 

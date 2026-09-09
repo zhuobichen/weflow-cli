@@ -12,6 +12,7 @@ import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import type { Message } from '../src/types.js'
 import { DbPathService } from '../src/core/dbPathService.js'
+import { WcdbCore } from '../src/core/wcdbCore.js'
 import { createWeFlowEnvelope } from '../src/services/messageContract.js'
 import { createPythonProcessEnv, safeSubprocessError } from '../src/utils/pythonProcessEnv.js'
 
@@ -84,6 +85,7 @@ test('does not forward API keys in Python child-process arguments', () => {
   const cliSource = readFileSync(join(process.cwd(), 'bin', 'weflow-cli.ts'), 'utf8')
   const pipelineSource = readFileSync(join(process.cwd(), 'scripts', 'pipeline.py'), 'utf8')
   const ntCoreSource = readFileSync(join(process.cwd(), 'src', 'core', 'ntCore.ts'), 'utf8')
+  const wcdbCoreSource = readFileSync(join(process.cwd(), 'src', 'core', 'wcdbCore.ts'), 'utf8')
   const exportSource = readFileSync(join(process.cwd(), 'src', 'services', 'exportService.ts'), 'utf8')
 
   assert.doesNotMatch(cliSource, /(?:args|a)\.push\(['"]--api-key['"]/)
@@ -94,6 +96,7 @@ test('does not forward API keys in Python child-process arguments', () => {
   assert.doesNotMatch(exportSource, /['"]--(?:key|salt|passphrase|own-wxid)['"]/)
   assert.doesNotMatch(ntCoreSource, /args\.push\(['"]--(?:keyword|usernames)['"]/)
   assert.doesNotMatch(exportSource, /args\.push\(['"]--(?:name|out|cache-dir|account-dir|date)['"]/)
+  assert.match(wcdbCoreSource, /PARAMETER_BINDING_UNSUPPORTED/)
   assert.doesNotMatch(cliSource, /args\.push\((?:query|question)/)
   assert.doesNotMatch(cliSource, /args\.push\(['"]--talker['"]/)
 })
@@ -137,6 +140,14 @@ test('subprocess errors never repeat command arguments', () => {
   assert.equal(formatted, 'worker failed (exit 7)')
   assert.equal(formatted.includes('synthetic-secret'), false)
   assert.equal(formatted.includes('worker.py'), false)
+})
+
+test('WCDB rejects parameters until the native binding ABI supports them', async () => {
+  const core = new WcdbCore() as any
+  core.initialized = true
+  core.handle = 1
+  const result = await core.execQuery('contact', null, 'SELECT 1', ['untrusted'])
+  assert.deepEqual(result, { success: false, error: 'PARAMETER_BINDING_UNSUPPORTED' })
 })
 
 test('syncs daily favorites without touching other report files', () => {

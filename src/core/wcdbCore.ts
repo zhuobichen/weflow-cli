@@ -3586,6 +3586,9 @@ export class WcdbCore {
     if (!this.ensureReady()) {
       return { success: false, error: 'WCDB 未连接' }
     }
+    if (params && params.length > 0) {
+      return { success: false, error: 'PARAMETER_BINDING_UNSUPPORTED' }
+    }
     const startedAt = Date.now()
     try {
       if (!this.wcdbExecQuery) return { success: false, error: '接口未就绪' }

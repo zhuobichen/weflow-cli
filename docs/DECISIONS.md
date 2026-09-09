@@ -234,6 +234,16 @@ Commands that create or replace local knowledge artifacts, build semantic indexe
 
 **Consequences:** Vault content mutations, Vault RAG, semantic search, RAG chat, evidence review, Wiki compilation, todo extraction, daily-favorite changes, semantic indexing, knowledge pipelines, and report generators expose `--dry-run --json` and require `--yes --json` for machine execution. Interactive key capture and interactive RAG chat expose previews but reject JSON execution. Preview mode does not read private content, call external services, scan processes, or write files; structured status results omit local paths, selected names, logs, and generated content. Queries, questions, and conversation restrictions passed to Python workers use environment inheritance instead of process arguments.
 
+## D-026: Reject unsupported WCDB query parameters
+
+**Status:** Active
+
+The bundled WCDB DLL exposes a raw SQL query ABI without parameter binding. `execQuery` rejects non-empty parameter arrays until the native interface can be upgraded and verified.
+
+**Reason:** Silently ignoring parameters and executing the original SQL would create a misleading and unsafe API contract for future callers.
+
+**Consequences:** Existing fixed internal queries are unchanged. A future parameterized implementation requires a native ABI change, compatibility testing, and a separate security review.
+
 ## Decision Template
 
 
