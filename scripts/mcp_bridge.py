@@ -23,7 +23,8 @@ except ImportError:
     sys.exit(1)
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _utils import load_config, decrypt_lock, parse_frontmatter
+from _utils import (load_config, decrypt_lock, parse_frontmatter,
+                    open_message_shards, decode_message_content)
 
 OUTPUT_ROOT = 'output'
 TZ = timezone(timedelta(hours=8))
@@ -72,10 +73,23 @@ def get_biz_keys(config):
     biz_db = os.path.join(msg_dir, 'biz_message_0.db')
     biz_key_enc = config.get('bizKey', '')
     biz_salt = config.get('bizSalt', '')
-    if biz_key_enc and biz_salt:
-        biz_key = decrypt_lock(biz_key_enc)
-    else:
-        return {'error': '缺少 biz_message_0.db 密钥，请运行 python scripts/nt_decrypt.py scan --json'}
+    biz_key = decrypt_lock(biz_key_enc) if biz_key_enc else ''
+
+    if not (biz_key and biz_salt):
+        # Every database key derives from the master key, so a missing bizKey
+        # is not fatal any more.
+        from nt_keys import derive_key_or_none
+        master = decrypt_lock(config.get('decryptKey', '')) if config.get('decryptKey') else ''
+        derived = derive_key_or_none(master, biz_db) if master else None
+        if derived:
+            biz_key = derived
+            biz_salt = open(biz_db, 'rb').read(16).hex()
+        if not contact_key and master and os.path.isfile(contact_db):
+            contact_key = derive_key_or_none(master, contact_db) or ''
+            contact_salt = open(contact_db, 'rb').read(16).hex()
+
+    if not (biz_key and biz_salt):
+        return {'error': '缺少 biz_message_0.db 密钥，且无法从主密钥派生（请确认配置里有 decryptKey）'}
     return {
         'biz_db': biz_db, 'biz_key': biz_key, 'biz_salt': biz_salt,
         'contact_db': contact_db, 'contact_key': contact_key, 'contact_salt': contact_salt,
@@ -110,39 +124,54 @@ def cmd_list_sessions(args):
     if err:
         return err
 
-    c = conn.cursor()
+    conn.close()
     limit = args.limit or 30
     now = datetime.now(TZ)
     start_ts = int((now - timedelta(days=90)).timestamp())
     end_ts = int(now.timestamp())
 
-    try:
-        c.execute("SELECT user_name FROM Name2Id WHERE is_session = 1")
-        sessions = [r[0] for r in c.fetchall()]
-    except:
-        c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'Msg_%'")
-        sessions = [r[0] for r in c.fetchall()]
-
-    results = []
-    for talker in sessions:
-        tbl = f"Msg_{hashlib.md5(talker.encode()).hexdigest()}"
+    # One conversation can be split over several shards, so scan them all.
+    per_shard = []
+    for sconn, _spath in open_message_shards(load_config()):
         try:
-            c.execute(f'SELECT COUNT(*), MAX(create_time) FROM "{tbl}" WHERE create_time >= ? AND create_time < ?', (start_ts, end_ts))
-            count, last_ts = c.fetchone()
-            if count > 0:
-                name = name_map.get(talker, talker)
-                last_time = datetime.fromtimestamp(last_ts, tz=TZ).strftime('%m-%d %H:%M')
-                results.append({
-                    "name": name,
-                    "wxid": talker,
-                    "count": count,
-                    "last_active": last_time,
-                })
-        except:
-            pass
+            c = sconn.cursor()
+            try:
+                c.execute("SELECT user_name FROM Name2Id WHERE is_session = 1")
+                sessions = [r[0] for r in c.fetchall()]
+            except Exception:
+                c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'Msg_%'")
+                sessions = [r[0] for r in c.fetchall()]
 
-    conn.close()
-    results.sort(key=lambda x: x['count'], reverse=True)
+            for talker in sessions:
+                tbl = f"Msg_{hashlib.md5(talker.encode()).hexdigest()}"
+                try:
+                    c.execute(f'SELECT COUNT(*), MAX(create_time) FROM "{tbl}" WHERE create_time >= ? AND create_time < ?', (start_ts, end_ts))
+                    count, last_ts = c.fetchone()
+                    if count > 0:
+                        per_shard.append({
+                            "name": name_map.get(talker, talker),
+                            "wxid": talker,
+                            "count": count,
+                            "last_active": datetime.fromtimestamp(last_ts, tz=TZ).strftime('%m-%d %H:%M'),
+                        })
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        finally:
+            try: sconn.close()
+            except Exception: pass
+
+    merged = {}
+    for r in per_shard:
+        cur = merged.get(r['wxid'])
+        if cur is None:
+            merged[r['wxid']] = r
+        else:
+            cur['count'] += r['count']
+            if r['last_active'] > cur['last_active']:
+                cur['last_active'] = r['last_active']
+    results = sorted(merged.values(), key=lambda x: x['count'], reverse=True)
     return {"sessions": results[:limit], "total": len(results)}
 
 
@@ -161,62 +190,64 @@ def cmd_search_messages(args):
     start_ts = int((now - timedelta(days=days)).timestamp())
     end_ts = int(now.timestamp())
 
-    c = conn.cursor()
-    try:
-        c.execute("SELECT user_name FROM Name2Id WHERE is_session = 1")
-        sessions = [r[0] for r in c.fetchall()]
-    except:
-        c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'Msg_%'")
-        sessions = [r[0] for r in c.fetchall()]
-
-    # Filter by talker if specified
-    if talker_query:
-        filtered = []
-        for s in sessions:
-            name = name_map.get(s, s)
-            if talker_query in name or talker_query in s:
-                filtered.append(s)
-        sessions = filtered
-        if not sessions:
-            conn.close()
-            return {"results": [], "message": f"未找到联系人: {talker_query}"}
-
-    results = []
-    for talker in sessions[:50]:  # Limit scan scope
-        tbl = f"Msg_{hashlib.md5(talker.encode()).hexdigest()}"
-        try:
-            c.execute(f'SELECT COUNT(*) FROM sqlite_master WHERE name="{tbl}"')
-            if c.fetchone()[0] == 0:
-                continue
-
-            c.execute(f'''
-                SELECT create_time, real_sender_id, message_content
-                FROM "{tbl}"
-                WHERE create_time >= ? AND create_time < ?
-                ORDER BY create_time DESC
-            ''', (start_ts, end_ts))
-
-            for ts, sender, content in c.fetchall():
-                if not content or not isinstance(content, str):
-                    continue
-                if keyword and keyword.lower() not in content.lower():
-                    continue
-                sender_name = name_map.get(sender, sender) if sender else name_map.get(talker, talker)
-                dt = datetime.fromtimestamp(ts, tz=TZ)
-                results.append({
-                    "talker": name_map.get(talker, talker),
-                    "sender": sender_name,
-                    "time": dt.strftime('%Y-%m-%d %H:%M'),
-                    "content": content[:500],
-                })
-                if len(results) >= limit:
-                    break
-        except:
-            pass
-        if len(results) >= limit:
-            break
-
     conn.close()
+    results = []
+    # Scan every shard: a conversation's messages are rotated across files.
+    for sconn, _spath in open_message_shards(load_config()):
+        try:
+            c = sconn.cursor()
+            try:
+                c.execute("SELECT user_name FROM Name2Id WHERE is_session = 1")
+                sessions = [r[0] for r in c.fetchall()]
+            except Exception:
+                c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'Msg_%'")
+                sessions = [r[0] for r in c.fetchall()]
+
+            if talker_query:
+                sessions = [t for t in sessions
+                            if talker_query in name_map.get(t, t) or talker_query in t]
+
+            for talker in sessions[:50]:  # Limit scan scope
+                tbl = f"Msg_{hashlib.md5(talker.encode()).hexdigest()}"
+                try:
+                    c.execute(f'SELECT COUNT(*) FROM sqlite_master WHERE name="{tbl}"')
+                    if c.fetchone()[0] == 0:
+                        continue
+
+                    c.execute(f'''
+                        SELECT create_time, real_sender_id, message_content
+                        FROM "{tbl}"
+                        WHERE create_time >= ? AND create_time < ?
+                        ORDER BY create_time DESC
+                    ''', (start_ts, end_ts))
+
+                    for ts, sender, raw_content in c.fetchall():
+                        # zstd-compressed payloads must be unwrapped first;
+                        # skipping non-str content silently dropped them.
+                        content = decode_message_content(raw_content)
+                        if not content:
+                            continue
+                        if keyword and keyword.lower() not in content.lower():
+                            continue
+                        sender_name = name_map.get(sender, sender) if sender else name_map.get(talker, talker)
+                        dt = datetime.fromtimestamp(ts, tz=TZ)
+                        results.append({
+                            "talker": name_map.get(talker, talker),
+                            "sender": sender_name,
+                            "time": dt.strftime('%Y-%m-%d %H:%M'),
+                            "content": content[:500],
+                        })
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        finally:
+            try: sconn.close()
+            except Exception: pass
+
+    results.sort(key=lambda r: r['time'], reverse=True)
+    if talker_query and not results:
+        return {"results": [], "message": f"未找到联系人: {talker_query}"}
     results.sort(key=lambda x: x['time'], reverse=True)
     return {"results": results, "total": len(results), "keyword": keyword, "days": days}
 
@@ -293,39 +324,45 @@ def cmd_get_chat_stats(args):
     start_ts = int(start_date.timestamp())
     end_ts = int(now.timestamp())
 
-    c = conn.cursor()
-    try:
-        c.execute("SELECT user_name FROM Name2Id WHERE is_session = 1")
-        sessions = [r[0] for r in c.fetchall()]
-    except:
-        c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'Msg_%'")
-        sessions = [r[0] for r in c.fetchall()]
-
+    conn.close()
     total_sent = 0
     total_recv = 0
     talker_counts = {}
     hour_dist = [0] * 24
 
-    for talker in sessions:
-        tbl = f"Msg_{hashlib.md5(talker.encode()).hexdigest()}"
+    for sconn, _spath in open_message_shards(load_config()):
         try:
-            c.execute(f'SELECT COUNT(*) FROM sqlite_master WHERE name="{tbl}"')
-            if c.fetchone()[0] == 0:
-                continue
-            c.execute(f'SELECT create_time FROM "{tbl}" WHERE create_time >= ? AND create_time < ?', (start_ts, end_ts))
-            count = 0
-            for (ts,) in c.fetchall():
-                count += 1
-                dt = datetime.fromtimestamp(ts, tz=TZ)
-                hour_dist[dt.hour] += 1
-            if count > 0:
-                name = name_map.get(talker, talker)
-                talker_counts[name] = talker_counts.get(name, 0) + count
-                total_recv += count  # Approximate
-        except:
-            pass
+            c = sconn.cursor()
+            try:
+                c.execute("SELECT user_name FROM Name2Id WHERE is_session = 1")
+                sessions = [r[0] for r in c.fetchall()]
+            except Exception:
+                c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'Msg_%'")
+                sessions = [r[0] for r in c.fetchall()]
 
-    conn.close()
+            for talker in sessions:
+                tbl = f"Msg_{hashlib.md5(talker.encode()).hexdigest()}"
+                try:
+                    c.execute(f'SELECT COUNT(*) FROM sqlite_master WHERE name="{tbl}"')
+                    if c.fetchone()[0] == 0:
+                        continue
+                    c.execute(f'SELECT create_time FROM "{tbl}" WHERE create_time >= ? AND create_time < ?', (start_ts, end_ts))
+                    count = 0
+                    for (ts,) in c.fetchall():
+                        count += 1
+                        dt = datetime.fromtimestamp(ts, tz=TZ)
+                        hour_dist[dt.hour] += 1
+                    if count > 0:
+                        name = name_map.get(talker, talker)
+                        talker_counts[name] = talker_counts.get(name, 0) + count
+                        total_recv += count  # Approximate
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        finally:
+            try: sconn.close()
+            except Exception: pass
 
     # Top talkers
     top_talkers = sorted(talker_counts.items(), key=lambda x: x[1], reverse=True)[:10]

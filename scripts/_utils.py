@@ -407,14 +407,115 @@ def decrypt_lock(locked_str: str) -> str:
 def get_db_config(config=None):
     if config is None:
         config = load_config()
+    nt_db = config.get('ntDbPath', '')
+    master_key = decrypt_lock(config.get('decryptKey', '')) if config.get('decryptKey') else ''
+
+    # WeChat rotates messages across message_N.db, so a conversation's history
+    # can be split over several files. The master key derives every shard's key.
+    shards = []
+    session_db = ''
+    session_key = ''
+    if nt_db and master_key:
+        try:
+            from nt_keys import discover_message_shards, session_db_path, derive_key_or_none
+            shards = discover_message_shards(nt_db, master_key)
+            session_db = session_db_path(nt_db)
+            session_key = derive_key_or_none(master_key, session_db) or ''
+        except Exception:
+            shards = []
+
     return {
-        'nt_db': config.get('ntDbPath', ''),
+        'nt_db': nt_db,
         'nt_key': decrypt_lock(config.get('ntKey', '')),
         'nt_salt': config.get('ntSalt', ''),
         'contact_db': config.get('contactDbPath', ''),
         'contact_key': decrypt_lock(config.get('contactKey', '')),
         'contact_salt': config.get('contactSalt', ''),
+        'master_key': master_key,
+        # [(path, key), ...] for every message shard; empty when no master key
+        'shards': shards,
+        'session_db': session_db,
+        'session_key': session_key,
     }
+
+
+def decode_message_content(value):
+    """Message text, transparently unwrapping zstd-compressed payloads.
+
+    WeChat 4.x stores larger messages (appmsg XML, long text) as zstd blobs, so
+    anything that treats message_content as plain text silently skips them.
+    """
+    if value is None:
+        return ''
+    if isinstance(value, str):
+        # Plain text arrives as str; blobs come back as bytes-like.
+        if not any(ord(ch) > 255 for ch in value):
+            try:
+                value = value.encode('latin-1')
+            except Exception:
+                return value
+        else:
+            return value
+    try:
+        raw = bytes(value)
+    except Exception:
+        return ''
+    if raw[:4] == b'\x28\xb5\x2f\xfd':
+        try:
+            import zstandard
+            raw = zstandard.ZstdDecompressor().decompress(raw)
+        except Exception:
+            return ''
+    return raw.decode('utf-8', 'ignore')
+
+
+def collect_across_shards(config, fn):
+    """Run fn(conn) on every message shard and concatenate the list results.
+
+    WeChat splits one conversation's history across message_0..N.db, so any
+    collector that only sees one file silently misses the rest.
+    """
+    out = []
+    for conn, _path in open_message_shards(config):
+        try:
+            result = fn(conn)
+            if result:
+                out.extend(result)
+        except Exception:
+            continue
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+    return out
+
+
+def open_message_shards(config):
+    """Yield (conn, shard_path) for every readable message shard.
+
+    Falls back to the single configured database when no master key is
+    available, so callers keep working on partial data.
+    """
+    import sqlcipher3.dbapi2 as _sqlcipher
+    cfg = get_db_config(config)
+
+    def _open(path, key):
+        salt = open(path, 'rb').read(16).hex()
+        conn = _sqlcipher.connect(path)
+        cur = conn.cursor()
+        cur.execute(f'PRAGMA key = "x\'{key}{salt}\'";')
+        return conn
+
+    shards = cfg['shards']
+    if not shards and cfg['nt_db'] and cfg['nt_key']:
+        shards = [(cfg['nt_db'], cfg['nt_key'])]
+
+    for path, key in shards:
+        try:
+            yield _open(path, key), path
+        except Exception:
+            continue
 
 
 # ======================================================================
