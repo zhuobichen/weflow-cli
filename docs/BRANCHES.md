@@ -21,7 +21,8 @@
 | --- | --- | --- | --- | --- |
 | 2026-06-30 | `trae/solo-agent-Xl3Lhb` | `master` | 合并提交 `bc44e93` | 优化消息与朋友圈功能 |
 | 2026-09-01 | `Mandark6/master` | `master` | PR #6，合并提交 `2d3005c` | 外部贡献 |
-| 2026-09-10 | `draft/weflow-cli-improvements` | — | **未合并** | 见下方「2026-09-10」条目 |
+| 2026-09-10 | `feat/export-enhancements` | `master` | 快进至 `64dcf2f` | 表情原版图、`--per-page` 分页、表情包本地解密、图片缩放；并修复跨分片未生效 |
+| 2026-09-10 | `draft/weflow-cli-improvements` | — | **未合并，已作废** | 基于过期 master；独有功能已移植，见下方「2026-09-10」条目 |
 
 ### 2026-09-10 · `draft/weflow-cli-improvements`
 
