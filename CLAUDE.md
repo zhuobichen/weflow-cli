@@ -202,6 +202,36 @@ key = md5(f"{seed}{wxid}EMOTICON")[:16]        # wxid = 目录名去掉 _xxxx �
 **命中率有天花板**：微信会清理旧缓存，实测某会话 194 个表情里 139 个（72%）能在磁盘上找到，
 其余早已被清掉，只能用 `[表情]` 占位。
 
+**聊天图片（普通图片消息）走另一条路，别和表情混为一谈**
+
+缩略图缓存 `cache/YYYY-MM/Message/<会话>/Thumb` **主要存的是公众号封面**，普通聊天图片几乎
+不进这里，且只保留约 2 个月 —— 实测某会话 82 条图片消息只覆盖了 **1 条**。原图其实一直在：
+
+```
+msg/attach/<md5(会话)>/<YYYY-MM>/Img/<file_id>_t.dat   缩略图（纯 JPEG，优先用）
+msg/attach/<md5(会话)>/<年月>/Img/<file_id>.dat        原图（常是 wxgf）
+```
+
+两个关键点：
+
+1. **`file_id` 不是图片 md5**，消息 XML 里的 `md5` / `cdnthumbmd5` 全都对不上。它在
+   `message_resource.db` 的 `MessageResourceInfo.packed_info` 里 —— 一个小 protobuf，
+   形如 `12 22 0a 20 <32位hex>`，那个 hex 就是文件名。用 `(chat_id, message_local_id,
+   message_create_time)` 关联。
+2. **密钥和表情的那把不是一回事**（字符串不同、切片方式也不同）：
+
+```
+表情包:  md5(f"{seed}{wxid}EMOTICON").digest()[:16]        # 16 字节
+聊天图片: md5(f"{seed}{wxid}").hexdigest()[:16].encode()    # 16 个 ASCII 字符
+```
+
+容器格式 V2：`[6B 070856320807][4B aes_size][4B xor_size][1B pad]` + `AES-128-ECB | 明文 | XOR段`，
+XOR 密钥是 `seed & 0xFF`。实现见 `scripts/wechat_image.py`。
+
+**踩坑提醒**：`.dat` 所有文件的**首个密文块是同一个常量**，所以任何错误密钥解出来都一样 ——
+我一度以为解出了以 `BM` 开头的 BMP，但验证头部结构 0/500 合法。**两字节魔数不能当判据**，
+必须用 3~4 字节的强魔数（`ffd8ff` / `89504e47` / `47494638` / `RIFF`）。
+
 **消息内容是 zstd 压缩的**
 
 `message_content` 对大消息（appmsg XML、长文本）是 zstd 二进制。任何把它当纯文本处理的代码都会

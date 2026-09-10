@@ -33,6 +33,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from wechat_emoji import render_faces, face_css  # noqa: E402
 from nt_keys import discover_message_shards  # noqa: E402
 import wechat_emoticon  # noqa: E402
+import wechat_image  # noqa: E402
 
 PAGE_SIZE = 4096
 MSG_TYPES = {
@@ -63,6 +64,10 @@ COVER_STATE = {'dir': '', 'budget': 0, 'stats': None, 'last': 0.0}
 
 # Set up by main(); custom stickers (local cache + derived key).
 STICKER_STATE = {'key': b'', 'dirs': [], 'cache_dir': ''}
+
+# Set up by main(); chat images from the local .dat store.
+IMAGE_STATE = {'key': b'', 'seed': '', 'file_ids': {}, 'account_root': '',
+               'talker': '', 'cache_dir': ''}
 
 
 def to_bytes(value):
@@ -654,6 +659,19 @@ def format_message(row, talker, wx_dir, image_map=None, sender_map=None, display
             if result:
                 img_data, mime = result
 
+        if not img_data:
+            # The thumbnail cache only holds recent activity (and mostly article
+            # covers), so fall back to the original in msg/attach/*/Img/*.dat.
+            fid = IMAGE_STATE['file_ids'].get((local_id, create_time)) if IMAGE_STATE['file_ids'] else None
+            if fid:
+                data, dmime = wechat_image.load_image(
+                    IMAGE_STATE['account_root'], IMAGE_STATE['talker'], fid,
+                    IMAGE_STATE['key'], IMAGE_STATE['seed'], create_time,
+                    IMAGE_STATE['cache_dir'])
+                if data:
+                    img_data = base64.b64encode(data).decode()
+                    mime = dmime
+
         if img_data:
             image_b64 = img_data
             display += f'<br><img src="data:{mime};base64,{img_data}" loading="lazy" />'
@@ -1042,6 +1060,19 @@ def main():
         STICKER_STATE['dirs'] = wechat_emoticon.sticker_cache_dirs(account_root)
         STICKER_STATE['cache_dir'] = os.path.join(args.out, '.sticker-cache')
         print(f"Stickers: {len(STICKER_STATE['dirs'])} cache dir(s), key {STICKER_STATE['key'].hex()[:8]}...")
+
+        # Chat images: key is the *ASCII* first 16 chars of md5(seed+wxid),
+        # and the file id per message comes from message_resource.db.
+        IMAGE_STATE['key'] = wechat_image.derive_key(args.emoticon_seed, wxid)
+        IMAGE_STATE['seed'] = args.emoticon_seed
+        IMAGE_STATE['account_root'] = account_root
+        IMAGE_STATE['talker'] = args.talker
+        IMAGE_STATE['cache_dir'] = os.path.join(args.out, '.image-cache')
+        resource_db = os.path.join(account_root, 'db_storage', 'message', 'message_resource.db')
+        IMAGE_STATE['file_ids'] = wechat_image.load_file_ids(
+            resource_db, args.master_key, args.talker)
+        if IMAGE_STATE['file_ids']:
+            print(f"Images: {len(IMAGE_STATE['file_ids'])} message(s) mapped to local .dat files")
 
     # Scan NT cache for image thumbnails
     image_map = {}
