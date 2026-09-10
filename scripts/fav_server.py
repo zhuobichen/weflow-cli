@@ -14,10 +14,15 @@ from pathlib import Path
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 from socketserver import ThreadingMixIn
 import urllib.request
+import urllib.parse
 
 SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(SCRIPTS_DIR)
 SOURCE_ROOT = os.path.join(PROJECT_ROOT, 'output', 'biz-daily')
+
+if SCRIPTS_DIR not in sys.path:
+    sys.path.insert(0, SCRIPTS_DIR)
+from wechat_emoji import convert_faces  # noqa: E402
 
 
 class ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
@@ -56,6 +61,8 @@ class FavHandler(SimpleHTTPRequestHandler):
                 self._handle_notes_get()
             elif self.path.startswith('/proxy?url='):
                 self._handle_proxy()
+            elif self._serve_markdown():
+                pass
             else:
                 super().do_GET()
         except (ConnectionResetError, BrokenPipeError, ConnectionAbortedError):
@@ -90,6 +97,27 @@ class FavHandler(SimpleHTTPRequestHandler):
             pass
         except Exception:
             pass
+
+    def _serve_markdown(self):
+        """Serve .md with WeChat face codes turned into emoji. Returns True if handled."""
+        path = urllib.parse.urlparse(self.path).path
+        if not path.lower().endswith(('.md', '.markdown')):
+            return False
+        local = self.translate_path(path)
+        if not os.path.isfile(local):
+            return False
+        try:
+            with open(local, encoding='utf-8', errors='replace') as fh:
+                body = convert_faces(fh.read()).encode('utf-8')
+        except OSError:
+            return False
+
+        self.send_response(200)
+        self.send_header('Content-Type', 'text/markdown; charset=utf-8')
+        self.send_header('Content-Length', str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+        return True
 
     def _handle_proxy(self):
         """代理微信CDN图片，绕过防盗链Referer检查（带本地缓存）。"""

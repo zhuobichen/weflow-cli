@@ -12,6 +12,7 @@ import { configService } from '../src/services/configService.js'
 import { chatService } from '../src/services/chatService.js'
 import { exportService } from '../src/services/exportService.js'
 import { resolveTalker as resolveTalkerCore } from '../src/utils/talkerUtils.js'
+import { convertFaces, convertFacesTruncated } from '../src/utils/wechatEmoji.js'
 import { WechatMessageService } from '../src/services/wechatMessageService.js'
 import { whitelistService, MAX_TEXT_LENGTH } from '../src/services/whitelistService.js'
 import type { ChatSession } from '../src/types.js'
@@ -346,7 +347,7 @@ configCmd
   .command('set <key> <value>')
   .description('设置配置项 (dbPath, decryptKey, dbPath3x, decryptKey3x, dataVersion, wxid)')
   .action((key: string, value: string) => {
-    const validKeys = ['dbPath', 'decryptKey', 'dbPath3x', 'decryptKey3x', 'dataVersion', 'wxid', 'ntDbPath', 'ntKey', 'ntSalt', 'contactDbPath', 'contactKey', 'contactSalt', 'vaultRepo', 'aiEngine']
+    const validKeys = ['dbPath', 'decryptKey', 'dbPath3x', 'decryptKey3x', 'dataVersion', 'wxid', 'ntDbPath', 'ntKey', 'ntSalt', 'contactDbPath', 'contactKey', 'contactSalt', 'vaultRepo', 'aiEngine', 'emoticonSeed', 'snsDbPath', 'snsKey', 'snsSalt', 'bizKey', 'bizSalt']
     if (!validKeys.includes(key)) {
       console.log(chalk.red(`无效的配置项: ${key}`))
       console.log(chalk.gray(`可用: ${validKeys.join(', ')}`))
@@ -391,7 +392,7 @@ program
       const num = String(i + 1).padStart(3)
       const id = (s.username || '').padEnd(20)
       const name = (s.displayName || '').slice(0, 12).padEnd(12)
-      const summary = (s.summary || '').slice(0, 30)
+      const summary = convertFacesTruncated(s.summary, 30)
       console.log(`${num}  ${id} ${name} ${summary}`)
     }
   })
@@ -429,7 +430,7 @@ program
     for (const m of messages) {
       const time = new Date(m.createTime * 1000).toLocaleString('zh-CN')
       const senderName = m.isSend ? chalk.green('我') : chalk.blue((m as any).senderDisplay || m.senderUsername || talker)
-      const content = (m.parsedContent || m.rawContent || '').replace(/\n/g, ' ').slice(0, 80)
+      const content = convertFacesTruncated((m.parsedContent || m.rawContent || '').replace(/\n/g, ' '), 80)
       console.log(chalk.gray(`[${time}]`) + ` ${senderName}: ${content}`)
     }
   })
@@ -473,6 +474,7 @@ program
   .option('-n, --limit <number>', '最大数量（0=全量导出）', '0')
   .option('--from <date>', '起始日期或时间（YYYY-MM-DD 或 ISO 时间）')
   .option('--to <date>', '结束日期或时间（YYYY-MM-DD 或 ISO 时间）')
+  .option('--no-cover-fetch', '不联网抓取公众号封面，仅使用微信本地缓存')
   .action(async (talkerInput: string, format: string, opts) => {
     if (!configService.isConfigured()) {
       console.log(chalk.red('\n❌ 还没配置'))
@@ -520,7 +522,7 @@ program
         result = await exportService.exportTxt(talker, opts.output, limit, from, to)
         break
       case 'html':
-        result = await exportService.exportHtml(talker, opts.output, limit, from, to)
+        result = await exportService.exportHtml(talker, opts.output, limit, from, to, opts.coverFetch === false)
         break
       case 'excel':
         result = await exportService.exportExcel(talker, opts.output, limit, from, to)
@@ -535,12 +537,94 @@ program
     }
   })
 
+// ==================== emoticon-key ====================
+program
+  .command('emoticon-key')
+  .description('从微信内存提取表情包解密 seed，导出的自定义表情就能显示原图')
+  .action(async () => {
+    console.log(chalk.cyan('\n🔑 提取表情包解密 seed\n'))
+
+    const ntDb = configService.get('ntDbPath')
+    if (!ntDb) {
+      console.log(chalk.red('请先运行 weflow-cli init'))
+      process.exit(1)
+    }
+    if (!configService.get('decryptKey')) {
+      console.log(chalk.red('缺少主密钥，请先运行 weflow-cli init'))
+      process.exit(1)
+    }
+
+    const { execFile } = await import('child_process')
+    const { promisify } = await import('util')
+    const execFileAsync = promisify(execFile)
+    const { fileURLToPath } = await import('url')
+    const { dirname } = await import('path')
+
+    const pkgRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..')
+    const script = join(pkgRoot, 'scripts', 'wechat_emoticon.py')
+    // <account>/db_storage/message/message_0.db -> <account>
+    const accountRoot = dirname(dirname(dirname(ntDb)))
+
+    console.log(chalk.gray('  请确保微信正在运行，且曾在微信里查看过表情包\n'))
+    console.log(chalk.gray('  正在扫描微信内存（可能需要一两分钟）...'))
+
+    try {
+      const { stdout } = await execFileAsync('python', [script, '--find-seed', accountRoot, '--json'], {
+        timeout: 600_000,
+        maxBuffer: 10 * 1024 * 1024,
+        env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
+        encoding: 'utf-8',
+      })
+      const lines = String(stdout).split('\n').filter(l => l.trim().startsWith('{'))
+      const result = JSON.parse(lines[lines.length - 1] || '{}')
+      if (result.success && result.seed) {
+        configService.set('emoticonSeed', String(result.seed))
+        console.log(chalk.green(`\n✓ 已保存 seed: ${result.seed}`))
+        console.log(chalk.gray('  之后导出的聊天记录会自动显示表情包原图'))
+      } else {
+        console.log(chalk.red('\n✗ 未找到 seed'))
+        console.log(chalk.gray(String(stdout).trim().split('\n').pop() || ''))
+        process.exit(1)
+      }
+    } catch (e: any) {
+      console.log(chalk.red(`\n✗ 失败: ${e.message}`))
+      process.exit(1)
+    }
+  })
+
 // ==================== dbkey ====================
 program
   .command('dbkey')
   .description('从运行中的微信进程提取数据库解密密钥 (自动检测版本)')
   .option('-t, --timeout <ms>', '超时时间(毫秒)', '60000')
+  .option('--db <path>', '只捕获能解开指定数据库的密钥 (用于 message_N.db 等分片)')
   .action(async (opts) => {
+    // Target a specific database: WeChat opens its message shards one at a
+    // time, so the key we want may not be the first one the hook reports.
+    if (opts.db) {
+      const dbPath = opts.db as string
+      console.log(chalk.cyan('\n🔑 捕获指定数据库的密钥\n'))
+      console.log(chalk.gray(`  目标: ${dbPath}`))
+      console.log(chalk.cyan('\n  ══════════════════════════════════════'))
+      console.log(chalk.cyan('  请现在启动微信，或重启微信（无需扫码）'))
+      console.log(chalk.cyan('  ══════════════════════════════════════\n'))
+
+      const result = await keyService.captureDatabaseKey(
+        parseInt(opts.timeout) || 120000,
+        dbPath,
+        (msg) => console.log(chalk.gray(`  ${msg}`)),
+      )
+      if (result.success && result.key) {
+        console.log(chalk.green(`\n✓ 密钥: ${result.key}`))
+        console.log(chalk.gray('\n下一步: weflow-cli export <联系人> html 前先保存'))
+        console.log(chalk.gray(`  weflow-cli config set ntKey ${result.key}`))
+      } else {
+        console.log(chalk.red(`\n✗ 失败: ${result.error}`))
+        process.exit(1)
+      }
+      return
+    }
+
     console.log(chalk.cyan('🔑 提取微信数据库密钥\n'))
     console.log(chalk.gray('请确保微信已登录且正在运行...\n'))
 
