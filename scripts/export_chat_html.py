@@ -48,6 +48,21 @@ except Exception:
     BUILTIN_EMOJI_MAP = {}
     _WECHAT_EMOJI = False
 
+try:
+    import wechat_emoticon
+    _WECHAT_EMOTICON = True
+except Exception:
+    _WECHAT_EMOTICON = False
+
+try:
+    import wechat_image
+    _WECHAT_IMAGE = True
+except Exception:
+    _WECHAT_IMAGE = False
+
+# Set up by main(); custom stickers decrypted from WeChat's local cache.
+STICKER_STATE = {'key': b'', 'dirs': [], 'cache_dir': ''}
+
 
 def connect(db_path, key_hex, salt_hex):
     raw_key = f"x'{key_hex}{salt_hex}'"
@@ -227,6 +242,8 @@ def scan_nt_cache(nt_cache_dir, talker, account_dir='', own_wxid=''):
                             with open(fpath, 'rb') as fh:
                                 data = fh.read()
                             if len(data) < MAX_EMBED_SIZE:
+                                if _WECHAT_IMAGE:
+                                    data, mime = wechat_image.shrink(data, mime, max_side=480)
                                 image_map[local_id] = (base64.b64encode(data).decode(), mime)
                                 cache_time = parse_cache_timestamp(fname)
                                 if cache_time:
@@ -252,7 +269,9 @@ def scan_nt_cache(nt_cache_dir, talker, account_dir='', own_wxid=''):
                                 with open(fpath, 'rb') as fh:
                                     data = fh.read()
                                 if len(data) < MAX_EMBED_SIZE:
-                                    image_map[local_id] = (base64.b64encode(data).decode(), 'image/jpeg')
+                                    if _WECHAT_IMAGE:
+                                        data, _m = wechat_image.shrink(data, 'image/jpeg', max_side=480)
+                                    image_map[local_id] = (base64.b64encode(data).decode(), _m if _WECHAT_IMAGE else 'image/jpeg')
                                     cache_time = parse_cache_timestamp(fname)
                                     if cache_time:
                                         image_map[f'pair:{local_id}:{cache_time}'] = image_map[local_id]
@@ -284,6 +303,10 @@ def scan_nt_cache(nt_cache_dir, talker, account_dir='', own_wxid=''):
                     with open(fpath, 'rb') as fh:
                         data = fh.read()
                     if data:
+                        if _WECHAT_IMAGE:
+                            data, mime = wechat_image.shrink(data, mime, max_side=480)
+                            if not data:
+                                continue
                         image = (base64.b64encode(data).decode(), mime)
                         if local_id is not None:
                             image_map[local_id] = image
@@ -458,7 +481,13 @@ def decode_wechat_media(data, filepath=None, v2_key=None):
     if not data or len(data) < 16:
         return None
     if data.startswith(V2_MAGIC) and filepath and v2_key:
-        return decode_wechat_v2(filepath, *v2_key)
+        decoded = decode_wechat_v2(filepath, *v2_key)
+        if decoded and _WECHAT_IMAGE:
+            # Chat photos are stored full-size (several hundred KB each);
+            # embedding them untouched makes the export far heavier than the
+            # reader can actually show.
+            return wechat_image.shrink(decoded[0], decoded[1], max_side=720)
+        return decoded
     for key in range(1, 256):
         decoded = bytes(value ^ key for value in data[: min(len(data), 64)])
         mime = detect_mime_from_bytes(decoded)
@@ -669,6 +698,9 @@ def download_image_as_base64(url, aes_key='', timeout=10):
             detected = next((_valid_media(candidate) for candidate in candidates if _valid_media(candidate)), None)
             if detected:
                 data, mime = detected
+                if _WECHAT_IMAGE:
+                    # Covers arrive full-size; the reader shows them at 240px.
+                    data, mime = wechat_image.shrink(data, mime, max_side=480)
                 return (base64.b64encode(data).decode(), mime)
         except Exception:
             continue
@@ -1076,6 +1108,19 @@ def format_message(row, talker, wx_dir, image_map=None, sender_map=None, display
                 img_data, mime = downloaded
                 image_b64 = img_data
                 display = f'<span class="msg-media">{escape_html(emoji_label)}</span><br><img src="data:{mime};base64,{img_data}" loading="lazy" />'
+            if not image_b64 and _WECHAT_EMOTICON and STICKER_STATE['key'] and metadata_content:
+                # WeChat's own sticker cache is local and offline; the CDN
+                # paths above need the network and frequently have nothing.
+                sticker_md5 = extract_xml_attr_value(metadata_content, 'md5') or ''
+                data, mime = wechat_emoticon.load_sticker(
+                    STICKER_STATE['dirs'], sticker_md5, STICKER_STATE['key'],
+                    STICKER_STATE['cache_dir'])
+                if data:
+                    img_data = base64.b64encode(data).decode()
+                    image_b64 = img_data
+                    display = f'<span class="msg-media">{escape_html(emoji_label)}</span><br><img src="data:{mime};base64,{img_data}" loading="lazy" />'
+            if image_b64:
+                pass
             elif thumb_url and thumb_url.startswith(('http://', 'https://')):
                 remote_url = thumb_url.replace('http://', 'https://', 1)
                 display = f'<span class="msg-media">{escape_html(emoji_label)}</span><br><img src="{escape_html(remote_url)}" referrerpolicy="no-referrer" loading="lazy" />'
@@ -1432,6 +1477,8 @@ def main():
     parser.add_argument('--per-page', type=int, default=0,
                         help='Messages per file; overrides --parts. Keeps a long history snappy to open')
     parser.add_argument('--date', default=os.environ.get('WEFLOW_EXPORT_DATE', ''), help='Only export messages from local date YYYY-MM-DD')
+    parser.add_argument('--emoticon-seed', default=os.environ.get('WEFLOW_EMOTICON_SEED', ''),
+                        help='Account seed; decrypts custom stickers from the local cache')
     parser.add_argument('--passphrase', default=os.environ.get('WEFLOW_NT_PASSPHRASE', ''), help='Shared NT passphrase for deriving shard keys')
     parser.add_argument('--own-wxid', default=os.environ.get('WEFLOW_OWN_WXID', ''), help='Configured account identifier for self-message detection')
     args = parser.parse_args()
@@ -1446,6 +1493,14 @@ def main():
     elif args.account_dir:
         image_map = scan_account_media(args.account_dir, args.own_wxid)
         print(f"  Found {len(image_map)} cached images for embedding")
+
+    # Custom stickers: derive the local cache key from the account seed.
+    if args.emoticon_seed and args.account_dir and _WECHAT_EMOTICON:
+        wxid = wechat_emoticon.account_wxid(os.path.basename(os.path.normpath(args.account_dir)))
+        STICKER_STATE['key'] = wechat_emoticon.derive_key(args.emoticon_seed, wxid)
+        STICKER_STATE['dirs'] = wechat_emoticon.sticker_cache_dirs(args.account_dir)
+        STICKER_STATE['cache_dir'] = os.path.join(args.out, '.sticker-cache')
+        print(f"Stickers: {len(STICKER_STATE['dirs'])} cache dir(s)")
 
     # Connect
     print(f"Connecting to {args.db}...")

@@ -156,4 +156,6 @@ export interface ConfigData {
   favKey?: string
   /** NT 格式: 4.x 全库共用 passphrase 密钥 (64位hex, 用于派生各库 raw key) */
   favPassphrase?: string
+  /** 账号级 seed，用于解密本地缓存里的自定义表情包 */
+  emoticonSeed?: string
 }

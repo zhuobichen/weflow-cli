@@ -131,6 +131,8 @@ export class ExportService {
           WEFLOW_EXPORT_OUTPUT: outputDir || './output',
           WEFLOW_EXPORT_CACHE_DIR: exportCacheDir,
           WEFLOW_EXPORT_ACCOUNT_DIR: exportAccountDir,
+          // Lets custom stickers be decrypted from WeChat's local cache.
+          WEFLOW_EMOTICON_SEED: String(cfg.emoticonSeed || '') || undefined,
           WEFLOW_EXPORT_DATE: date || undefined,
         }),
       })

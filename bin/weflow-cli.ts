@@ -886,6 +886,7 @@ const configurableKeys = [
   'vaultRepo', 'aiEngine', 'aiBaseUrl', 'aiModel', 'deepseekApiKey', 'wereadApiKey',
   'assistantPrivacy', 'assistantWhitelist', 'assistantGroupWhitelist',
   'assistantGroupRequireMention', 'dailySources', 'dailySourceCategories', 'dailyAiEnabled',
+  'emoticonSeed',
 ] as const
 
 function setConfigValue(key: string, value: string, quiet = false): void {
