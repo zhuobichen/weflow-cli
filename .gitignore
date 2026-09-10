@@ -39,5 +39,6 @@ scripts/regen_wsl_keys.mjs
 !docs/DATA_CONTRACT.md
 !docs/AI_INTERFACE.md
 !docs/PARTNERS.md
+!docs/BRANCHES.md
 .DS_Store
 Thumbs.db
