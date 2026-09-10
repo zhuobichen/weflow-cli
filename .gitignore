@@ -23,5 +23,6 @@ msg.txt
 !ARCHITECTURE.md
 !CLAUDE.md
 !OPERATIONS.md
+!docs/planning/*.md
 .DS_Store
 Thumbs.db

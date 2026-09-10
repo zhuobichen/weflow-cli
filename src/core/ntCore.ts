@@ -169,6 +169,9 @@ export class NtCore {
       '--salt', this.saltHex,
     ]
     if (keyword) args.push('--keyword', keyword)
+    // Lets the script read the live session.db rather than a frozen message DB.
+    const masterKey = configService.get('decryptKey')
+    if (masterKey) args.push('--master-key', masterKey)
     if (this.contactDbPath && this.contactKey && this.contactSalt) {
       args.push('--contact-db', this.contactDbPath)
       args.push('--contact-key', this.contactKey)

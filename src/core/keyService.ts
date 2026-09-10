@@ -322,7 +322,13 @@ export class KeyService {
       try { this.cleanupHook() } catch { }
     }
 
-    return { success: false, error: '获取密钥超时，请确保微信已登录', logs }
+    return {
+      success: false,
+      error: '获取密钥超时：Hook 需要在微信登录之前安装。'
+        + '请完全退出微信（右下角托盘 → 右键退出），运行 weflow-cli init，'
+        + '看到提示后再启动微信并登录，密钥会在登录时自动捕获。',
+      logs,
+    }
   }
 
   /**
@@ -432,17 +438,24 @@ export class KeyService {
     const keyBuffer = Buffer.alloc(128)
     const seen = new Set<string>()
     const startedAt = Date.now()
+    let pollCount = 0
 
-    onStatus?.(`已连接微信进程 (PID: ${pid})，等待收藏库访问...`)
+    onStatus?.(`已 Hook 微信进程 (PID: ${pid})，等待它打开目标数据库...`)
+    onStatus?.(`  目标: ${dbPath}`)
+    onStatus?.(`  微信只在“打开数据库”时调用取密钥函数。若目标是消息分片，`)
+    onStatus?.(`  请在微信内退出登录后重新登录（不要关闭微信程序，否则 Hook 会失效）。`)
     try {
       while (Date.now() - startedAt < timeoutMs) {
         if (this.pollKeyData(keyBuffer, keyBuffer.length)) {
           const key = this.decodeUtf8(keyBuffer)
           if (key.length === 64 && !seen.has(key)) {
             seen.add(key)
+            onStatus?.(`捕获到密钥 ${key.slice(0, 8)}...${key.slice(-8)}，测试能否解开目标库...`)
             try {
-              const { stdout } = await execFileAsync('py', [
-                '-3', scriptPath, 'schema', '--db', dbPath, '--key', key, '--salt', salt,
+              // check-key reports success cleanly; `schema` would return a table
+              // map with no success field and could never confirm a match.
+              const { stdout } = await execFileAsync('python', [
+                scriptPath, 'check-key', '--db', dbPath, '--key', key, '--salt', salt,
               ], {
                 timeout: 15_000,
                 maxBuffer: 1024 * 1024,
@@ -452,18 +465,40 @@ export class KeyService {
               const lines = stdout.split('\n').filter(line => line.trim().startsWith('{'))
               const result = JSON.parse(lines.at(-1) || '{}')
               if (result.success) return { success: true, key }
+              onStatus?.(`  ✗ 该密钥打不开 ${dbPath.split(/[\\/]/).pop()}，继续等待其它密钥...`)
             } catch {
               // This key belongs to another database access; keep listening.
             }
           }
         }
+
+        // The DLL reports hook progress through this queue. extractKeyFromPid
+        // drains it every cycle; skipping that here left the hook silent, so
+        // no key was ever surfaced.
+        for (let i = 0; i < 5; i++) {
+          const statusBuffer = Buffer.alloc(256)
+          const levelOut = [0]
+          if (!this.getStatusMessage(statusBuffer, statusBuffer.length, levelOut)) break
+          const msg = this.decodeUtf8(statusBuffer)
+          if (msg) onStatus?.(msg)
+        }
+
+        pollCount++
+        if (pollCount <= 5 || pollCount % 100 === 0) {
+          onStatus?.(`[调试] poll #${pollCount}: buffer=${keyBuffer.slice(0, 16).toString('hex')}`)
+        }
+
         await new Promise(resolve => setTimeout(resolve, 200))
       }
     } finally {
       try { this.cleanupHook() } catch { }
     }
 
-    return { success: false, error: `超时 (${timeoutMs / 1000}s)，未捕获到收藏库密钥。请保持“收藏”页面打开。` }
+    return {
+      success: false,
+      error: `超时 (${Math.round(timeoutMs / 1000)}s)，未捕获到该数据库的密钥。`
+        + '微信只在打开数据库时取密钥；请在微信内退出登录后重新登录（保持微信程序运行）。',
+    }
   }
 
   /**

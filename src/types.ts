@@ -144,4 +144,6 @@ export interface ConfigData {
   snsKey?: string
   /** NT 格式: sns.db 32位十六进制盐值 */
   snsSalt?: string
+  /** 账号级 seed，用于解密本地缓存里的自定义表情包 */
+  emoticonSeed?: string
 }

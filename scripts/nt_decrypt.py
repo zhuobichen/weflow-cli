@@ -128,7 +128,8 @@ def find_nt_databases(data_dir=None):
     ]
     xwechat = None
     for c in candidates:
-        if os.path.isdir(c):
+        # data_dir is None when the caller did not pass --path.
+        if c and os.path.isdir(c):
             xwechat = c
             break
     if not xwechat:
@@ -303,6 +304,40 @@ def get_sessions(conn):
 
     # Sort by timestamp descending
     sessions.sort(key=lambda s: s.get("sortTimestamp", 0), reverse=True)
+    return {"sessions": sessions}
+
+
+def get_sessions_from_db(session_db_path, session_key):
+    """Read the live session list from session.db.
+
+    The Name2Id-based listing below only sees conversations that own a table in
+    the single configured message database, and its summaries freeze once
+    WeChat rotates the message store. session.db keeps updating, so it is the
+    authoritative source for "who talked recently, and about what".
+    """
+    with open(session_db_path, 'rb') as fh:
+        salt = fh.read(16).hex()
+    conn = sqlcipher.connect(session_db_path)
+    c = conn.cursor()
+    c.execute(f'PRAGMA key = "x\'{session_key}{salt}\'";')
+    c.execute('''
+        SELECT username, type, unread_count, summary, last_timestamp, sort_timestamp
+        FROM SessionTable
+        WHERE is_hidden = 0
+        ORDER BY sort_timestamp DESC
+    ''')
+    sessions = []
+    for username, stype, unread, summary, last_ts, sort_ts in c.fetchall():
+        sessions.append({
+            "username": username or '',
+            "type": stype or 0,
+            "unreadCount": unread or 0,
+            "summary": summary or '',
+            "lastTimestamp": last_ts or 0,
+            "sortTimestamp": sort_ts or last_ts or 0,
+            "displayName": username or '',
+        })
+    conn.close()
     return {"sessions": sessions}
 
 
@@ -662,12 +697,20 @@ def main():
     schema_parser.add_argument('--key', required=True, help='Key hex (64 chars)')
     schema_parser.add_argument('--salt', required=True, help='Salt hex (32 chars)')
 
+    # check-key command - does this key open this database?
+    ck_parser = sub.add_parser('check-key', help='Check whether a key decrypts a database')
+    ck_parser.add_argument('--db', required=True, help='Path to NT database')
+    ck_parser.add_argument('--key', required=True, help='Key hex (64 chars)')
+    ck_parser.add_argument('--salt', required=True, help='Salt hex (32 chars)')
+
     # sessions command
     sessions_parser = sub.add_parser('sessions', help='List chat sessions')
     sessions_parser.add_argument('--db', required=True, help='Path to NT database')
     sessions_parser.add_argument('--key', required=True, help='Key hex (64 chars)')
     sessions_parser.add_argument('--salt', required=True, help='Salt hex (32 chars)')
     sessions_parser.add_argument('--keyword', help='Filter by keyword')
+    sessions_parser.add_argument('--master-key', default='',
+                                 help='Master key; reads the live session.db instead of the message DB')
     sessions_parser.add_argument('--contact-db', help='Path to contact.db for display names')
     sessions_parser.add_argument('--contact-key', help='Contact DB key hex (64 chars)')
     sessions_parser.add_argument('--contact-salt', help='Contact DB salt hex (32 chars)')
@@ -735,6 +778,10 @@ def main():
         keys = scan_memory_keys(pid)
         if not args.json:
             print(f"找到 {len(keys)} 个密钥")
+            if not keys:
+                print("  提示: 密钥只在微信打开数据库的瞬间以 x'<key><salt>' 形式存在，")
+                print("        微信已登录很久时通常扫不到。")
+                print("        请: 完全退出微信 -> weflow-cli init -> 启动微信登录 -> 立即重跑本命令。")
 
         databases = find_nt_databases(args.data_dir)
         if not args.json:
@@ -757,14 +804,44 @@ def main():
     if contact_db and contact_key and contact_salt:
         contact_name_map = load_contact_names(contact_db, contact_key, contact_salt)
 
-    if args.command == 'schema':
+    if args.command == 'check-key':
+        # A wrong key only fails once a page is actually read, so touch the
+        # schema rather than trusting that opening the file succeeded.
+        try:
+            conn, _ = connect_nt_db(args.db, args.key, args.salt)
+            cur = conn.cursor()
+            cur.execute("SELECT count(*) FROM sqlite_master")
+            cur.fetchone()
+            conn.close()
+            print(json.dumps({"success": True}))
+        except Exception as e:
+            print(json.dumps({"success": False, "error": str(e)[:120]}))
+
+    elif args.command == 'schema':
         conn, _ = connect_nt_db(args.db, args.key, args.salt)
         print(json.dumps(get_schema(conn), ensure_ascii=True))
         conn.close()
 
     elif args.command == 'sessions':
-        conn, _ = connect_nt_db(args.db, args.key, args.salt)
-        result = get_sessions(conn)
+        # Prefer the live session list; fall back to the message DB when the
+        # master key is unavailable or session.db is missing.
+        result = None
+        master = getattr(args, 'master_key', '') or ''
+        if master:
+            try:
+                from nt_keys import session_db_path, derive_key_or_none
+                sdb = session_db_path(args.db)
+                skey = derive_key_or_none(master, sdb) if sdb else None
+                if sdb and skey:
+                    result = get_sessions_from_db(sdb, skey)
+            except Exception:
+                result = None
+
+        conn = None
+        if result is None:
+            conn, _ = connect_nt_db(args.db, args.key, args.salt)
+            result = get_sessions(conn)
+
         if 'sessions' in result:
             result['sessions'] = apply_contact_names(result['sessions'], contact_name_map)
             if args.keyword:
@@ -774,7 +851,8 @@ def main():
                     if kw in (s.get('username', '') + s.get('displayName', '') + s.get('summary', '')).lower()
                 ]
         print(json.dumps(result, ensure_ascii=True))
-        conn.close()
+        if conn is not None:
+            conn.close()
 
     elif args.command == 'messages':
         conn, _ = connect_nt_db(args.db, args.key, args.salt)

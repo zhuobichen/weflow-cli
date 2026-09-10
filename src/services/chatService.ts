@@ -11,6 +11,9 @@ import type { ChatSession, Message, Contact, DataVersion } from '../types.js'
 const wcdbCore = new WcdbCore()
 const sqlcipherCore = new SqlcipherCore()
 
+// Upper bound for a keyword scan; contact books are far smaller than this.
+const CONTACT_SCAN_LIMIT = 100000
+
 export class ChatService {
   private connected = false
   private activeVersion: DataVersion | null = null
@@ -240,10 +243,15 @@ export class ChatService {
     const conn = await this.connect()
     if (!conn.success) return []
 
+    // The keyword filter runs below, so when one is given the backend has to
+    // hand over the whole contact book: pushing `limit` down truncates before
+    // matching and silently hides anyone ranked past it.
+    const fetchLimit = keyword ? CONTACT_SCAN_LIMIT : limit
+
     let contacts: Contact[] = []
 
     if (this.ntCore) {
-      const result = await this.ntCore.getContacts(keyword, limit)
+      const result = await this.ntCore.getContacts(keyword, fetchLimit)
       if (!result.success || !result.contacts) return []
       contacts = result.contacts
     } else if (this.activeVersion === '4.x') {
