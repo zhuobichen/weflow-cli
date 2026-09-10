@@ -121,11 +121,54 @@ def load_file_ids(resource_db, master_key, talker):
         return {}
 
 
+def shrink(data, mime, max_side=720, quality=82):
+    """Downscale to at most `max_side` on the long edge, as JPEG.
+
+    The exported page shows images at ~240px, but a 2-3x display still needs
+    more than the 120-210px thumbnails WeChat caches - those upscale into the
+    blocky mess users notice. Full images run ~370KB on average though, so
+    embedding them untouched would balloon the export; ~720px is the point
+    where they look clean at any realistic zoom without the weight.
+    """
+    try:
+        import io as _io
+        from PIL import Image
+    except ImportError:
+        return data, mime
+    try:
+        im = Image.open(_io.BytesIO(data))
+        im.load()
+        w, h = im.size
+        if max(w, h) > max_side:
+            scale = max_side / max(w, h)
+            im = im.resize((max(1, int(w * scale)), max(1, int(h * scale))), Image.LANCZOS)
+        elif mime == 'image/jpeg':
+            return data, mime          # already small enough and already compact
+        # wxgf decodes to PNG, and PNG at ~700px runs several times the size of
+        # the same photo as JPEG - so re-encode unless it would grow the file.
+        if im.mode in ('RGBA', 'LA', 'P'):
+            # Stickers carry transparency; flatten onto white rather than
+            # letting the conversion produce a black background.
+            im = im.convert('RGBA')
+            bg = Image.new('RGB', im.size, (255, 255, 255))
+            bg.paste(im, mask=im.split()[-1])
+            im = bg
+        else:
+            im = im.convert('RGB')
+        buf = _io.BytesIO()
+        im.save(buf, 'JPEG', quality=quality, optimize=True)
+        out = buf.getvalue()
+        return (out, 'image/jpeg') if 0 < len(out) < len(data) else (data, mime)
+    except Exception:
+        return data, mime
+
+
 def load_image(account_root, talker, file_id, key, seed, create_time, decode_cache_dir=''):
     """(image bytes, mime) for a chat image, or (b'', '').
 
-    Prefers the thumbnail (`_t.dat`): full images are often `wxgf`, while
-    thumbnails are plain JPEG and far smaller to embed.
+    Prefers the full image over the thumbnail: WeChat only caches 120-210px
+    thumbnails, and those look blocky at the size the reader renders. The
+    result is downscaled to keep the export a sane size.
     """
     if not file_id or not key:
         return b'', ''
@@ -160,10 +203,11 @@ def load_image(account_root, talker, file_id, key, seed, create_time, decode_cac
             if d not in search_dirs:
                 search_dirs.append(d)
 
+    # Full image first - the thumbnail is only 120-210px and looks blocky.
     candidates = []
     for d in search_dirs:
-        candidates.append(os.path.join(d, f'{file_id}_t.dat'))
         candidates.append(os.path.join(d, f'{file_id}.dat'))
+        candidates.append(os.path.join(d, f'{file_id}_t.dat'))
 
     for path in candidates:
         if not os.path.isfile(path):
@@ -181,6 +225,7 @@ def load_image(account_root, talker, file_id, key, seed, create_time, decode_cac
             mime = 'image/png' if data else ''
         if not mime:
             continue
+        data, mime = shrink(data, mime)
         if decode_cache_dir:
             try:
                 os.makedirs(decode_cache_dir, exist_ok=True)
