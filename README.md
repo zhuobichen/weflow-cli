@@ -74,6 +74,11 @@ weflow-cli messages "联系人" -n 10
 weflow-cli export "联系人" html --output ./output
 ```
 
+导出的 HTML 会把图片和公众号封面内嵌成单文件：图片取自微信本地缓存，
+本地没有的封面会从文章页获取并缓存在 `output/.cover-cache/`（同一会话二次导出无需联网）。
+加 `--no-cover-fetch` 可完全离线，只用本地缓存。
+用 `--from 2026-01-01 --to 2026-06-30` 可只导出指定时间段。
+
 **生成当天公众号日报**
 
 ```powershell
@@ -172,5 +177,7 @@ python scripts/fav_server.py --date YYYY-MM-DD
 ## 致谢与许可
 
 项目借鉴或使用了 [WeFlow](https://github.com/hicccc77/WeFlow)、[koffi](https://koffi.dev/)、[ExcelJS](https://github.com/exceljs/exceljs)、[Scrapling](https://github.com/D4Vinci/Scrapling) 等优秀项目。
+
+ `resources/emoji/` 下的微信表情原版图来自 [wechat-emojis](https://github.com/xxk8/wechat-emojis)（MIT）。
 
 采用 [MIT License](./LICENSE) 发布。

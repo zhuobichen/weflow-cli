@@ -7,3 +7,7 @@ zstandard
 scrapling
 numpy
 pycryptodome
+
+# Bundles a static ffmpeg used to decode WeChat's `wxgf` sticker format.
+# Without it, custom stickers (表情包) render as a placeholder instead of an image.
+imageio-ffmpeg
