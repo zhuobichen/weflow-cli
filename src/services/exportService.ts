@@ -110,8 +110,8 @@ export class ExportService {
 
       const args: string[] = [
         script,
-        '--single',
-        '--parts', '1',
+        // Paginate: a whole year of chat in one file makes the browser crawl.
+        '--per-page', '100',
       ]
       const ownWxid = String(cfg.wxid || '').trim()
       const exportCacheDir = cacheDir && existsSync(cacheDir) ? cacheDir : undefined

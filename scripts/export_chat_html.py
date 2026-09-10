@@ -1429,6 +1429,8 @@ def main():
     parser.add_argument('--cache-dir', default=os.environ.get('WEFLOW_EXPORT_CACHE_DIR', ''), help='NT cache directory for image thumbnails')
     parser.add_argument('--account-dir', default=os.environ.get('WEFLOW_EXPORT_ACCOUNT_DIR', ''), help='Account data directory for media resources')
     parser.add_argument('--single', action='store_true', help='Generate a single HTML file (no splitting)')
+    parser.add_argument('--per-page', type=int, default=0,
+                        help='Messages per file; overrides --parts. Keeps a long history snappy to open')
     parser.add_argument('--date', default=os.environ.get('WEFLOW_EXPORT_DATE', ''), help='Only export messages from local date YYYY-MM-DD')
     parser.add_argument('--passphrase', default=os.environ.get('WEFLOW_NT_PASSPHRASE', ''), help='Shared NT passphrase for deriving shard keys')
     parser.add_argument('--own-wxid', default=os.environ.get('WEFLOW_OWN_WXID', ''), help='Configured account identifier for self-message detection')
@@ -1501,7 +1503,9 @@ def main():
 
     # Split into parts (or single file)
     total = len(formatted)
-    if args.single:
+    if args.per_page and args.per_page > 0:
+        parts = max(1, (total + args.per_page - 1) // args.per_page)
+    elif args.single:
         parts = 1
     else:
         parts = min(args.parts, total)
@@ -1522,7 +1526,7 @@ def main():
             break
 
         html = build_html_page(args.talker, chunk, i + 1, parts, display_name)
-        if args.single:
+        if parts == 1:
             filename = f"{file_prefix}.html"
         else:
             filename = f"{file_prefix}_part{i+1}.html"
