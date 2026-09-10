@@ -11,3 +11,4 @@ pycryptodome
 # Bundles a static ffmpeg used to decode WeChat's `wxgf` sticker format.
 # Without it, custom stickers (表情包) render as a placeholder instead of an image.
 imageio-ffmpeg
+Pillow==10.4.0  # 聊天图片缩放（原图平均 370KB，缩到 720px 后约 38KB）

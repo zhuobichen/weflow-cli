@@ -257,6 +257,14 @@ def load_sticker(cache_dirs, md5_hex, key, decode_cache_dir=''):
     if not mime:
         return b'', ''
 
+    # Sticker art is often 512-1024px; the reader renders it at ~240px, so
+    # embedding it untouched is pure weight.
+    try:
+        from wechat_image import shrink
+        data, mime = shrink(data, mime, max_side=360)
+    except Exception:
+        pass
+
     if decode_cache_dir and data:
         try:
             os.makedirs(decode_cache_dir, exist_ok=True)

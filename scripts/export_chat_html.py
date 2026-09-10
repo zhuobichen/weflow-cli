@@ -314,6 +314,9 @@ def scan_nt_cache(nt_cache_dir, talker):
                         try:
                             with open(fpath, 'rb') as fh:
                                 data = fh.read()
+                            # ImageTemp holds HD thumbnails (often 1280px);
+                            # the reader shows them at 240px.
+                            data, mime = wechat_image.shrink(data, mime, max_side=480)
                             if len(data) < MAX_EMBED_SIZE:
                                 image_map[key] = (base64.b64encode(data).decode(), mime)
                         except:
@@ -335,7 +338,8 @@ def scan_nt_cache(nt_cache_dir, talker):
                                 with open(fpath, 'rb') as fh:
                                     data = fh.read()
                                 if len(data) < MAX_EMBED_SIZE:
-                                    image_map[key] = (base64.b64encode(data).decode(), 'image/jpeg')
+                                    data, m2 = wechat_image.shrink(data, 'image/jpeg', max_side=480)
+                                    image_map[key] = (base64.b64encode(data).decode(), m2)
                             except:
                                 pass
 
@@ -399,13 +403,18 @@ def download_image_as_base64(url, timeout=10):
             'Referer': 'https://mp.weixin.qq.com/',
         })
         with urllib.request.urlopen(req, timeout=timeout) as resp:
-            data = resp.read(MAX_EMBED_SIZE + 1)
-            if len(data) > MAX_EMBED_SIZE:
+            data = resp.read(MAX_EMBED_SIZE * 4 + 1)
+            if len(data) > MAX_EMBED_SIZE * 4:
                 return None
             mime = resp.headers.get('Content-Type', 'image/jpeg').split(';')[0].strip()
             if mime not in ('image/jpeg', 'image/png', 'image/gif', 'image/webp'):
                 # Try detecting from data
                 mime = detect_mime_from_bytes(data) or 'image/jpeg'
+            # Article covers come back at full size; the reader shows them at
+            # 240px, so shrink before embedding or the export balloons.
+            data, mime = wechat_image.shrink(data, mime, max_side=480)
+            if len(data) > MAX_EMBED_SIZE:
+                return None
             return (base64.b64encode(data).decode(), mime)
     except Exception:
         return None
