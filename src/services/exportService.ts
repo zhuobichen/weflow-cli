@@ -1,13 +1,11 @@
 import { join, basename, dirname } from 'path'
 import { existsSync, mkdirSync, writeFileSync } from 'fs'
-import { execFile } from 'child_process'
-import { promisify } from 'util'
+import { spawn } from 'child_process'
 import { fileURLToPath } from 'url'
 import { chatService } from './chatService.js'
 import { configService } from './configService.js'
 import type { Message } from '../types.js'
 
-const execFileAsync = promisify(execFile)
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
 
@@ -51,7 +49,7 @@ export class ExportService {
     }
   }
 
-  async exportHtml(talker: string, outputDir: string, limit = 0, from?: number, to?: number): Promise<{ success: boolean; path?: string; error?: string }> {
+  async exportHtml(talker: string, outputDir: string, limit = 0, from?: number, to?: number, noCoverFetch = false): Promise<{ success: boolean; path?: string; error?: string }> {
     try {
       if (from !== undefined || to !== undefined) {
         return this.exportHtmlBasic(talker, outputDir, limit, from, to)
@@ -71,10 +69,19 @@ export class ExportService {
       const pkgRoot = join(__dirname, '..', '..', '..')
       const script = join(pkgRoot, 'scripts', 'export_chat_html.py')
 
-      // Cache dir for image thumbnails
-      const cacheDir = cfg.contactDbPath
-        ? join(dirname(dirname(cfg.contactDbPath)), 'cache')
-        : ''
+      // Cache dir for image thumbnails. WeChat 4.x keeps it next to db_storage
+      // (<accountRoot>/cache), but older layouts nest it under db_storage, so
+      // probe each candidate instead of assuming one.
+      const cacheCandidates: string[] = []
+      if (cfg.contactDbPath) {
+        const accountRoot = dirname(dirname(dirname(cfg.contactDbPath)))
+        cacheCandidates.push(join(accountRoot, 'cache'), join(accountRoot, 'db_storage', 'cache'))
+      }
+      if (cfg.ntDbPath) {
+        const messageRoot = dirname(dirname(cfg.ntDbPath))
+        cacheCandidates.push(join(messageRoot, 'cache'), join(messageRoot, 'db_storage', 'cache'))
+      }
+      const cacheDir = cacheCandidates.find((dir) => existsSync(dir)) || ''
 
       // Resolve display name for filename (prefer remark/nickname over wxid)
       let displayName = ''
@@ -85,6 +92,18 @@ export class ExportService {
           displayName = match.displayName
         }
       } catch {}
+      if (!displayName) {
+        // Old conversations fall out of the session list long before they stop
+        // being exportable, so fall back to the contact book.
+        try {
+          const contacts = await chatService.listContacts(talker)
+          const contact = contacts.find(c => c.username === talker)
+          const name = contact?.displayName || contact?.remark || contact?.nickname || ''
+          if (name && name !== talker) {
+            displayName = name
+          }
+        } catch {}
+      }
 
       const args: string[] = [
         script,
@@ -93,8 +112,8 @@ export class ExportService {
         '--salt', salt,
         '--talker', talker,
         '--out', outputDir || `./output`,
-        '--single',
-        '--parts', '1',
+        // Paginate: a whole year of chat in one file makes the browser crawl.
+        '--per-page', '100',
       ]
       if (displayName) {
         args.push('--name', displayName)
@@ -102,30 +121,110 @@ export class ExportService {
       if (cacheDir && existsSync(cacheDir)) {
         args.push('--cache-dir', cacheDir)
       }
-
-      console.log(`  Exporting HTML via Python...`)
-      const { stdout } = await execFileAsync('python', args, {
-        timeout: 300_000,
-        maxBuffer: 50 * 1024 * 1024,
-      })
-
-      // Parse JSON result from Python output
-      const lines = stdout.split('\n').filter((l: string) => l.trim())
-      for (let i = lines.length - 1; i >= 0; i--) {
-        try {
-          const result = JSON.parse(lines[i])
-          if (result.success && result.files?.length > 0) {
-            return { success: true, path: result.files[0] }
-          }
-        } catch {}
+      if (noCoverFetch) {
+        args.push('--no-cover-fetch')
+      }
+      // WeChat 4.1.12.26+ derives every database's key from one master key, so
+      // passing it lets the exporter merge all message shards instead of just
+      // the single configured one.
+      const masterKey = cfg.decryptKey
+      if (masterKey) {
+        args.push('--master-key', masterKey)
+      }
+      // Lets custom stickers be decrypted out of WeChat's local cache.
+      if (cfg.emoticonSeed) {
+        args.push('--emoticon-seed', cfg.emoticonSeed)
       }
 
-      return { success: false, error: 'Python export succeeded but no output found' }
+      console.log(`  Exporting HTML via Python...`)
+      const pythonResult = await this.runPythonExport(args)
+      if (pythonResult.success && pythonResult.path) {
+        return { success: true, path: pythonResult.path }
+      }
+      if (pythonResult.error) {
+        console.error(`  Python export failed: ${pythonResult.error}`)
+      }
+      // Fallback to basic HTML
+      return this.exportHtmlBasic(talker, outputDir, limit, from, to)
     } catch (e: any) {
       console.error(`  Python export failed: ${e.message}`)
       // Fallback to basic HTML
       return this.exportHtmlBasic(talker, outputDir, limit, from, to)
     }
+  }
+
+  /**
+   * Run export_chat_html.py, relaying its progress lines live.
+   *
+   * The script can spend a while fetching article covers, so its output is
+   * streamed rather than buffered - otherwise the user stares at nothing.
+   */
+  private runPythonExport(args: string[], timeoutMs = 600_000): Promise<{ success: boolean; path?: string; error?: string }> {
+    return new Promise((resolve) => {
+      const child = spawn('python', args, {
+        windowsHide: true,
+        // Otherwise Python writes the console code page and every Chinese
+        // character in the relayed progress lines comes out as mojibake.
+        env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
+      })
+      let buffered = ''
+      let stderrTail = ''
+      let jsonLine = ''
+      let settled = false
+      let relayed = 0
+
+      const finish = (r: { success: boolean; path?: string; error?: string }) => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        resolve(r)
+      }
+      const timer = setTimeout(() => {
+        child.kill()
+        finish({ success: false, error: `timed out after ${Math.round(timeoutMs / 1000)}s` })
+      }, timeoutMs)
+
+      const handleLine = (line: string) => {
+        if (!line) return
+        // The final line is the machine-readable result; everything else is progress.
+        if (line.startsWith('{') && line.endsWith('}')) {
+          jsonLine = line
+          return
+        }
+        if (relayed < 200) {
+          relayed++
+          console.log(`  ${line}`)
+        }
+      }
+
+      child.stdout.on('data', (chunk: Buffer) => {
+        buffered += chunk.toString()
+        let idx: number
+        while ((idx = buffered.indexOf('\n')) >= 0) {
+          handleLine(buffered.slice(0, idx).trim())
+          buffered = buffered.slice(idx + 1)
+        }
+      })
+      child.stderr.on('data', (chunk: Buffer) => {
+        stderrTail = (stderrTail + chunk.toString()).slice(-2000)
+      })
+      child.on('error', (err) => finish({ success: false, error: err.message }))
+      child.on('close', () => {
+        handleLine(buffered.trim())
+        if (jsonLine) {
+          try {
+            const parsed = JSON.parse(jsonLine)
+            if (parsed.success && parsed.files?.length > 0) {
+              return finish({ success: true, path: parsed.files[0] })
+            }
+          } catch {}
+        }
+        finish({
+          success: false,
+          error: stderrTail.trim().split('\n').pop() || 'no output found',
+        })
+      })
+    })
   }
 
   private async exportHtmlBasic(talker: string, outputDir: string, limit = 0, from?: number, to?: number): Promise<{ success: boolean; path?: string; error?: string }> {
