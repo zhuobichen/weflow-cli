@@ -35,8 +35,8 @@
 
 | 项 | 处理 | 原因 |
 | --- | --- | --- |
-| 跨分片读取 | **放弃** | `master` 已有 `fetch_messages_from_shards` 等 |
-| 主密钥派生 | **放弃** | `master` 已有 `derive_database_key` |
+| 跨分片读取 | **改修为接线修复** | `master` 有 `fetch_messages_from_shards`，但见下方「附带修复」 |
+| 主密钥派生 | **放弃** | `master` 已有 `derive_database_key`，算法与草稿一致 |
 | 图片按 `(local_id, create_time)` 配对 | **放弃** | `master` 已有 |
 | `.dat` 图片解密与资源映射 | **放弃** | `master` 已有 `decode_wechat_v2`、`load_resource_media_map` |
 | zstd 解压、CDATA 解析、名片渲染 | **放弃** | `master` 已有 |
@@ -46,6 +46,16 @@
 | **`--per-page` 按条数分页** | **移植** | `master` 只有 `--parts`（按份数） |
 | **表情包本地解密** | **移植** | `master` 走 CDN，需联网 |
 | **图片缩放管线** | **移植** | `master` 按原始尺寸内嵌 |
+
+### 附带修复：跨分片合并默认未生效
+
+移植过程中发现 `master` 的跨分片能力实际处于休眠状态：`derive_database_key()` 需要
+`passphrase` 才会派生分片密钥，而 `exportService.ts` 只从配置的 `favPassphrase` 读取，
+`init` 写入的却是 `decryptKey`。两者本是同一个值，但字段名不同，于是口令为空、派生
+退回单库密钥，导出静默地停在第一个分片的最后一条消息。
+
+实测：某会话只导出 10 条（止于 2026-04-23），而该会话实际有 20 条（到 2026-09-10）。
+已在 `exportService.ts` 增加 `favPassphrase || decryptKey` 回退。
 
 ## 并行开发
 

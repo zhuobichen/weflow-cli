@@ -70,7 +70,11 @@ export class ExportService {
       const db = cfg.ntDbPath
       const key = cfg.ntKey
       const salt = cfg.ntSalt
-      const passphrase = configService.get('favPassphrase')
+      // Derives each message shard's key (WeChat 4.1.12.26+). favPassphrase is
+      // the dedicated field, but decryptKey holds the same value and is what
+      // `init` writes - without this fallback the shard merge silently stays
+      // dormant and exports stop at the first shard's last message.
+      const passphrase = configService.get('favPassphrase') || cfg.decryptKey || ''
 
       if (!db || !key || !salt) {
         // Fallback: basic HTML

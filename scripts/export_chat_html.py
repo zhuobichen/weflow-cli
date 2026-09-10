@@ -36,17 +36,17 @@ BUILTIN_EMOJI_DIR = os.path.join(os.path.dirname(__file__), '..', 'resources', '
 # Labels used by WeChat's built-in default emoji.  These messages may only
 # retain a PUA/signature marker in the export, so their CDN media is not
 # recoverable from the message row itself.
-BUILTIN_EMOJI_MAP = {
-    '[打脸]': 'Facepalm',
-    '[皱眉]': 'Concerned',
-    '[合十]': 'Respect',
-    '[流泪]': 'Cry',
-    '[生病]': 'Sick',
-    '[微笑]': 'Smile',
-    '[强]': 'Awesome',
-    '[呲牙]': 'Grin',
-    '[睡]': 'Sleep',
-}
+#
+# The table is derived from the artwork actually present in BUILTIN_EMOJI_DIR
+# rather than hand-maintained: adding a PNG named after the face is enough.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+try:
+    import wechat_emoji
+    BUILTIN_EMOJI_MAP = {f'[{name}]': name for name in wechat_emoji.IMAGE_FACES}
+    _WECHAT_EMOJI = True
+except Exception:
+    BUILTIN_EMOJI_MAP = {}
+    _WECHAT_EMOJI = False
 
 
 def connect(db_path, key_hex, salt_hex):
@@ -857,26 +857,31 @@ def escape_html(text):
 
 
 def load_builtin_emoji(name):
-    """Load a bundled WeChat default emoji as (base64, mime), if available."""
-    path = os.path.join(BUILTIN_EMOJI_DIR, f'{name}.png')
+    """One bundled face as (base64, mime), or None."""
+    path = wechat_emoji.IMAGE_FACES.get(name) if _WECHAT_EMOJI else None
+    if not path:
+        return None
     try:
         with open(path, 'rb') as stream:
             data = stream.read(MAX_EMBED_SIZE + 1)
-        if len(data) > MAX_EMBED_SIZE or detect_mime_from_bytes(data[:16]) != 'image/png':
+        if len(data) > MAX_EMBED_SIZE:
             return None
         return base64.b64encode(data).decode(), 'image/png'
     except OSError:
         return None
 
 
-def render_builtin_emoji(content, label):
-    image = load_builtin_emoji(BUILTIN_EMOJI_MAP.get(label, ''))
-    if not image:
+def render_builtin_emoji(content, label=None):
+    """Render every built-in face in `content`, in place.
+
+    Faces become <span class="wxface wxf-…">; the artwork itself is emitted
+    once per page by face_css(). The previous approach appended one <img> per
+    message and only ever matched the first label, so a sentence containing
+    several emoji rendered at most one - and repeated the base64 for it.
+    """
+    if not _WECHAT_EMOJI:
         return escape_html(content)
-    b64, mime = image
-    before, marker, after = str(content).partition(label)
-    display = escape_html(before) + escape_html(marker) + escape_html(after)
-    return f'{display}<br><img src="data:{mime};base64,{b64}" loading="lazy" />'
+    return wechat_emoji.render_faces(escape_html(str(content or '')))
 
 
 def parse_source(source_text):
@@ -1207,6 +1212,10 @@ def build_html_page(talker, messages_part, part_num, total_parts, display_name):
     from_time = datetime.datetime.fromtimestamp(messages_part[0]['create_time']).strftime('%Y-%m-%d %H:%M')
     to_time = datetime.datetime.fromtimestamp(messages_part[-1]['create_time']).strftime('%Y-%m-%d %H:%M')
 
+    # Emit artwork only for the faces this page uses; shipping the whole
+    # set in every part would add ~1MB to each.
+    face_rules = wechat_emoji.face_css(''.join(rows)) if _WECHAT_EMOJI else ''
+
     return f'''<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -1269,6 +1278,11 @@ body {{
 .msg-sender {{ font-size: 11px; color: #999; margin-bottom: 3px; }}
 .msg-content {{ font-size: 15px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }}
 .msg-content img {{ max-width: 240px; max-height: 240px; border-radius: 4px; margin-top: 6px; display: block; }}
+.wxface {{
+  display: inline-block; width: 22px; height: 22px; vertical-align: -5px;
+  background-size: 22px 22px; background-repeat: no-repeat; margin: 0 1px;
+}}
+{face_rules}
 .msg-media {{ color: #888; font-size: 14px; }}
 .msg-sys {{ color: #bbb; font-size: 13px; }}
 .msg-file {{ color: #07c160; font-weight: 500; }}
