@@ -38,7 +38,7 @@ except:
     pass
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _utils import load_config, decrypt_lock
+from _utils import load_config, decrypt_lock, collect_across_shards
 
 OUTPUT_ROOT = 'output'
 INDEX_DIR = Path(OUTPUT_ROOT) / '.semantic_index'
@@ -252,10 +252,10 @@ def build_index(api_key: str, full: bool = False):
     # Collect items
     items = []
     try:
-        conn = open_db(nt_db, nt_key, nt_salt)
-        chat_items = collect_chat_messages(conn, name_map, days=90)
-        items.extend(chat_items)
-        conn.close()
+        # Every shard, not just the configured message_0.db.
+        items.extend(collect_across_shards(
+            config, lambda c: collect_chat_messages(c, name_map, days=90)
+        ))
     except Exception as e:
         print(f"[WARN] 聊天消息收集失败: {e}", file=sys.stderr)
 

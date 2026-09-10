@@ -72,8 +72,19 @@ def get_name_map(contact_db, contact_key, contact_salt):
     return name_map
 
 
-def get_messages(conn, talker, start_ts, end_ts, sender_map, name_map, own_wxid):
-    """Get text messages for a talker within time range."""
+def get_messages(config, talker, start_ts, end_ts, sender_map, name_map, own_wxid):
+    """Get text messages for a talker across every message shard."""
+    from _utils import collect_across_shards
+    msgs = collect_across_shards(
+        config,
+        lambda conn: _get_messages_one(conn, talker, start_ts, end_ts, sender_map, name_map, own_wxid),
+    )
+    msgs.sort(key=lambda m: m.get('create_time', 0))
+    return msgs
+
+
+def _get_messages_one(conn, talker, start_ts, end_ts, sender_map, name_map, own_wxid):
+    """Get text messages for a talker within time range from one shard."""
     tbl = f"Msg_{hashlib.md5(talker.encode()).hexdigest()}"
     c = conn.cursor()
     try:
@@ -240,7 +251,7 @@ def main():
 
     for i, s in enumerate(sessions):
         wxid = s['username']; name = name_map.get(wxid, wxid)
-        msgs = get_messages(conn, wxid, s_ts, e_ts, sender_map, name_map, own_wxid)
+        msgs = get_messages(config, wxid, s_ts, e_ts, sender_map, name_map, own_wxid)
         if not msgs: continue
         sent = sum(1 for m in msgs if m['is_self']); recv = len(msgs) - sent
         days = set(fmt_date(m['time']) for m in msgs)

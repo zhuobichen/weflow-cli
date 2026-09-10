@@ -21,7 +21,7 @@ except ImportError:
     sys.exit(1)
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _utils import load_config, decrypt_lock, parse_frontmatter, call_deepseek
+from _utils import load_config, decrypt_lock, parse_frontmatter, call_deepseek, open_message_shards
 
 TZ = timezone(timedelta(hours=8))
 OUTPUT_ROOT = 'output'
@@ -752,16 +752,49 @@ def main():
         name_map = get_name_map(contact_db, contact_key, contact_salt)
 
         try:
-            conn = open_db(nt_db, nt_key, nt_salt)
-            chat_stats = collect_chat_stats(conn, year, name_map)
-            stats.update(chat_stats)
-            print(f'  ✓ 聊天数据: {chat_stats["total_msgs"]:,} 条消息')
+            # WeChat splits a year's history across message_0..N.db; merge them.
+            chat_stats = None
+            payments = None
+            shard_n = 0
+            for sconn, _spath in open_message_shards(config):
+                try:
+                    part = collect_chat_stats(sconn, year, name_map)
+                    part_pay = collect_payments(sconn, year)
+                except Exception:
+                    continue
+                finally:
+                    try: sconn.close()
+                    except Exception: pass
+                shard_n += 1
 
-            payments = collect_payments(conn, year)
+                if chat_stats is None:
+                    chat_stats = part
+                else:
+                    for k in ('monthly_msg', 'monthly_chars', 'hourly'):
+                        chat_stats[k] = [a + b for a, b in zip(chat_stats[k], part[k])]
+                    chat_stats['total_msgs'] += part['total_msgs']
+                    chat_stats['total_chars'] += part['total_chars']
+                    tc = Counter(dict(chat_stats['top_contacts'])) + Counter(dict(part['top_contacts']))
+                    chat_stats['top_contacts'] = tc.most_common(10)
+                    chat_stats['contact_count'] = max(chat_stats['contact_count'], part['contact_count'])
+
+                if part_pay:
+                    if payments is None:
+                        payments = dict(part_pay)
+                    else:
+                        payments['monthly_income'] = [a + b for a, b in zip(payments['monthly_income'], part_pay['monthly_income'])]
+                        payments['monthly_expense'] = [a + b for a, b in zip(payments['monthly_expense'], part_pay['monthly_expense'])]
+                        payments['total_count'] += part_pay['total_count']
+
+            if chat_stats is None:
+                raise RuntimeError('未能打开任何消息分片')
+
+            stats.update(chat_stats)
+            print(f'  ✓ 聊天数据: {chat_stats["total_msgs"]:,} 条消息 (合并 {shard_n} 个分片)')
+
             if payments:
                 stats['payments'] = payments
                 print(f'  ✓ 支付数据: {payments["total_count"]} 条')
-            conn.close()
         except Exception as e:
             print(f'  [WARN] 聊天数据: {e}')
 

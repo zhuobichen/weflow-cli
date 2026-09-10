@@ -24,7 +24,7 @@ except ImportError:
     sys.exit(1)
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _utils import load_config, decrypt_lock, call_deepseek
+from _utils import load_config, decrypt_lock, call_deepseek, collect_across_shards
 
 TODOS_FILE = os.path.join(os.path.expanduser('~'), '.weflow-cli', 'todos.json')
 TZ = timezone(timedelta(hours=8))
@@ -180,9 +180,11 @@ def extract_todos(api_key: str, days: int = 7):
     start_ts = int((now - timedelta(days=days)).timestamp())
     end_ts = int(now.timestamp())
 
-    conn = open_db(nt_db, nt_key, nt_salt)
-    messages = collect_recent_messages(conn, start_ts, end_ts, name_map)
-    conn.close()
+    # WeChat splits one conversation's history across message_0..N.db
+    messages = collect_across_shards(
+        config, lambda c: collect_recent_messages(c, start_ts, end_ts, name_map)
+    )
+    messages.sort(key=lambda m: m.get('time', ''))
 
     if not messages:
         return {"new": 0, "total": len(load_todos()), "message": "近 {days} 天没有发现相关消息"}

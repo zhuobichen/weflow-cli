@@ -21,7 +21,7 @@ except ImportError:
     print("请安装: pip install sqlcipher3"); sys.exit(1)
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _utils import load_config, decrypt_lock, parse_frontmatter
+from _utils import load_config, decrypt_lock, parse_frontmatter, open_message_shards
 
 OUTPUT_ROOT = 'output'
 
@@ -86,10 +86,23 @@ def get_biz_keys(config):
     biz_db = os.path.join(msg_dir, 'biz_message_0.db')
     biz_key_enc = config.get('bizKey', '')
     biz_salt = config.get('bizSalt', '')
-    if biz_key_enc and biz_salt:
-        biz_key = decrypt_lock(biz_key_enc)
-    else:
-        print('[ERROR] 缺少 biz_message_0.db 密钥，请运行: python scripts/nt_decrypt.py scan --json')
+    biz_key = decrypt_lock(biz_key_enc) if biz_key_enc else ''
+
+    if not (biz_key and biz_salt):
+        # Every database's key is derivable from the master key, so a missing
+        # bizKey is no longer fatal.
+        from nt_keys import derive_key_or_none
+        master = decrypt_lock(config.get('decryptKey', '')) if config.get('decryptKey') else ''
+        derived = derive_key_or_none(master, biz_db) if master else None
+        if derived:
+            biz_key = derived
+            biz_salt = open(biz_db, 'rb').read(16).hex()
+        if not contact_key and master and os.path.isfile(contact_db):
+            contact_key = derive_key_or_none(master, contact_db) or ''
+            contact_salt = open(contact_db, 'rb').read(16).hex()
+
+    if not (biz_key and biz_salt):
+        print('[ERROR] 缺少 biz_message_0.db 密钥，且无法从主密钥派生（请确认配置里有 decryptKey）')
         sys.exit(1)
 
     return {
@@ -333,13 +346,26 @@ def extract_payment_totals(biz_db, biz_key, biz_salt, start_ts, end_ts):
         return []
 
 
-def extract_transfers(nt_db, nt_key, nt_salt, start_ts, end_ts, name_map, own_wxid):
-    """Scan message_0.db for 微信转账 records (type 8589934592049)."""
+def extract_transfers(config, start_ts, end_ts, name_map, own_wxid):
+    """Scan every message shard for 微信转账 records (type 8589934592049)."""
+    return _extract_transfers_shards(open_message_shards(config), start_ts, end_ts, name_map, own_wxid)
+
+
+def _extract_transfers_shards(shard_iter, start_ts, end_ts, name_map, own_wxid):
     import hashlib as _hashlib, re as _re
-    try:
-        conn = open_db(nt_db, nt_key, nt_salt)
-    except:
-        return []
+    transfers = []
+    for conn, _path in shard_iter:
+        try:
+            transfers.extend(_extract_transfers_one(conn, start_ts, end_ts, name_map, own_wxid))
+        except Exception:
+            pass
+        finally:
+            try: conn.close()
+            except Exception: pass
+    return transfers
+
+
+def _extract_transfers_one(conn, start_ts, end_ts, name_map, own_wxid):
     c = conn.cursor()
 
     # Build sender_id → username map
@@ -412,7 +438,7 @@ def extract_transfers(nt_db, nt_key, nt_salt, start_ts, end_ts, name_map, own_wx
                 contact_name = name_map.get(contact_wxid, contact_wxid)
                 transfers.append({'time': time_str, 'amount': amt, 'direction': '收到', 'contact': contact_name})
 
-    conn.close()
+    # Connection ownership belongs to the shard loop in _extract_transfers_shards.
     return transfers
 
 
@@ -641,16 +667,34 @@ def main():
     own_wxid = get_own_wxid(nt_db, nt_key, nt_salt)
     print(f'联系人映射: {len(name_map)} | 自己: {own_wxid[:20]}...')
 
-    # Collect chat stats
+    # Collect chat stats across every shard - WeChat splits one conversation's
+    # history over message_0..N.db, so a single file undercounts.
     print(f'\n统计聊天消息...')
-    try:
-        conn = open_db(nt_db, nt_key, nt_salt)
-    except Exception as e:
-        print(f'[ERROR] 打开数据库失败: {e}')
-        sys.exit(1)
+    chat_stats = None
+    shard_count = 0
+    for sconn, spath in open_message_shards(config):
+        try:
+            part = collect_chat_stats(sconn, start_ts, end_ts, name_map, own_wxid)
+        except Exception as e:
+            print(f'  [WARN] 跳过 {os.path.basename(spath)}: {e}')
+            continue
+        finally:
+            try: sconn.close()
+            except Exception: pass
+        shard_count += 1
+        if chat_stats is None:
+            chat_stats = part
+        else:
+            chat_stats['total_sent'] += part['total_sent']
+            chat_stats['total_recv'] += part['total_recv']
+            chat_stats['talker_stats'] += part['talker_stats']
+            chat_stats['hour_dist'] += part['hour_dist']
+            chat_stats['day_dist'] += part['day_dist']
 
-    chat_stats = collect_chat_stats(conn, start_ts, end_ts, name_map, own_wxid)
-    conn.close()
+    if chat_stats is None:
+        print('[ERROR] 未能打开任何消息分片')
+        sys.exit(1)
+    print(f'  已合并 {shard_count} 个分片')
     print(f'  消息: 发送 {chat_stats["total_sent"]:,} / 接收 {chat_stats["total_recv"]:,}')
     print(f'  联系人: {len(chat_stats["talker_stats"])} 个')
 
@@ -674,7 +718,7 @@ def main():
 
     # Collect transfer data
     print(f'\n统计转账...')
-    transfers = extract_transfers(nt_db, nt_key, nt_salt, start_ts, end_ts, name_map, own_wxid)
+    transfers = extract_transfers(config, start_ts, end_ts, name_map, own_wxid)
     total_in = sum(t['amount'] for t in transfers if t['direction'] == '收到')
     total_out = sum(t['amount'] for t in transfers if t['direction'] == '发出')
     if transfers:
