@@ -142,6 +142,19 @@ export class ExportService {
         }),
       })
 
+      // Surface Python's progress and diagnostics. Only the trailing JSON
+      // summary is machine-read; everything else used to be discarded, so a
+      // multi-minute export showed nothing between "Exporting..." and the
+      // result - and the sticker seed hint never reached the user at all.
+      if (!quiet) {
+        for (const raw of stdout.split('\n')) {
+          const line = raw.trim()
+          if (!line || line.startsWith('{') || line.startsWith('Total messages:')) continue
+          if (/^Fetched \d+\/\d+/.test(line)) continue
+          console.log(`  ${line}`)
+        }
+      }
+
       // Parse JSON result from Python output
       const lines = stdout.split('\n').filter((l: string) => l.trim())
       for (let i = lines.length - 1; i >= 0; i--) {

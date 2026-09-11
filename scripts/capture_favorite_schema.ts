@@ -3,6 +3,8 @@ import { readFileSync } from 'fs'
 import { promisify } from 'util'
 import { join } from 'path'
 import { keyService } from '../src/core/keyService.js'
+import { getPythonCommand } from '../src/utils/python.js'
+import { createPythonProcessEnv } from '../src/utils/pythonProcessEnv.js'
 
 const execFileAsync = promisify(execFile)
 const dbPath = process.argv[2]
@@ -23,12 +25,14 @@ if (!capture.success || !capture.key) {
 
 const scriptPath = join(process.cwd(), 'scripts', 'nt_decrypt.py')
 const salt = readFileSync(dbPath).subarray(0, 16).toString('hex')
-const { stdout } = await execFileAsync('py', [
-  '-3', scriptPath, 'schema', '--db', dbPath, '--key', capture.key, '--salt', salt,
+// Resolve the interpreter the same way the CLI does; `py -3` is absent on
+// many Windows installs and disagrees with the venv the dependencies live in.
+const { stdout } = await execFileAsync(getPythonCommand(), [
+  scriptPath, 'schema', '--db', dbPath, '--key', capture.key, '--salt', salt,
 ], {
   timeout: 15_000,
   maxBuffer: 1024 * 1024,
-  env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
+  env: createPythonProcessEnv(),
   encoding: 'utf-8',
 })
 

@@ -17,6 +17,13 @@ All notable user-facing changes are recorded here. This project follows [Semanti
 - Preserve forwarded app cards with cached covers, including CDATA-wrapped Bilibili links, and decrypt remote WeChat 4.x emoticons with their message-provided AES key.
 - Decode entity-escaped emoji XML and try `encrypturl`, `thumburl`, `cdnurl`, and `externurl` fallbacks; resolve Bilibili BV covers when a share page omits `og:image`.
 - Render signature-only WeChat default `[打脸]` messages with the bundled official `Facepalm` asset when no message-specific resource is available.
+- Cache remote export media (covers, article thumbnails, emoticon CDN) on disk, misses included, so a re-export no longer repeats hundreds of requests against dead WeChat CDN links. First export of a link-heavy conversation dropped from 228s to 28s and re-export to 1.8s, with identical output.
+- Fetch that remote media concurrently instead of one URL per message. A throwaway local-only pass records what the conversation needs, the URLs are fetched in parallel, then the real pass runs against a warm cache.
+- Try WeChat's local sticker cache before the CDN for custom emoticons. The local path is offline and instant; the CDN cost 1.32s per sticker and was tried first.
+- Discover the account's sticker seed automatically. `find_seed`/`any_sticker_file` existed but nothing called them, so `emoticonSeed` stayed empty, local decryption never ran, and custom stickers silently degraded. The export now derives it from a real cached sticker, memoises it, and prints the command to persist it.
+- Render `local_type=10000` system rows as text. Escaping the raw row put WeChat's own display markup (`<img src="SystemMessages_HongbaoIcon.png"/>`, `<_wc_custom_link_ ...>`) in the bubble as a wall of `&lt;sysmsg ...&gt;`, so a revoke notice read as XML instead of naming who revoked what. `$wxid_...$` placeholders are expanded too.
+- Flatten quoted replies (appmsg type 57) whose `<des>` carries a whole escaped nested message, instead of dumping the nested markup.
+- Surface the Python exporter's progress and diagnostics in `export html` output; only the trailing JSON summary was read, so a multi-minute export showed nothing in between.
 
 ### Security and reliability
 

@@ -125,6 +125,8 @@ For key, database, or Python environment issues, follow the [Operations & Troubl
 weflow-cli export "contact" html --output ./output
 ```
 
+HTML export embeds WeChat's cached thumbnails by default and reconstructs images, custom stickers, system messages, and article cards as far as the local data allows. Remote media is cached per URL under `.cover-cache/` in the output directory, so **a re-export is near-instant** (about 2s for 1600+ messages) and only the first export pays the network cost. Custom stickers decrypt offline from the local cache; when no sticker seed is configured the exporter derives it from WeChat's process memory and prints the command to persist it. Add `--full-images` for originals (5-24MB each) at several times the cost. See the [operations manual](./OPERATIONS.md#4-导出聊天记录) for details.
+
 **Generate the official-account digest for a day**
 
 ```powershell
