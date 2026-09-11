@@ -1283,6 +1283,29 @@ def split_group_speaker(content, sender_map, own_wxid=''):
     return candidate, content[match.end():]
 
 
+def image_is_blank(b64_data, threshold=0.985):
+    """True for an embedded payload that carries no visible artwork.
+
+    Sticker sources occasionally hand back an all-white frame - a truncated
+    local download, or a CDN placeholder. Embedding it renders as an empty
+    square, which reads as a broken export rather than as the placeholder it
+    is, so callers prefer the text fallback.
+    """
+    if not b64_data or not _WECHAT_IMAGE:
+        return False
+    try:
+        from collections import Counter
+        import io as _io
+        from PIL import Image
+        with Image.open(_io.BytesIO(base64.b64decode(b64_data))) as image:
+            pixels = list(image.convert('RGB').resize((32, 32)).getdata())
+        if not pixels:
+            return True
+        return Counter(pixels).most_common(1)[0][1] / len(pixels) > threshold
+    except Exception:
+        return False
+
+
 def render_voice(local_id, content):
     """`[语音 6″]` plus its transcript when one has been cached.
 
@@ -1658,6 +1681,12 @@ def format_message(row, talker, wx_dir, image_map=None, sender_map=None, display
                     img_data, mime = downloaded
                     image_b64 = img_data
                     display = f'<span class="msg-media">{escape_html(emoji_label)}</span><br><img src="data:{mime};base64,{img_data}" loading="lazy" />'
+            if image_b64 and image_is_blank(image_b64):
+                # A blank square is indistinguishable from a broken page; fall
+                # back to the label so the message still reads as an emoji.
+                image_b64 = None
+                img_data = None
+                display = f'<span class="msg-media">{escape_html(emoji_label)}</span>'
             if image_b64:
                 pass
             elif thumb_url and thumb_url.startswith(('http://', 'https://')):

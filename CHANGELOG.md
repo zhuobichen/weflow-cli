@@ -32,6 +32,8 @@ All notable user-facing changes are recorded here. This project follows [Semanti
 - Show a cached poster frame for `local_type=43` videos when one exists, and always show the clip's duration (`[视频 10″]`) instead of a bare `[视频]`. Where WeChat never downloaded the video, no poster exists locally to show.
 - Fix HTML part navigation, which linked to `<talker>_partN.html` while the files were written as `<remark>_partN.html`, so every "第 N 部分" link opened a missing file (`ERR_FILE_NOT_FOUND`). Affected both group and 1:1 exports; all 16165 links across the two test conversations now resolve.
 - Correct the exported page footer, which still claimed images cover only the most recent two months.
+- Show the drawn frame of a `wxgf` sticker instead of a blank white square. Sticker H.265 streams routinely open with a blank transition frame, and taking frame 1 embedded that; decoding a few frames and keeping the one carrying the most artwork fixes it (one sticker measured 99.1% white before, 2.1% after). Verified across three conversations: 2215 embedded images, 0 blank.
+- Treat an all-blank sticker payload as a failed decode rather than an image, so a truncated local download or a CDN placeholder falls back to the `[表情]` label instead of rendering an empty square.
 
 ### Added
 

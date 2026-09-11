@@ -16,6 +16,7 @@ Decoded results are cached on disk because that is the expensive step.
 
 Reference: CN-Grace/Wechat-Emoticon-Parser (v4.0-plus branch).
 """
+import glob
 import hashlib
 import os
 import subprocess
@@ -178,10 +179,47 @@ _FFMPEG = None
 _FFMPEG_CHECKED = False
 
 
+WXGF_MAX_FRAMES = 4
+
+# Below this share of non-dominant pixels a frame is treated as blank rather
+# than as artwork. Line drawings on white still score well above it; the blank
+# transition frames and truncated payloads sit at essentially 0.
+BLANK_FRAME_SCORE = 0.005
+
+
+def _frame_score(path):
+    """How much artwork a decoded frame carries, in [0, 1].
+
+    The share of pixels that are not the frame's dominant colour. Sticker
+    streams routinely open with a blank transition frame, which scores ~0.01
+    while the drawn frame scores several times that.
+    """
+    try:
+        from PIL import Image
+        from collections import Counter
+    except ImportError:
+        return None
+    try:
+        with Image.open(path) as image:
+            pixels = list(image.convert('RGB').getdata())
+        if not pixels:
+            return 0.0
+        dominant = Counter(pixels).most_common(1)[0][1]
+        return 1.0 - dominant / len(pixels)
+    except Exception:
+        return None
+
+
 def decode_wxgf(data):
-    """First frame of a `wxgf` payload as PNG bytes, or b''.
+    """A drawn frame of a `wxgf` payload as PNG bytes, or b''.
 
     The container is 'wxgf' + a small header, then a raw H.265 stream.
+
+    Not simply the first frame: many sticker streams begin with a blank
+    transition frame, so taking frame 1 yields a white square. Decoding a few
+    frames and keeping the one with the most artwork costs little (the result
+    is cached by the caller) and is the difference between showing the sticker
+    and showing nothing.
     """
     global _FFMPEG, _FFMPEG_CHECKED
     if not _FFMPEG_CHECKED:
@@ -189,30 +227,44 @@ def decode_wxgf(data):
         _FFMPEG_CHECKED = True
     if not _FFMPEG:
         return b''
-    tmp_in = tmp_out = None
+    tmp_in = None
+    tmp_out = None
     try:
         with tempfile.NamedTemporaryFile(suffix='.hevc', delete=False) as fh:
             fh.write(data[4:])
             tmp_in = fh.name
-        tmp_out = tmp_in + '.png'
+        tmp_out = tmp_in + '_%02d.png'
         subprocess.run(
             [_FFMPEG, '-y', '-loglevel', 'error', '-f', 'hevc', '-i', tmp_in,
-             '-frames:v', '1', tmp_out],
-            capture_output=True, timeout=30,
+             '-frames:v', str(WXGF_MAX_FRAMES), '-vsync', '0', tmp_out],
+            capture_output=True, timeout=60,
         )
-        if os.path.exists(tmp_out) and os.path.getsize(tmp_out) > 0:
-            with open(tmp_out, 'rb') as fh:
-                return fh.read()
+        frames = sorted(glob.glob(tmp_in + '_*.png'))
+        if not frames:
+            return b''
+        best = frames[0]
+        best_score = None
+        for frame in frames:
+            score = _frame_score(frame)
+            if score is None:
+                break
+            if best_score is None or score > best_score:
+                best, best_score = frame, score
+        # Every frame blank means the cached payload is not decodable (a
+        # truncated download, typically). Report failure so the caller tries
+        # another source rather than embedding a white square.
+        if best_score is not None and best_score < BLANK_FRAME_SCORE:
+            return b''
+        with open(best, 'rb') as fh:
+            return fh.read()
     except Exception:
-        pass
+        return b''
     finally:
-        for p in (tmp_in, tmp_out):
+        for path in ([tmp_in] if tmp_in else []) + (glob.glob(tmp_in + '_*.png') if tmp_in else []):
             try:
-                if p:
-                    os.remove(p)
+                os.remove(path)
             except OSError:
                 pass
-    return b''
 
 
 def load_sticker(cache_dirs, md5_hex, key, decode_cache_dir=''):
