@@ -33,6 +33,14 @@ All notable user-facing changes are recorded here. This project follows [Semanti
 - Fix HTML part navigation, which linked to `<talker>_partN.html` while the files were written as `<remark>_partN.html`, so every "第 N 部分" link opened a missing file (`ERR_FILE_NOT_FOUND`). Affected both group and 1:1 exports; all 16165 links across the two test conversations now resolve.
 - Correct the exported page footer, which still claimed images cover only the most recent two months.
 
+### Added
+
+- Transcribe voice messages into HTML exports. WeChat voice is SILK v3, which browsers cannot play and ffmpeg cannot decode at all, so a voice message previously carried no information whatsoever. `scripts/wechat_voice.py` decodes the payloads from `media_*.db`'s `VoiceInfo` table and recognises them on-device, and the export renders `[语音 6″]` with the transcript beneath it.
+- Transcription is a separate, resumable pass rather than part of the export: exports only read a content-addressed transcript cache, so a long conversation never blocks an export and an interrupted run continues where it stopped.
+- Prefer a Cantonese fine-tune over stock Whisper. Stock Whisper answers Cantonese speech with fluent, confident Mandarin that was never said — worse than no transcript, because it reads as a real sentence. The Cantonese model transcribes the same clips into actual Cantonese, and stock `large-v3` was measurably worse still, hallucinating Vietnamese and English.
+- Use the GPU when one is available, falling back to CPU. The same clip goes from 2.0s to 0.07s, which is the difference between a ~30 minute pass and an overnight one. Includes the Windows DLL-path setup the recognition library needs for its CUDA runtime.
+- `requirements-voice.txt` declares the optional voice dependencies.
+
 ### Security and reliability
 
 - Run the regression suite in CI and make NT path-discovery checks independent of the optional SQLCipher runtime.

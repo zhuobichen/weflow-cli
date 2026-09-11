@@ -103,6 +103,47 @@ HTML 导出的时间几乎全部花在远程媒体上（公众号封面、B 站�
 - 图片显示为 `[图片]` 且无图：该图片从未在这台设备上下载过。
 - `[位置]` 只有地名、没有地图：位置消息本身不携带地图图片。
 
+### 语音消息转文字
+
+HTML 里放不出语音：微信语音是 **SILK v3** 格式，浏览器不支持，ffmpeg 也没有 SILK 解码器（只有 AMR）。所以语音转文字是让语音消息在导出里能携带信息的唯一办法。
+
+**它是独立的、可断点续跑的一步，不在导出过程里。** 导出只读转写缓存；缓存没有的语音显示为 `[语音 6″]`。这样可以随时跑、随时停，跑过一遍就永久命中（按语音内容的 md5 缓存，同一条语音被转发到别处也只识别一次）。
+
+安装（可选，较重）：
+
+```powershell
+python -m pip install -r requirements-voice.txt
+```
+
+下载模型。**这一步对粤语是必须的**：原版 Whisper 遇到粤语会输出通顺但完全是编造的普通话——看着像真句子，实际什么都没说过，比不转写更危险。粤语微调版才转得出真正的粤语：
+
+```powershell
+$env:HF_ENDPOINT = "https://hf-mirror.com"; $env:HF_HUB_DISABLE_XET = "1"
+python -c "from huggingface_hub import snapshot_download; snapshot_download('alvanlii/whisper-small-cantonese', allow_patterns=['cts/*'], local_dir='models/whisper-small-cantonese')"
+```
+
+> `HF_HUB_DISABLE_XET=1` 是必需的：hf-mirror 不代理 HuggingFace 的 Xet 传输，不加会报 401。
+
+模型放好后会自动被优先使用（`models/whisper-small-cantonese/cts` 存在即可，该目录已在 `.gitignore` 中）。跑转写：
+
+```powershell
+python scripts/wechat_voice.py --db "<message_0.db>" --key <key> --salt <salt> `
+  --passphrase <passphrase> --talker "<会话id>" --cache-dir "output\.voice-cache"
+```
+
+- **有 NVIDIA GPU 时自动走 GPU**，约快 30 倍（实测 0.07 秒/条 vs 2.0 秒/条）；GPU 不可用则退回 CPU，不会报错。需要 `pip install nvidia-cublas-cu12 nvidia-cudnn-cu12`。
+- 语言**自动检测**。强制 `--language yue` 在粤语模型上会返回空，别加。
+- 中断后重跑会从缓存未命中的地方继续，不会从头再来。
+- 实测：1775 条语音（约 2.5 小时音频）全量约 9 分钟。
+
+实测对比（同一条粤语语音）：
+
+| 设置 | 输出 |
+| --- | --- |
+| 原版 small，`zh` | 有些人在拍攝,我們都很懶拍七六歲 ← 编造 |
+| large-v3，自动检测 | `Các bạn hãy đăng ký kênh...` ← 幻觉成越南语 |
+| **粤语 small，自动检测** | 你所以東興人沒處來囉，東興人沒處來開囉 ← 正确识别出地名 |
+
 ### 自定义表情包（表情包/贴纸）
 
 自定义表情包是 AES 加密的，密钥由一个**账号级 seed** 参与派生。该 seed 只存在于微信进程内存中：

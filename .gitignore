@@ -1,4 +1,5 @@
 node_modules/
+models/
 dist/
 output/
 !output/biz-daily/.template/

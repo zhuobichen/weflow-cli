@@ -63,6 +63,12 @@ try:
 except Exception:
     _WECHAT_IMAGE = False
 
+try:
+    import wechat_voice
+    _WECHAT_VOICE = True
+except Exception:
+    _WECHAT_VOICE = False
+
 # Remote media is the single slowest step of an export: each miss costs a page
 # fetch plus an image download, and inline thumbnails alone run to several
 # hundred per conversation. Bound it per run and keep results on disk, misses
@@ -100,6 +106,12 @@ STICKER_STATE = {'key': b'', 'dirs': [], 'cache_dir': ''}
 # by wxid, so without this a group transcript is unreadable. Empty when the
 # contact database is unavailable, in which case ids are shown as-is.
 CONTACT_NAMES = {}
+
+# Voice messages: {local_id: silk bytes} for this conversation, plus the
+# transcript cache. The export only ever *reads* transcripts - recognising
+# speech runs ~1.4x the audio's own length on CPU, so it is a separate,
+# resumable pass (`scripts/wechat_voice.py`) rather than part of an export.
+VOICE_STATE = {'map': {}, 'cache': None}
 
 # Remote media is discovered one message at a time, but a conversation needs
 # it from hundreds of messages at once - and a single message rarely needs
@@ -1271,6 +1283,30 @@ def split_group_speaker(content, sender_map, own_wxid=''):
     return candidate, content[match.end():]
 
 
+def render_voice(local_id, content):
+    """`[语音 6″]` plus its transcript when one has been cached.
+
+    Browsers cannot play SILK and ffmpeg cannot decode it, so there is no audio
+    element to offer - the transcript is the only way a voice message can carry
+    meaning in an export.
+    """
+    length = (extract_xml_attr_value(content, 'voicelength')
+              or extract_xml_attr_value(content, 'length'))
+    seconds = f' {round(int(length) / 1000)}″' if length.isdigit() and int(length) > 0 else ''
+    label = f'<span class="msg-media">[语音{seconds}]</span>'
+    blob = VOICE_STATE['map'].get(local_id)
+    cache = VOICE_STATE['cache']
+    if blob is None or cache is None:
+        return label
+    text = cache.get(wechat_voice.voice_key(blob))
+    if not text:
+        return label
+    # Labelled, not presented as the words themselves: recognition of dialect
+    # speech is approximate, and an unlabelled transcript reads as a quote.
+    return (f'{label}<div class="msg-voice-text">'
+            f'<span class="voice-tag">机器转写</span>{escape_html(text)}</div>')
+
+
 def render_location(content):
     """Readable label for a type-48 location row instead of its raw XML."""
     label = extract_xml_attr_value(content, 'poiname') or extract_xml_attr_value(content, 'label')
@@ -1575,7 +1611,7 @@ def format_message(row, talker, wx_dir, image_map=None, sender_map=None, display
             image_b64 = img_data
             display = f'<span class="msg-media">[图片]</span><br><img src="data:{mime};base64,{img_data}" loading="lazy" />'
     elif local_type == 34:
-        display = '<span class="msg-media">[语音]</span>'
+        display = render_voice(local_id, metadata_content or content)
     elif local_type == 43:
         # A video row has no frame of its own, but a poster image can exist
         # under the same md5, so show it when the index has one.
@@ -1838,6 +1874,8 @@ body {{
 }}
 {face_rules}
 .msg-media {{ color: #888; font-size: 14px; }}
+.msg-voice-text {{ margin-top: 4px; padding: 6px 9px; background: rgba(0,0,0,0.045); border-left: 3px solid #bbb; border-radius: 3px; font-size: 14px; line-height: 1.5; color: #444; }}
+.voice-tag {{ display: inline-block; margin-right: 6px; padding: 1px 5px; border-radius: 3px; background: #e8e8e8; color: #999; font-size: 11px; vertical-align: 1px; }}
 .msg-sys {{ color: #bbb; font-size: 13px; }}
 .msg-file {{ color: #07c160; font-weight: 500; }}
 .msg-app {{ margin: 0; }}
@@ -2049,6 +2087,22 @@ def main():
     CONTACT_NAMES.update(load_contact_names(args.contact_db, args.contact_key, args.contact_salt))
     if CONTACT_NAMES:
         print(f"Contacts: {len(CONTACT_NAMES)} name(s)")
+
+    # Voice: load the payloads so a cached transcript can be shown. Anything
+    # not yet transcribed simply renders as `[语音 N″]`.
+    if _WECHAT_VOICE:
+        VOICE_STATE['cache'] = wechat_voice.TranscriptCache(os.path.join(args.out, '.voice-cache'))
+        try:
+            VOICE_STATE['map'] = wechat_voice.load_voice_map(
+                args.db, args.key, args.salt, args.passphrase, args.talker)
+        except Exception:
+            VOICE_STATE['map'] = {}
+        if VOICE_STATE['map']:
+            done = sum(
+                1 for blob in VOICE_STATE['map'].values()
+                if VOICE_STATE['cache'].get(wechat_voice.voice_key(blob)) is not None
+            )
+            print(f"Voice: {len(VOICE_STATE['map'])} clip(s), {done} transcribed")
 
     # Connect
     print(f"Connecting to {args.db}...")

@@ -1,0 +1,15 @@
+# Optional: voice-message transcription for HTML chat export.
+#
+# Only needed if you want voice messages to appear as text. Install with:
+#     python -m pip install -r requirements-voice.txt
+#
+# `pilk` decodes WeChat's SILK v3 audio, which neither browsers nor ffmpeg
+# can decode. `faster-whisper` does the recognition on-device; the model is
+# fetched separately (see OPERATIONS.md, 「语音消息」).
+#
+# On an NVIDIA GPU, also install the CUDA runtime wheels the recognition
+# library loads at runtime. Without them it falls back to CPU and is roughly
+# 30x slower:
+#     python -m pip install nvidia-cublas-cu12 nvidia-cudnn-cu12
+pilk>=0.2.4
+faster-whisper>=1.0.0
