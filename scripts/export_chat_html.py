@@ -1202,6 +1202,29 @@ def render_contact_card(content):
     return '<div class="msg-app">' + ''.join(parts) + '</div>'
 
 
+def split_group_speaker(content, sender_map, own_wxid=''):
+    """(speaker id, content) with the group sender prefix removed.
+
+    Group rows generally prefix the content with the speaker's id. Only an id
+    the sender map actually knows is accepted, so a message that merely starts
+    with `note: ...` is not mistaken for one. Returns (None, content) when
+    there is no prefix to strip.
+    """
+    match = re.match(r'^([A-Za-z0-9_@.-]{5,64})\s*[:：]\s', str(content or ''))
+    if not match:
+        return None, content
+    candidate = match.group(1)
+    if candidate not in set((sender_map or {}).values()):
+        return None, content
+    return candidate, content[match.end():]
+
+
+def render_location(content):
+    """Readable label for a type-48 location row instead of its raw XML."""
+    label = extract_xml_attr_value(content, 'poiname') or extract_xml_attr_value(content, 'label')
+    return f'[位置] {escape_html(label)}' if label else '<span class="msg-media">[位置]</span>'
+
+
 def extract_xml_text(content, tag):
     """Extract plain or CDATA-wrapped text from one XML element."""
     if not content:
@@ -1368,6 +1391,7 @@ def format_message(row, talker, wx_dir, image_map=None, sender_map=None, display
         sender_map: {sender_id: user_name} from Name2Id table
         display_name: human-readable name for the target talker
     """
+    is_group = '@chatroom' in str(talker or '')
     local_id = row[0] or 0
     server_id = row[1] or 0
     local_type = row[2] or 0
@@ -1387,16 +1411,6 @@ def format_message(row, talker, wx_dir, image_map=None, sender_map=None, display
     is_self = sender_matches_account(sender_user_name, own_wxid)
     if not is_self and sender_user_name and not own_wxid:
         is_self = sender_user_name != talker
-
-    # Build display sender name
-    if is_self:
-        sender_display = '我'
-    elif display_name:
-        sender_display = display_name
-    elif sender_user_name:
-        sender_display = sender_user_name
-    else:
-        sender_display = '未知发送者'
 
     # Get content
     content = ''
@@ -1442,6 +1456,26 @@ def format_message(row, talker, wx_dir, image_map=None, sender_map=None, display
         and _face_index.has_face(content)
     )
     builtin_emoji_label = _face_index.find_face(content)
+
+    # A group row's `display_name` is the group, not the speaker, so using it
+    # put the same name on every bubble and nobody could tell who said what.
+    # The speaker is in the content prefix; fall back to the sender map.
+    group_speaker = None
+    if is_group:
+        group_speaker, content = split_group_speaker(content, sender_map)
+
+    if is_self:
+        sender_display = '我'
+    elif group_speaker:
+        sender_display = '我' if sender_matches_account(group_speaker, own_wxid) else group_speaker
+    elif is_group and sender_user_name:
+        sender_display = sender_user_name
+    elif display_name:
+        sender_display = display_name
+    elif sender_user_name:
+        sender_display = sender_user_name
+    else:
+        sender_display = '未知发送者'
 
     if '\x00' in content or sum(ord(char) < 32 and char not in '\n\r\t' for char in content) > 2:
         content = ''
@@ -1491,6 +1525,8 @@ def format_message(row, talker, wx_dir, image_map=None, sender_map=None, display
         display = '<span class="msg-media">[语音]</span>'
     elif local_type == 43:
         display = '<span class="msg-media">[视频]</span>'
+    elif local_type == 48:
+        display = render_location(metadata_content or content)
     elif is_emoji_xml or (local_type in (1, 47) and ('<' in metadata_content or local_type == 47)):
         emoji_label = content if content.startswith('[') and content.endswith(']') else '[表情]'
         cached = get_cached_image(image_map, local_id, create_time, metadata_content, resource_md5s)

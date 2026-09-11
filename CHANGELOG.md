@@ -24,6 +24,9 @@ All notable user-facing changes are recorded here. This project follows [Semanti
 - Render `local_type=10000` system rows as text. Escaping the raw row put WeChat's own display markup (`<img src="SystemMessages_HongbaoIcon.png"/>`, `<_wc_custom_link_ ...>`) in the bubble as a wall of `&lt;sysmsg ...&gt;`, so a revoke notice read as XML instead of naming who revoked what. `$wxid_...$` placeholders are expanded too.
 - Flatten quoted replies (appmsg type 57) whose `<des>` carries a whole escaped nested message, instead of dumping the nested markup.
 - Surface the Python exporter's progress and diagnostics in `export html` output; only the trailing JSON summary was read, so a multi-minute export showed nothing in between.
+- Name the actual speaker in group chats. `display_name` is the group, so every bubble was labelled with the group name and no message could be attributed; group rows now use the sender id carried by the content prefix, falling back to the sender map.
+- Render `local_type=48` location rows as their place label (`[位置] ...`) instead of dumping the location XML.
+- Strip the redundant `wxid_...: ` content prefix from group rows once it has been used to identify the speaker.
 
 ### Security and reliability
 
