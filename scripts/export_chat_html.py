@@ -1301,10 +1301,11 @@ def render_voice(local_id, content):
     text = cache.get(wechat_voice.voice_key(blob))
     if not text:
         return label
-    # Labelled, not presented as the words themselves: recognition of dialect
-    # speech is approximate, and an unlabelled transcript reads as a quote.
+    # Labelled, not presented as the words themselves. Recognition of dialect
+    # speech is approximate: an unlabelled transcript reads as a quote, and a
+    # confidently wrong quote is worse than an obvious placeholder.
     return (f'{label}<div class="msg-voice-text">'
-            f'<span class="voice-tag">机器转写</span>{escape_html(text)}</div>')
+            f'<span class="voice-tag">机器转写·粤语欠准</span>{escape_html(text)}</div>')
 
 
 def render_location(content):
@@ -1875,7 +1876,7 @@ body {{
 {face_rules}
 .msg-media {{ color: #888; font-size: 14px; }}
 .msg-voice-text {{ margin-top: 4px; padding: 6px 9px; background: rgba(0,0,0,0.045); border-left: 3px solid #bbb; border-radius: 3px; font-size: 14px; line-height: 1.5; color: #444; }}
-.voice-tag {{ display: inline-block; margin-right: 6px; padding: 1px 5px; border-radius: 3px; background: #e8e8e8; color: #999; font-size: 11px; vertical-align: 1px; }}
+.voice-tag {{ display: inline-block; margin-right: 6px; padding: 1px 5px; border-radius: 3px; background: #fdf0e0; color: #b5762a; font-size: 11px; vertical-align: 1px; white-space: nowrap; }}
 .msg-sys {{ color: #bbb; font-size: 13px; }}
 .msg-file {{ color: #07c160; font-weight: 500; }}
 .msg-app {{ margin: 0; }}
@@ -1953,6 +1954,7 @@ body {{
 <div class="footer">
   <p>Exported by WeFlow CLI · {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}</p>
   <p class="hint">💡 图片与表情来自本机微信数据（会话缓存 + 账号媒体索引）。本机从未下载过的图片、以及未缓存封面的视频，无法显示。</p>
+  <p class="hint">⚠️ 语音下方文字为<b>本机机器转写</b>，未经校对。粤语/方言的识别准确率有限，可能出现通顺但并非原话的内容——<b>不可作为原话引用</b>；需要确证时请以录音为准。</p>
 </div>
 <script>
 function searchMessages(query) {{

@@ -40,6 +40,7 @@ All notable user-facing changes are recorded here. This project follows [Semanti
 - Prefer a Cantonese fine-tune over stock Whisper. Stock Whisper answers Cantonese speech with fluent, confident Mandarin that was never said — worse than no transcript, because it reads as a real sentence. The Cantonese model transcribes the same clips into actual Cantonese, and stock `large-v3` was measurably worse still, hallucinating Vietnamese and English.
 - Use the GPU when one is available, falling back to CPU. The same clip goes from 2.0s to 0.07s, which is the difference between a ~30 minute pass and an overnight one. Includes the Windows DLL-path setup the recognition library needs for its CUDA runtime.
 - `requirements-voice.txt` declares the optional voice dependencies.
+- Label machine transcripts and state the limitation in the page footer. Sampling a Cantonese family group found the recogniser producing Cantonese-shaped text whose meaning often does not hold - right sounds, wrong words. A confidently wrong transcript is worse than an obvious placeholder in a record that may be cited, so transcripts are marked `机器转写·粤语欠准` and the footer says they must not be quoted as the original words. See OPERATIONS.md for the measurements that rule out decoding, audio quality, and model confidence as causes.
 
 ### Security and reliability
 
