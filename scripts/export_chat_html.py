@@ -2106,6 +2106,15 @@ def main():
             )
             print(f"Voice: {len(VOICE_STATE['map'])} clip(s), {done} transcribed")
 
+    # The caller resolves the display name from the session list, which only
+    # covers recent conversations. A less recent chat therefore exported as
+    # `wxid_..._part1.html` even though its remark was known all along. Fall
+    # back to the contact database so files are named after the person.
+    if not args.name and args.talker:
+        args.name = CONTACT_NAMES.get(args.talker, '')
+        if args.name:
+            print(f"Name: {args.name} (from contacts)")
+
     # Connect
     print(f"Connecting to {args.db}...")
     _phase("cover init")
