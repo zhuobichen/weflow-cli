@@ -34,6 +34,8 @@ All notable user-facing changes are recorded here. This project follows [Semanti
 - Correct the exported page footer, which still claimed images cover only the most recent two months.
 - Show the drawn frame of a `wxgf` sticker instead of a blank white square. Sticker H.265 streams routinely open with a blank transition frame, and taking frame 1 embedded that; decoding a few frames and keeping the one carrying the most artwork fixes it (one sticker measured 99.1% white before, 2.1% after). Verified across three conversations: 2215 embedded images, 0 blank.
 - Treat an all-blank sticker payload as a failed decode rather than an image, so a truncated local download or a CDN placeholder falls back to the `[表情]` label instead of rendering an empty square.
+- Test the plain-text branch against the message body rather than the row's combined metadata. `metadata_content` always carries `<msgsource>`, so the check always saw a `<` and every text message that had sender metadata skipped the text branch and fell through to the emoji one - rendering a Tencent Meeting invite as `[表情]` beside a broken image.
+- Never emit a remote URL as an `<img>` source. The candidate comes from a catch-all that accepts any URL in the row, and a sample of 57 such sources found 56 were web page links (`meeting.tencent.com`, `github.com`, `support.weixin.qq.com`) rather than images, each rendering as a broken-image icon. Images we could not fetch are now simply not shown.
 
 ### Added
 

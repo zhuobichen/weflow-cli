@@ -1599,7 +1599,13 @@ def format_message(row, talker, wx_dir, image_map=None, sender_map=None, display
 
     if is_contact_card:
         display = render_contact_card(metadata_content)
-    elif local_type == 1 and '<' not in metadata_content:
+    elif local_type == 1 and '<' not in content:
+        # Tested against `content`, not `metadata_content`: the latter always
+        # carries the row's `<msgsource>` block, so it always contains '<'.
+        # Any text message with sender metadata therefore failed this branch
+        # and fell through to the emoji one, which rendered it as `[表情]` plus
+        # whatever URL its catch-all found - a meeting invite became a broken
+        # image whose src was `https://meeting.tencent.com/dm/...`.
         # Text
         builtin_label = _face_index.find_face(content)
         display = render_builtin_emoji(content, builtin_label) if builtin_label else escape_html(content)
@@ -1689,9 +1695,6 @@ def format_message(row, talker, wx_dir, image_map=None, sender_map=None, display
                 display = f'<span class="msg-media">{escape_html(emoji_label)}</span>'
             if image_b64:
                 pass
-            elif thumb_url and thumb_url.startswith(('http://', 'https://')):
-                remote_url = thumb_url.replace('http://', 'https://', 1)
-                display = f'<span class="msg-media">{escape_html(emoji_label)}</span><br><img src="{escape_html(remote_url)}" referrerpolicy="no-referrer" loading="lazy" />'
             elif has_builtin_signature and builtin_emoji_label:
                 display = render_builtin_emoji(content, builtin_emoji_label)
             else:
@@ -1736,9 +1739,11 @@ def format_message(row, talker, wx_dir, image_map=None, sender_map=None, display
                     b64, mime = img_data
                     image_b64 = b64
                     parts.append(f'<img class="msg-app-thumb" src="data:{mime};base64,{b64}" loading="lazy" />')
-                elif thumb_url and thumb_url.startswith(('http://', 'https://')):
-                    remote_url = thumb_url.replace('http://', 'https://', 1)
-                    parts.append(f'<img class="msg-app-thumb" src="{escape_html(remote_url)}" referrerpolicy="no-referrer" loading="lazy" />')
+                # No remote-src fallback. The candidate URL came from a
+                # catch-all that accepts any URL in the row, which is usually a
+                # web page link (`meeting.tencent.com`, `github.com`,
+                # `support.weixin.qq.com`) rather than an image; emitting it
+                # produced a broken-image icon in 56 of 57 sampled cases.
                 if url.startswith(('http://', 'https://')):
                     parts.append(f'<a class="msg-link" href="{escape_html(url)}" target="_blank">{title_html}</a>')
                 else:
