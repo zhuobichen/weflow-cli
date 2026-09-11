@@ -78,6 +78,25 @@ def render_faces(text):
     return _ALL_RE.sub(repl, text)
 
 
+def find_face(text):
+    """First WeChat face code in `text` as "[名字]", or None.
+
+    A single regex scan; callers used to loop the whole table doing
+    `label in text`, which got expensive once the table grew to ~120.
+    """
+    if not text or _ALL_RE is None:
+        return None
+    m = _ALL_RE.search(text)
+    return f"[{m.group(1)}]" if m else None
+
+
+def has_face(text):
+    """True if `text` contains any known face code."""
+    if not text or _ALL_RE is None:
+        return False
+    return _ALL_RE.search(text) is not None
+
+
 def faces_used_in(html):
     """CSS classes referenced by an HTML fragment."""
     return set(re.findall(r'wxface (wxf-[0-9a-f]{10})', html))

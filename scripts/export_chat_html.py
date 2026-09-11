@@ -5,6 +5,7 @@ Splits large conversations into multiple parts.
 Embeds cached image thumbnails from NT cache directory.
 """
 import sys
+import time
 import os
 import hashlib
 import datetime
@@ -13,6 +14,7 @@ import re
 import base64
 import urllib.request
 import urllib.error
+import concurrent.futures
 import struct
 import json
 from pathlib import Path
@@ -44,6 +46,7 @@ try:
     import wechat_emoji
     BUILTIN_EMOJI_MAP = {f'[{name}]': name for name in wechat_emoji.IMAGE_FACES}
     _WECHAT_EMOJI = True
+    import wechat_emoji as _face_index
 except Exception:
     BUILTIN_EMOJI_MAP = {}
     _WECHAT_EMOJI = False
@@ -60,8 +63,43 @@ try:
 except Exception:
     _WECHAT_IMAGE = False
 
+# Remote media is the single slowest step of an export: each miss costs a page
+# fetch plus an image download, and inline thumbnails alone run to several
+# hundred per conversation. Bound it per run and keep results on disk, misses
+# included, so re-exports are instant. Set by main().
+COVER_STATE = {
+    'dir': '', 'budget': 0, 'fetched': 0, 'cached': 0, 'skipped': 0,
+    'thumb_budget': 0, 'thumb_fetched': 0, 'thumb_cached': 0, 'thumb_skipped': 0,
+}
+
+# Off by default: full-resolution originals are 5-24MB / 3000-5700px each, and
+# downscaling ~500 of them costs minutes (PIL decode dominates). The cache's
+# own thumbnails need no processing at all and are what an export normally
+# wants. Turn on for maximum fidelity at the cost of a much slower export.
+FULL_IMAGES = os.environ.get('WEFLOW_FULL_IMAGES', '') == '1'
+
+# og:image lives in <head>; WeChat article pages are multi-MB, so reading the
+# whole thing to find it wastes seconds per article.
+COVER_HEAD_BYTES = 64 * 1024
+
+# Two separate budgets: share-page covers are rare and expensive, inline
+# appmsg thumbnails are common and cheap. Sharing one pool lets a run of
+# thumbnails starve the covers that actually change how a page looks.
+COVER_FETCH_LIMIT = 60
+THUMB_FETCH_LIMIT = 300
+
 # Set up by main(); custom stickers decrypted from WeChat's local cache.
 STICKER_STATE = {'key': b'', 'dirs': [], 'cache_dir': ''}
+
+# Remote media is discovered one message at a time, but a conversation needs
+# it from hundreds of messages at once - and a single message rarely needs
+# more than one URL, so nothing is ever fetched in parallel. main() therefore
+# runs a throwaway formatting pass that only records the URLs (0.1s, no
+# network), fetches them concurrently, then formats for real against a warm
+# cache. Set to a list during that pass; None otherwise.
+PREFETCH = {'sink': None, 'active': False}
+PREFETCH_WORKERS = 24
+PREFETCH_MAX_URLS = 800
 
 
 def connect(db_path, key_hex, salt_hex):
@@ -242,7 +280,7 @@ def scan_nt_cache(nt_cache_dir, talker, account_dir='', own_wxid=''):
                             with open(fpath, 'rb') as fh:
                                 data = fh.read()
                             if len(data) < MAX_EMBED_SIZE:
-                                if _WECHAT_IMAGE:
+                                if _WECHAT_IMAGE and FULL_IMAGES:
                                     data, mime = wechat_image.shrink(data, mime, max_side=480)
                                 image_map[local_id] = (base64.b64encode(data).decode(), mime)
                                 cache_time = parse_cache_timestamp(fname)
@@ -269,7 +307,7 @@ def scan_nt_cache(nt_cache_dir, talker, account_dir='', own_wxid=''):
                                 with open(fpath, 'rb') as fh:
                                     data = fh.read()
                                 if len(data) < MAX_EMBED_SIZE:
-                                    if _WECHAT_IMAGE:
+                                    if _WECHAT_IMAGE and FULL_IMAGES:
                                         data, _m = wechat_image.shrink(data, 'image/jpeg', max_side=480)
                                     image_map[local_id] = (base64.b64encode(data).decode(), _m if _WECHAT_IMAGE else 'image/jpeg')
                                     cache_time = parse_cache_timestamp(fname)
@@ -303,7 +341,7 @@ def scan_nt_cache(nt_cache_dir, talker, account_dir='', own_wxid=''):
                     with open(fpath, 'rb') as fh:
                         data = fh.read()
                     if data:
-                        if _WECHAT_IMAGE:
+                        if _WECHAT_IMAGE and FULL_IMAGES:
                             data, mime = wechat_image.shrink(data, mime, max_side=480)
                             if not data:
                                 continue
@@ -319,25 +357,42 @@ def scan_nt_cache(nt_cache_dir, talker, account_dir='', own_wxid=''):
                 except OSError:
                     continue
 
-    if account_dir and os.path.isdir(account_dir):
-        for key, image in scan_account_media(account_dir, own_wxid).items():
+    # The account media index is where full-resolution originals live; without
+    # it an export uses only this conversation's own cache thumbnails.
+    if FULL_IMAGES and account_dir and os.path.isdir(account_dir):
+        for key, image in scan_account_media(account_dir, own_wxid, talker).items():
             if key.startswith('md5:'):
                 image_map.setdefault(key, image)
 
     return image_map
 
 
-def scan_account_media(account_dir, own_wxid=''):
-    """Index image resources stored outside a conversation cache directory."""
+def scan_account_media(account_dir, own_wxid='', talker=''):
+    """Index image resources stored outside a conversation cache directory.
+
+    Scoped to `talker` whenever it is known. Walking the whole account means
+    stat-ing and probing ~20k files (and 255-way XOR on every non-image), which
+    dominated export time; a conversation only ever needs its own media.
+    """
     image_map = {}
     v2_key = resolve_v2_media_key(account_dir, own_wxid)
-    roots = [
-        os.path.join(account_dir, 'cache'),
-        os.path.join(account_dir, 'msg'),
-        os.path.join(account_dir, 'resource'),
-        os.path.join(account_dir, 'business'),
-        os.path.join(account_dir, 'temp'),
-    ]
+    if talker:
+        talker_md5 = hashlib.md5(talker.encode()).hexdigest()
+        roots = [os.path.join(account_dir, 'msg', 'attach', talker_md5)]
+        cache_root = os.path.join(account_dir, 'cache')
+        if os.path.isdir(cache_root):
+            for month in sorted(os.listdir(cache_root)):
+                d = os.path.join(cache_root, month, 'Message', talker_md5)
+                if os.path.isdir(d):
+                    roots.append(d)
+    else:
+        roots = [
+            os.path.join(account_dir, 'cache'),
+            os.path.join(account_dir, 'msg'),
+            os.path.join(account_dir, 'resource'),
+            os.path.join(account_dir, 'business'),
+            os.path.join(account_dir, 'temp'),
+        ]
     seen = set()
     for root in roots:
         if not os.path.isdir(root):
@@ -481,13 +536,11 @@ def decode_wechat_media(data, filepath=None, v2_key=None):
     if not data or len(data) < 16:
         return None
     if data.startswith(V2_MAGIC) and filepath and v2_key:
-        decoded = decode_wechat_v2(filepath, *v2_key)
-        if decoded and _WECHAT_IMAGE:
-            # Chat photos are stored full-size (several hundred KB each);
-            # embedding them untouched makes the export far heavier than the
-            # reader can actually show.
-            return wechat_image.shrink(decoded[0], decoded[1], max_side=720)
-        return decoded
+        # No downscaling here: this is called once per file while building the
+        # account media index (tens of thousands of files), so doing image work
+        # at this layer makes the index build take minutes. Shrinking happens
+        # in get_cached_image(), which only runs for images actually embedded.
+        return decode_wechat_v2(filepath, *v2_key)
     for key in range(1, 256):
         decoded = bytes(value ^ key for value in data[: min(len(data), 64)])
         mime = detect_mime_from_bytes(decoded)
@@ -592,15 +645,66 @@ def load_resource_media_map(account_dir, key_hex, salt_hex, messages, image_map=
     return {key: list(dict.fromkeys(values)) for key, values in result.items()}
 
 
+_SHRINK_MEMO = {}
+
+
+def shrink_embedded(image, max_side=720):
+    """Downscale an (base64, mime) pair on the way out of the media index.
+
+    The index deliberately keeps originals: it is built over the whole account
+    and only a fraction of it ever gets embedded, so image work belongs here
+    rather than there.
+    """
+    if not image or not _WECHAT_IMAGE or not FULL_IMAGES:
+        return image
+    memo_key = image[0][:64] + ':' + str(len(image[0]))
+    if memo_key in _SHRINK_MEMO:
+        return _SHRINK_MEMO[memo_key]
+
+    # Disk cache: shrinking a multi-MB photo costs ~0.15s, and the same media
+    # comes back on every export. Key is the source digest, so this is safe to
+    # share across conversations.
+    cache_dir = COVER_STATE.get('imgshrink') or ''
+    disk_key = hashlib.md5(image[0][:4096].encode()).hexdigest() + str(len(image[0]))
+    disk_path = os.path.join(cache_dir, disk_key) if cache_dir else ''
+    if disk_path and os.path.isfile(disk_path):
+        try:
+            with open(disk_path, 'rb') as fh:
+                blob = fh.read()
+            nl = blob.find(b'\n')
+            if nl > 0:
+                result = (blob[:nl].decode(), blob[nl + 1:].decode())
+                _SHRINK_MEMO[memo_key] = result
+                return result
+        except OSError:
+            pass
+
+    try:
+        raw = base64.b64decode(image[0])
+        smaller, mime = wechat_image.shrink(raw, image[1], max_side=max_side)
+        result = image if smaller is raw else (base64.b64encode(smaller).decode(), mime)
+        _SHRINK_MEMO[memo_key] = result
+        if disk_path and smaller is not raw:
+            try:
+                os.makedirs(cache_dir, exist_ok=True)
+                with open(disk_path, 'wb') as fh:
+                    fh.write(result[0].encode() + b'\n' + result[1].encode())
+            except OSError:
+                pass
+        return result
+    except Exception:
+        return image
+
+
 def get_cached_image(image_map, local_id, create_time, content='', resource_md5s=None, server_id=0):
     if not image_map:
         return None
     for media_md5 in resource_md5s or []:
         if image_map.get(f'md5:{media_md5}'):
-            return image_map[f'md5:{media_md5}']
+            return shrink_embedded(image_map[f'md5:{media_md5}'])
     for media_md5 in extract_media_md5s(content):
         if image_map.get(f'md5:{media_md5}'):
-            return image_map[f'md5:{media_md5}']
+            return shrink_embedded(image_map[f'md5:{media_md5}'])
     return None
 
 
@@ -677,10 +781,88 @@ def _valid_media(data):
     return None
 
 
-def download_image_as_base64(url, aes_key='', timeout=10):
-    """Download image from URL and return (base64_data, mime_type) or None."""
+# Writes a file with no '\n', which the (b64, mime) format can never produce.
+NEGATIVE_MARKER = b'!'
+
+
+def _cache_media(cache_file, payload):
+    """Store a downloaded (b64, mime) pair, or a negative marker when None.
+
+    Misses are cached too. The bulk of these URLs are dead WeChat CDN links,
+    so without a negative cache every re-export re-attempted all of them.
+    """
+    if not cache_file:
+        return
+    try:
+        os.makedirs(os.path.dirname(cache_file), exist_ok=True)
+        if payload is None:
+            with open(cache_file, 'wb') as fh:
+                fh.write(NEGATIVE_MARKER)
+        else:
+            with open(cache_file, 'wb') as fh:
+                fh.write(payload[0].encode() + b'\n' + payload[1].encode())
+    except OSError:
+        pass
+
+
+def _read_cache_media(cache_file):
+    """Read a cached download.
+
+    Returns a (b64, mime) pair, None for a cached miss, or 'unknown' when the
+    path is absent or unreadable and a fetch should be attempted.
+    """
+    if not cache_file or not os.path.isfile(cache_file):
+        return 'unknown'
+    try:
+        with open(cache_file, 'rb') as fh:
+            blob = fh.read()
+    except OSError:
+        return 'unknown'
+    if blob == NEGATIVE_MARKER:
+        return None
+    sep = blob.find(b'\n')
+    if sep <= 0:
+        return 'unknown'
+    return (blob[:sep].decode(), blob[sep + 1:].decode())
+
+
+def download_image_as_base64(url, aes_key='', timeout=10, budgeted=True):
+    """Download image from URL and return (base64_data, mime_type) or None.
+
+    Cached on disk and budgeted per run: this is the hot path for every appmsg
+    thumbnail and sticker fallback, and it accounted for the entire runtime of
+    a link-heavy export before either guard existed.
+
+    `budgeted=False` is for calls made *by* the cover fetchers, which have
+    already spent their own budget for this URL.
+    """
     if not url or not url.startswith(('http://', 'https://')):
         return None
+
+    sink = PREFETCH['sink']
+    if sink is not None:
+        # Dry pass: record the request, spend no budget, touch no network.
+        sink.append(('img', url, aes_key))
+        return None
+
+    cache_dir = COVER_STATE.get('dir') or ''
+    # The AES key changes the bytes, so it belongs in the cache identity.
+    slug = hashlib.md5(f'{url}\x00{aes_key}'.encode()).hexdigest()
+    cache_file = os.path.join(cache_dir, slug + '.b64') if cache_dir else ''
+
+    cached = _read_cache_media(cache_file)
+    if cached != 'unknown':
+        if budgeted:
+            COVER_STATE['thumb_cached'] += 1
+        return cached
+
+    if budgeted and not PREFETCH['active']:
+        if COVER_STATE.get('thumb_budget', 0) <= 0:
+            COVER_STATE['thumb_skipped'] += 1
+            return None
+        COVER_STATE['thumb_budget'] -= 1
+        COVER_STATE['thumb_fetched'] += 1
+
     for _ in range(2):
         try:
             req = urllib.request.Request(url, headers={
@@ -689,21 +871,27 @@ def download_image_as_base64(url, aes_key='', timeout=10):
             })
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 data = resp.read(MAX_EMBED_SIZE + 1)
+            # Too large and unparseable both mean "nothing usable here"; record
+            # it so the next export does not pay for the same dead URL.
             if len(data) > MAX_EMBED_SIZE:
+                _cache_media(cache_file, None)
                 return None
             candidates = [data]
             decrypted = _decrypt_aes_cbc(data, aes_key)
             if decrypted:
                 candidates.insert(0, decrypted)
-            detected = next((_valid_media(candidate) for candidate in candidates if _valid_media(candidate)), None)
+            detected = next((hit for hit in map(_valid_media, candidates) if hit), None)
             if detected:
                 data, mime = detected
                 if _WECHAT_IMAGE:
                     # Covers arrive full-size; the reader shows them at 240px.
                     data, mime = wechat_image.shrink(data, mime, max_side=480)
-                return (base64.b64encode(data).decode(), mime)
+                result = (base64.b64encode(data).decode(), mime)
+                _cache_media(cache_file, result)
+                return result
         except Exception:
             continue
+    _cache_media(cache_file, None)
     return None
 
 
@@ -758,12 +946,49 @@ def is_share_page_url(url):
     ))
 
 
+def _page_cache_file(page_url):
+    """Cache path for a resolved share-page cover.
+
+    Namespaced apart from download_image_as_base64's entries so a page URL and
+    an image URL can never collide on the same digest.
+    """
+    cache_dir = COVER_STATE.get('dir') or ''
+    if not cache_dir:
+        return ''
+    return os.path.join(cache_dir, 'page-' + hashlib.md5(page_url.encode()).hexdigest() + '.b64')
+
+
 def download_bilibili_cover(page_url, timeout=10):
-    """Resolve a Bilibili share page and embed its og:image cover."""
+    """Resolve a Bilibili share page and embed its og:image cover.
+
+    Guarded like download_page_og_image: Bilibili shares are common in chat,
+    and without a cache + shared budget every re-export re-fetched all of
+    them, which alone accounted for minutes of an export.
+    """
     if not page_url or not re.match(
             r'https?://(?:www\.)?(?:b23\.tv|bilibili\.com)(?:/|$)',
             page_url, re.IGNORECASE):
         return None
+
+    sink = PREFETCH['sink']
+    if sink is not None:
+        sink.append(('page', page_url, ''))
+        return None
+
+    cache_file = _page_cache_file(page_url)
+    cached = _read_cache_media(cache_file)
+    if cached != 'unknown':
+        COVER_STATE['cached'] += 1
+        return cached
+    if not PREFETCH['active']:
+        # The prefetch pass has PREFETCH_MAX_URLS as its own bound and runs
+        # concurrently, so charging it here would only make a large
+        # conversation hit the cap early and fall back to serial fetching.
+        if COVER_STATE.get('budget', 0) <= 0:
+            COVER_STATE['skipped'] += 1
+            return None
+        COVER_STATE['budget'] -= 1
+        COVER_STATE['fetched'] += 1
 
     try:
         req = urllib.request.Request(page_url, headers={
@@ -771,7 +996,7 @@ def download_bilibili_cover(page_url, timeout=10):
             'Referer': 'https://www.bilibili.com/',
         })
         with urllib.request.urlopen(req, timeout=timeout) as resp:
-            html = resp.read(1024 * 1024).decode('utf-8', errors='ignore')
+            html = resp.read(COVER_HEAD_BYTES).decode('utf-8', errors='ignore')
             final_url = resp.geturl()
         match = re.search(
             r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)',
@@ -791,23 +1016,54 @@ def download_bilibili_cover(page_url, timeout=10):
                 payload = json.loads(api_resp.read(1024 * 1024).decode('utf-8'))
             cover_url = str((payload.get('data') or {}).get('pic') or '')
         if not cover_url:
+            _cache_media(cache_file, None)
             return None
-        return download_image_as_base64(cover_url, timeout=timeout)
+        cover = download_image_as_base64(cover_url, timeout=timeout, budgeted=False)
+        _cache_media(cache_file, cover)
+        return cover
     except Exception:
+        _cache_media(cache_file, None)
         return None
 
 
 def download_page_og_image(page_url, timeout=10):
-    """Fetch a share page's og:image and embed the resolved cover."""
+    """Fetch a share page's og:image and embed the resolved cover.
+
+    Guarded by a disk cache and a per-run budget: without them a conversation
+    full of links spends minutes on network round-trips, and every re-export
+    repeats the whole cost.
+    """
     if not page_url or not page_url.startswith(('http://', 'https://')):
         return None
+
+    sink = PREFETCH['sink']
+    if sink is not None:
+        sink.append(('page', page_url, ''))
+        return None
+
+    cache_file = _page_cache_file(page_url)
+    cached = _read_cache_media(cache_file)
+    if cached != 'unknown':
+        COVER_STATE['cached'] += 1
+        return cached
+
+    if not PREFETCH['active']:
+        # The prefetch pass has PREFETCH_MAX_URLS as its own bound and runs
+        # concurrently, so charging it here would only make a large
+        # conversation hit the cap early and fall back to serial fetching.
+        if COVER_STATE.get('budget', 0) <= 0:
+            COVER_STATE['skipped'] += 1
+            return None
+        COVER_STATE['budget'] -= 1
+        COVER_STATE['fetched'] += 1
+
     try:
         req = urllib.request.Request(page_url, headers={
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
             'Referer': page_url,
         })
         with urllib.request.urlopen(req, timeout=timeout) as resp:
-            html = resp.read(2 * 1024 * 1024).decode('utf-8', errors='ignore')
+            html = resp.read(COVER_HEAD_BYTES).decode('utf-8', errors='ignore')
         patterns = (
             r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)',
             r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']og:image',
@@ -819,9 +1075,59 @@ def download_page_og_image(page_url, timeout=10):
             if match:
                 cover_url = decode_xml(match.group(1)).replace('\\/', '/').strip()
                 break
-        return download_image_as_base64(cover_url, timeout=timeout) if cover_url else None
+        cover = download_image_as_base64(cover_url, timeout=timeout, budgeted=False) if cover_url else None
+        _cache_media(cache_file, cover)
+        return cover
     except Exception:
+        _cache_media(cache_file, None)
         return None
+
+
+def prefetch_remote(records):
+    """Fetch recorded remote media concurrently, filling the disk cache.
+
+    `records` is the PREFETCH sink: (kind, url, aes_key) triples. Everything
+    lands in the same cache `download_image_as_base64` reads, so the real
+    formatting pass becomes a sequence of cache hits. Returns a short summary
+    for the progress line.
+    """
+    seen = set()
+    jobs = []
+    for kind, url, aes_key in records:
+        key = (kind, url, aes_key)
+        if key in seen:
+            continue
+        seen.add(key)
+        jobs.append(key)
+    if not jobs:
+        return 0, 0
+
+    dropped = 0
+    if len(jobs) > PREFETCH_MAX_URLS:
+        dropped = len(jobs) - PREFETCH_MAX_URLS
+        jobs = jobs[:PREFETCH_MAX_URLS]
+
+    def run(job):
+        kind, url, aes_key = job
+        try:
+            if kind == 'page':
+                if download_bilibili_cover(url):
+                    return True
+                return download_page_og_image(url) is not None
+            return download_image_as_base64(url, aes_key) is not None
+        except Exception:
+            return False
+
+    done = 0
+    PREFETCH['active'] = True
+    try:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=PREFETCH_WORKERS) as pool:
+            for ok in pool.map(run, jobs):
+                if ok:
+                    done += 1
+    finally:
+        PREFETCH['active'] = False
+    return done, dropped
 
 
 def extract_xml_attr_url(content, name):
@@ -1036,11 +1342,9 @@ def format_message(row, talker, wx_dir, image_map=None, sender_map=None, display
     )
     has_builtin_signature = bool(
         re.search(r'<signature\b[^>]*>[^<]+</signature>', metadata_content, re.IGNORECASE)
-        and any(label in content for label in BUILTIN_EMOJI_MAP)
+        and _face_index.has_face(content)
     )
-    builtin_emoji_label = next(
-        (label for label in BUILTIN_EMOJI_MAP if label in content), None
-    )
+    builtin_emoji_label = _face_index.find_face(content)
 
     if '\x00' in content or sum(ord(char) < 32 and char not in '\n\r\t' for char in content) > 2:
         content = ''
@@ -1053,7 +1357,7 @@ def format_message(row, talker, wx_dir, image_map=None, sender_map=None, display
         display = render_contact_card(metadata_content)
     elif local_type == 1 and '<' not in metadata_content:
         # Text
-        builtin_label = next((label for label in BUILTIN_EMOJI_MAP if label in content), None)
+        builtin_label = _face_index.find_face(content)
         display = render_builtin_emoji(content, builtin_label) if builtin_label else escape_html(content)
     elif local_type == 3:
         # Image - try cache map first, then traditional FileStorage
@@ -1098,25 +1402,28 @@ def format_message(row, talker, wx_dir, image_map=None, sender_map=None, display
             image_b64 = img_data
             display = f'<span class="msg-media">{escape_html(emoji_label)}</span><br><img src="data:{mime};base64,{img_data}" loading="lazy" />'
         else:
-            thumb_url = extract_appmsg_image(metadata_content)
-            downloaded = download_image_as_base64(thumb_url, extract_media_aes_key(metadata_content)) if thumb_url else None
-            if not downloaded:
-                fallback_url = extract_xml_attr_url(metadata_content, 'thumburl')
-                if fallback_url and fallback_url != thumb_url:
-                    downloaded = download_image_as_base64(fallback_url)
-            if downloaded:
-                img_data, mime = downloaded
-                image_b64 = img_data
-                display = f'<span class="msg-media">{escape_html(emoji_label)}</span><br><img src="data:{mime};base64,{img_data}" loading="lazy" />'
-            if not image_b64 and _WECHAT_EMOTICON and STICKER_STATE['key'] and metadata_content:
-                # WeChat's own sticker cache is local and offline; the CDN
-                # paths above need the network and frequently have nothing.
+            # Local first. WeChat's own sticker cache is offline, instant, and
+            # normally resolves; the CDN paths need a network round-trip each
+            # and usually have nothing left to serve for older stickers.
+            if _WECHAT_EMOTICON and STICKER_STATE['key'] and metadata_content:
                 sticker_md5 = extract_xml_attr_value(metadata_content, 'md5') or ''
                 data, mime = wechat_emoticon.load_sticker(
                     STICKER_STATE['dirs'], sticker_md5, STICKER_STATE['key'],
                     STICKER_STATE['cache_dir'])
                 if data:
                     img_data = base64.b64encode(data).decode()
+                    image_b64 = img_data
+                    display = f'<span class="msg-media">{escape_html(emoji_label)}</span><br><img src="data:{mime};base64,{img_data}" loading="lazy" />'
+            thumb_url = ''
+            if not image_b64:
+                thumb_url = extract_appmsg_image(metadata_content)
+                downloaded = download_image_as_base64(thumb_url, extract_media_aes_key(metadata_content)) if thumb_url else None
+                if not downloaded:
+                    fallback_url = extract_xml_attr_url(metadata_content, 'thumburl')
+                    if fallback_url and fallback_url != thumb_url:
+                        downloaded = download_image_as_base64(fallback_url)
+                if downloaded:
+                    img_data, mime = downloaded
                     image_b64 = img_data
                     display = f'<span class="msg-media">{escape_html(emoji_label)}</span><br><img src="data:{mime};base64,{img_data}" loading="lazy" />'
             if image_b64:
@@ -1152,7 +1459,7 @@ def format_message(row, talker, wx_dir, image_map=None, sender_map=None, display
                 display = f'<span class="msg-file">[文件] {escape_html(title)}</span>'
             elif title:
                 parts = []
-                builtin_title = next((label for label in BUILTIN_EMOJI_MAP if label in title), None)
+                builtin_title = _face_index.find_face(title)
                 title_html = (render_builtin_emoji(title, builtin_title)
                               if builtin_title else escape_html(title))
                 # Extract and embed article thumbnail image
@@ -1487,12 +1794,14 @@ def main():
 
     # Scan NT cache for image thumbnails
     image_map = {}
+    _phase("start")
     if args.cache_dir:
         print(f"Scanning NT cache: {args.cache_dir}")
         image_map = scan_nt_cache(args.cache_dir, args.talker, args.account_dir, args.own_wxid)
     elif args.account_dir:
-        image_map = scan_account_media(args.account_dir, args.own_wxid)
+        image_map = scan_account_media(args.account_dir, args.own_wxid, args.talker)
         print(f"  Found {len(image_map)} cached images for embedding")
+        _phase("NT cache scan")
 
     # Custom stickers: derive the local cache key from the account seed.
     if args.emoticon_seed and args.account_dir and _WECHAT_EMOTICON:
@@ -1502,12 +1811,21 @@ def main():
         STICKER_STATE['cache_dir'] = os.path.join(args.out, '.sticker-cache')
         print(f"Stickers: {len(STICKER_STATE['dirs'])} cache dir(s)")
 
+    # Remote fetches: cache on disk and bound the per-run budget, otherwise
+    # a link-heavy conversation spends minutes on network round-trips.
+    COVER_STATE['dir'] = os.path.join(args.out, '.cover-cache')
+    COVER_STATE['imgshrink'] = os.path.join(args.out, '.imgshrink-cache')
+    COVER_STATE['budget'] = COVER_FETCH_LIMIT
+    COVER_STATE['thumb_budget'] = THUMB_FETCH_LIMIT
+
     # Connect
     print(f"Connecting to {args.db}...")
+    _phase("cover init")
     conn, c = connect(args.db, args.key, args.salt)
 
     # Fetch messages
     print(f"Fetching messages for {args.talker}...")
+    _phase("before fetch")
     messages = fetch_messages_from_shards(args.db, args.key, args.salt, args.talker, args.date, args.passphrase)
 
     if not messages:
@@ -1529,6 +1847,7 @@ def main():
     )
     if resource_map:
         print(f"  Found resource mappings for {len(resource_map)} message keys")
+    _phase("resource map")
 
     # Build sender name map from every message shard because each shard can
     # contain a different Name2Id mapping.
@@ -1540,14 +1859,37 @@ def main():
 
     # Format messages
     display_name = args.name or args.talker
-    print(f"Formatting {len(messages)} messages...")
+    _phase("before formatting")
     wx_dir = args.wx_dir or ''
+
+    # Remote media is the dominant cost and is discovered one message at a
+    # time, so doing it inline serialises hundreds of round-trips. Sweep the
+    # conversation once to record what it needs (local-only, ~0.1s), fetch it
+    # all concurrently, then format against a warm cache.
+    sink = []
+    PREFETCH['sink'] = sink
+    try:
+        for row in messages:
+            format_message(row, args.talker, wx_dir, image_map, sender_map, display_name, resource_map, args.own_wxid)
+    finally:
+        PREFETCH['sink'] = None
+    if sink:
+        print(f"Prefetching {len(sink)} remote media reference(s)...", flush=True)
+        _phase("prefetch scan")
+        ok, dropped = prefetch_remote(sink)
+        print(f"  Resolved {ok} remote item(s)" + (f", skipped {dropped} (cap)" if dropped else ""), flush=True)
+        _phase("prefetch fetch")
+        # Budgets were not charged during the prefetch, so anything it missed
+        # is still bounded by the full per-run allowance here.
+
+    print(f"Formatting {len(messages)} messages...")
     formatted = []
     img_hit_count = 0
     article_img_count = 0
+    progress_step = max(1, len(messages) // 20)
     for i, row in enumerate(messages):
-        if i % 2000 == 0:
-            print(f"  Formatting {i}/{len(messages)}...")
+        if i % progress_step == 0:
+            print(f"  Formatting {i}/{len(messages)}...", flush=True)
         result = format_message(row, args.talker, wx_dir, image_map, sender_map, display_name, resource_map, args.own_wxid)
         if result.get('image_b64'):
             img_hit_count += 1
@@ -1566,6 +1908,7 @@ def main():
         parts = min(args.parts, total)
     per_part = (total + parts - 1) // parts
 
+    _phase(f"formatting {len(messages)} msgs")
     print(f"Splitting into {parts} part(s) (~{per_part} messages each)...")
 
     # Use display name for filename if provided, otherwise fallback to wxid
@@ -1606,6 +1949,17 @@ def main():
         "parts": len(html_files),
         "files": html_files,
     }))
+
+
+_PHASE_T0 = time.time()
+
+
+def _phase(label):
+    global _PHASE_T0
+    now = time.time()
+    if os.environ.get("WEFLOW_DEBUG"):
+        print(f"  [t+{now - _PHASE_T0:6.1f}s] {label}", flush=True)
+    _PHASE_T0 = now
 
 
 def sanitize_filename(name: str) -> str:

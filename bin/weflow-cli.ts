@@ -1252,6 +1252,7 @@ program
   .option('--contract <name>', 'JSON 数据契约：raw 或 weflow-v1', 'raw')
   .option('--json', '输出机器可读的导出结果，不改变导出文件格式')
   .option('--non-interactive', '禁止交互选择；匹配不唯一时返回错误')
+  .option('--full-images', '使用原图而非微信缓存缩略图（更清晰，但导出慢数倍）')
   .action(async (talkerInput: string, format: string, opts) => {
     const validFormats = ['json', 'txt', 'html', 'excel']
     if (!validFormats.includes(format)) {
@@ -1310,7 +1311,7 @@ program
         result = await exportService.exportTxt(talker, opts.output, limit, from, to)
         break
       case 'html':
-        result = await exportService.exportHtml(talker, opts.output, limit, opts.date || '', from, to, !!opts.json)
+        result = await exportService.exportHtml(talker, opts.output, limit, opts.date || '', from, to, !!opts.json, { fullImages: opts.fullImages === true })
         break
       case 'excel':
         result = await exportService.exportExcel(talker, opts.output, limit, from, to)

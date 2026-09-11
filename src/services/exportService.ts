@@ -60,7 +60,7 @@ export class ExportService {
     }
   }
 
-  async exportHtml(talker: string, outputDir: string, limit = 0, date = '', from?: number, to?: number, quiet = false): Promise<ExportResult> {
+  async exportHtml(talker: string, outputDir: string, limit = 0, date = '', from?: number, to?: number, quiet = false, options: { fullImages?: boolean } = {}): Promise<ExportResult> {
     try {
       if (from !== undefined || to !== undefined) {
         return this.exportHtmlBasic(talker, outputDir, limit, from, to)
@@ -118,7 +118,9 @@ export class ExportService {
       const exportAccountDir = accountDir && existsSync(accountDir) ? accountDir : undefined
       if (!quiet) console.log(`  Exporting HTML via Python...`)
       const { stdout } = await execFileAsync(getPythonCommand(), args, {
-        timeout: 300_000,
+        // Headroom for the opt-in --full-images path, which resizes hundreds
+        // of multi-MB originals and can take several minutes.
+        timeout: 900_000,
         maxBuffer: 50 * 1024 * 1024,
         env: createPythonProcessEnv({
           WEFLOW_DB_PATH: db,
@@ -133,6 +135,9 @@ export class ExportService {
           WEFLOW_EXPORT_ACCOUNT_DIR: exportAccountDir,
           // Lets custom stickers be decrypted from WeChat's local cache.
           WEFLOW_EMOTICON_SEED: String(cfg.emoticonSeed || '') || undefined,
+          // Off by default: originals are 5-24MB each and downscaling a few
+          // hundred of them costs minutes in PIL.
+          WEFLOW_FULL_IMAGES: options.fullImages ? '1' : undefined,
           WEFLOW_EXPORT_DATE: date || undefined,
         }),
       })
