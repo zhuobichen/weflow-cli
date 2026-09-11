@@ -946,6 +946,50 @@ def is_share_page_url(url):
     ))
 
 
+def resolve_emoticon_seed(configured, account_dir, out_dir):
+    """The account's sticker seed, discovered from memory if unconfigured.
+
+    The seed is a per-account constant that only exists in WeChat's process
+    memory. Nothing used to populate it, so `STICKER_STATE['key']` stayed
+    empty, local sticker decryption never ran, and every custom sticker
+    degraded to a `[表情]` placeholder.
+
+    Returns (seed, discovered). The scan costs a few seconds and is only
+    needed once: the result is memoised under the output directory, and
+    persisting it via `weflow-cli config set emoticonSeed` skips even that.
+    """
+    if configured:
+        return str(configured), False
+    if not account_dir or not _WECHAT_EMOTICON:
+        return '', False
+
+    cache_dir = os.path.join(out_dir, '.sticker-cache')
+    memo = os.path.join(cache_dir, 'seed')
+    try:
+        with open(memo, 'r', encoding='utf-8') as fh:
+            memoised = fh.read().strip()
+        if memoised:
+            return memoised, False
+    except OSError:
+        pass
+
+    dirs = wechat_emoticon.sticker_cache_dirs(account_dir)
+    sample = wechat_emoticon.any_sticker_file(dirs)
+    if not sample:
+        return '', False
+    wxid = wechat_emoticon.account_wxid(os.path.basename(os.path.normpath(account_dir)))
+    seed = wechat_emoticon.find_seed(wxid, sample)
+    if not seed:
+        return '', False
+    try:
+        os.makedirs(cache_dir, exist_ok=True)
+        with open(memo, 'w', encoding='utf-8') as fh:
+            fh.write(str(seed))
+    except OSError:
+        pass
+    return str(seed), True
+
+
 def _page_cache_file(page_url):
     """Cache path for a resolved share-page cover.
 
@@ -1181,6 +1225,59 @@ def extract_media_aes_key(content):
         if match:
             return match.group(1)
     return ''
+
+
+def plain_fragment(text, limit=200):
+    """Tag-stripped, whitespace-collapsed preview of an XML fragment."""
+    if not text:
+        return ''
+    text = re.sub(r'<\?xml[^>]*\?>', ' ', str(text))
+    text = re.sub(r'<[^>]*>', ' ', text)
+    text = re.sub(r'\s+', ' ', decode_xml(text)).strip()
+    return text[:limit]
+
+
+def readable_fragment(text, limit=300):
+    """`text` with any embedded document reduced to prose.
+
+    Quoted replies (appmsg type 57) put a whole escaped message inside <des>,
+    so rendering it verbatim fills the bubble with markup. Plain text passes
+    through unchanged.
+    """
+    if not text:
+        return ''
+    if '<' in text or '&lt;' in text:
+        return plain_fragment(decode_xml(text), limit)
+    return text[:limit]
+
+
+def render_system_message(content, names=None):
+    """Readable text for a type-10000 system row.
+
+    These rows carry XML, but it is WeChat's own display markup
+    (`<img src="SystemMessages_HongbaoIcon.png"/>`, `<_wc_custom_link_ ...>`)
+    rather than a document worth showing. Escaping it verbatim put a wall of
+    `&lt;sysmsg ...&gt;` in the bubble; a revoke notice read as XML instead of
+    saying who revoked what.
+    """
+    if not content:
+        return ''
+    if '<' not in content:
+        return escape_html(content)
+    revoke = re.search(r'<revokemsg\b[\s\S]*?</revokemsg>', content, re.IGNORECASE)
+    scope = revoke.group(0) if revoke else content
+    text = ''
+    for tag in ('content', 'title', 'text'):
+        text = extract_xml_text(scope, tag)
+        if text:
+            break
+    if not text:
+        text = plain_fragment(scope, 200)
+    for wxid, name in (names or {}).items():
+        # The row keeps `$wxid_...$` for the client to expand at render time.
+        if wxid and name:
+            text = text.replace(f'${wxid}$', name)
+    return escape_html(text)
 
 
 def escape_html(text):
@@ -1450,8 +1547,8 @@ def format_message(row, talker, wx_dir, image_map=None, sender_map=None, display
         # App message (link/file/article)
         if content:
             # Try to parse XML for title/desc
-            title = extract_xml_text(content, 'title')
-            desc = extract_xml_text(content, 'des')
+            title = readable_fragment(extract_xml_text(content, 'title'))
+            desc = readable_fragment(extract_xml_text(content, 'des'))
             url = extract_xml_text(content, 'url')
             app_type = extract_xml_text(content, 'type')
 
@@ -1492,7 +1589,8 @@ def format_message(row, talker, wx_dir, image_map=None, sender_map=None, display
     elif local_type == 50:
         display = '<span class="msg-media">[语音通话]</span>'
     elif local_type == 10000:
-        display = f'<span class="msg-sys">{escape_html(content)}</span>'
+        names = {talker: display_name or talker, own_wxid: '我'}
+        display = f'<span class="msg-sys">{render_system_message(content, names)}</span>'
     elif local_type == 10002:
         display = escape_html(content) if content else '<span class="msg-media">[引用]</span>'
     else:
@@ -1804,12 +1902,19 @@ def main():
         _phase("NT cache scan")
 
     # Custom stickers: derive the local cache key from the account seed.
-    if args.emoticon_seed and args.account_dir and _WECHAT_EMOTICON:
-        wxid = wechat_emoticon.account_wxid(os.path.basename(os.path.normpath(args.account_dir)))
-        STICKER_STATE['key'] = wechat_emoticon.derive_key(args.emoticon_seed, wxid)
+    if args.account_dir and _WECHAT_EMOTICON:
         STICKER_STATE['dirs'] = wechat_emoticon.sticker_cache_dirs(args.account_dir)
         STICKER_STATE['cache_dir'] = os.path.join(args.out, '.sticker-cache')
-        print(f"Stickers: {len(STICKER_STATE['dirs'])} cache dir(s)")
+        seed, discovered = resolve_emoticon_seed(args.emoticon_seed, args.account_dir, args.out)
+        if seed:
+            wxid = wechat_emoticon.account_wxid(os.path.basename(os.path.normpath(args.account_dir)))
+            STICKER_STATE['key'] = wechat_emoticon.derive_key(seed, wxid)
+            source = 'discovered' if discovered else 'configured'
+            print(f"Stickers: {len(STICKER_STATE['dirs'])} cache dir(s), seed {source}")
+            if discovered:
+                print(f"  建议固化以避免每次扫描: weflow-cli config set emoticonSeed {seed}")
+        else:
+            print("Stickers: 未找到 seed（需微信正在运行），自定义表情包将显示为 [表情]")
 
     # Remote fetches: cache on disk and bound the per-run budget, otherwise
     # a link-heavy conversation spends minutes on network round-trips.
