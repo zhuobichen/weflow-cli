@@ -82,6 +82,11 @@ FULL_IMAGES = os.environ.get('WEFLOW_FULL_IMAGES', '') == '1'
 # whole thing to find it wastes seconds per article.
 COVER_HEAD_BYTES = 64 * 1024
 
+# Base64 length above which an account-index original is re-encoded before
+# embedding. Below it the file is already display-sized and PIL would only
+# cost time, which matters across thousands of media entries.
+EMBED_SHRINK_THRESHOLD = 400 * 1024
+
 # Two separate budgets: share-page covers are rare and expensive, inline
 # appmsg thumbnails are common and cheap. Sharing one pool lets a run of
 # thumbnails starve the covers that actually change how a page looks.
@@ -90,6 +95,11 @@ THUMB_FETCH_LIMIT = 300
 
 # Set up by main(); custom stickers decrypted from WeChat's local cache.
 STICKER_STATE = {'key': b'', 'dirs': [], 'cache_dir': ''}
+
+# {wxid: remark/nickname}, loaded by main(). Group rows name their sender only
+# by wxid, so without this a group transcript is unreadable. Empty when the
+# contact database is unavailable, in which case ids are shown as-is.
+CONTACT_NAMES = {}
 
 # Remote media is discovered one message at a time, but a conversation needs
 # it from hundreds of messages at once - and a single message rarely needs
@@ -648,14 +658,20 @@ def load_resource_media_map(account_dir, key_hex, salt_hex, messages, image_map=
 _SHRINK_MEMO = {}
 
 
-def shrink_embedded(image, max_side=720):
+def shrink_embedded(image, max_side=720, force=False):
     """Downscale an (base64, mime) pair on the way out of the media index.
 
     The index deliberately keeps originals: it is built over the whole account
     and only a fraction of it ever gets embedded, so image work belongs here
     rather than there.
+
+    `force` skips the opt-in gate, for media that has no smaller alternative -
+    an original pulled in from the account index because the conversation
+    cache never held it at all.
     """
-    if not image or not _WECHAT_IMAGE or not FULL_IMAGES:
+    if not image or not _WECHAT_IMAGE:
+        return image
+    if not force and not FULL_IMAGES:
         return image
     memo_key = image[0][:64] + ':' + str(len(image[0]))
     if memo_key in _SHRINK_MEMO:
@@ -1202,6 +1218,42 @@ def render_contact_card(content):
     return '<div class="msg-app">' + ''.join(parts) + '</div>'
 
 
+def load_contact_names(db_path, key_hex, salt_hex):
+    """{username: best available name} from the contact database.
+
+    A group message only identifies its sender by wxid, which is unusable in a
+    transcript. Prefer the remark (what the user calls them) over the account
+    nickname over the alias, matching how the 1:1 path already resolves the
+    conversation partner.
+    """
+    names = {}
+    if not db_path or not key_hex or not salt_hex or not os.path.isfile(db_path):
+        return names
+    conn = None
+    try:
+        conn, cursor = connect(db_path, key_hex, salt_hex)
+        cursor.execute('SELECT username, remark, nick_name, alias FROM contact')
+        for username, remark, nick_name, alias in cursor.fetchall():
+            if not username:
+                continue
+            names[username] = remark or nick_name or alias or username
+    except Exception:
+        return names
+    finally:
+        if conn is not None:
+            conn.close()
+    return names
+
+
+def contact_name(wxid):
+    """Display name for a wxid, falling back to the wxid itself.
+
+    An unresolved id is kept rather than blanked: it is still unique, and a
+    transcript that silently drops the speaker is worse than one showing one.
+    """
+    return CONTACT_NAMES.get(wxid) or wxid
+
+
 def split_group_speaker(content, sender_map, own_wxid=''):
     """(speaker id, content) with the group sender prefix removed.
 
@@ -1467,13 +1519,14 @@ def format_message(row, talker, wx_dir, image_map=None, sender_map=None, display
     if is_self:
         sender_display = '我'
     elif group_speaker:
-        sender_display = '我' if sender_matches_account(group_speaker, own_wxid) else group_speaker
+        sender_display = ('我' if sender_matches_account(group_speaker, own_wxid)
+                          else contact_name(group_speaker))
     elif is_group and sender_user_name:
-        sender_display = sender_user_name
+        sender_display = contact_name(sender_user_name)
     elif display_name:
         sender_display = display_name
     elif sender_user_name:
-        sender_display = sender_user_name
+        sender_display = contact_name(sender_user_name)
     else:
         sender_display = '未知发送者'
 
@@ -1524,7 +1577,16 @@ def format_message(row, talker, wx_dir, image_map=None, sender_map=None, display
     elif local_type == 34:
         display = '<span class="msg-media">[语音]</span>'
     elif local_type == 43:
-        display = '<span class="msg-media">[视频]</span>'
+        # A video row has no frame of its own, but a poster image can exist
+        # under the same md5, so show it when the index has one.
+        seconds = extract_xml_attr_value(metadata_content, 'playlength')
+        label = f'[视频 {seconds}″]' if seconds.isdigit() and seconds != '0' else '[视频]'
+        display = f'<span class="msg-media">{label}</span>'
+        cached = get_cached_image(image_map, local_id, create_time, metadata_content, resource_md5s)
+        if cached:
+            img_data, mime = cached
+            image_b64 = img_data
+            display += f'<br><img src="data:{mime};base64,{img_data}" loading="lazy" />'
     elif local_type == 48:
         display = render_location(metadata_content or content)
     elif is_emoji_xml or (local_type in (1, 47) and ('<' in metadata_content or local_type == 47)):
@@ -1922,6 +1984,9 @@ def main():
                         help='Account seed; decrypts custom stickers from the local cache')
     parser.add_argument('--passphrase', default=os.environ.get('WEFLOW_NT_PASSPHRASE', ''), help='Shared NT passphrase for deriving shard keys')
     parser.add_argument('--own-wxid', default=os.environ.get('WEFLOW_OWN_WXID', ''), help='Configured account identifier for self-message detection')
+    parser.add_argument('--contact-db', default=os.environ.get('WEFLOW_CONTACT_DB_PATH', ''), help='Contact database, for resolving group senders to names')
+    parser.add_argument('--contact-key', default=os.environ.get('WEFLOW_CONTACT_KEY', ''), help='Contact database key hex')
+    parser.add_argument('--contact-salt', default=os.environ.get('WEFLOW_CONTACT_SALT', ''), help='Contact database salt hex')
     args = parser.parse_args()
 
     os.makedirs(args.out, exist_ok=True)
@@ -1932,10 +1997,25 @@ def main():
     if args.cache_dir:
         print(f"Scanning NT cache: {args.cache_dir}")
         image_map = scan_nt_cache(args.cache_dir, args.talker, args.account_dir, args.own_wxid)
-    elif args.account_dir:
-        image_map = scan_account_media(args.account_dir, args.own_wxid, args.talker)
-        print(f"  Found {len(image_map)} cached images for embedding")
-        _phase("NT cache scan")
+    else:
+        image_map = {}
+    # The account media index holds everything the conversation cache does not.
+    # A conversation cache only keeps recent months, so without this a group
+    # photo from last year resolved 0/1444 - every image and video came out as
+    # a bare `[图片]`. Both indexes are merged rather than chosen between.
+    if args.account_dir:
+        account_media = scan_account_media(args.account_dir, args.own_wxid, args.talker)
+        print(f"  Account media index: {len(account_media)} entries")
+        for key, value in account_media.items():
+            if key in image_map:
+                continue
+            # Most entries are already thumbnail-sized (median 6KB); only the
+            # few large originals are worth re-encoding.
+            if len(value[0]) > EMBED_SHRINK_THRESHOLD:
+                value = shrink_embedded(value, max_side=720, force=True)
+            image_map[key] = value
+    print(f"  Found {len(image_map)} media entries for embedding")
+    _phase("media scan")
 
     # Custom stickers: derive the local cache key from the account seed.
     if args.account_dir and _WECHAT_EMOTICON:
@@ -1958,6 +2038,11 @@ def main():
     COVER_STATE['imgshrink'] = os.path.join(args.out, '.imgshrink-cache')
     COVER_STATE['budget'] = COVER_FETCH_LIMIT
     COVER_STATE['thumb_budget'] = THUMB_FETCH_LIMIT
+
+    # Contact names make a group transcript readable; the ids alone do not.
+    CONTACT_NAMES.update(load_contact_names(args.contact_db, args.contact_key, args.contact_salt))
+    if CONTACT_NAMES:
+        print(f"Contacts: {len(CONTACT_NAMES)} name(s)")
 
     # Connect
     print(f"Connecting to {args.db}...")

@@ -135,6 +135,11 @@ export class ExportService {
           WEFLOW_EXPORT_ACCOUNT_DIR: exportAccountDir,
           // Lets custom stickers be decrypted from WeChat's local cache.
           WEFLOW_EMOTICON_SEED: String(cfg.emoticonSeed || '') || undefined,
+          // Group rows identify their sender only by wxid; the contact
+          // database is what turns that into a name.
+          WEFLOW_CONTACT_DB_PATH: cfg.contactDbPath || undefined,
+          WEFLOW_CONTACT_KEY: cfg.contactKey || undefined,
+          WEFLOW_CONTACT_SALT: cfg.contactSalt || undefined,
           // Off by default: originals are 5-24MB each and downscaling a few
           // hundred of them costs minutes in PIL.
           WEFLOW_FULL_IMAGES: options.fullImages ? '1' : undefined,
