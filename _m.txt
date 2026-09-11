@@ -1,8 +1,0 @@
-Total messages: 237
-  Fetched 237/237...
-local_type: 1
-is_emoji_xml: False
-content[:420]: 施显晟 邀请您参加腾讯会议|会议主题：施显晟预定的会议|会议时间：2026/09/09 21:00-21:30 (GMT+08:00) 中国标准时间 - 北京||点击链接入会，或添加至会议列表：|https://meeting.tencent.com/dm/srz953F4aUuu||#腾讯会议：502-644-724||复制该信息，打开手机腾讯会议即可参与
-
-extract_appmsg_image → https://meeting.tencent.com/dm/srz953F4aUuu
-is_share_page_url   → False

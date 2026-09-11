@@ -1386,6 +1386,34 @@ def readable_fragment(text, limit=300):
     return text[:limit]
 
 
+def render_group_template(content):
+    """Readable text for a `sysmsgtemplate` group notice, or ''.
+
+    The row carries a sentence template with `$name$` placeholders plus a
+    `link_list` that maps each placeholder to member nicknames. Stripping tags
+    without substituting left nothing but the chatroom id.
+    """
+    template = extract_xml_text(content, 'template')
+    if not template:
+        return ''
+    for placeholder in set(re.findall(r'\$(\w+)\$', template)):
+        link = re.search(rf'<link\s+name="{placeholder}"[\s\S]*?</link>', content, re.IGNORECASE)
+        if not link:
+            continue
+        nicknames = []
+        for raw in re.findall(r'<nickname>([\s\S]*?)</nickname>', link.group(0), re.IGNORECASE):
+            value = raw.strip()
+            cdata = re.fullmatch(r'<!\[CDATA\[([\s\S]*)\]\]>', value)
+            text = (cdata.group(1) if cdata else value).strip()
+            if text:
+                nicknames.append(decode_xml(text))
+        separator = extract_xml_text(link.group(0), 'separator') or '、'
+        template = template.replace(f'${placeholder}$', separator.join(nicknames))
+    # Any placeholder with no link_list entry is left dangling; drop it rather
+    # than print `$username$` into the transcript.
+    return re.sub(r'\$\w+\$', '', template).strip()
+
+
 def render_system_message(content, names=None):
     """Readable text for a type-10000 system row.
 
@@ -1399,6 +1427,10 @@ def render_system_message(content, names=None):
         return ''
     if '<' not in content:
         return escape_html(content)
+    if '<sysmsgtemplate' in content:
+        # A join/invite notice: a template plus a member list, which has to be
+        # substituted before any of the generic extraction below can help.
+        return escape_html(render_group_template(content)) or escape_html(plain_fragment(content, 200))
     revoke = re.search(r'<revokemsg\b[\s\S]*?</revokemsg>', content, re.IGNORECASE)
     scope = revoke.group(0) if revoke else content
     text = ''
@@ -1576,14 +1608,22 @@ def format_message(row, talker, wx_dir, image_map=None, sender_map=None, display
     if is_group:
         group_speaker, content = split_group_speaker(content, sender_map)
 
-    if is_self:
+    if local_type == 10000:
+        # Revoke notices and group templates are emitted by the system, and
+        # their real_sender_id resolves to nobody. Anything else here reads as
+        # if a person had said it.
+        sender_display = '系统'
+    elif is_self:
         sender_display = '我'
     elif group_speaker:
         sender_display = ('我' if sender_matches_account(group_speaker, own_wxid)
                           else contact_name(group_speaker))
     elif is_group and sender_user_name:
         sender_display = contact_name(sender_user_name)
-    elif display_name:
+    elif display_name and not is_group:
+        # `display_name` is the conversation. For a group that is the group
+        # itself, so using it as a fallback labelled unrelated rows with the
+        # group name - three system rows in one export read as "江南试验群".
         sender_display = display_name
     elif sender_user_name:
         sender_display = contact_name(sender_user_name)
