@@ -1734,9 +1734,15 @@ def decode_xml(text):
             .replace('&apos;', "'"))
 
 
-def build_html_page(talker, messages_part, part_num, total_parts, display_name):
-    """Build a single HTML page for a part."""
-    talker_safe = talker.replace('@', '_').replace('/', '_')
+def build_html_page(talker, messages_part, part_num, total_parts, display_name, file_prefix=''):
+    """Build a single HTML page for a part.
+
+    `file_prefix` must be the prefix the parts were actually written under.
+    Deriving it from the talker instead produced links to
+    `wxid_..._part2.html` next to files named after the remark, so every
+    navigation link 404'd.
+    """
+    talker_safe = file_prefix or talker.replace('@', '_').replace('/', '_')
     rows = []
     for m in messages_part:
         dt = datetime.datetime.fromtimestamp(m['create_time'])
@@ -1908,7 +1914,7 @@ body {{
 </div>
 <div class="footer">
   <p>Exported by WeFlow CLI · {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}</p>
-  <p class="hint">💡 图片来自微信本地缓存，仅覆盖最近2个月。滚动查看更多聊天可生成更多缩略图。</p>
+  <p class="hint">💡 图片与表情来自本机微信数据（会话缓存 + 账号媒体索引）。本机从未下载过的图片、以及未缓存封面的视频，无法显示。</p>
 </div>
 <script>
 function searchMessages(query) {{
@@ -2149,7 +2155,7 @@ def main():
         if not chunk:
             break
 
-        html = build_html_page(args.talker, chunk, i + 1, parts, display_name)
+        html = build_html_page(args.talker, chunk, i + 1, parts, display_name, file_prefix)
         if parts == 1:
             filename = f"{file_prefix}.html"
         else:

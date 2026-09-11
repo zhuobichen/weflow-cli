@@ -30,6 +30,8 @@ All notable user-facing changes are recorded here. This project follows [Semanti
 - Resolve group senders to names from the contact database (remark, then nickname, then alias). A group transcript previously showed raw wxids for every speaker; unresolved ids still fall back to the id rather than a blank.
 - Merge the conversation cache and the account media index instead of choosing between them. A `--cache-dir` short-circuited the account scan, and a conversation cache only keeps recent months, so a group photo from last year resolved 0 of 1444 images and every one rendered as a bare `[图片]`. The same fix also recovered 82 additional images in a 1:1 conversation.
 - Show a cached poster frame for `local_type=43` videos when one exists, and always show the clip's duration (`[视频 10″]`) instead of a bare `[视频]`. Where WeChat never downloaded the video, no poster exists locally to show.
+- Fix HTML part navigation, which linked to `<talker>_partN.html` while the files were written as `<remark>_partN.html`, so every "第 N 部分" link opened a missing file (`ERR_FILE_NOT_FOUND`). Affected both group and 1:1 exports; all 16165 links across the two test conversations now resolve.
+- Correct the exported page footer, which still claimed images cover only the most recent two months.
 
 ### Security and reliability
 
