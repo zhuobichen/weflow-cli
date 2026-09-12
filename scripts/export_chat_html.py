@@ -15,6 +15,7 @@ import urllib.request
 import urllib.error
 import struct
 import json
+import time
 from pathlib import Path
 
 try:
@@ -30,6 +31,8 @@ MSG_TYPES = {
     50: 'voip', 10000: 'system', 10002: 'quote',
 }
 MAX_EMBED_SIZE = 8 * 1024 * 1024  # Bound self-contained HTML growth per image.
+REMOTE_FETCH_BUDGET_SECONDS = 30
+_remote_fetch_deadline = None
 V2_MAGIC = b'\x07\x08V2\x08\x07'
 V2_CIPHERTEXT_START = 0x0F
 BUILTIN_EMOJI_DIR = os.path.join(os.path.dirname(__file__), '..', 'resources', 'wechat-emoji')
@@ -244,21 +247,26 @@ def scan_nt_cache(nt_cache_dir, talker, account_dir='', own_wxid=''):
                 parts = fname.split('_', 1)
                 if parts and parts[0].isdigit():
                     local_id = int(parts[0])
-                    if local_id not in image_map:  # Don't override ImageTemp
-                        fpath = os.path.join(thumb_dir, fname)
-                        size = os.path.getsize(fpath)
-                        if size < MAX_EMBED_SIZE:
-                            try:
-                                with open(fpath, 'rb') as fh:
-                                    data = fh.read()
-                                if len(data) < MAX_EMBED_SIZE:
-                                    image_map[local_id] = (base64.b64encode(data).decode(), 'image/jpeg')
-                                    cache_time = parse_cache_timestamp(fname)
-                                    if cache_time:
-                                        image_map[f'pair:{local_id}:{cache_time}'] = image_map[local_id]
-                                        image_map[f'time:{cache_time}'] = image_map[local_id]
-                            except:
-                                pass
+                    cache_time = parse_cache_timestamp(fname)
+                    pair_key = f'pair:{local_id}:{cache_time}' if cache_time else ''
+                    if pair_key and pair_key in image_map:
+                        continue
+                    if not pair_key and local_id in image_map:
+                        continue
+                    fpath = os.path.join(thumb_dir, fname)
+                    size = os.path.getsize(fpath)
+                    if size < MAX_EMBED_SIZE:
+                        try:
+                            with open(fpath, 'rb') as fh:
+                                data = fh.read()
+                            if len(data) < MAX_EMBED_SIZE:
+                                image = (base64.b64encode(data).decode(), 'image/jpeg')
+                                image_map[local_id] = image
+                                if cache_time:
+                                    image_map[pair_key] = image
+                                    image_map[f'time:{cache_time}'] = image
+                        except:
+                            pass
 
         for root, _, files in os.walk(msg_dir):
             if root == img_temp_dir:
@@ -270,8 +278,10 @@ def scan_nt_cache(nt_cache_dir, talker, account_dir='', own_wxid=''):
                 if local_id is None and not file_md5:
                     continue
                 cache_time = parse_cache_timestamp(fname)
-                if local_id is not None and (local_id in image_map or f'time:{cache_time}' in image_map):
-                    continue
+                if local_id is not None:
+                    pair_key = f'pair:{local_id}:{cache_time}' if cache_time else ''
+                    if (pair_key and pair_key in image_map) or (not pair_key and local_id in image_map):
+                        continue
                 if file_md5 and f'md5:{file_md5}' in image_map:
                     continue
                 fpath = os.path.join(root, fname)
@@ -296,10 +306,26 @@ def scan_nt_cache(nt_cache_dir, talker, account_dir='', own_wxid=''):
                 except OSError:
                     continue
 
-    if account_dir and os.path.isdir(account_dir):
+    # A conversation cache is the bounded, identity-aware source. Scanning
+    # the whole account tree here can exceed the CLI timeout and mix unrelated
+    # media into an export, so use the account-wide fallback only when the
+    # conversation cache yielded nothing.
+    if account_dir and os.path.isdir(account_dir) and not image_map:
         for key, image in scan_account_media(account_dir, own_wxid).items():
             if key.startswith('md5:'):
                 image_map.setdefault(key, image)
+
+    local_candidates = {}
+    for key, image in image_map.items():
+        if isinstance(key, str) and key.startswith('pair:'):
+            parts = key.split(':', 2)
+            if len(parts) == 3:
+                local_candidates.setdefault(parts[1], {})[hashlib.sha256(image[0].encode('ascii')).hexdigest()] = image
+        elif isinstance(key, int):
+            local_candidates.setdefault(str(key), {})[hashlib.sha256(image[0].encode('ascii')).hexdigest()] = image
+    for local_id, candidates in local_candidates.items():
+        if len(candidates) == 1:
+            image_map[f'unique:{local_id}'] = next(iter(candidates.values()))
 
     return image_map
 
@@ -569,6 +595,18 @@ def get_cached_image(image_map, local_id, create_time, content='', resource_md5s
     for media_md5 in resource_md5s or []:
         if image_map.get(f'md5:{media_md5}'):
             return image_map[f'md5:{media_md5}']
+    try:
+        pair_key = f'pair:{int(local_id)}:{int(create_time)}'
+    except (TypeError, ValueError):
+        pair_key = ''
+    if pair_key and image_map.get(pair_key):
+        return image_map[pair_key]
+    try:
+        unique_key = f'unique:{int(local_id)}'
+    except (TypeError, ValueError):
+        unique_key = ''
+    if unique_key and image_map.get(unique_key):
+        return image_map[unique_key]
     for media_md5 in extract_media_md5s(content):
         if image_map.get(f'md5:{media_md5}'):
             return image_map[f'md5:{media_md5}']
@@ -653,12 +691,15 @@ def download_image_as_base64(url, aes_key='', timeout=10):
     if not url or not url.startswith(('http://', 'https://')):
         return None
     for _ in range(2):
+        bounded_timeout = _remote_timeout(timeout)
+        if bounded_timeout is None:
+            return None
         try:
             req = urllib.request.Request(url, headers={
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
                 'Referer': 'https://mp.weixin.qq.com/',
             })
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
+            with urllib.request.urlopen(req, timeout=bounded_timeout) as resp:
                 data = resp.read(MAX_EMBED_SIZE + 1)
             if len(data) > MAX_EMBED_SIZE:
                 return None
@@ -673,6 +714,21 @@ def download_image_as_base64(url, aes_key='', timeout=10):
         except Exception:
             continue
     return None
+
+
+def configure_remote_fetch_budget(seconds=None):
+    """Bound optional remote media work without affecting local media export."""
+    global _remote_fetch_deadline
+    _remote_fetch_deadline = None if seconds is None else time.monotonic() + max(0, seconds)
+
+
+def _remote_timeout(timeout):
+    if _remote_fetch_deadline is None:
+        return timeout
+    remaining = _remote_fetch_deadline - time.monotonic()
+    if remaining <= 0:
+        return None
+    return min(timeout, max(0.1, remaining))
 
 
 def detect_mime_from_bytes(header_bytes):
@@ -734,11 +790,14 @@ def download_bilibili_cover(page_url, timeout=10):
         return None
 
     try:
+        bounded_timeout = _remote_timeout(timeout)
+        if bounded_timeout is None:
+            return None
         req = urllib.request.Request(page_url, headers={
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
             'Referer': 'https://www.bilibili.com/',
         })
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with urllib.request.urlopen(req, timeout=bounded_timeout) as resp:
             html = resp.read(1024 * 1024).decode('utf-8', errors='ignore')
             final_url = resp.geturl()
         match = re.search(
@@ -755,7 +814,10 @@ def download_bilibili_cover(page_url, timeout=10):
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
                 'Referer': final_url,
             })
-            with urllib.request.urlopen(api_req, timeout=timeout) as api_resp:
+            bounded_timeout = _remote_timeout(timeout)
+            if bounded_timeout is None:
+                return None
+            with urllib.request.urlopen(api_req, timeout=bounded_timeout) as api_resp:
                 payload = json.loads(api_resp.read(1024 * 1024).decode('utf-8'))
             cover_url = str((payload.get('data') or {}).get('pic') or '')
         if not cover_url:
@@ -770,11 +832,14 @@ def download_page_og_image(page_url, timeout=10):
     if not page_url or not page_url.startswith(('http://', 'https://')):
         return None
     try:
+        bounded_timeout = _remote_timeout(timeout)
+        if bounded_timeout is None:
+            return None
         req = urllib.request.Request(page_url, headers={
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
             'Referer': page_url,
         })
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with urllib.request.urlopen(req, timeout=bounded_timeout) as resp:
             html = resp.read(2 * 1024 * 1024).decode('utf-8', errors='ignore')
         patterns = (
             r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)',
@@ -931,8 +996,10 @@ def format_message(row, talker, wx_dir, image_map=None, sender_map=None, display
     local_id = row[0] or 0
     server_id = row[1] or 0
     local_type = row[2] or 0
+    raw_local_type = local_type
     if local_type > 0xffffffff:
         local_type &= 0xffffffff
+    is_encoded_media_type = raw_local_type > 0xffffffff and local_type == 49
     real_sender_id = row[4] or 0
     create_time = row[5] or 0
     source = row[7]
@@ -992,6 +1059,12 @@ def format_message(row, talker, wx_dir, image_map=None, sender_map=None, display
     if content and content != source_text:
         metadata_parts.append(content)
     metadata_content = '\n'.join(metadata_parts)
+    app_title = extract_xml_text(content, 'title')
+    app_url = extract_xml_text(content, 'url')
+    # WeChat stores some forwarded articles as high-bit variants of type 49.
+    # They may also have a cached thumbnail; keep the article branch so the
+    # title/link is not hidden by the image-only fallback.
+    has_app_link_metadata = local_type == 49 and bool(app_title or app_url)
     is_emoji_xml = bool(re.search(r'<(?:msg\s*>)?\s*<emoji\b|<emoji\b', metadata_content, re.IGNORECASE))
     is_contact_card = bool(
         re.search(r'<msg\b[^>]*(?:nickname|username)=', metadata_content, re.IGNORECASE)
@@ -1042,7 +1115,7 @@ def format_message(row, talker, wx_dir, image_map=None, sender_map=None, display
         if img_data:
             image_b64 = img_data
             display += f'<br><img src="data:{mime};base64,{img_data}" loading="lazy" />'
-    elif local_type not in MSG_TYPES and get_cached_image(image_map, local_id, create_time, content, resource_md5s):
+    elif (local_type not in MSG_TYPES or is_encoded_media_type) and not has_app_link_metadata and get_cached_image(image_map, local_id, create_time, content, resource_md5s):
         # Some image messages use encoded types (e.g. 21474836529 = images in appmsg)
         # Check image_map for any message type
         img_data, mime = get_cached_image(image_map, local_id, create_time, content, resource_md5s)
@@ -1093,9 +1166,9 @@ def format_message(row, talker, wx_dir, image_map=None, sender_map=None, display
         # App message (link/file/article)
         if content:
             # Try to parse XML for title/desc
-            title = extract_xml_text(content, 'title')
+            title = app_title
             desc = extract_xml_text(content, 'des')
-            url = extract_xml_text(content, 'url')
+            url = app_url
             app_type = extract_xml_text(content, 'type')
 
             if app_type == '6' and re.search(r'\.\w+$', title):
@@ -1107,7 +1180,10 @@ def format_message(row, talker, wx_dir, image_map=None, sender_map=None, display
                               if builtin_title else escape_html(title))
                 # Extract and embed article thumbnail image
                 thumb_url = extract_appmsg_image(content)
-                if thumb_url:
+                cached = get_cached_image(image_map, local_id, create_time, metadata_content, resource_md5s)
+                if cached:
+                    img_data = cached
+                elif thumb_url:
                     img_data = download_image_as_base64(thumb_url, extract_media_aes_key(content))
                 else:
                     page_url = extract_xml_text(content, 'url')
@@ -1419,6 +1495,8 @@ def main():
     parser.add_argument('--passphrase', default=os.environ.get('WEFLOW_NT_PASSPHRASE', ''), help='Shared NT passphrase for deriving shard keys')
     parser.add_argument('--own-wxid', default=os.environ.get('WEFLOW_OWN_WXID', ''), help='Configured account identifier for self-message detection')
     args = parser.parse_args()
+
+    configure_remote_fetch_budget(REMOTE_FETCH_BUDGET_SECONDS)
 
     os.makedirs(args.out, exist_ok=True)
 

@@ -31,7 +31,7 @@ weflow-cli evidence-review "<session-id>" --dry-run --json --limit 100
 weflow-cli export "<session-id>" json --contract weflow-v1 --output "<local-output>"
 ```
 
-Add `--json` to an export command when the caller needs a machine-readable operation result. This changes only stdout status reporting, not the selected export file format. The result contains `success`, `format`, `contract`, `path`, and `count`. `--date` applies to every export format using the machine's local calendar day; `--date` cannot be combined with `--from` or `--to`.
+Add `--json` to an export command when the caller needs a machine-readable operation result. This changes only stdout status reporting, not the selected export file format. The result contains `success`, `format`, `contract`, `path`, and `count`. The `weflow-v1` file additionally includes conservative `coverage` metadata (`requestedFrom`, `requestedTo`, `requestedLimit`, `returned`, `mayHaveMore`, and returned time bounds); it does not expose a stable incremental cursor yet. `--date` applies to every export format using the machine's local calendar day; `--date` cannot be combined with `--from` or `--to`.
 
 Favorite exports use `--json-result` because `json` is already a positional file format: `fav export json --json-result --output <local-file>`. The result reports only status, path, format, and count; exported favorite content remains in the local file.
 

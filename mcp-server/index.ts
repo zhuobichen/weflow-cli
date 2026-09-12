@@ -208,7 +208,11 @@ async function exportMessagesForMcp(args: Record<string, any>): Promise<string> 
 
   const talker = await resolveMcpTalker(args.contact)
   const messages = await chatService.getMessagesInRange(talker, limit, from, to)
-  return JSON.stringify(createWeFlowEnvelope(messages), null, 2)
+  return JSON.stringify(createWeFlowEnvelope(messages, new Date().toISOString(), {
+    requestedFrom: from,
+    requestedTo: to,
+    requestedLimit: limit,
+  }), null, 2)
 }
 
 function parseFrontmatter(text: string): Record<string, any> {

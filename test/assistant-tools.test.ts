@@ -53,6 +53,9 @@ test('capability discovery declares the default MCP surface read-only', () => {
   assert.equal(result.status, 0, result.stderr || result.stdout)
   const capabilities = JSON.parse(result.stdout)
   assert.equal(capabilities.safety.mcpDefaultReadOnly, true)
+  assert.equal(capabilities.read.exports.versionedContract, 'weflow-message/v1')
+  assert.equal(capabilities.read.exports.rawContractPreserved, true)
+  assert.equal(capabilities.read.exports.incrementalRead.stableCursor, false)
 })
 
 test('generated MCP guidance lists the real read-only tool surface', () => {

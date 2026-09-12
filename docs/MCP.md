@@ -15,7 +15,7 @@ Example input:
 }
 ```
 
-The tool returns a JSON string with `schema: "weflow-message/v1"`. `limit` defaults to 100 and is capped at 1000. `from` and `to` are inclusive local dates. Use a session ID when a display name is ambiguous.
+The tool returns a JSON string with `schema: "weflow-message/v1"` and `coverage` metadata for the requested range, returned count, conservative `mayHaveMore` status, and returned time bounds. `limit` defaults to 100 and is capped at 1000. `from` and `to` are inclusive local dates. Use a session ID when a display name is ambiguous.
 
 This tool is read-only. It does not expose database paths, keys, configuration, or unrestricted filesystem access, and it does not invoke AI. Unknown WeChat message codes remain in the output with their original `localType` and `messageType: "other"`.
 

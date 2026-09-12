@@ -29,7 +29,13 @@ export class ExportService {
 
       const dir = this.ensureOutputDir(outputDir)
       const filePath = join(dir, `${talker}_messages.json`)
-      const payload = contract === 'weflow-v1' ? createWeFlowEnvelope(messages) : messages
+      const payload = contract === 'weflow-v1'
+        ? createWeFlowEnvelope(messages, new Date().toISOString(), {
+          requestedFrom: from,
+          requestedTo: to,
+          requestedLimit: limit,
+        })
+        : messages
       writeFileSync(filePath, JSON.stringify(payload, null, 2), 'utf8')
       return { success: true, path: filePath, count: messages.length }
     } catch {

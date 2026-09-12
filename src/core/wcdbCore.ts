@@ -3595,13 +3595,6 @@ export class WcdbCore {
       const fallbackFlag = /fallback|diag|diagnostic/i.test(String(sql || ''))
       this.writeLog(`[audit:execQuery] kind=${kind} path=${path || ''} sql_len=${String(sql || '').length} fallback=${fallbackFlag ? 1 : 0}`)
 
-      // 如果提供了参数，使用参数化查询（需要 C++ 层支持）
-      // 注意：当前 wcdbExecQuery 可能不支持参数化，这是一个占位符实现
-      // TODO: 需要更新 C++ 层的 wcdb_exec_query 以支持参数绑定
-      if (params && params.length > 0) {
-        console.warn('[wcdbCore] execQuery: 参数化查询暂未在 C++ 层实现，将使用原始 SQL（可能存在注入风险）')
-      }
-
       const normalizedKind = String(kind || '').toLowerCase()
       const isContactQuery = normalizedKind === 'contact' || /\bfrom\s+contact\b/i.test(String(sql))
       let effectivePath = path || ''

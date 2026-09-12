@@ -43,9 +43,68 @@ class EmojiExportTests(unittest.TestCase):
         result = self.render(message(), {'server:101': [MEDIA_MD5]})
         self.assertEqual(result['image_b64'], IMAGE[0])
 
+    def test_cache_pair_matches_without_using_local_id_alone(self):
+        with tempfile.TemporaryDirectory() as directory:
+            talker = 'example-contact'
+            cache_dir = Path(directory) / '2026-09' / 'Message' / hashlib.md5(talker.encode()).hexdigest() / 'ImageTemp'
+            cache_dir.mkdir(parents=True)
+            first_payload = b'\x89PNG\r\n\x1a\nfirst-image'
+            second_payload = b'\x89PNG\r\n\x1a\nsecond-image'
+            (cache_dir / '7_1700000000_hd_temp_convert').write_bytes(first_payload)
+            (cache_dir / '7_1700000100_hd_temp_convert').write_bytes(second_payload)
+            image_map = export.scan_nt_cache(directory, talker)
+            self.assertIn('pair:7:1700000000', image_map)
+            self.assertIn('pair:7:1700000100', image_map)
+            result = export.format_message(
+                (7, 0, 3, 0, 1, 1700000100, 0, '', '', b''),
+                talker, '', image_map,
+            )
+            self.assertEqual(result['image_b64'], image_map['pair:7:1700000100'][0])
+
     def test_colliding_local_id_does_not_match(self):
         result = self.render(message(), {'local:7': [MEDIA_MD5]})
         self.assertIsNone(result['image_b64'])
+        self.assertIsNone(export.get_cached_image({7: IMAGE}, 7, 1700000000))
+
+    def test_unique_local_id_fallback_matches(self):
+        with tempfile.TemporaryDirectory() as directory:
+            talker = 'example-contact'
+            cache_dir = Path(directory) / '2026-09' / 'Message' / hashlib.md5(talker.encode()).hexdigest() / 'Thumb'
+            cache_dir.mkdir(parents=True)
+            (cache_dir / '7_1700000100_thumb.jpg').write_bytes(b'\xff\xd8\xff\xe0unique-image')
+            image_map = export.scan_nt_cache(directory, talker)
+            result = export.format_message(
+                (7, 0, 3, 0, 1, 1700000000, 0, '', '', b''),
+                talker, '', image_map,
+            )
+            self.assertEqual(result['image_b64'], image_map['unique:7'][0])
+
+    def test_encoded_media_type_uses_conversation_cache(self):
+        row = (7, 0, 21474836529, 0, 1, 1700000000, 0, '', '', b'')
+        result = export.format_message(row, 'example-contact', '', {'unique:7': IMAGE})
+        self.assertEqual(result['image_b64'], IMAGE[0])
+
+    def test_remote_fetch_budget_does_not_affect_local_media(self):
+        export.configure_remote_fetch_budget(0)
+        try:
+            self.assertIsNone(export.download_image_as_base64('https://example.test/image.jpg'))
+            row = (7, 0, 21474836529, 0, 1, 1700000000, 0, '', '', b'')
+            result = export.format_message(row, 'example-contact', '', {'unique:7': IMAGE})
+            self.assertEqual(result['image_b64'], IMAGE[0])
+        finally:
+            export.configure_remote_fetch_budget(None)
+
+    def test_encoded_forwarded_article_keeps_thumbnail_and_link(self):
+        content = (
+            '<appmsg><title><![CDATA[Forwarded article]]></title>'
+            '<type>5</type><url><![CDATA[https://mp.weixin.qq.com/s/example]]></url>'
+            '</appmsg>'
+        )
+        row = (7, 0, 21474836529, 0, 1, 1700000000, 0, '', content, b'')
+        result = export.format_message(row, 'example-contact', '', {'unique:7': IMAGE})
+        self.assertEqual(result['image_b64'], IMAGE[0])
+        self.assertIn('msg-link', result['display'])
+        self.assertIn('Forwarded article', result['display'])
 
     def test_zero_server_id_does_not_match(self):
         result = self.render(message(0), {'server:0': [MEDIA_MD5]})

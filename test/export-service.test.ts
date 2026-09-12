@@ -30,6 +30,17 @@ test('JSON export reports count and writes the versioned contract', async () => 
     const payload = JSON.parse(readFileSync(result.path!, 'utf8'))
     assert.equal(payload.schema, 'weflow-message/v1')
     assert.equal(payload.messages.length, 1)
+    assert.equal(payload.coverage.requestedLimit, 100)
+    assert.equal(payload.coverage.returned, 1)
+    assert.equal(payload.coverage.mayHaveMore, false)
+    assert.equal(payload.coverage.oldestCreateTime, 1_700_000_000)
+    assert.equal(payload.coverage.newestCreateTime, 1_700_000_000)
+
+    const rawResult = await exportService.exportJson('synthetic-session', output, 100)
+    assert.equal(rawResult.success, true)
+    const rawPayload = JSON.parse(readFileSync(rawResult.path!, 'utf8'))
+    assert.equal(Array.isArray(rawPayload), true)
+    assert.equal(rawPayload[0].messageType, undefined)
   } finally {
     chatService.getMessagesInRange = original
     rmSync(output, { recursive: true, force: true })
