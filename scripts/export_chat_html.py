@@ -725,6 +725,17 @@ def shrink_embedded(image, max_side=720, force=False):
 
 
 def get_cached_image(image_map, local_id, create_time, content='', resource_md5s=None, server_id=0):
+    """Best local media for a message: by content md5, then by identity.
+
+    md5 is the strongest key, but it is not always derivable - a group row can
+    lack the resource mapping that carries it. The conversation cache also
+    indexes by `(local_id, create_time)`, which is identity-aware and was
+    already being stored; reading it recovers media the md5 path alone misses.
+
+    Deliberately *not* falling back to a bare `local_id`: that id restarts in
+    every message shard, so matching on it alone attaches one conversation's
+    image to another conversation's message.
+    """
     if not image_map:
         return None
     for media_md5 in resource_md5s or []:
@@ -733,6 +744,12 @@ def get_cached_image(image_map, local_id, create_time, content='', resource_md5s
     for media_md5 in extract_media_md5s(content):
         if image_map.get(f'md5:{media_md5}'):
             return shrink_embedded(image_map[f'md5:{media_md5}'])
+    try:
+        pair_key = f'pair:{int(local_id)}:{int(create_time)}'
+    except (TypeError, ValueError):
+        return None
+    if image_map.get(pair_key):
+        return shrink_embedded(image_map[pair_key])
     return None
 
 

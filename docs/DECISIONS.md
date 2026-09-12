@@ -244,6 +244,16 @@ The bundled WCDB DLL exposes a raw SQL query ABI without parameter binding. `exe
 
 **Consequences:** Existing fixed internal queries are unchanged. A future parameterized implementation requires a native ABI change, compatibility testing, and a separate security review.
 
+## D-027: Add conservative coverage metadata to the versioned message contract
+
+**Status:** Active
+
+`weflow-message/v1` may include query coverage metadata such as requested bounds, returned count, returned time bounds, and a conservative `mayHaveMore` flag. The legacy `raw` export remains a top-level message array and does not gain this metadata.
+
+**Reason:** Downstream data consumers need enough information to checkpoint time-window synchronization without treating a timestamp as a globally unique cursor or assuming that a database shard is complete.
+
+**Consequences:** Consumers can perform overlapping time-window reads and deduplicate locally. A stable incremental cursor remains a separate future change and must be supported by all relevant database backends before it is advertised.
+
 ## Decision Template
 
 

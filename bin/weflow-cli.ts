@@ -261,7 +261,14 @@ program
         sessions: { cli: 'sessions --json', mcp: 'wechat.list_sessions' },
         messages: { cli: 'messages <talker> --json', mcp: 'wechat.export_messages' },
         contacts: { cli: 'contacts --json' },
-        exports: { cli: 'export <talker> <json|txt|html|excel>', mcp: 'wechat.export_messages' },
+        exports: {
+          cli: 'export <talker> <json|txt|html|excel>',
+          mcp: 'wechat.export_messages',
+          versionedContract: 'weflow-message/v1',
+          rawContractPreserved: true,
+          coverage: ['requestedFrom', 'requestedTo', 'requestedLimit', 'returned', 'mayHaveMore', 'oldestCreateTime', 'newestCreateTime'],
+          incrementalRead: { mode: 'overlapping-time-window', stableCursor: false },
+        },
         favorites: {
           cli: 'fav list --json',
           export: 'fav export <markdown|json> --json-result --output <local-file>',

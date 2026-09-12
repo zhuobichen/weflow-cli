@@ -41,5 +41,7 @@ scripts/regen_wsl_keys.mjs
 !docs/AI_INTERFACE.md
 !docs/PARTNERS.md
 !docs/BRANCHES.md
+!docs/ROADMAP.md
+!docs/DEEPSEEK_V4_FLASH施工文档.md
 .DS_Store
 Thumbs.db

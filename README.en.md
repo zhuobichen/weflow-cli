@@ -142,6 +142,14 @@ weflow-cli daily --date 2026-08-12 --no-ai
 
 The reader serves at `http://localhost:8765/` by default.
 
+**Use the versioned message contract**
+
+```powershell
+weflow-cli export "contact" json --contract weflow-v1 --output ./output
+```
+
+The generated envelope keeps message fields stable and includes conservative `coverage` metadata. For incremental reads, use an overlapping `--from` time window and deduplicate locally by conversation plus `localId`/`serverId`; a stable cursor is not exposed yet. The legacy JSON export remains a top-level array.
+
 **Connect an AI editor**
 
 ```powershell

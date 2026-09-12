@@ -14,6 +14,7 @@ All notable user-facing changes are recorded here. This project follows [Semanti
 
 - Decode locally cached WeChat 4.x V2 image containers during HTML chat export by deriving and validating the account-specific media key from local `kvcomm` data.
 - Match exported chat media by stable server-message identity so reused local IDs cannot attach an unrelated image or emoji.
+- Match NT cache media by the exact local-message-ID and timestamp pair when server-resource metadata is unavailable, including reused local IDs.
 - Preserve forwarded app cards with cached covers, including CDATA-wrapped Bilibili links, and decrypt remote WeChat 4.x emoticons with their message-provided AES key.
 - Decode entity-escaped emoji XML and try `encrypturl`, `thumburl`, `cdnurl`, and `externurl` fallbacks; resolve Bilibili BV covers when a share page omits `og:image`.
 - Render signature-only WeChat default `[打脸]` messages with the bundled official `Facepalm` asset when no message-specific resource is available.
@@ -72,11 +73,13 @@ All notable user-facing changes are recorded here. This project follows [Semanti
 - Require preview and confirmation for semantic search and RAG chat, and keep their private inputs out of child-process arguments.
 - Keep report conversation selections and NT scan roots out of child-process arguments, and clear unrelated internal values from long-lived worker environments.
 - Require preview and confirmation for evidence review, with content-free and path-free machine results.
+- Reject unsupported WCDB query parameters instead of silently executing SQL without bindings.
 
 ### Agent interfaces
 
 - Added `capabilities --json`, redacted configuration status, structured export results, reader status, diagnostics, access-list JSON, and no-AI daily JSON output.
 - Added the versioned `weflow-message/v1` contract to CLI exports and the read-only `wechat.export_messages` MCP tool for downstream projects.
+- Added conservative `coverage` metadata to versioned message exports and capability discovery, while preserving the legacy raw JSON array.
 - Added bounded local evidence-package and explicitly authorized evidence-review commands.
 - Applied message date ranges before pagination and preserved unknown message types in downstream contracts.
 - Added content-free JSON summaries for account scanning and assistant logs, plus structured todo reminders.
