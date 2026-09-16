@@ -1,12 +1,14 @@
 # Changelog
 
+The npm package is published separately from GitHub. It may lag behind the `master` branch until a release is published.
+
 All notable user-facing changes are recorded here. This project follows [Semantic Versioning](https://semver.org/).
 
-## Unreleased
+## 1.6.0
 
 ### Documentation
 
-- Synchronized setup, operations, architecture, security, MCP, and maintenance guidance with the current `1.5.1` source baseline.
+- Synchronized setup, operations, architecture, security, MCP, and maintenance guidance with the current `1.6.0` source baseline.
 - Clarified source-versus-npm version drift, no-AI daily runs, staged data-directory discovery, media-export limitations, and local-data privacy boundaries.
 - Replaced the outdated architecture image with a GPT-image-2 diagram covering current CLI, MCP, service, workflow, data, and privacy boundaries.
 
@@ -39,6 +41,9 @@ All notable user-facing changes are recorded here. This project follows [Semanti
 - Label `local_type=10000` system rows as `系统` and never fall back to the conversation name for a group speaker. A revoke notice or join template resolves to no member, and the fallback labelled it with the group name, reading as if the group itself had spoken.
 - Render `sysmsgtemplate` join notices from their template and member list (`"彪弟"邀请你和"777"加入了群聊`) instead of stripping the tags and leaving only the chatroom id.
 - Never emit a remote URL as an `<img>` source. The candidate comes from a catch-all that accepts any URL in the row, and a sample of 57 such sources found 56 were web page links (`meeting.tencent.com`, `github.com`, `support.weixin.qq.com`) rather than images, each rendering as a broken-image icon. Images we could not fetch are now simply not shown.
+- Improved WeChat data-directory discovery for custom locations, nested folders, and database subdirectories.
+- Added staged guidance and optional `init --full-scan` fallback when automatic discovery cannot find the data.
+- Completed incomplete yesterday output before an unqualified daily report run.
 
 ### Added
 
@@ -93,16 +98,6 @@ All notable user-facing changes are recorded here. This project follows [Semanti
 - Added a unified Python dependency manifest for the standard Windows 4.x workflow and an optional legacy 3.x manifest.
 - Added MCP integration, contribution and security guidance.
 - Included README architecture assets and installation manifests in npm and portable releases.
-
-## 1.5.1
-
-### Fixed
-
-- Improved WeChat data-directory discovery for custom locations, nested folders, and database subdirectories.
-- Added staged guidance and optional `init --full-scan` fallback when automatic discovery cannot find the data.
-- Completed incomplete yesterday output before an unqualified daily report run.
-
-The npm package is published separately from GitHub. It may lag behind the `master` branch until a release is published.
 
 ## 1.5.0
 
