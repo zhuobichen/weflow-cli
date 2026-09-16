@@ -130,6 +130,19 @@ def shrink(data, mime, max_side=720, quality=82):
     embedding them untouched would balloon the export; ~720px is the point
     where they look clean at any realistic zoom without the weight.
     """
+    # An animated GIF must not go through a JPEG re-encode: PIL decodes the
+    # first frame only, so the export showed a still of what the sender saw
+    # moving. Re-encoding also tends to grow small GIFs, so they pass through
+    # untouched unless they are genuinely oversized.
+    if mime == 'image/gif':
+        try:
+            import io as _io
+            from PIL import Image
+            with Image.open(_io.BytesIO(data)) as probe:
+                if getattr(probe, 'is_animated', False):
+                    return data, mime
+        except Exception:
+            return data, mime
     try:
         import io as _io
         from PIL import Image

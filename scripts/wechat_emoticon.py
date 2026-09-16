@@ -186,6 +186,11 @@ WXGF_MAX_FRAMES = 4
 # transition frames and truncated payloads sit at essentially 0.
 BLANK_FRAME_SCORE = 0.005
 
+# Animation output. The page shows a sticker at ~240px, and uncapped frame
+# rates on a 50-frame clip produce a multi-megabyte GIF.
+GIF_MAX_SIDE = 240
+GIF_FPS = 10
+
 
 def _frame_score(path):
     """How much artwork a decoded frame carries, in [0, 1].
@@ -210,16 +215,37 @@ def _frame_score(path):
         return None
 
 
+def _encode_animated_gif(source, target):
+    """Animated GIF from an H.265 stream, scaled for a chat bubble.
+
+    The stream is a sticker animation, not a still. Frames are capped at
+    `GIF_FPS` and `GIF_MAX_SIDE`, and quantised through a generated palette -
+    without that a 50-frame clip runs to megabytes instead of a few hundred KB.
+    """
+    try:
+        subprocess.run(
+            [_FFMPEG, '-y', '-loglevel', 'error', '-f', 'hevc', '-i', source,
+             '-vf', (f'fps={GIF_FPS},scale={GIF_MAX_SIDE}:-1:flags=lanczos,'
+                     'split[a][b];[a]palettegen[p];[b][p]paletteuse'),
+             '-loop', '0', target],
+            capture_output=True, timeout=120,
+        )
+        return os.path.isfile(target) and os.path.getsize(target) > 0
+    except Exception:
+        return False
+
+
 def decode_wxgf(data):
-    """A drawn frame of a `wxgf` payload as PNG bytes, or b''.
+    """A `wxgf` payload as image bytes (animated GIF or PNG), or b''.
 
-    The container is 'wxgf' + a small header, then a raw H.265 stream.
+    The container is 'wxgf' + a small header, then a raw H.265 stream. Multi
+    frame streams are sticker animations and are re-encoded as an animated GIF;
+    taking a single frame from those - which is what this used to do - shows a
+    still of what the sender saw moving.
 
-    Not simply the first frame: many sticker streams begin with a blank
-    transition frame, so taking frame 1 yields a white square. Decoding a few
-    frames and keeping the one with the most artwork costs little (the result
-    is cached by the caller) and is the difference between showing the sticker
-    and showing nothing.
+    Single frame streams are handled by picking the frame with the most
+    artwork rather than frame 1: many begin with a blank transition frame, so
+    frame 1 yields a white square.
     """
     global _FFMPEG, _FFMPEG_CHECKED
     if not _FFMPEG_CHECKED:
@@ -228,23 +254,30 @@ def decode_wxgf(data):
     if not _FFMPEG:
         return b''
     tmp_in = None
-    tmp_out = None
+    tmp_dir = None
     try:
         with tempfile.NamedTemporaryFile(suffix='.hevc', delete=False) as fh:
             fh.write(data[4:])
             tmp_in = fh.name
-        tmp_out = tmp_in + '_%02d.png'
+        tmp_dir = tempfile.mkdtemp(prefix='weflow-wxgf-')
+        # Probe the frame count cheaply: all frames, no scaling.
         subprocess.run(
             [_FFMPEG, '-y', '-loglevel', 'error', '-f', 'hevc', '-i', tmp_in,
-             '-frames:v', str(WXGF_MAX_FRAMES), '-vsync', '0', tmp_out],
-            capture_output=True, timeout=60,
+             '-vsync', '0', os.path.join(tmp_dir, 'f%04d.png')],
+            capture_output=True, timeout=120,
         )
-        frames = sorted(glob.glob(tmp_in + '_*.png'))
+        frames = sorted(glob.glob(os.path.join(tmp_dir, 'f*.png')))
         if not frames:
             return b''
+        if len(frames) > 1:
+            gif_path = os.path.join(tmp_dir, 'anim.gif')
+            if _encode_animated_gif(tmp_in, gif_path):
+                with open(gif_path, 'rb') as fh:
+                    return fh.read()
+            # Fall through to a still frame if the animation could not be built.
         best = frames[0]
         best_score = None
-        for frame in frames:
+        for frame in frames[:WXGF_MAX_FRAMES]:
             score = _frame_score(frame)
             if score is None:
                 break
@@ -260,11 +293,14 @@ def decode_wxgf(data):
     except Exception:
         return b''
     finally:
-        for path in ([tmp_in] if tmp_in else []) + (glob.glob(tmp_in + '_*.png') if tmp_in else []):
+        if tmp_in:
             try:
-                os.remove(path)
+                os.remove(tmp_in)
             except OSError:
                 pass
+        if tmp_dir:
+            import shutil
+            shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
 def load_sticker(cache_dirs, md5_hex, key, decode_cache_dir=''):
@@ -304,8 +340,11 @@ def load_sticker(cache_dirs, md5_hex, key, decode_cache_dir=''):
     data = decrypt(raw, key)
     mime, _ = sniff(data)
     if mime == 'image/hevc':
+        # Re-sniff rather than assuming PNG: an animated stream decodes to a
+        # GIF, and labelling that `image/png` sent it down the JPEG path
+        # downstream, flattening the animation this was meant to preserve.
         data = decode_wxgf(data)
-        mime = 'image/png' if data else ''
+        mime = sniff(data)[0] or ''
     if not mime:
         return b'', ''
 

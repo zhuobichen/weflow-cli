@@ -1315,6 +1315,10 @@ def image_is_blank(b64_data, threshold=0.985):
         import io as _io
         from PIL import Image
         with Image.open(_io.BytesIO(base64.b64decode(b64_data))) as image:
+            # An animation's first frame can be blank while the animation is
+            # not; judging it on frame 1 would drop a perfectly good sticker.
+            if getattr(image, 'is_animated', False):
+                return False
             pixels = list(image.convert('RGB').resize((32, 32)).getdata())
         if not pixels:
             return True
