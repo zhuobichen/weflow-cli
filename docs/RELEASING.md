@@ -139,7 +139,7 @@ npm view weflow-cli version --registry=https://registry.npmjs.org  # 用官方�
 ### 新动态邮件提醒
 
 `scripts/watch_issues.py` 轮询本仓库的 issue 与回复，有非维护者发言时发邮件。
-由 Windows 计划任务 `WeFlow Issue Watch` 每 30 分钟调用一次，不依赖任何编辑器
+由 Windows 计划任务 `WeFlow Issue Watch` 每小时调用一次，不依赖任何编辑器
 或 Claude 会话处于打开状态。
 
 邮件凭据放在仓库外，不进版本库：
