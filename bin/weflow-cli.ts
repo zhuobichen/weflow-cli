@@ -28,6 +28,26 @@ function resolvePackageRoot(): string {
   return resolvePackageRootFrom(import.meta.url)
 }
 
+/**
+ * Version reported by `--version` and `capabilities`.
+ *
+ * Read from package.json instead of written here. A literal has to be updated
+ * by hand on every release, and when that is forgotten `--version` lies about
+ * what is installed - which is exactly what happened: the 1.6.0 package
+ * shipped a hardcoded `1.5.1`, so a user's bug report could not be told apart
+ * from a stale install, and diagnosing it needed a clean install to disprove.
+ */
+function resolveCliVersion(): string {
+  try {
+    const pkg = JSON.parse(readFileSync(join(resolvePackageRoot(), 'package.json'), 'utf8'))
+    return String(pkg.version || '0.0.0')
+  } catch {
+    return '0.0.0'
+  }
+}
+
+const CLI_VERSION = resolveCliVersion()
+
 function pythonProcessEnv(apiKey?: string, variable = 'DEEPSEEK_API_KEY'): NodeJS.ProcessEnv {
   return createPythonProcessEnv(apiKey ? { [variable]: apiKey } : {})
 }
@@ -247,7 +267,7 @@ async function resolveTalker(input: string, quiet = false, nonInteractive = fals
 program
   .name('weflow-cli')
   .description('WeFlow CLI - 微信聊天记录命令行查询与导出工具')
-  .version('1.5.1')
+  .version(CLI_VERSION)
 
 program
   .command('capabilities')
@@ -256,7 +276,7 @@ program
   .action((opts) => {
     const data = {
       schema: 'weflow-capabilities/v1',
-      version: '1.5.1',
+      version: CLI_VERSION,
       read: {
         sessions: { cli: 'sessions --json', mcp: 'wechat.list_sessions' },
         messages: { cli: 'messages <talker> --json', mcp: 'wechat.export_messages' },
