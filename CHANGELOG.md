@@ -4,11 +4,22 @@ The npm package is published separately from GitHub. It may lag behind the `mast
 
 All notable user-facing changes are recorded here. This project follows [Semantic Versioning](https://semver.org/).
 
+## 1.6.1
+
+### Fixed
+
+- Report the real version from `--version` and `capabilities`. The version was a literal in the CLI source and `npm version` only rewrites `package.json`, so the 1.6.0 package announced itself as `1.5.1` - which made a user's bug report impossible to tell apart from a stale install, and took a clean install to disprove.
+- Keep the discovered database list when the NT scan cannot read WeChat's memory. `nt_decrypt.py scan` returned early on "Weixin.exe 未运行" *before* walking the filesystem, and the caller discarded the whole result on any error. The passphrase-derivation path - the correct one for current WeChat, and one that needs only the file list - therefore never ran, so a run that had already captured the passphrase still ended with no usable keys and `sessions` reported "WCDB 初始化失败: -1006".
+
+### Documentation
+
+- Added `docs/RELEASING.md`: versioning rules, the pre-publish check for local media and keys, npm credentials with 2FA, and the China-mirror sync step that otherwise leaves users unable to install a fresh release.
+
 ## 1.6.0
 
 ### Documentation
 
-- Synchronized setup, operations, architecture, security, MCP, and maintenance guidance with the current `1.6.0` source baseline.
+- Synchronized setup, operations, architecture, security, MCP, and maintenance guidance with the current `1.6.1` source baseline.
 - Clarified source-versus-npm version drift, no-AI daily runs, staged data-directory discovery, media-export limitations, and local-data privacy boundaries.
 - Replaced the outdated architecture image with a GPT-image-2 diagram covering current CLI, MCP, service, workflow, data, and privacy boundaries.
 
