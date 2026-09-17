@@ -194,9 +194,11 @@ def get_db_keys(config):
                 bytes.fromhex(biz_salt), 256000, dklen=32
             ).hex()
         if not biz_key:
+            # 只指向 passphrase 一条路: 早先还建议 `config set bizKey`, 但该键不在
+            # CLI 的可写白名单里, 照做必然报 INVALID_CONFIG_KEY。
             raise SystemExit(
                 '缺少公众号数据库密钥: 请运行 weflow-cli fav set-key --passphrase <64位hex> '
-                '配置全库 passphrase (自动派生各库密钥), 或 weflow-cli config set bizKey <raw key>'
+                '配置全库 passphrase (自动派生各库密钥)'
             )
 
     return {

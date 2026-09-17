@@ -388,11 +388,20 @@ export class ChatService {
 
   /** 当前连接是否支持收藏查询 */
   isFavSupported(): boolean {
-    if (!this.connected || this.activeVersion !== '4.x' || !this.ntCore) return false
-    const favPath = configService.get('favDbPath')
-    const favKey = configService.get('favKey')
-    const favPass = configService.get('favPassphrase')
-    return !!(favPath && (favKey || favPass))
+    return this.favUnavailableReason() === null
+  }
+
+  /**
+   * 收藏不可用的具体原因, null 表示可用。
+   *
+   * 旧实现把「通道不对」和「没配密钥」压成一个 false, 于是没配 favKey 时报的是
+   * 「需 4.x NT 连接」—— 与用户实际看到的状态(4.x 已连接)矛盾, 也指错了修改方向。
+   */
+  favUnavailableReason(): 'channel' | 'path' | 'key' | null {
+    if (!this.connected || this.activeVersion !== '4.x' || !this.ntCore) return 'channel'
+    if (!configService.get('favDbPath')) return 'path'
+    if (!configService.get('favKey') && !configService.get('favPassphrase')) return 'key'
+    return null
   }
 
   /** 解析收藏密钥: 优先 favKey, 其次从 favPassphrase + 库 salt 派生 */

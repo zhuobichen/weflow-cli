@@ -2519,14 +2519,26 @@ favCmd
       else console.log(chalk.red(`\n❌ 数据库连接失败: ${conn.error}\n`))
       process.exit(1)
     }
-    if (!chatService.isFavSupported()) {
+    const favReason = chatService.favUnavailableReason()
+    if (favReason) {
+      const detail = {
+        channel: '当前数据通道不支持收藏查询 (需 4.x NT 连接)',
+        path: '未找到收藏数据库 (favorite.db)，请确认微信已登录并产生过收藏',
+        key: '收藏数据库已找到，但缺少密钥',
+      }[favReason]
       if (opts.json) {
-        console.log(JSON.stringify({ success: false, code: 'FAVORITES_UNAVAILABLE', error: '当前数据通道不支持收藏查询' }))
+        console.log(JSON.stringify({ success: false, code: 'FAVORITES_UNAVAILABLE', reason: favReason, error: detail }))
         process.exit(1)
       }
-      console.log(chalk.red('\n❌ 当前数据通道不支持收藏查询 (需 4.x NT 连接)'))
-      console.log(chalk.gray('  请先配置收藏密钥: weflow-cli fav set-key <64位hex密钥>'))
-      console.log(chalk.gray('  或设置全库 passphrase: weflow-cli fav set-key --passphrase <64位hex>\n'))
+      console.log(chalk.red(`\n❌ ${detail}`))
+      if (favReason === 'key') {
+        console.log(chalk.gray('  请先配置收藏密钥: weflow-cli fav set-key <64位hex密钥>'))
+        console.log(chalk.gray('  或设置全库 passphrase: weflow-cli fav set-key --passphrase <64位hex>'))
+      }
+      if (favReason === 'path') {
+        console.log(chalk.gray('  可手动指定: weflow-cli config set favDbPath <favorite.db 路径>'))
+      }
+      console.log('')
       process.exit(1)
     }
 
@@ -5362,6 +5374,12 @@ program
           messageDatabase: !!configService.get('ntDbPath') && existsSync(configService.get('ntDbPath')),
           momentsDatabase: !!configService.get('snsDbPath') && existsSync(configService.get('snsDbPath')),
           favoritesDatabase: !!configService.get('favDbPath') && existsSync(configService.get('favDbPath')),
+          // `favoritesDatabase` only says the file is there. Reading it also
+          // needs a key, and a caller that took the former for "usable" would
+          // attempt favorites and always fail.
+          favoritesReady: !!configService.get('favDbPath')
+            && existsSync(configService.get('favDbPath'))
+            && (!!configService.get('favKey') || !!configService.get('favPassphrase')),
         },
         assistant: {
           engine,
