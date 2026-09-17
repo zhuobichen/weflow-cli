@@ -685,6 +685,8 @@ program
       console.log(chalk.gray('  尝试从 WeFlow 桌面版配置读取...'))
       let extractedKey = opts.testMissingKeys ? '' : tryReadWeFlowKey()
       let linuxNtKey = ''
+      /** 密钥是本次从 hook 捕获的, 还是沿用已有的 - 摘要要说准, 不能一律报"获取成功" */
+      let keyCaptured = false
 
       if (extractedKey) {
         console.log(chalk.green('  ✓ 从 WeFlow 配置读取到密钥'))
@@ -770,11 +772,17 @@ program
 
         if (keyResult.success && keyResult.key) {
           extractedKey = keyResult.key
+          keyCaptured = true
         } else {
-          // hook 只在登录瞬间触发; 微信已登录时捕获不到 → 回退到已配置的 passphrase
-          const fallback = configService.get('favPassphrase') || ''
+          // hook 只在登录瞬间触发; 微信已登录时捕获不到 → 回退到已有密钥。
+          // decryptKey 也必须算数: init 成功时写入的就是它, 而 favPassphrase
+          // 仅在收藏库存在且验证通过时才会被设置。只看 favPassphrase 会让
+          // `init --refresh` 在一把完全可用的密钥面前报「密钥提取失败」——
+          // 而那正是 CLI 自己在微信迁移后建议用户执行的命令。
+          const fallback = configService.get('favPassphrase') || configService.get('decryptKey') || ''
           if (fallback) {
-            console.log(chalk.gray('  Hook 未捕获到密钥 (微信已登录时不再触发密钥函数), 使用已配置的 passphrase 继续'))
+            console.log(chalk.gray('  Hook 未捕获到密钥 (微信已登录时不再触发密钥函数)'))
+            console.log(chalk.gray('  检测到已配置的密钥, 沿用它并重新验证各库...'))
             extractedKey = fallback
           } else {
             console.log(chalk.red(`\n✗ 密钥提取失败: ${keyResult.error}`))
@@ -789,7 +797,8 @@ program
 
       if (extractedKey) {
         configService.set('decryptKey', extractedKey)
-        console.log(chalk.green('\n✓ 密钥获取成功!'))
+        if (keyCaptured) console.log(chalk.green('\n✓ 密钥获取成功!'))
+        else console.log(chalk.green('\n✓ 已沿用配置中的密钥 (本次未重新捕获)'))
       } else {
         console.log(chalk.green('\n✓ NT 密钥配置完成!'))
       }

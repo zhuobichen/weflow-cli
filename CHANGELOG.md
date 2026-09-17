@@ -16,6 +16,7 @@ All notable user-facing changes are recorded here. This project follows [Semanti
 - `fav list` no longer blames the data channel when the actual blocker is a missing favorites key. Added `check --json` → `favoritesReady`, which distinguishes "database found" from "usable".
 - Subprocess failures now include the last stderr line, redacted of key-shaped strings. A missing config key used to surface as `统计失败 (exit 1)` with no cause; it now names the cause and the command that fixes it.
 - `daily-stats` / `daily` no longer tell users to run `config set bizKey`, which the CLI rejects as an unwritable key.
+- `init --refresh` no longer fails with "密钥提取失败" when a perfectly good key is already configured. The hook only fires at the login moment, so a refresh run against an already-logged-in WeChat always times out; the fallback then consulted **only** `favPassphrase`, which `init` itself never writes (it writes `decryptKey`, and `favPassphrase` is set only when a usable `favorite.db` exists). Reads use `favPassphrase || decryptKey`, so the fallback rejected keys the rest of the tool was happily using. Reported as "最新版本的微信密钥解不开了" (Issue #9) after a WeChat upgrade, where `init --refresh` is exactly what the CLI tells users to run. The fallback now matches the read path, and the summary distinguishes a fresh capture ("密钥获取成功") from reusing what was configured ("已沿用配置中的密钥") instead of claiming success either way. Reaching that point also lets `enableFavorites` run, so favorites start working for users who previously died here.
 
 ### Added
 
