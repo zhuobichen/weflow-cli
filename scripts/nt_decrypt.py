@@ -1075,12 +1075,21 @@ def main():
     args = parser.parse_args()
 
     if args.command == 'scan':
+        # Discover the database files before touching the process. Walking the
+        # filesystem does not need WeChat running, but key matching does - and
+        # the caller derives keys from the passphrase when the memory scan
+        # finds nothing, which only needs the file list. Returning early on
+        # "process not running" without the databases threw that list away and
+        # left the caller with nothing to derive from.
+        databases = find_nt_databases(getattr(args, 'root', None))
+
         pid = find_weixin_pid()
         if not pid:
             if IS_WINDOWS:
-                print(json.dumps({"error": "Weixin.exe 未运行"}))
+                print(json.dumps({"error": "Weixin.exe 未运行", "databases": databases}))
             else:
-                print(json.dumps({"error": "未检测到 Linux 微信进程，请确认微信已启动并登录"}))
+                print(json.dumps({"error": "未检测到 Linux 微信进程，请确认微信已启动并登录",
+                                  "databases": databases}))
             return
 
         if not args.json:
@@ -1088,15 +1097,15 @@ def main():
 
         keys, scan_err = scan_memory_keys(pid)
         if scan_err == 'permission':
-            print(json.dumps({"error": "PERMISSION_DENIED: 读取微信进程内存需要 root 或 CAP_SYS_PTRACE 权限。可使用 sudo 运行，或执行: sudo setcap cap_sys_ptrace=ep $(which python3)"}))
+            print(json.dumps({"error": "PERMISSION_DENIED: 读取微信进程内存需要 root 或 CAP_SYS_PTRACE 权限。可使用 sudo 运行，或执行: sudo setcap cap_sys_ptrace=ep $(which python3)",
+                              "databases": databases}))
             return
         if scan_err == 'gone':
-            print(json.dumps({"error": "微信进程已退出，请重试"}))
+            print(json.dumps({"error": "微信进程已退出，请重试", "databases": databases}))
             return
         if not args.json:
             print(f"找到 {len(keys)} 个密钥")
 
-        databases = find_nt_databases(getattr(args, 'root', None))
         if not args.json:
             print(f"找到 {len(databases)} 个 NT 数据库")
 

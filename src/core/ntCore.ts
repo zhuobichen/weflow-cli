@@ -175,7 +175,19 @@ export class NtCore {
           let result: any
           try { result = JSON.parse(trimmed) } catch { continue }
           if (result.error) {
-            return { success: false, error: result.error }
+            // Keep whatever the scan discovered alongside the failure. The
+            // database file list is independent of the process, and callers
+            // derive keys from the passphrase when the memory scan finds
+            // nothing - which needs exactly that list. Dropping it here left
+            // the derivation step with nothing to work on, so a run that had
+            // already captured the passphrase still ended with no keys.
+            return {
+              success: false,
+              error: result.error,
+              keys: result.keys || [],
+              databases: result.databases || [],
+              matched: result.matched || [],
+            }
           }
           return {
             success: true,
