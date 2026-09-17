@@ -2121,6 +2121,8 @@ def main():
     parser.add_argument('--per-page', type=int, default=0,
                         help='Messages per file; overrides --parts. Keeps a long history snappy to open')
     parser.add_argument('--date', default=os.environ.get('WEFLOW_EXPORT_DATE', ''), help='Only export messages from local date YYYY-MM-DD')
+    parser.add_argument('--limit', type=int, default=int(os.environ.get('WEFLOW_EXPORT_LIMIT') or 0),
+                        help='Only export the most recent N messages (0 = all)')
     parser.add_argument('--emoticon-seed', default=os.environ.get('WEFLOW_EMOTICON_SEED', ''),
                         help='Account seed; decrypts custom stickers from the local cache')
     parser.add_argument('--passphrase', default=os.environ.get('WEFLOW_NT_PASSPHRASE', ''), help='Shared NT passphrase for deriving shard keys')
@@ -2219,6 +2221,13 @@ def main():
     print(f"Fetching messages for {args.talker}...")
     _phase("before fetch")
     messages = fetch_messages_from_shards(args.db, args.key, args.salt, args.talker, args.date, args.passphrase)
+
+    # `--limit` means the most recent N, the same as `messages` and
+    # `export json`. Sliced here, before the media and sender maps are built,
+    # so neither does work for messages that are about to be dropped.
+    if args.limit and args.limit > 0 and len(messages) > args.limit:
+        print(f"Limiting to the most recent {args.limit} of {len(messages)} messages")
+        messages = messages[-args.limit:]
 
     if not messages:
         if args.date:

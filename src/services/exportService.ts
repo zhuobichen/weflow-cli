@@ -150,6 +150,10 @@ export class ExportService {
           // hundred of them costs minutes in PIL.
           WEFLOW_FULL_IMAGES: options.fullImages ? '1' : undefined,
           WEFLOW_EXPORT_DATE: date || undefined,
+          // Without this the Python path exported the entire history: `--limit`
+          // only ever reached the fallback renderer, so a capped export of a
+          // busy group silently produced hundreds of files.
+          WEFLOW_EXPORT_LIMIT: limit > 0 ? String(limit) : undefined,
         }),
       })
 
@@ -205,7 +209,12 @@ export class ExportService {
 
   async exportExcel(talker: string, outputDir: string, limit = 0, from?: number, to?: number): Promise<ExportResult> {
     try {
-      const ExcelJS = await import('exceljs')
+      // exceljs is CJS-only, so a dynamic import hands back a namespace whose
+      // only member is `default`. `new ExcelJS.Workbook()` on the namespace
+      // itself is a TypeError, which the catch below used to swallow into a
+      // bare "Excel 导出失败".
+      const mod: any = await import('exceljs')
+      const ExcelJS = mod.default ?? mod
       const messages = await chatService.getMessagesInRange(talker, limit, from, to)
       if (messages.length === 0) {
         return { success: false, error: '未找到消息' }
@@ -236,8 +245,11 @@ export class ExportService {
       const filePath = join(dir, `${talker}_messages.xlsx`)
       await workbook.xlsx.writeFile(filePath)
       return { success: true, path: filePath, count: messages.length }
-    } catch {
-      return { success: false, error: 'Excel 导出失败' }
+    } catch (e: any) {
+      // Keep the reason: a bare label turned a one-line library error into an
+      // undiagnosable "export failed" for both users and agents.
+      const reason = e?.message ? `: ${String(e.message).slice(0, 200)}` : ''
+      return { success: false, error: `Excel 导出失败${reason}` }
     }
   }
 
