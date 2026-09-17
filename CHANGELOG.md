@@ -4,6 +4,23 @@ The npm package is published separately from GitHub. It may lag behind the `mast
 
 All notable user-facing changes are recorded here. This project follows [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+### Fixed
+
+- Read every message shard, not just the configured one. WeChat rolls a conversation into a new `message_N.db` over time and encrypts each shard with its own PBKDF2-derived key. `sessions`, `messages`, `contacts`, `export json/txt/excel`, `evidence` and the MCP server opened only `message_0.db` with the single configured key, so anything written after the last shard roll was **invisible** - and the commands still reported success. On the machine this was found on, one conversation showed 31 messages ending 2026-08-30 instead of 1145 ending 2026-09-17. Only `export html` merged shards (its Python exporter always had), which is why the two read paths disagreed.
+- `export <talker> html --limit N` now honours the limit. It reached only the fallback renderer; the primary path passed the flag nowhere, so a capped export of a busy chat silently produced the entire history.
+- `export <talker> excel` works at all. `exceljs` is CJS-only, so `await import('exceljs')` yields a namespace whose only member is `default`; `new ExcelJS.Workbook()` on the namespace is a `TypeError`, which a bare `catch {}` turned into the uninformative "Excel 导出失败". The reason is now reported too.
+- Group messages no longer show the sender's own `wxid_...:` prefix in the text (`波: [强]`, not `波: wxid_ogfiei1l1ye722: [强]`). Only `parsedContent` is normalised; `content`/`rawContent` keep the stored value.
+- `contacts` no longer emits a blank row for `Name2Id`'s placeholder entry.
+- `fav list` no longer blames the data channel when the actual blocker is a missing favorites key. Added `check --json` → `favoritesReady`, which distinguishes "database found" from "usable".
+- Subprocess failures now include the last stderr line, redacted of key-shaped strings. A missing config key used to surface as `统计失败 (exit 1)` with no cause; it now names the cause and the command that fixes it.
+- `daily-stats` / `daily` no longer tell users to run `config set bizKey`, which the CLI rejects as an unwritable key.
+
+### Added
+
+- `scripts/health_check.py` and `docs/HEALTH-CHECK.md`: a periodic, zero-token health check whose exit code is the verdict, covering version drift, shard read consistency, session freshness, export formats and the watcher tasks.
+
 ## 1.6.1
 
 ### Fixed

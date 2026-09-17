@@ -322,6 +322,7 @@ python scripts/fav_server.py --date YYYY-MM-DD
 - [技术决策记录](./docs/DECISIONS.md)：长期维护中的关键设计取舍。
 - [分支与合并记录](./docs/BRANCHES.md)：分支用途、合并时间线与并行开发的对齐约定。
 - [发布清单](./docs/RELEASING.md)：版本号、打包敏感内容检查、npm 凭据、国内镜像同步。
+- [定期体检](./docs/HEALTH-CHECK.md)：一条命令查出版本漂移、分片漏读、会话不更新与导出失败。
 - [电子数据证据指南](./docs/EVIDENCE_GUIDE.md)：证据保全、法律边界与使用注意事项。
 - [贡献指南](./CONTRIBUTING.md) 与 [安全策略](./SECURITY.md)：开发、反馈和敏感问题处理。
 - [变更记录](./CHANGELOG.md)：版本更新摘要。

@@ -43,6 +43,7 @@ scripts/regen_wsl_keys.mjs
 !docs/BRANCHES.md
 !docs/ROADMAP.md
 !docs/RELEASING.md
+!docs/HEALTH-CHECK.md
 !docs/DEEPSEEK_V4_FLASH施工文档.md
 .DS_Store
 Thumbs.db

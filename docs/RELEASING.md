@@ -167,3 +167,11 @@ npm view weflow-cli version --registry=https://registry.npmmirror.com
 ```
 
 两个源都是新版本，再对外说「已发布」。
+
+然后跑一遍体检，确认这次改动没有把读取路径或某个导出格式弄坏：
+
+```powershell
+py scripts/health_check.py
+```
+
+退出码 `0` 才算干净。检查项与各自的由来见 [HEALTH-CHECK.md](HEALTH-CHECK.md)。
