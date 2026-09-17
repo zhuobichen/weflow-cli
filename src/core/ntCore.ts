@@ -119,6 +119,10 @@ export class NtCore {
           WEFLOW_DB_PATH: values.dbPath,
           WEFLOW_NT_KEY: values.key,
           WEFLOW_NT_SALT: values.salt,
+          // WeChat rolls conversations into new message_*.db shards, each with
+          // a key PBKDF2-derived from this shared passphrase. Without it only
+          // shard 0 opens, and every read silently stops at its last write.
+          WEFLOW_NT_PASSPHRASE: (configService.get('favPassphrase') || configService.get('decryptKey') || '') || undefined,
           WEFLOW_CONTACT_DB: values.contactDbPath || undefined,
           WEFLOW_CONTACT_KEY: values.contactKey || undefined,
           WEFLOW_CONTACT_SALT: values.contactSalt || undefined,

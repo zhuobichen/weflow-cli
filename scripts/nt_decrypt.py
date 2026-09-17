@@ -7,6 +7,7 @@ import sys
 import os
 import json
 import re
+import hashlib
 import ctypes
 from ctypes import wintypes, c_void_p, c_size_t, create_string_buffer, byref, sizeof
 from pathlib import Path
@@ -468,6 +469,86 @@ def connect_nt_db(db_path, key_hex, salt_hex):
     return conn, c
 
 
+# WeChat rolls a conversation into a new shard over time, and every shard is
+# encrypted with its own key. Reading only the configured database therefore
+# shows a transcript that stops wherever the first shard's last write left off
+# - which is silent, because the query still succeeds. Only the HTML exporter
+# used to merge shards, so the same chat exported two different histories
+# depending on the format asked for.
+
+SHARD_EXCLUDED = {'message_fts.db', 'message_resource.db'}
+
+
+def discover_message_shards(db_path):
+    """Every NT message shard sitting beside the configured database."""
+    path = Path(db_path)
+    if not path.parent.is_dir():
+        return [str(path)]
+    shards = sorted(str(p) for p in path.parent.glob('message_*.db')
+                    if p.name.lower() not in SHARD_EXCLUDED)
+    return shards or [str(path)]
+
+
+def derive_database_key(path, fallback_key, fallback_salt, passphrase=''):
+    """Per-shard SQLCipher key (WeChat 4.1.12.26+).
+
+    The shared passphrase is PBKDF2-HMAC-SHA512'd against each shard's own
+    16-byte header salt. Without a passphrase the configured pair is used
+    unchanged, which is what shard 0 opens with on older installs.
+    """
+    if not passphrase:
+        return fallback_key, fallback_salt
+    try:
+        with open(path, 'rb') as fh:
+            salt = fh.read(16)
+        if len(salt) != 16:
+            return fallback_key, fallback_salt
+        raw_passphrase = bytes.fromhex(passphrase)
+        key = hashlib.pbkdf2_hmac('sha512', raw_passphrase, salt, 256000, 32).hex()
+        return key, salt.hex()
+    except (OSError, ValueError):
+        return fallback_key, fallback_salt
+
+
+def connect_message_shards(db_path, key_hex, salt_hex, passphrase=''):
+    """Open the configured database plus every sibling shard.
+
+    Returns the connections that actually opened. A shard that fails is
+    skipped rather than fatal: a partially readable transcript beats a
+    command that refuses to run at all.
+    """
+    opened = []
+    for shard in discover_message_shards(db_path):
+        derived_key, derived_salt = derive_database_key(
+            shard, key_hex, salt_hex, passphrase)
+        # Try the derived key first; fall back to the configured pair so
+        # installs without a passphrase keep working exactly as before.
+        candidates = [(derived_key, derived_salt)]
+        if (derived_key, derived_salt) != (key_hex, salt_hex):
+            candidates.append((key_hex, salt_hex))
+        for candidate_key, candidate_salt in candidates:
+            try:
+                conn, _ = connect_nt_db(shard, candidate_key, candidate_salt)
+                # PRAGMA key alone never fails; only a read surfaces a bad key.
+                conn.execute('SELECT count(*) FROM sqlite_master').fetchone()
+            except Exception:
+                continue
+            opened.append(conn)
+            break
+    return opened
+
+
+def msg_tables(conn):
+    """Names of the per-conversation Msg_ tables in one shard."""
+    try:
+        rows = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'Msg\\_%' ESCAPE '\\'"
+        ).fetchall()
+    except Exception:
+        return set()
+    return {row[0] for row in rows}
+
+
 def get_fav_schema(db_path, key_hex):
     """Dump favorite.db schema + sample rows (key verification / exploration)."""
     try:
@@ -594,174 +675,214 @@ def get_favorites(db_path, key_hex, limit=100, offset=0, keyword=None, fav_type=
         return {"error": str(e).split('\n')[0][:200]}
 
 
-def get_sessions(conn):
-    """Get chat sessions from NT database (Name2Id table)."""
-    c = conn.cursor()
-    sessions = []
+def _summarise(row):
+    """(last_time, summary) from the newest message row of a conversation."""
+    last_time = row[0] or 0
+    msg_type = row[3] or 0
+    source_text = row[1]
+    content_text = row[2]
+
+    if msg_type == 1:
+        # Text message: use message_content
+        if isinstance(content_text, str) and content_text:
+            return last_time, content_text[:50]
+        if isinstance(content_text, bytes):
+            return last_time, content_text.decode('utf-8', errors='ignore')[:50]
+        return last_time, ""
+
+    if isinstance(source_text, str) and source_text:
+        # Non-text: try to extract from source, stripping XML tags
+        clean = re.sub(r'<[^>]+>', '', source_text)
+        lines = clean.split('\n')
+        if len(lines) > 1 and lines[1].strip():
+            return last_time, lines[1].strip()[:50]
+        if clean.strip():
+            return last_time, clean.strip()[:50]
+    return last_time, ""
+
+
+def get_sessions(conns):
+    """Get chat sessions, newest message per conversation across every shard."""
+    sessions = {}
 
     # NT format: each chat has its own Msg_<MD5> table
     # The Name2Id table maps usernames to IDs (user_name, is_session)
-    try:
-        c.execute("SELECT user_name FROM Name2Id WHERE is_session = 1 LIMIT 500")
-        rows = c.fetchall()
+    for conn in conns:
+        c = conn.cursor()
+        try:
+            c.execute("SELECT user_name FROM Name2Id WHERE is_session = 1 LIMIT 500")
+            usernames = [row[0] for row in c.fetchall() if row[0]]
+        except Exception:
+            continue
 
-        import hashlib as hl
-
-        for (username,) in rows:
-            summary = ""
-            last_time = 0
-
-            # Try to get last message summary
+        tables = msg_tables(conn)
+        for username in usernames:
+            entry = sessions.setdefault(username, {"summary": "", "last_time": 0})
+            msg_table = f"Msg_{hashlib.md5(username.encode()).hexdigest()}"
+            if msg_table not in tables:
+                continue
             try:
-                tbl_hash = hl.md5(username.encode()).hexdigest()
-                msg_table = f"Msg_{tbl_hash}"
-
                 c.execute(f'SELECT create_time, source, message_content, local_type FROM "{msg_table}" ORDER BY create_time DESC LIMIT 1')
                 row = c.fetchone()
                 if row:
-                    last_time = row[0] or 0
-                    msg_type = row[3] or 0
-                    source_text = row[1]
-                    content_text = row[2]
+                    last_time, summary = _summarise(row)
+                    # A conversation spans shards; only the newest speaks for it.
+                    if last_time >= entry["last_time"]:
+                        entry["last_time"] = last_time
+                        entry["summary"] = summary
+            except Exception:
+                continue
 
-                    if msg_type == 1:
-                        # Text message: use message_content
-                        if isinstance(content_text, str) and content_text:
-                            summary = content_text[:50]
-                        elif isinstance(content_text, bytes):
-                            summary = content_text.decode('utf-8', errors='ignore')[:50]
-                    elif isinstance(source_text, str) and source_text:
-                        # Non-text: try to extract from source
-                        # Strip XML tags for summary
-                        import re as _re
-                        clean = _re.sub(r'<[^>]+>', '', source_text)
-                        lines = clean.split('\n')
-                        if len(lines) > 1 and lines[1].strip():
-                            summary = lines[1].strip()[:50]
-                        elif clean.strip():
-                            summary = clean.strip()[:50]
-            except:
-                pass
-
-            sessions.append({
-                "username": username,
-                "type": 1 if "@chatroom" in username else 0,
-                "unreadCount": 0,
-                "summary": summary,
-                "sortTimestamp": last_time,
-                "lastTimestamp": last_time,
-                "displayName": username,
-            })
-    except Exception as e:
-        return {"error": str(e)}
+    result = [{
+        "username": username,
+        "type": 1 if "@chatroom" in username else 0,
+        "unreadCount": 0,
+        "summary": entry["summary"],
+        "sortTimestamp": entry["last_time"],
+        "lastTimestamp": entry["last_time"],
+        "displayName": username,
+    } for username, entry in sessions.items()]
 
     # Sort by timestamp descending
-    sessions.sort(key=lambda s: s.get("sortTimestamp", 0), reverse=True)
-    return {"sessions": sessions}
+    result.sort(key=lambda s: s.get("sortTimestamp", 0), reverse=True)
+    return {"sessions": result}
 
 
-def get_messages(conn, talker, limit=100, offset=0, name_map=None, own_wxid=None):
-    """Get messages for a specific talker from NT database.
+def _strip_group_speaker(content, known_ids):
+    """Drop the `wxid_...:` prefix group rows carry in their content.
+
+    Only an id the shard's Name2Id actually knows is accepted, so a message
+    that merely starts with `note: ...` is left alone.
+    """
+    match = re.match(r'^([A-Za-z0-9_@.-]{5,64})\s*[:：]\s', str(content or ''))
+    if not match or match.group(1) not in known_ids:
+        return content
+    return content[match.end():]
+
+
+def _message_dict(row, sender_id_map, name_map, own_wxid, is_group=False):
+    """One message row -> the CLI's message shape."""
+    local_type = row[2] or 0
+    create_time = row[5] or 0
+    real_sender_id = row[4] or 0
+
+    # Resolve sender: real_sender_id -> Name2Id -> user_name
+    sender_username = sender_id_map.get(real_sender_id, "")
+
+    # Determine if message is from self
+    # own_wxid may have _xxxx suffix (from xwechat_files dir), try both
+    is_self = bool(own_wxid and (
+        sender_username == own_wxid or
+        (own_wxid.endswith('_') is False and sender_username.startswith(own_wxid))
+    ))
+    if not is_self and own_wxid:
+        # Strip _xxxx suffix and retry
+        parts = own_wxid.rsplit('_', 1)
+        if len(parts) == 2 and len(parts[1]) == 4 and parts[1].isalnum():
+            is_self = (sender_username == parts[0])
+
+    # Resolve sender display name from contact map
+    if is_self:
+        sender_display = ""  # Let the CLI show "我"
+    else:
+        sender_display = name_map.get(sender_username, sender_username) if sender_username else sender_username
+
+    # Parse message_content - TEXT column
+    content = row[12] if isinstance(row[12], str) else ""
+
+    # `content`/`rawContent` stay exactly as stored; only `parsedContent` - the
+    # field every consumer reads first - gets the display-ready form.
+    display = _strip_group_speaker(content, set(sender_id_map.values())) if is_group else content
+
+    return {
+        "localId": row[0] or 0,
+        "serverId": str(row[1] or ''),
+        "localType": local_type,
+        "createTime": create_time,
+        "isSend": 1 if is_self else 0,  # 1 = I sent this
+        "senderUsername": sender_username,
+        "senderDisplay": sender_display,
+        "content": content,
+        "rawContent": content,
+        "parsedContent": display[:200] if local_type == 1 else "",
+    }
+
+
+def get_messages(conns, talker, limit=100, offset=0, name_map=None, own_wxid=None):
+    """Get messages for a specific talker, merged across every shard.
 
     Args:
         name_map: optional {wxid: display_name} dict for resolving sender names
         own_wxid: account owner wxid for self-message detection
     """
-    import hashlib
     if name_map is None:
         name_map = {}
-    c = conn.cursor()
 
     msg_table = f"Msg_{hashlib.md5(talker.encode()).hexdigest()}"
+    is_group = '@chatroom' in talker
 
-    try:
-        # Check if table exists
-        c.execute(f"SELECT COUNT(*) FROM sqlite_master WHERE name='{msg_table}'")
-        if c.fetchone()[0] == 0:
-            return {"error": f"未找到会话: {talker}"}
+    # Each shard only needs to yield its newest window: once every shard's rows
+    # are merged and re-sorted, nothing older than that can reach this page.
+    window = 0 if limit <= 0 else limit + offset
+    collected = []
+    found = False
 
-        if limit > 0:
-            c.execute(f'''
+    for conn in conns:
+        c = conn.cursor()
+        try:
+            c.execute("SELECT COUNT(*) FROM sqlite_master WHERE name=?", (msg_table,))
+            if c.fetchone()[0] == 0:
+                continue
+            found = True
+
+            sql = f'''
                 SELECT local_id, server_id, local_type, sort_seq, real_sender_id,
                        create_time, status, upload_status, download_status,
                        server_seq, origin_source, source, message_content, compress_content
                 FROM "{msg_table}"
-                ORDER BY create_time DESC
-                LIMIT ? OFFSET ?
-            ''', (limit, offset))
-        else:
-            c.execute(f'''
-                SELECT local_id, server_id, local_type, sort_seq, real_sender_id,
-                       create_time, status, upload_status, download_status,
-                       server_seq, origin_source, source, message_content, compress_content
-                FROM "{msg_table}"
-                ORDER BY create_time DESC
-            ''')
+                ORDER BY create_time DESC, local_id DESC
+            '''
+            if window:
+                c.execute(sql + ' LIMIT ?', (window,))
+            else:
+                c.execute(sql)
+            rows = c.fetchall()
 
-        rows = c.fetchall()
-        messages = []
-
-        # Build sender_id -> username map from Name2Id (one query for all messages)
-        c.execute("SELECT rowid, user_name FROM Name2Id")
-        sender_id_map = {rowid: uname for rowid, uname in c.fetchall()}
+            # Sender ids are rowids, so the map has to come from the same shard.
+            c.execute("SELECT rowid, user_name FROM Name2Id")
+            sender_id_map = {rowid: uname for rowid, uname in c.fetchall()}
+        except Exception:
+            continue
 
         for row in rows:
-            local_type = row[2] or 0
-            create_time = row[5] or 0
-            real_sender_id = row[4] or 0
+            collected.append(_message_dict(row, sender_id_map, name_map, own_wxid, is_group))
 
-            # Resolve sender: real_sender_id -> Name2Id -> user_name
-            sender_username = sender_id_map.get(real_sender_id, "")
+    if not found:
+        return {"error": f"未找到会话: {talker}"}
 
-            # Determine if message is from self
-            # own_wxid may have _xxxx suffix (from xwechat_files dir), try both
-            is_self = bool(own_wxid and (
-                sender_username == own_wxid or
-                (own_wxid.endswith('_') is False and sender_username.startswith(own_wxid))
-            ))
-            if not is_self and own_wxid:
-                # Strip _xxxx suffix and retry
-                parts = own_wxid.rsplit('_', 1)
-                if len(parts) == 2 and len(parts[1]) == 4 and parts[1].isalnum():
-                    is_self = (sender_username == parts[0])
-
-            # Resolve sender display name from contact map
-            if is_self:
-                sender_display = ""  # Let the CLI show "我"
-            else:
-                sender_display = name_map.get(sender_username, sender_username) if sender_username else sender_username
-
-            # Parse message_content - TEXT column
-            content = row[12] if isinstance(row[12], str) else ""
-
-            messages.append({
-                "localId": row[0] or 0,
-                "serverId": str(row[1] or ''),
-                "localType": local_type,
-                "createTime": create_time,
-                "isSend": 1 if is_self else 0,  # 1 = I sent this
-                "senderUsername": sender_username,
-                "senderDisplay": sender_display,
-                "content": content,
-                "rawContent": content,
-                "parsedContent": content[:200] if local_type == 1 else "",
-            })
-
-        return {"messages": messages}
-    except Exception as e:
-        return {"error": str(e)}
+    collected.sort(key=lambda m: (m["createTime"], m["localId"]), reverse=True)
+    if limit > 0:
+        collected = collected[offset:offset + limit]
+    return {"messages": collected}
 
 
-def get_contacts(conn, limit=200):
-    """Get contacts from NT database."""
-    c = conn.cursor()
-    try:
-        c.execute("SELECT user_name FROM Name2Id LIMIT ?", (limit,))
-        rows = c.fetchall()
-        contacts = [{"username": r[0], "displayName": r[0]} for r in rows]
-        return {"contacts": contacts}
-    except Exception as e:
-        return {"error": str(e)}
+def get_contacts(conns, limit=200):
+    """Get contacts from NT database, merged across every shard."""
+    seen = set()
+    contacts = []
+    for conn in conns:
+        try:
+            rows = conn.execute("SELECT user_name FROM Name2Id LIMIT ?", (limit,)).fetchall()
+        except Exception:
+            continue
+        for (username,) in rows:
+            # Name2Id carries a placeholder row with no user_name; rendering it
+            # produced a blank line at the top of every contact list.
+            if not username or username in seen:
+                continue
+            seen.add(username)
+            contacts.append({"username": username, "displayName": username})
+    return {"contacts": contacts}
 
 
 # ========== SNS (朋友圈) Queries ==========
@@ -998,6 +1119,7 @@ def main():
     sessions_parser.add_argument('--db', default=os.environ.get('WEFLOW_DB_PATH'), required=not os.environ.get('WEFLOW_DB_PATH'), help='Path to NT database')
     sessions_parser.add_argument('--key', default=os.environ.get('WEFLOW_NT_KEY'), required=not os.environ.get('WEFLOW_NT_KEY'), help='Key hex (64 chars)')
     sessions_parser.add_argument('--salt', default=os.environ.get('WEFLOW_NT_SALT'), required=not os.environ.get('WEFLOW_NT_SALT'), help='Salt hex (32 chars)')
+    sessions_parser.add_argument('--passphrase', default=os.environ.get('WEFLOW_NT_PASSPHRASE'), help='Shared passphrase for deriving per-shard keys')
     sessions_parser.add_argument('--keyword', default=os.environ.get('WEFLOW_QUERY_KEYWORD'), help='Filter by keyword')
     sessions_parser.add_argument('--contact-db', default=os.environ.get('WEFLOW_CONTACT_DB'), help='Path to contact.db for display names')
     sessions_parser.add_argument('--contact-key', default=os.environ.get('WEFLOW_CONTACT_KEY'), help='Contact DB key hex (64 chars)')
@@ -1008,6 +1130,7 @@ def main():
     msg_parser.add_argument('--db', default=os.environ.get('WEFLOW_DB_PATH'), required=not os.environ.get('WEFLOW_DB_PATH'), help='Path to NT database')
     msg_parser.add_argument('--key', default=os.environ.get('WEFLOW_NT_KEY'), required=not os.environ.get('WEFLOW_NT_KEY'), help='Key hex (64 chars)')
     msg_parser.add_argument('--salt', default=os.environ.get('WEFLOW_NT_SALT'), required=not os.environ.get('WEFLOW_NT_SALT'), help='Salt hex (32 chars)')
+    msg_parser.add_argument('--passphrase', default=os.environ.get('WEFLOW_NT_PASSPHRASE'), help='Shared passphrase for deriving per-shard keys')
     msg_parser.add_argument('--talker', default=os.environ.get('WEFLOW_TALKER'), required=not os.environ.get('WEFLOW_TALKER'), help='Talker username')
     msg_parser.add_argument('--limit', type=int, default=100)
     msg_parser.add_argument('--offset', type=int, default=0)
@@ -1021,6 +1144,7 @@ def main():
     contacts_parser.add_argument('--db', default=os.environ.get('WEFLOW_DB_PATH'), required=not os.environ.get('WEFLOW_DB_PATH'), help='Path to NT database')
     contacts_parser.add_argument('--key', default=os.environ.get('WEFLOW_NT_KEY'), required=not os.environ.get('WEFLOW_NT_KEY'), help='Key hex (64 chars)')
     contacts_parser.add_argument('--salt', default=os.environ.get('WEFLOW_NT_SALT'), required=not os.environ.get('WEFLOW_NT_SALT'), help='Salt hex (32 chars)')
+    contacts_parser.add_argument('--passphrase', default=os.environ.get('WEFLOW_NT_PASSPHRASE'), help='Shared passphrase for deriving per-shard keys')
     contacts_parser.add_argument('--keyword', default=os.environ.get('WEFLOW_QUERY_KEYWORD'), help='Filter by keyword')
     contacts_parser.add_argument('--limit', type=int, default=200)
     contacts_parser.add_argument('--contact-db', default=os.environ.get('WEFLOW_CONTACT_DB'), help='Path to contact.db for display names')
@@ -1140,8 +1264,11 @@ def main():
         contact_name_map = load_contact_names(contact_db, contact_key, contact_salt)
 
     if args.command == 'sessions':
-        conn, _ = connect_nt_db(args.db, args.key, args.salt)
-        result = get_sessions(conn)
+        conns = connect_message_shards(args.db, args.key, args.salt, getattr(args, 'passphrase', '') or '')
+        if not conns:
+            print(json.dumps({"error": "无法打开消息数据库，请检查密钥"}, ensure_ascii=True))
+            return
+        result = get_sessions(conns)
         if 'sessions' in result:
             result['sessions'] = apply_contact_names(result['sessions'], contact_name_map)
             if args.keyword:
@@ -1151,18 +1278,26 @@ def main():
                     if kw in (s.get('username', '') + s.get('displayName', '') + s.get('summary', '')).lower()
                 ]
         print(json.dumps(result, ensure_ascii=True))
-        conn.close()
+        for conn in conns:
+            conn.close()
 
     elif args.command == 'messages':
-        conn, _ = connect_nt_db(args.db, args.key, args.salt)
+        conns = connect_message_shards(args.db, args.key, args.salt, getattr(args, 'passphrase', '') or '')
+        if not conns:
+            print(json.dumps({"error": "无法打开消息数据库，请检查密钥"}, ensure_ascii=True))
+            return
         own_wxid = getattr(args, 'own_wxid', None)
-        result = get_messages(conn, args.talker, args.limit, args.offset, contact_name_map, own_wxid)
+        result = get_messages(conns, args.talker, args.limit, args.offset, contact_name_map, own_wxid)
         print(json.dumps(result, ensure_ascii=True))
-        conn.close()
+        for conn in conns:
+            conn.close()
 
     elif args.command == 'contacts':
-        conn, _ = connect_nt_db(args.db, args.key, args.salt)
-        result = get_contacts(conn, args.limit)
+        conns = connect_message_shards(args.db, args.key, args.salt, getattr(args, 'passphrase', '') or '')
+        if not conns:
+            print(json.dumps({"error": "无法打开消息数据库，请检查密钥"}, ensure_ascii=True))
+            return
+        result = get_contacts(conns, args.limit)
         if 'contacts' in result:
             result['contacts'] = apply_contact_names(result['contacts'], contact_name_map)
             if args.keyword:
@@ -1172,7 +1307,8 @@ def main():
                     if kw in (c.get('username', '') + c.get('displayName', '') + c.get('remark', '') + c.get('nickname', '')).lower()
                 ]
         print(json.dumps(result, ensure_ascii=True))
-        conn.close()
+        for conn in conns:
+            conn.close()
 
     elif args.command == 'sns-timeline':
         conn, _ = connect_nt_db(args.db, args.key, args.salt)
