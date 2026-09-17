@@ -122,3 +122,25 @@ npm view weflow-cli version --registry=https://registry.npmjs.org  # 用官方�
 
 - 回到相关 issue 回复「已发布 + 升级方式」
 - GitHub Release 与本清单解耦：源码、编译包、npm 三者版本差异要对用户可见
+
+### 回复用户的规矩
+
+报障的人多半不是开发者，也不看长文。**回复写给用户，不是写给同事：**
+
+- **先给出结论和做法**（已修复 / 升级到 x.y.z），技术细节不要写进回复
+- **三五句话说完**。根因分析、代码片段、执行顺序论证属于 commit message 和
+  本文档，不属于 issue 回复
+- 升级类回复直接给命令，别让人自己找
+- **发出前先给维护者过目**，确认后再发
+
+反面例子：一条回复里贴了 Python 代码片段和逐步的执行顺序分析，内容全对，
+但给用户的感受是「看不懂、太长」。
+
+### 发布后自检
+
+```powershell
+npm view weflow-cli version --registry=https://registry.npmjs.org
+npm view weflow-cli version --registry=https://registry.npmmirror.com
+```
+
+两个源都是新版本，再对外说「已发布」。
