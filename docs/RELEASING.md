@@ -136,6 +136,29 @@ npm view weflow-cli version --registry=https://registry.npmjs.org  # 用官方�
 反面例子：一条回复里贴了 Python 代码片段和逐步的执行顺序分析，内容全对，
 但给用户的感受是「看不懂、太长」。
 
+### 新动态邮件提醒
+
+`scripts/watch_issues.py` 轮询本仓库的 issue 与回复，有非维护者发言时发邮件。
+由 Windows 计划任务 `WeFlow Issue Watch` 每 30 分钟调用一次，不依赖任何编辑器
+或 Claude 会话处于打开状态。
+
+邮件凭据放在仓库外，不进版本库：
+
+```json
+// ~/.weflow-issue-watch.json   （QQ 邮箱需用「授权码」，不是登录密码）
+{
+  "smtp_user": "1473517806@qq.com",
+  "smtp_auth": "<授权码>",
+  "mail_to":   "1473517806@qq.com",
+  "repo":      "zhuobichen/weflow-cli"
+}
+```
+
+- 首次运行只记录基线、不发信，避免把历史 issue 一次性全发出去
+- 发送失败不推进记录，下次自动重试
+- 手动跑一次：`py scripts/watch_issues.py`
+- 查看/改频率：`Get-ScheduledTask -TaskName 'WeFlow Issue Watch'`
+
 ### 发布后自检
 
 ```powershell
