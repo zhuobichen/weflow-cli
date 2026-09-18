@@ -4,7 +4,13 @@ The npm package is published separately from GitHub. It may lag behind the `mast
 
 All notable user-facing changes are recorded here. This project follows [Semantic Versioning](https://semver.org/).
 
-## Unreleased
+## 1.6.3
+
+### Fixed
+
+- `npm install -g weflow-cli` no longer fails on machines without Visual Studio build tools. `lz4@0.6.5` declares an unconditional `"install": "node-gyp rebuild"` with no prebuilt binaries and no fallback, so having it in `dependencies` made the whole install abort with `gyp ERR! find VS could not find a version of Visual Studio 2017 or newer` - for every Windows user without a C++ toolchain, which is most of them. The code only ever used it for 3.x WCDB `CompressContent` decompression, and already loaded it lazily behind a `try/catch` that degrades to `null`, so it is now an `optionalDependency`: npm installs it best-effort and continues when the build fails. Measured on a machine with no Visual Studio: before, `npm install` exited 1; after, it exits 0 and the installed CLI runs.
+
+## 1.6.2
 
 ### Fixed
 

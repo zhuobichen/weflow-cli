@@ -1,5 +1,8 @@
 # 发布清单
 
+> npm 侧的**症状对照与省上下文技巧**在 [NPM-PUBLISH.md](NPM-PUBLISH.md)：
+> 404 / 409 / ETARGET 到底是失败还是在传播，查那一份，不用通读本文。
+
 npm 包与 GitHub 分开发布，中间隔多久都不奇怪——`1.5.0` 与主线之间曾拉开 128 个提交、
 两个多月，直接导致用户照着 README 敲 `init --path` 却报 `unknown option`。
 
