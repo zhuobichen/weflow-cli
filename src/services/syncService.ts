@@ -145,7 +145,9 @@ export function buildNextState(input: {
 }): SyncState {
   const state = input.prior ?? emptySyncState(input.talker, input.scope, input.source,
     input.window.overlapSeconds)
-  const stamp = new Date((input.now ?? Math.floor(Date.now() / 1000)) * 1000).toISOString()
+  // Same form as coveredFrom/coveredTo: an offset, not a bare Z. A file that
+  // mixes the two makes "which local day was this?" unanswerable.
+  const stamp = isoFromSeconds(input.now ?? Math.floor(Date.now() / 1000))
 
   const priorFrom = state.coveredFrom
   let coveredFrom: string | null = priorFrom

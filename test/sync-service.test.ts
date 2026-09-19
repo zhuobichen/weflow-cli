@@ -149,6 +149,23 @@ test('a completed run advances both timestamps and writes state plus a job', asy
   })
 })
 
+test('every recorded timestamp carries a local offset, not a bare Z', async () => {
+  await withStore(async (store) => {
+    await runSync(TALKER, {
+      store, since: 1_700_000_000, now: 1_700_001_000,
+      read: async () => ({ messages: [message(1, 1_700_000_100, 's1')], shards: report() }),
+    })
+    const state = store.read(SOURCE, TALKER) as any
+    // Mixing `...Z` with `...+08:00` in one file makes "which local day was
+    // this?" unanswerable, and the contract asks for the offset form.
+    for (const field of ['lastAttempt', 'lastSuccessfulRun', 'updatedAt',
+                         'coveredFrom', 'coveredTo']) {
+      assert.match(String(state[field]), /[+-]\d{2}:\d{2}$/,
+        `${field} should carry a local offset, got ${state[field]}`)
+    }
+  })
+})
+
 test('a partial run records the attempt but never claims success', async () => {
   await withStore(async (store) => {
     // Establish a known-good baseline first.
