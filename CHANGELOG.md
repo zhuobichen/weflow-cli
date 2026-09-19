@@ -4,6 +4,26 @@ The npm package is published separately from GitHub. It may lag behind the `mast
 
 All notable user-facing changes are recorded here. This project follows [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+### Fixed
+
+- Restored four pieces of matching logic in the HTML exporter that the `90b165a` clone-consolidation merge had silently dropped, all of which lowered media coverage without failing loudly:
+  - the `unique:<local_id>` fallback, which matches an image when that id resolves to exactly one distinct picture in the conversation (content-deduped, so the shard-collision risk that rules out a bare `local_id` does not apply);
+  - `is_encoded_media_type`, needed because WeChat stores some forwards as high-bit variants of type 49 — the mask turns those into a plain 49, which is a registered type, so the branch guarding them had become unreachable;
+  - the guard that keeps a type-49 row carrying a title or url on the link-card path instead of hiding it behind a cached thumbnail;
+  - the cache-first lookup in the article branch, which had been downloading covers it already had on disk.
+- Seeded `COVER_STATE`'s budgets with their limits instead of 0. They were only ever set by `main()`, so any caller reaching the fetchers another way silently skipped every remote fetch and got `None` back with no error.
+- `pipeline_security_test` no longer reads the developer's real `~/.weflow-cli/config.json`; it points `CONFIG_PATH` at an empty temp file. The test only passed on a machine that happened to have a config, and reading a real config from a unit test is exactly what the repo rules forbid.
+- CI actually runs, for the first time. `npm test` passed locally and failed on every push: the script used `test/**/*.test.ts`, which Git Bash expands locally but CI's bash does not (globstar is off by default), so Node received the literal pattern and reported `Could not find ...`. The glob is now quoted so Node expands it. The single combined job was also split into `node` / `python` / `release-consistency`, because a Node failure previously stopped the Python tests from running at all — they had been failing unnoticed.
+- Raised the Node floor to 22.13.0. `src/core/sqlcipherCore.ts` imports `node:sqlite` at module scope; that builtin arrives in 22.5.0 and stops needing `--experimental-sqlite` at 22.13.0, so on Node 18/20 every command died at load while `engines` still claimed `>=18`. Both are past end-of-life, so the floor moved rather than adding a lazy-load path for dead runtimes.
+- Rebuilt `package-lock.json`, which still said 1.6.1 and still listed `lz4` as an ordinary dependency after the 1.6.3 change moved it to optional. `npm audit fix` then took production vulnerabilities from 17 to 6; the remainder (`@xmldom/xmldom`, `exceljs`, `@wenyan-md/core`, `mermaid`, `speech-rule-engine`, `uuid`) have no non-breaking fix — `exceljs@4.4.0` and `@wenyan-md/core@3.0.11` are already the newest releases and the advisories' suggested "fix" is to downgrade them.
+
+### Added
+
+- `docs/PROJECT_STATE.md` no longer carries a hardcoded version — it points at `package.json`, which is what drifted to `1.5.1`. Example version numbers in `docs/NPM-PUBLISH.md` and `docs/HEALTH-CHECK.md` became placeholders for the same reason.
+- Git tags and GitHub Releases for `1.6.0`, `1.6.1` and `1.6.3`, so npm versions map to commits. `1.6.2` has neither: it was published, but its version bump was never committed.
+
 ## 1.6.3
 
 ### Fixed
