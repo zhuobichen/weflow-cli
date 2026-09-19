@@ -30,8 +30,28 @@ export interface NtSessionsResult extends NtResult {
   sessions?: ChatSession[]
 }
 
+/** One shard's outcome, as reported by `nt_decrypt.py --report-shards`. */
+export interface ShardOutcome {
+  /** basename only - the child never reports a full path */
+  name: string
+  opened: boolean
+  /** null when the shard could not be read at all */
+  hasTalkerTable: boolean | null
+  rowsForTalker: number | null
+  /** null | KEY_REJECTED | OPEN_FAILED | READ_FAILED */
+  reason: string | null
+}
+
+export interface ShardReport {
+  scanned: number
+  opened: number
+  failed: number
+  items: ShardOutcome[]
+}
+
 export interface NtMessagesResult extends NtResult {
   messages?: Message[]
+  shards?: ShardReport
 }
 
 export interface NtContactsResult extends NtResult {
@@ -280,6 +300,28 @@ export class NtCore {
       return { success: false, error: result.error }
     }
     return { success: true, messages: result.messages || [] }
+  }
+
+  /**
+   * `getMessages` plus the per-shard read report.
+   *
+   * Separate method rather than a flag on `getMessages`: the extra argv token
+   * changes what the child returns, and every existing caller is better off
+   * with the smaller payload it already parses.
+   */
+  async getMessagesWithShards(talker: string, limit = 100, offset = 0): Promise<NtMessagesResult> {
+    const args: string[] = [
+      'messages',
+      '--limit', String(limit),
+      '--offset', String(offset),
+      '--report-shards',
+    ]
+    const ownWxid = configService.get('wxid')
+    const result = await this.callPython(args, { talker, ownWxid })
+    if (result.error) {
+      return { success: false, error: result.error }
+    }
+    return { success: true, messages: result.messages || [], shards: result.shards }
   }
 
   async getContacts(keyword?: string, limit = 200): Promise<NtContactsResult> {

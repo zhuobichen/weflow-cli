@@ -3,6 +3,7 @@ import { existsSync } from 'fs'
 import { WcdbCore } from '../core/wcdbCore.js'
 import { SqlcipherCore } from '../core/sqlcipherCore.js'
 import { NtCore } from '../core/ntCore.js'
+import type { ShardReport } from '../core/ntCore.js'
 import { configService } from './configService.js'
 import type { ChatSession, Message, Contact, DataVersion } from '../types.js'
 import { collectMessagesInRange } from './messageQuery.js'
@@ -237,6 +238,31 @@ export class ChatService {
     }
 
     return []
+  }
+
+  /**
+   * Messages plus a per-shard read report, when the backend can produce one.
+   *
+   * Only the NT path (Python) knows about shards. The legacy 3.x, raw-4.x and
+   * WCDB paths return `shards: undefined`, which callers must read as "this
+   * backend cannot tell you" rather than "everything was read" - see
+   * `coverage: 'unverified'` in docs/SYNC_CONTRACT.md.
+   */
+  async getMessagesWithShards(
+    talker: string,
+    limit = 0,
+    offset = 0
+  ): Promise<{ messages: Message[]; shards?: ShardReport }> {
+    const conn = await this.connect()
+    if (!conn.success) return { messages: [] }
+
+    if (this.ntCore) {
+      const result = await this.ntCore.getMessagesWithShards(talker, limit, offset)
+      if (!result.success || !result.messages) return { messages: [] }
+      return { messages: result.messages, shards: result.shards }
+    }
+
+    return { messages: await this.getMessages(talker, limit, offset) }
   }
 
   async getMessagesInRange(
