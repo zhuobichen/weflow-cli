@@ -18,6 +18,16 @@ jobs:
           # 必须 >=22.13.0: src/core/sqlcipherCore.ts 顶层 import 'node:sqlite',
           # 该模块 22.5.0 才有、22.13.0 才不需要 --experimental-sqlite 标志。
           node-version: '22.13'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      # The end-to-end acceptance suite builds a synthetic encrypted NT store,
+      # which needs sqlcipher3. The prebuilt wheel avoids compiling OpenSSL
+      # here. Marked non-fatal on purpose: if it cannot install, the suite
+      # skips with a printed reason rather than failing the whole job on a
+      # dependency it does not control.
+      - run: python -m pip install --quiet sqlcipher3-binary
+        continue-on-error: true
       - run: npm ci
       - run: npm run build
       - run: npm test
