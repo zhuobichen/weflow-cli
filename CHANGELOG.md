@@ -4,6 +4,24 @@ The npm package is published separately from GitHub. It may lag behind the `mast
 
 All notable user-facing changes are recorded here. This project follows [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+### Added
+
+- `sync run|status|verify`: a local message-sync checkpoint. `sync run` reads a time window, deduplicates against the previous checkpoint and records what it covered; `sync status` reports coverage without touching the database, so it still works while the database is locked. It does **not** advertise a stable cursor - overlapping windows plus local deduplication is what it offers, per D-027.
+- Per-shard read reporting. Shard open and read failures used to be swallowed by a bare `except: continue`, so "read 31 messages" and "read one shard and silently skipped three" were indistinguishable from the outside. `--report-shards` (opt-in; without it the JSON is byte-identical) surfaces `scanned/opened/failed` and one entry per shard. On the machine this was developed against the report reads `message_0.db` 31 rows and `message_3.db` 1258 - exactly the shape of the shard-read bug fixed in 1.6.4, which was completely invisible at the time.
+- A media coverage report on HTML export: `<prefix>_media.json` beside the parts, with a status and a reason for every media item (`embedded | cached | remote-fetched | missing | unsupported`). The exporter had been computing `COVER_STATE` counters and discarding them, and a media miss showed up only as a bare `[图片]` with no reason recorded. A real 120-message export reports 54 items: 35 embedded, 15 missing, 2 unsupported, 2 remote-fetched, with reasons `not-in-local-cache` and `voice-not-in-media-index`.
+- `docs/SYNC_CONTRACT.md` freezing the `weflow-sync/v1` and `weflow-job/v1` state schemas, and `D-029` recording the additive-only boundary, why the identity omits `shard`, and why `sync retry` is deliberately not implemented.
+
+### Changed
+
+- The HTML exporter now tries the conversation cache before the network when resolving an article thumbnail; it had been downloading covers it already had on disk.
+- `collectMessagesInRangeDetailed` distinguishes why paging stopped. The original loop ended on a short page exactly as it ended on an exhausted conversation, so a short page caused by offset shifting on a live database looked identical to having reached the end. The original function is unchanged; the variant is used by the new sync path and available to the export path next.
+
+### Fixed
+
+- A leaked database handle when a shard opened but its key was rejected: the connection was left open, which on Windows keeps the file locked.
+
 ## 1.6.4
 
 ### Fixed
