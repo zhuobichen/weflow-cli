@@ -510,14 +510,24 @@ def derive_database_key(path, fallback_key, fallback_salt, passphrase=''):
         return fallback_key, fallback_salt
 
 
-def connect_message_shards(db_path, key_hex, salt_hex, passphrase=''):
-    """Open the configured database plus every sibling shard.
+def connect_message_shards_detailed(db_path, key_hex, salt_hex, passphrase=''):
+    """Open every shard and report what happened to each one.
 
-    Returns the connections that actually opened. A shard that fails is
-    skipped rather than fatal: a partially readable transcript beats a
-    command that refuses to run at all.
+    Returns (pairs, failures):
+      pairs    [(shard_path, conn)] for the shards that opened
+      failures [{"name": basename, "reason": "KEY_REJECTED" | "OPEN_FAILED"}]
+
+    A shard that fails is still skipped rather than fatal - a partially
+    readable transcript beats a command that refuses to run at all - but the
+    failure stops being invisible. `shardsFailed` is the difference between
+    "read everything" and "read what happened to be reachable", which is the
+    whole point of the coverage report.
+
+    Only the basename is reported: the caller stores this in a state file, and
+    absolute paths must not end up there.
     """
-    opened = []
+    pairs = []
+    failures = []
     for shard in discover_message_shards(db_path):
         derived_key, derived_salt = derive_database_key(
             shard, key_hex, salt_hex, passphrase)
@@ -526,16 +536,60 @@ def connect_message_shards(db_path, key_hex, salt_hex, passphrase=''):
         candidates = [(derived_key, derived_salt)]
         if (derived_key, derived_salt) != (key_hex, salt_hex):
             candidates.append((key_hex, salt_hex))
+        failure_reason = 'OPEN_FAILED'
         for candidate_key, candidate_salt in candidates:
+            conn = None
             try:
                 conn, _ = connect_nt_db(shard, candidate_key, candidate_salt)
                 # PRAGMA key alone never fails; only a read surfaces a bad key.
                 conn.execute('SELECT count(*) FROM sqlite_master').fetchone()
             except Exception:
+                # Reached the database but could not decrypt it: the key is
+                # wrong, not the file. Close before retrying, or the handle
+                # leaks and on Windows the file stays locked.
+                if conn is not None:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+                failure_reason = 'KEY_REJECTED'
                 continue
-            opened.append(conn)
+            pairs.append((shard, conn))
             break
-    return opened
+        else:
+            failures.append({'name': os.path.basename(shard), 'reason': failure_reason})
+    return pairs, failures
+
+
+def connect_message_shards(db_path, key_hex, salt_hex, passphrase=''):
+    """Open the configured database plus every sibling shard.
+
+    Returns the connections that actually opened. A shard that fails is
+    skipped rather than fatal: a partially readable transcript beats a
+    command that refuses to run at all.
+
+    Behaviour-preserving delegate: callers that do not ask for the failure
+    detail get exactly what they got before.
+    """
+    pairs, _failures = connect_message_shards_detailed(
+        db_path, key_hex, salt_hex, passphrase)
+    return [conn for _path, conn in pairs]
+
+
+def count_talker_rows(conn, msg_table):
+    """Rows this conversation has in one shard, or None if it has no table there.
+
+    Distinguishes "this shard holds nothing for the conversation" from "this
+    shard could not be read" - without it both look like zero.
+    """
+    try:
+        cur = conn.execute(
+            "SELECT COUNT(*) FROM sqlite_master WHERE name=?", (msg_table,))
+        if cur.fetchone()[0] == 0:
+            return None
+        return conn.execute('SELECT COUNT(*) FROM "%s"' % msg_table).fetchone()[0]
+    except Exception:
+        return None
 
 
 def msg_tables(conn):
@@ -808,12 +862,17 @@ def _message_dict(row, sender_id_map, name_map, own_wxid, is_group=False):
     }
 
 
-def get_messages(conns, talker, limit=100, offset=0, name_map=None, own_wxid=None):
+def get_messages(conns, talker, limit=100, offset=0, name_map=None, own_wxid=None,
+                 shard_names=None, shard_report=None):
     """Get messages for a specific talker, merged across every shard.
 
     Args:
         name_map: optional {wxid: display_name} dict for resolving sender names
         own_wxid: account owner wxid for self-message detection
+        shard_names: optional basename per connection, parallel to `conns`
+        shard_report: optional list to append one outcome dict per shard to.
+            Purely additive: the returned messages are identical with or
+            without it, which is asserted by test/nt_decrypt_shards_test.py.
     """
     if name_map is None:
         name_map = {}
@@ -821,19 +880,36 @@ def get_messages(conns, talker, limit=100, offset=0, name_map=None, own_wxid=Non
     msg_table = f"Msg_{hashlib.md5(talker.encode()).hexdigest()}"
     is_group = '@chatroom' in talker
 
+    def record(index, opened, has_table, rows_for_talker, reason):
+        if shard_report is None:
+            return
+        name = shard_names[index] if shard_names and index < len(shard_names) else ''
+        shard_report.append({
+            'name': name,
+            'opened': opened,
+            'hasTalkerTable': has_table,
+            'rowsForTalker': rows_for_talker,
+            'reason': reason,
+        })
+
     # Each shard only needs to yield its newest window: once every shard's rows
     # are merged and re-sorted, nothing older than that can reach this page.
     window = 0 if limit <= 0 else limit + offset
     collected = []
     found = False
 
-    for conn in conns:
+    for index, conn in enumerate(conns):
         c = conn.cursor()
         try:
             c.execute("SELECT COUNT(*) FROM sqlite_master WHERE name=?", (msg_table,))
             if c.fetchone()[0] == 0:
+                # The shard is readable and simply holds nothing for this
+                # conversation - distinct from not being readable at all.
+                record(index, True, False, None, None)
                 continue
             found = True
+            rows_for_talker = c.execute(
+                'SELECT COUNT(*) FROM "%s"' % msg_table).fetchone()[0]
 
             sql = f'''
                 SELECT local_id, server_id, local_type, sort_seq, real_sender_id,
@@ -852,7 +928,11 @@ def get_messages(conns, talker, limit=100, offset=0, name_map=None, own_wxid=Non
             c.execute("SELECT rowid, user_name FROM Name2Id")
             sender_id_map = {rowid: uname for rowid, uname in c.fetchall()}
         except Exception:
+            # This shard had the conversation's table but could not be read.
+            # Previously this was indistinguishable from "no rows here".
+            record(index, True, None, None, 'READ_FAILED')
             continue
+        record(index, True, True, rows_for_talker, None)
 
         for row in rows:
             collected.append(_message_dict(row, sender_id_map, name_map, own_wxid, is_group))
@@ -1138,6 +1218,9 @@ def main():
     msg_parser.add_argument('--contact-key', default=os.environ.get('WEFLOW_CONTACT_KEY'), help='Contact DB key hex (64 chars)')
     msg_parser.add_argument('--contact-salt', default=os.environ.get('WEFLOW_CONTACT_SALT'), help='Contact DB salt hex (32 chars)')
     msg_parser.add_argument('--own-wxid', default=os.environ.get('WEFLOW_OWN_WXID'), help='Account owner wxid (for self-message detection)')
+    # Opt-in: without it the JSON is byte-identical to before this flag existed.
+    msg_parser.add_argument('--report-shards', action='store_true',
+                            help='Add a per-shard read report to the result (additive)')
 
     # contacts command
     contacts_parser = sub.add_parser('contacts', help='List contacts')
@@ -1282,12 +1365,37 @@ def main():
             conn.close()
 
     elif args.command == 'messages':
-        conns = connect_message_shards(args.db, args.key, args.salt, getattr(args, 'passphrase', '') or '')
-        if not conns:
-            print(json.dumps({"error": "无法打开消息数据库，请检查密钥"}, ensure_ascii=True))
-            return
+        passphrase = getattr(args, 'passphrase', '') or ''
         own_wxid = getattr(args, 'own_wxid', None)
-        result = get_messages(conns, args.talker, args.limit, args.offset, contact_name_map, own_wxid)
+
+        if getattr(args, 'report_shards', False):
+            pairs, failures = connect_message_shards_detailed(
+                args.db, args.key, args.salt, passphrase)
+            if not pairs:
+                print(json.dumps({"error": "无法打开消息数据库，请检查密钥"}, ensure_ascii=True))
+                return
+            conns = [conn for _path, conn in pairs]
+            names = [os.path.basename(path) for path, _conn in pairs]
+            shard_items = []
+            result = get_messages(conns, args.talker, args.limit, args.offset,
+                                  contact_name_map, own_wxid,
+                                  shard_names=names, shard_report=shard_items)
+            # Failure entries carry no opened connection, so they are not in
+            # `conns` and could not be recorded by get_messages itself.
+            result['shards'] = {
+                'scanned': len(pairs) + len(failures),
+                'opened': len(pairs),
+                'failed': len(failures),
+                'items': failures + shard_items,
+            }
+        else:
+            conns = connect_message_shards(args.db, args.key, args.salt, passphrase)
+            if not conns:
+                print(json.dumps({"error": "无法打开消息数据库，请检查密钥"}, ensure_ascii=True))
+                return
+            result = get_messages(conns, args.talker, args.limit, args.offset,
+                                  contact_name_map, own_wxid)
+
         print(json.dumps(result, ensure_ascii=True))
         for conn in conns:
             conn.close()
