@@ -1,6 +1,6 @@
 # Project State
 
-> Last reviewed: 2026-09-08. This is the current maintenance snapshot, not a release note. Keep it factual and update it with meaningful project changes.
+> Last reviewed: 2026-09-19. This is the current maintenance snapshot, not a release note. Keep it factual and update it with meaningful project changes.
 
 ## Purpose
 
@@ -8,8 +8,8 @@ WeFlow CLI is a local-first command-line tool and MCP server for user-authorized
 
 ## Current Baseline
 
-- Source package version: `1.5.1`. The npm registry may remain on an earlier version until a maintainer publishes a release.
-- Runtime: Node.js 18+; Python 3.10+ is required for database and daily-reading workflows.
+- Source package version: take it from `package.json` -> `version` rather than from this file - a hardcoded copy drifts silently, and `package-lock.json` must always match it. The npm registry may remain on an earlier version until a maintainer publishes a release.
+- Runtime: Node.js 22.13+; Python 3.10+ is required for database and daily-reading workflows. The floor is set by `src/core/sqlcipherCore.ts`, which imports `node:sqlite` at module scope; that builtin exists from 22.5.0 and stops needing `--experimental-sqlite` at 22.13.0.
 - Main development command: `npm run dev -- <command>`.
 - Compiled/package command: `node cli.cjs <command>`; CLI, MCP, database, export, and assistant services resolve resources from the same package root in both source and compiled layouts.
 - Build check: `npm run build`.
@@ -53,7 +53,7 @@ Date-bounded message exports and `wechat.export_messages` page through the selec
 - `search` and `chat` use the same preview/confirmation boundary. Queries, questions, and optional conversation restrictions are inherited through the worker environment instead of appearing in process arguments; machine callers cannot start interactive RAG chat.
 - `daily-server --status --json` remains read-only. Machine startup uses `daily-server --dry-run --json` followed by `daily-server --yes --json`; the confirmed process is detached and remains bound to loopback. The legacy `fav-server` compatibility entry enforces the same preview and confirmation rules.
 
-Documentation was synchronized with the `1.5.1` source baseline on 2026-09-09. Command behavior is defined by `bin/weflow-cli.ts`; detached reader startup waits for service readiness, and release packages can lag behind the GitHub source until published.
+Documentation was synchronized with the current source baseline on 2026-09-19. Command behavior is defined by `bin/weflow-cli.ts`; detached reader startup waits for service readiness, and release packages can lag behind the GitHub source until published.
 
 ## Active Constraints
 

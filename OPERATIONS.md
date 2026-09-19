@@ -6,7 +6,7 @@
 
 | 依赖 | 用途 | 检查 |
 | --- | --- | --- |
-| Node.js 18+ | CLI、MCP、构建 | `node --version` |
+| Node.js 22.13+ | CLI、MCP、构建 | `node --version` |
 | Python 3.10+ | NT 数据、日报、阅读器 | `python --version` |
 | `requirements.txt` | 标准 4.x 工作流 | `python -m pip install -r requirements.txt` |
 | `requirements-3x.txt` | 旧版 3.x 数据，可选 | `python -m pip install -r requirements-3x.txt` |

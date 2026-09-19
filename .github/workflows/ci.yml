@@ -7,17 +7,50 @@ on:
   workflow_dispatch:
 
 jobs:
-  typecheck:
+  # Node 与 Python 分开跑：以前合成一个 job，Node 侧一挂 Python 测试就完全
+  # 不执行，Python 那边坏了几周也看不出来。
+  node:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
+          # 必须 >=22.13.0: src/core/sqlcipherCore.ts 顶层 import 'node:sqlite',
+          # 该模块 22.5.0 才有、22.13.0 才不需要 --experimental-sqlite 标志。
+          node-version: '22.13'
       - run: npm ci
       - run: npm run build
       - run: npm test
+
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      # 这些用例只依赖标准库；它们针对导出器的纯函数，不碰真实数据库。
       - run: python -m unittest discover -s test -p '*_test.py' -v
+
+  # 发布前的一致性校验: 版本号、锁文件、npm 包内容
+  release-consistency:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.13'
+      - name: 版本号与锁文件必须一致
+        run: |
+          pkg=$(node -p "require('./package.json').version")
+          lock=$(node -p "require('./package-lock.json').version")
+          echo "package.json=$pkg package-lock.json=$lock"
+          test "$pkg" = "$lock" || { echo "::error::package-lock.json 版本与 package.json 不一致，请运行 npm install 重新生成"; exit 1; }
+      - name: npm 包不得包含输出、模型、数据库或密钥
+        run: |
+          npm ci
+          npm pack --dry-run 2>&1 | grep 'npm notice' > /tmp/pack.txt
+          if grep -E 'output/|models/|node_modules|\.env|\.db$|\.dat$|_env\.json|secret|credential|\.key$|\.pem$' /tmp/pack.txt; then
+            echo "::error::npm 包中包含敏感或体积过大的文件"; exit 1
+          fi
+          echo "包内容检查通过"

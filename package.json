@@ -43,7 +43,7 @@
   },
   "scripts": {
     "build": "tsc",
-    "test": "node --import tsx --test test/**/*.test.ts",
+    "test": "node --import tsx --test \"test/**/*.test.ts\"",
     "dev": "npx tsx bin/weflow-cli.ts",
     "start": "node cli.cjs",
     "prepublishOnly": "npm run build"
@@ -78,6 +78,6 @@
     "typescript": "^5.7.0"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=22.13.0"
   }
 }

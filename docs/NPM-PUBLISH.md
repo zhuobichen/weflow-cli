@@ -26,9 +26,17 @@ grep -c " dist/" /tmp/packlist.txt     # 注意: 行首是体积, 不是路径
 
 **别信命令的输出，信 registry 的 `versions` 表：**
 
+下面用 `X.Y.Z` 代表这次要发的版本，**照抄时换成实际版本号**——写死在这里的版本
+过几天就是错的。
+
 ```bash
+V=X.Y.Z
 curl -s "https://registry.npmjs.org/weflow-cli?nocache=$RANDOM" --max-time 30 \
-| python -c "import json,sys; d=json.load(sys.stdin); print('latest:', d['dist-tags']['latest']); print('目标版本存在:', '1.6.2' in d['versions'])"
+| python -c "
+import json,sys,os
+d=json.load(sys.stdin)
+print('latest:', d['dist-tags']['latest'])
+print('目标版本存在:', os.environ['V'] in d['versions'])" V="$V"
 ```
 
 - `目标版本存在: True` → **发布成功**，剩下只是传播
@@ -40,11 +48,11 @@ curl -s "https://registry.npmjs.org/weflow-cli?nocache=$RANDOM" --max-time 30 \
 
 | 现象 | 含义 | 动作 |
 | --- | --- | --- |
-| `+ weflow-cli@1.6.2` | 已被接受 | 继续，等传播 |
+| `+ weflow-cli@X.Y.Z` | 已被接受 | 继续，等传播 |
 | `being processed and may take a few minutes` | 正常提示 | 等，别重发 |
 | `npm view` 仍是旧版本 | CDN 传播中 | **不是失败**，等 2–5 分钟 |
 | 重发报 `409 Conflict - Cannot publish over previously staged version` | **已经发布成功了** | 别再发，去等传播 |
-| tarball `404`（`/-/weflow-cli-1.6.2.tgz`） | 元数据已发布，tarball 还在传播 | 等，不是失败 |
+| tarball `404`（`/-/weflow-cli-X.Y.Z.tgz`） | 元数据已发布，tarball 还在传播 | 等，不是失败 |
 | `install` 报 `ETARGET No matching version` | 客户端缓存了旧 packument | 加 `--prefer-online` 重试 |
 | `install` 报 `404` | 元数据在、tarball 未到 | 等传播 |
 | `403 ... bypass 2fa enabled is required` | token 没勾 Bypass 2FA | 重新生成 token（见第 3 节） |
@@ -90,7 +98,7 @@ npm view weflow-cli version --registry=https://registry.npmmirror.com
 
 ```bash
 mkdir -p /tmp/verify && cd /tmp/verify && npm init -y >/dev/null
-npm install weflow-cli@1.6.2 --registry=https://registry.npmjs.org --prefer-online --no-audit --no-fund
+npm install weflow-cli@X.Y.Z --registry=https://registry.npmjs.org --prefer-online --no-audit --no-fund
 node -e "console.log(require('./node_modules/weflow-cli/package.json').version)"
 ```
 

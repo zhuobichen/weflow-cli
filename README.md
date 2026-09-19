@@ -108,7 +108,7 @@ Linux 的自动初始化能力取决于微信发行版、Python 依赖和当前�
 
 > npm 包与 GitHub 发布分开进行；需要最新修复时，请先确认 npm 包版本，或直接使用 GitHub `master` 分支代码。
 
-需要 Node.js 18+、Python 3.10+，以及已登录的 Windows 微信。安装后先检查本机环境：
+需要 Node.js 22.13+、Python 3.10+，以及已登录的 Windows 微信。安装后先检查本机环境：
 
 ```powershell
 npm install -g weflow-cli

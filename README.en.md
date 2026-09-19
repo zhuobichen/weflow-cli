@@ -78,7 +78,7 @@ weflow-cli mcp-config                  # one-shot MCP client integration
 
 ### 1. Install and Check
 
-Requires Node.js 18+, Python 3.10+, and a signed-in Windows WeChat. After installation, check your environment first:
+Requires Node.js 22.13+, Python 3.10+, and a signed-in Windows WeChat. After installation, check your environment first:
 
 ```powershell
 npm install -g weflow-cli

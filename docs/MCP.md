@@ -92,4 +92,4 @@ The chat-data tools share service code with the optional `weflow-cli assistant` 
 | --- | --- |
 | Server fails to start | Run `npm install` in the configured `cwd`, then run `npx tsx mcp-server/index.ts`. |
 | No articles found | Generate a daily collection first, then confirm `output/biz-daily/` exists under `cwd`. |
-| Client cannot find `npx` | Configure an absolute Node.js command path or install Node.js 18+. |
+| Client cannot find `npx` | Configure an absolute Node.js command path or install Node.js 22.13+. |
