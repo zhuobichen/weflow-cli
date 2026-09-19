@@ -4,7 +4,7 @@ The npm package is published separately from GitHub. It may lag behind the `mast
 
 All notable user-facing changes are recorded here. This project follows [Semantic Versioning](https://semver.org/).
 
-## Unreleased
+## 1.7.0
 
 ### Added
 
