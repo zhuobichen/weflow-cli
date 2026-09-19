@@ -124,6 +124,12 @@ VOICE_STATE = {'map': {}, 'cache': None}
 # runs a throwaway formatting pass that only records the URLs (0.1s, no
 # network), fetches them concurrently, then formats for real against a warm
 # cache. Set to a list during that pass; None otherwise.
+# Why the most recent remote fetch produced nothing. The skip counter alone
+# said "not fetched" without saying why, so "no budget left" and "the URL is
+# dead" were indistinguishable in the export - and both looked like a bare
+# placeholder to the reader.
+MEDIA_STATE = {'remote_reason': None}
+
 PREFETCH = {'sink': None, 'active': False}
 PREFETCH_WORKERS = 24
 PREFETCH_MAX_URLS = 800
@@ -752,13 +758,13 @@ def shrink_embedded(image, max_side=720, force=False):
         return image
 
 
-def get_cached_image(image_map, local_id, create_time, content='', resource_md5s=None, server_id=0):
-    """Best local media for a message: by content md5, then by identity.
+def resolve_media(image_map, local_id, create_time, content='', resource_md5s=None, server_id=0):
+    """Best local media for a message, with the identity that matched.
 
-    md5 is the strongest key, but it is not always derivable - a group row can
-    lack the resource mapping that carries it. The conversation cache also
-    indexes by `(local_id, create_time)`, which is identity-aware and was
-    already being stored; reading it recovers media the md5 path alone misses.
+    Returns `(base64, mime, media_key)` or None. `media_key` is the image_map
+    key that produced the hit, which is what the coverage report records - so
+    a report can never claim a match the page itself did not get, because both
+    come from this one function.
 
     Deliberately *not* falling back to a bare `local_id`: that id restarts in
     every message shard, so matching on it alone attaches one conversation's
@@ -769,24 +775,38 @@ def get_cached_image(image_map, local_id, create_time, content='', resource_md5s
     if not image_map:
         return None
     for media_md5 in resource_md5s or []:
-        if image_map.get(f'md5:{media_md5}'):
-            return shrink_embedded(image_map[f'md5:{media_md5}'])
+        key = f'md5:{media_md5}'
+        if image_map.get(key):
+            return shrink_embedded(image_map[key]) + (key,)
     for media_md5 in extract_media_md5s(content):
-        if image_map.get(f'md5:{media_md5}'):
-            return shrink_embedded(image_map[f'md5:{media_md5}'])
+        key = f'md5:{media_md5}'
+        if image_map.get(key):
+            return shrink_embedded(image_map[key]) + (key,)
     try:
         pair_key = f'pair:{int(local_id)}:{int(create_time)}'
     except (TypeError, ValueError):
         return None
     if image_map.get(pair_key):
-        return shrink_embedded(image_map[pair_key])
+        return shrink_embedded(image_map[pair_key]) + (pair_key,)
     try:
         unique_key = f'unique:{int(local_id)}'
     except (TypeError, ValueError):
         return None
     if image_map.get(unique_key):
-        return shrink_embedded(image_map[unique_key])
+        return shrink_embedded(image_map[unique_key]) + (unique_key,)
     return None
+
+
+def get_cached_image(image_map, local_id, create_time, content='', resource_md5s=None, server_id=0):
+    """`resolve_media` without the matched key, for every pre-existing caller.
+
+    md5 is the strongest key, but it is not always derivable - a group row can
+    lack the resource mapping that carries it. The conversation cache also
+    indexes by `(local_id, create_time)`, which is identity-aware and was
+    already being stored; reading it recovers media the md5 path alone misses.
+    """
+    hit = resolve_media(image_map, local_id, create_time, content, resource_md5s, server_id)
+    return (hit[0], hit[1]) if hit else None
 
 
 def detect_mime(filepath):
@@ -918,12 +938,14 @@ def download_image_as_base64(url, aes_key='', timeout=10, budgeted=True):
     already spent their own budget for this URL.
     """
     if not url or not url.startswith(('http://', 'https://')):
+        MEDIA_STATE['remote_reason'] = 'not-http'
         return None
 
     sink = PREFETCH['sink']
     if sink is not None:
         # Dry pass: record the request, spend no budget, touch no network.
         sink.append(('img', url, aes_key))
+        MEDIA_STATE['remote_reason'] = 'deferred-to-prefetch'
         return None
 
     cache_dir = COVER_STATE.get('dir') or ''
@@ -935,11 +957,13 @@ def download_image_as_base64(url, aes_key='', timeout=10, budgeted=True):
     if cached != 'unknown':
         if budgeted:
             COVER_STATE['thumb_cached'] += 1
+        MEDIA_STATE['remote_reason'] = None
         return cached
 
     if budgeted and not PREFETCH['active']:
         if COVER_STATE.get('thumb_budget', 0) <= 0:
             COVER_STATE['thumb_skipped'] += 1
+            MEDIA_STATE['remote_reason'] = 'budget-exhausted'
             return None
         COVER_STATE['thumb_budget'] -= 1
         COVER_STATE['thumb_fetched'] += 1
@@ -956,6 +980,7 @@ def download_image_as_base64(url, aes_key='', timeout=10, budgeted=True):
             # it so the next export does not pay for the same dead URL.
             if len(data) > MAX_EMBED_SIZE:
                 _cache_media(cache_file, None)
+                MEDIA_STATE['remote_reason'] = 'too-large'
                 return None
             candidates = [data]
             decrypted = _decrypt_aes_cbc(data, aes_key)
@@ -969,10 +994,12 @@ def download_image_as_base64(url, aes_key='', timeout=10, budgeted=True):
                     data, mime = wechat_image.shrink(data, mime, max_side=480)
                 result = (base64.b64encode(data).decode(), mime)
                 _cache_media(cache_file, result)
+                MEDIA_STATE['remote_reason'] = None
                 return result
         except Exception:
             continue
     _cache_media(cache_file, None)
+    MEDIA_STATE['remote_reason'] = 'download-failed'
     return None
 
 
@@ -1891,7 +1918,115 @@ def format_message(row, talker, wx_dir, image_map=None, sender_map=None, display
         'local_type': local_type,
         'display': display,
         'image_b64': image_b64,
+        # Built here rather than accumulated in module state: format_message
+        # runs twice (the prefetch dry sweep and the real pass) and the dry
+        # pass is discarded, so a counter would double-count.
+        'media': build_media_record(
+            local_type, image_b64, image_map, local_id, create_time, content,
+            resource_md5s, metadata_content, bool(server_id)),
     }
+
+
+MEDIA_KIND_BY_TYPE = {
+    3: 'image', 34: 'voice', 43: 'video-thumb', 47: 'emoji', 49: 'link-cover',
+}
+MEDIA_KINDS = {'image', 'emoji', 'voice', 'video-thumb', 'link-cover'}
+
+
+def build_media_report(items, scope, talker, per_page):
+    """Coverage summary plus one entry per media item.
+
+    Written beside the HTML rather than into it: the page is for reading, this
+    is for answering "what is missing and why" without opening the export.
+    Paths, keys and message bodies are not included (D-001/D-002/D-025).
+    """
+    counts = {}
+    for item in items:
+        counts[item['status']] = counts.get(item['status'], 0) + 1
+    counts['total'] = len(items)
+    return {
+        'schema': 'weflow-media-report/v1',
+        'source': 'weflow-cli',
+        'generatedAt': datetime.datetime.now().astimezone().isoformat(timespec='seconds'),
+        'scope': scope,
+        'counts': counts,
+        'budget': {
+            'coversFetched': COVER_STATE.get('fetched', 0),
+            'coversCached': COVER_STATE.get('cached', 0),
+            'coversSkipped': COVER_STATE.get('skipped', 0),
+            'thumbsFetched': COVER_STATE.get('thumb_fetched', 0),
+            'thumbsCached': COVER_STATE.get('thumb_cached', 0),
+            'thumbsSkipped': COVER_STATE.get('thumb_skipped', 0),
+        },
+        'items': [
+            {
+                'mediaKey': item['mediaKey'],
+                'kind': item['kind'],
+                'status': item['status'],
+                'mime': item['mime'],
+                'bytes': item['bytes'],
+                'sha256': item['sha256'],
+                'reason': item['reason'],
+                'locator': {
+                    'part': (item['index'] // per_page + 1) if per_page else 1,
+                    'createTime': None,
+                },
+            }
+            for item in items
+        ],
+    }
+
+
+def build_media_record(local_type, image_b64, image_map, local_id, create_time,
+                       content, resource_md5s, metadata_content, has_server_id):
+    """What happened to this message's media, or None for a non-media message.
+
+    Derived from the same `resolve_media` the page used, so the report cannot
+    claim a match the page did not get (or vice versa). A media-free message
+    returns None: this is a media manifest, not a message manifest.
+    """
+    if local_type not in MEDIA_KIND_BY_TYPE:
+        return None
+    kind = MEDIA_KIND_BY_TYPE[local_type]
+    record = {
+        'mediaKey': None, 'kind': kind, 'status': None,
+        'mime': None, 'bytes': None, 'sha256': None, 'reason': None,
+    }
+
+    if image_b64:
+        hit = resolve_media(image_map, local_id, create_time, metadata_content,
+                            resource_md5s)
+        if hit:
+            # Matched a local key: report which one, so "why this image" is
+            # answerable without re-running the export.
+            record['mediaKey'] = hit[2]
+            record['status'] = 'embedded'
+        else:
+            # Bytes came from somewhere other than the conversation index.
+            if MEDIA_STATE['remote_reason'] is None:
+                record['status'] = 'remote-fetched'
+                record['mediaKey'] = 'remote'
+            else:
+                record['status'] = 'embedded'
+                record['mediaKey'] = 'unindexed-local'
+        raw = base64.b64decode(image_b64)
+        record['bytes'] = len(raw)
+        record['sha256'] = hashlib.sha256(raw).hexdigest()
+        return record
+
+    record['status'] = 'missing'
+    if not has_server_id and not extract_media_md5s(metadata_content) and not resource_md5s:
+        # D-014: with no reliable identity there is nothing safe to match on,
+        # and guessing would attach someone else's media.
+        record['reason'] = 'no-reliable-identity'
+    elif kind == 'voice':
+        record['status'] = 'unsupported'
+        record['reason'] = 'voice-not-in-media-index'
+    elif MEDIA_STATE['remote_reason']:
+        record['reason'] = MEDIA_STATE['remote_reason']
+    else:
+        record['reason'] = 'not-in-local-cache'
+    return record
 
 
 def decode_message_content(value):
@@ -2337,6 +2472,7 @@ def main():
 
     print(f"Formatting {len(messages)} messages...")
     formatted = []
+    media_items = []
     img_hit_count = 0
     article_img_count = 0
     progress_step = max(1, len(messages) // 20)
@@ -2348,6 +2484,12 @@ def main():
             img_hit_count += 1
             if result.get('local_type') == 49:
                 article_img_count += 1
+        record = result.get('media')
+        if record:
+            # Index kept so the report can point back at the page part.
+            record = dict(record)
+            record['index'] = i
+            media_items.append(record)
         formatted.append(result)
     print(f"  Messages with embedded images: {img_hit_count} (including {article_img_count} article thumbnails)")
 
@@ -2366,6 +2508,20 @@ def main():
 
     # Use display name for filename if provided, otherwise fallback to wxid
     file_prefix = sanitize_filename(display_name) if display_name else args.talker.replace('@', '_').replace('/', '_')
+
+    # Media coverage report. Written beside the HTML parts, under the same
+    # prefix, so it is always found next to what it describes.
+    media_report = None
+    media_report_path = None
+    if media_items:
+        media_report = build_media_report(media_items, display_name, args.talker, per_part)
+        media_report_path = os.path.join(args.out, f'{file_prefix}_media.json')
+        with open(media_report_path, 'w', encoding='utf-8') as handle:
+            json.dump(media_report, handle, ensure_ascii=False, indent=2)
+        summary = media_report['counts']
+        missing = summary.get('missing', 0) + summary.get('unsupported', 0)
+        print(f"Media report: {len(media_items)} item(s), {missing} unavailable "
+              f"-> {os.path.basename(media_report_path)}")
 
     html_files = []
     for i in range(parts):
@@ -2395,12 +2551,20 @@ def main():
     print(f"\nDone! {len(html_files)} HTML files written to {args.out}")
     print(f"Total: {total} messages")
 
-    # Print JSON summary for CLI integration
+    # Print JSON summary for CLI integration.
+    # The four original keys are untouched; `media` is purely additive and the
+    # one existing consumer (src/services/exportService.ts) ignores it.
     print(json.dumps({
         "success": True,
         "total": total,
         "parts": len(html_files),
         "files": html_files,
+        "media": ({
+            "schema": "weflow-media-report/v1",
+            "records": len(media_items),
+            "status": media_report['counts'],
+            "report": os.path.basename(media_report_path) if media_report_path else None,
+        } if media_report else None),
     }))
 
 
