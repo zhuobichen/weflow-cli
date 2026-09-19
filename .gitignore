@@ -46,6 +46,7 @@ scripts/regen_wsl_keys.mjs
 !docs/HEALTH-CHECK.md
 !docs/NPM-PUBLISH.md
 !docs/FUNCTIONAL-IMPROVEMENT-SPEC.md
+!docs/SYNC_CONTRACT.md
 !docs/DEEPSEEK_V4_FLASH施工文档.md
 .DS_Store
 Thumbs.db

@@ -257,6 +257,43 @@ When a new architecture diagram visual is requested, use GPT-image-2 for the vis
 
 **Consequences:** Do not silently substitute an unrelated image-generation model. Do not treat generated pixels as the source of truth; `ARCHITECTURE.md` and the code remain authoritative.
 
+## D-029: Keep the sync and media-coverage work additive
+
+**Status:** Active
+
+`weflow-sync/v1` and `weflow-job/v1` are new local state contracts written under
+`~/.weflow-cli/`. The `sync` command and the export media report are additive: no existing command
+changes its behaviour, its stdout contract, or its JSON schema. `export <talker> html` gains one
+side file (`<prefix>_media.json`) and one extra key in its trailing stdout JSON, both of which the
+only consumer ignores; `--media-report 0` restores the previous file set exactly.
+
+**Reason:** D-016 fences the exported message contract and D-027 fences coverage metadata, so a
+change that redefines existing fields would need a compatibility review this work does not warrant.
+The gaps being closed - shard read failures dropped silently, media counters computed and discarded
+- are observations about what already happened, not redefinitions.
+
+**Consequences:**
+
+- Sync state is **one file per conversation** (`sync/<source>-<name>-<hash>.json`), so every write is
+  a whole-file atomic replace and no cross-conversation read-modify-write merge is needed. The hash
+  suffix keeps `wxid_a@chatroom` and `wxid_a_chatroom` distinct without putting display names in a
+  directory listing.
+- `lastAttempt` and `lastSuccessfulRun` advance separately. A run that is `partial` still writes its
+  state and its job record, but must not advance `lastSuccessfulRun` and must not return success
+  (the spec's rule that partial completion is not success).
+- The message identity keeps `serverId` when nonzero and otherwise uses `localId` + `createTime`.
+  It **omits `shard`**, deviating from the spec's §4.2 sketch: messages do not carry a shard field,
+  adding one would touch the fenced export contract, and overlap deduplication does not need it.
+  Add it only if a cross-shard collision is actually observed.
+- `sync retry` is **not** implemented. With no local index and no partial writes it would be exactly
+  the same operation as re-running the window, and the failed-shard list is already in `sync status`.
+  A command that is a synonym is worse than no command.
+- `sync` is the only writer of `weflow-job/v1` in this round. If a single consumer is judged not to
+  justify the file, the reversal is: delete the job store and fold `lastJob` into each
+  `weflow-sync/v1` file. Nothing else reads it, so that is a one-file change.
+- Still not advertised: a stable incremental cursor. D-027 stands - overlapping windows plus local
+  deduplication is what this exposes.
+
 ## Decision Template
 
 
