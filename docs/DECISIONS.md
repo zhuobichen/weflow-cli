@@ -2,6 +2,9 @@
 
 > Record decisions that affect long-term maintenance. Each entry explains the chosen direction and the reason, not every implementation detail.
 
+> 编号说明：`D-009` 从未使用（D-008 直接跳到 D-010），保留为空号；
+> 历史上曾有两条决策共用 `D-016`，其中「architecture visuals」一条改号为 `D-028`。
+
 ## D-001: Local-first data handling
 
 **Status:** Active
@@ -114,6 +117,16 @@ HTML export selects message-resource records by nonzero server message ID. It do
 
 **Consequences:** WeChat 4.x V2 media keys are derived from local `kvcomm` data, verified against a real cached V2 header, and used only in memory during export. Remote emoticons are decrypted with message-provided keys; entity-escaped XML is normalized; and URL fallbacks cover encrypted, thumbnail, CDN, and external fields. Structured app cards keep their links and use cached or resolved covers when available. Some messages remain placeholders when reliable identity or source media is unavailable. Synthetic tests cover these paths; reporter verification is still needed for issue #7.
 
+## D-015: Keep documentation synchronized with the source baseline
+
+**Status:** Active
+
+User-facing setup and troubleshooting documents describe supported commands and guarantees only when they are present in the current CLI and scripts. The project state and decision log remain the handoff source for agents; architecture explains boundaries and data flow; the README stays a short entry point.
+
+**Reason:** The project has both a GitHub source workflow and a separately published npm package. Stale examples, hard-coded tool counts, or old compatibility claims can cause users to run the wrong code or expose sensitive data while troubleshooting.
+
+**Consequences:** When command options, platform support, data flow, security boundaries, or verification status changes, update the relevant document in the same change. Validate examples against `--help` and keep generated local output out of commits.
+
 ## D-016: Establish a stable downstream data boundary
 
 **Status:** Active
@@ -143,26 +156,6 @@ The CLI exposes `capabilities --json` as the first call for automation. Read-ori
 **Reason:** An AI client needs to discover the current implementation and safety limits before choosing a command. A capability document is more reliable than inferring support from human-oriented help text.
 
 **Consequences:** New user-facing commands should be added to the capability response and should declare whether they read local data, invoke AI, or cause side effects. This is an additive interface and does not change existing human-readable output.
-
-## D-015: Keep documentation synchronized with the source baseline
-
-**Status:** Active
-
-User-facing setup and troubleshooting documents describe supported commands and guarantees only when they are present in the current CLI and scripts. The project state and decision log remain the handoff source for agents; architecture explains boundaries and data flow; the README stays a short entry point.
-
-**Reason:** The project has both a GitHub source workflow and a separately published npm package. Stale examples, hard-coded tool counts, or old compatibility claims can cause users to run the wrong code or expose sensitive data while troubleshooting.
-
-**Consequences:** When command options, platform support, data flow, security boundaries, or verification status changes, update the relevant document in the same change. Validate examples against `--help` and keep generated local output out of commits.
-
-## D-016: Use GPT-image-2 for future architecture visuals
-
-**Status:** Active
-
-When a new architecture diagram visual is requested, use GPT-image-2 for the visual asset. Keep the diagram's structure and labels aligned with the source documentation, validate the final dimensions and legibility, and retain a maintainable source representation when practical.
-
-**Reason:** The project owner wants architecture visuals to use the project's image-generation workflow while keeping technical documentation understandable and reviewable.
-
-**Consequences:** Do not silently substitute an unrelated image-generation model. Do not treat generated pixels as the source of truth; `ARCHITECTURE.md` and the code remain authoritative.
 
 ## D-019: Require preview and confirmation for side effects
 
@@ -253,6 +246,16 @@ The bundled WCDB DLL exposes a raw SQL query ABI without parameter binding. `exe
 **Reason:** Downstream data consumers need enough information to checkpoint time-window synchronization without treating a timestamp as a globally unique cursor or assuming that a database shard is complete.
 
 **Consequences:** Consumers can perform overlapping time-window reads and deduplicate locally. A stable incremental cursor remains a separate future change and must be supported by all relevant database backends before it is advertised.
+
+## D-028: Use GPT-image-2 for future architecture visuals
+
+**Status:** Active
+
+When a new architecture diagram visual is requested, use GPT-image-2 for the visual asset. Keep the diagram's structure and labels aligned with the source documentation, validate the final dimensions and legibility, and retain a maintainable source representation when practical.
+
+**Reason:** The project owner wants architecture visuals to use the project's image-generation workflow while keeping technical documentation understandable and reviewable.
+
+**Consequences:** Do not silently substitute an unrelated image-generation model. Do not treat generated pixels as the source of truth; `ARCHITECTURE.md` and the code remain authoritative.
 
 ## Decision Template
 
