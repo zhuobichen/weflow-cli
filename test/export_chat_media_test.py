@@ -1,6 +1,7 @@
 """Synthetic regressions for HTML emoji identity and resource isolation."""
 import importlib.util
 from pathlib import Path
+import re
 import sqlite3
 import sys
 import tempfile
@@ -33,6 +34,16 @@ class EmojiExportTests(unittest.TestCase):
             row, 'example-contact', '', {f'md5:{MEDIA_MD5}': IMAGE},
             resource_map=resources,
         )
+
+    @staticmethod
+    def faces(display):
+        """The wxf-* classes behind a display string, in order of appearance.
+
+        A builtin emoji renders as `<span class="wxface wxf-...">`; the artwork
+        lives once in the page CSS instead of being repeated as a base64 blob
+        inside every message that uses it.
+        """
+        return re.findall(r'class="wxface (wxf-[0-9a-f]+)"', display)
 
     def test_cached_emoji_keeps_emoji_label(self):
         result = self.render(message(content=f'<emoji md5="{MEDIA_MD5}"/>'))
@@ -85,14 +96,15 @@ class EmojiExportTests(unittest.TestCase):
         self.assertEqual(result['image_b64'], IMAGE[0])
 
     def test_remote_fetch_budget_does_not_affect_local_media(self):
-        export.configure_remote_fetch_budget(0)
+        original_budget = export.COVER_STATE['thumb_budget']
+        export.COVER_STATE['thumb_budget'] = 0
         try:
             self.assertIsNone(export.download_image_as_base64('https://example.test/image.jpg'))
             row = (7, 0, 21474836529, 0, 1, 1700000000, 0, '', '', b'')
             result = export.format_message(row, 'example-contact', '', {'unique:7': IMAGE})
             self.assertEqual(result['image_b64'], IMAGE[0])
         finally:
-            export.configure_remote_fetch_budget(None)
+            export.COVER_STATE['thumb_budget'] = original_budget
 
     def test_encoded_forwarded_article_keeps_thumbnail_and_link(self):
         content = (
@@ -194,8 +206,8 @@ class EmojiExportTests(unittest.TestCase):
         row = (7, 101, 1, 0, 1, 1700000000, 0, source, '[\u6253\u8138]', b'')
         self.assertIsNotNone(export.get_cached_image({f'md5:{MEDIA_MD5}': IMAGE}, 7, 1700000000, content, [MEDIA_MD5]))
         result = export.format_message(row, 'example-contact', '', {f'md5:{MEDIA_MD5}': IMAGE}, resource_map={'server:101': [MEDIA_MD5]})
-        self.assertIn('[\u6253\u8138]', result['display'])
-        self.assertIn('data:image/gif', result['display'])
+        # 内置表情渲染的是内置图样元素, 而不是压缩 source 里 md5 对应的 blob。
+        self.assertEqual(len(self.faces(result['display'])), 1)
 
     def test_message_content_emoji_xml_wins_over_pua_only_source(self):
         import zstandard
@@ -233,22 +245,19 @@ class EmojiExportTests(unittest.TestCase):
         source = b'<msgsource><pua>1</pua><signature>N0_V1_Sy7NKsXR|v1_kQSlFQy4</signature></msgsource>'
         row = (7, 101, 1, 0, 1, 1700000000, 0, source, '[\u6253\u8138]', b'')
         result = export.format_message(row, 'example-contact', '', {}, resource_map={})
-        self.assertIn('[\u6253\u8138]', result['display'])
-        self.assertIn('data:image/png;base64,', result['display'])
+        self.assertEqual(len(self.faces(result['display'])), 1)
 
     def test_signature_only_concerned_uses_bundled_default_emoji(self):
         source = b'<msgsource><pua>1</pua><signature>only-signature</signature></msgsource>'
         row = (7, 102, 1, 0, 1, 1700000000, 0, source, '[\u76b1\u7709]', b'')
         result = export.format_message(row, 'example-contact', '', {}, resource_map={})
-        self.assertIn('[\u76b1\u7709]', result['display'])
-        self.assertIn('data:image/png;base64,', result['display'])
+        self.assertEqual(len(self.faces(result['display'])), 1)
 
     def test_signature_only_respect_uses_bundled_default_emoji(self):
         source = b'<msgsource><pua>1</pua><signature>only-signature</signature></msgsource>'
         row = (7, 103, 1, 0, 1, 1700000000, 0, source, '[\u5408\u5341]', b'')
         result = export.format_message(row, 'example-contact', '', {}, resource_map={})
-        self.assertIn('[\u5408\u5341]', result['display'])
-        self.assertIn('data:image/png;base64,', result['display'])
+        self.assertEqual(len(self.faces(result['display'])), 1)
 
     def test_forwarded_emoji_xml_does_not_dump_raw_xml(self):
         content = (
@@ -280,26 +289,29 @@ class EmojiExportTests(unittest.TestCase):
         )
         row = (7, 105, 49, 0, 1, 1700000000, 0, b'', content, b'')
         result = export.format_message(row, 'example-contact', '', {}, resource_map={})
-        self.assertIn('看这个也觉得师兄面试不好[打脸]', result['display'])
-        self.assertIn('data:image/png;base64,', result['display'])
+        # 标题文字保留; 只有表情本身变成元素。
+        self.assertIn('看这个也觉得师兄面试不好', result['display'])
+        self.assertEqual(len(self.faces(result['display'])), 1)
 
     def test_plain_text_builtin_emoji_is_rendered(self):
         row = (7, 106, 1, 0, 1, 1700000000, 0, b'', '[\u751f\u75c5]', b'')
         result = export.format_message(row, 'example-contact', '', {}, resource_map={})
-        self.assertIn('[\u751f\u75c5]', result['display'])
-        self.assertIn('data:image/png;base64,', result['display'])
+        self.assertEqual(len(self.faces(result['display'])), 1)
+        # 标签不应作为纯文本残留 - 图样取代它。
+        self.assertNotIn('[生病]', result['display'])
 
     def test_repeated_grin_emoji_is_rendered(self):
         row = (7, 107, 1, 0, 1, 1700000000, 0, b'', '[呲牙][呲牙][呲牙]', b'')
         result = export.format_message(row, 'example-contact', '', {}, resource_map={})
-        self.assertIn('[呲牙][呲牙][呲牙]', result['display'])
-        self.assertIn('data:image/png;base64,', result['display'])
+        faces = self.faces(result['display'])
+        # 每出现一次一个元素, 且都指向同一份图样。
+        self.assertEqual(len(faces), 3)
+        self.assertEqual(len(set(faces)), 1)
 
     def test_sleep_emoji_is_rendered(self):
         row = (7, 108, 1, 0, 1, 1700000000, 0, b'', '[睡]', b'')
         result = export.format_message(row, 'example-contact', '', {}, resource_map={})
-        self.assertIn('[睡]', result['display'])
-        self.assertIn('data:image/png;base64,', result['display'])
+        self.assertEqual(len(self.faces(result['display'])), 1)
 
     def test_unstable_share_page_is_not_emitted_as_emoji_image(self):
         self.assertIsNone(export.extract_appmsg_image(

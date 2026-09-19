@@ -72,10 +72,21 @@ except Exception:
 # Remote media is the single slowest step of an export: each miss costs a page
 # fetch plus an image download, and inline thumbnails alone run to several
 # hundred per conversation. Bound it per run and keep results on disk, misses
-# included, so re-exports are instant. Set by main().
+# included, so re-exports are instant.
+#
+# Two separate pools: share-page covers are rare and expensive, inline appmsg
+# thumbnails are common and cheap. Sharing one would let a run of thumbnails
+# starve the covers that actually change how a page looks.
+COVER_FETCH_LIMIT = 60
+THUMB_FETCH_LIMIT = 300
+
+# Seeded with the full budgets rather than 0: main() re-sets them, but anything
+# that reaches the fetchers without going through main() used to find a budget
+# of 0 and silently skip every remote fetch, returning None with no error.
 COVER_STATE = {
-    'dir': '', 'budget': 0, 'fetched': 0, 'cached': 0, 'skipped': 0,
-    'thumb_budget': 0, 'thumb_fetched': 0, 'thumb_cached': 0, 'thumb_skipped': 0,
+    'dir': '', 'budget': COVER_FETCH_LIMIT, 'fetched': 0, 'cached': 0, 'skipped': 0,
+    'thumb_budget': THUMB_FETCH_LIMIT,
+    'thumb_fetched': 0, 'thumb_cached': 0, 'thumb_skipped': 0,
 }
 
 # Off by default: full-resolution originals are 5-24MB / 3000-5700px each, and
@@ -92,12 +103,6 @@ COVER_HEAD_BYTES = 64 * 1024
 # embedding. Below it the file is already display-sized and PIL would only
 # cost time, which matters across thousands of media entries.
 EMBED_SHRINK_THRESHOLD = 400 * 1024
-
-# Two separate budgets: share-page covers are rare and expensive, inline
-# appmsg thumbnails are common and cheap. Sharing one pool lets a run of
-# thumbnails starve the covers that actually change how a page looks.
-COVER_FETCH_LIMIT = 60
-THUMB_FETCH_LIMIT = 300
 
 # Set up by main(); custom stickers decrypted from WeChat's local cache.
 STICKER_STATE = {'key': b'', 'dirs': [], 'cache_dir': ''}
@@ -385,6 +390,29 @@ def scan_nt_cache(nt_cache_dir, talker, account_dir='', own_wxid=''):
         for key, image in scan_account_media(account_dir, own_wxid, talker).items():
             if key.startswith('md5:'):
                 image_map.setdefault(key, image)
+
+    # `unique:<local_id>`: an id that resolves to exactly one distinct image in
+    # this conversation is safe to match on its own. The id restarts across
+    # shards, but uniqueness inside one conversation's scan rules that out -
+    # which is what separates this from the bare-local_id match that
+    # get_cached_image deliberately refuses. Deduped by content, so one picture
+    # cached at several timestamps still counts as unique.
+    local_candidates = {}
+    for key, image in image_map.items():
+        if isinstance(key, str) and key.startswith('pair:'):
+            parts = key.split(':', 2)
+            if len(parts) != 3:
+                continue
+            local_id = parts[1]
+        elif isinstance(key, int):
+            local_id = str(key)
+        else:
+            continue
+        digest = hashlib.sha256(image[0].encode('ascii')).hexdigest()
+        local_candidates.setdefault(local_id, {})[digest] = image
+    for local_id, candidates in local_candidates.items():
+        if len(candidates) == 1:
+            image_map[f'unique:{local_id}'] = next(iter(candidates.values()))
 
     return image_map
 
@@ -734,7 +762,9 @@ def get_cached_image(image_map, local_id, create_time, content='', resource_md5s
 
     Deliberately *not* falling back to a bare `local_id`: that id restarts in
     every message shard, so matching on it alone attaches one conversation's
-    image to another conversation's message.
+    image to another conversation's message. `unique:<local_id>` is the sound
+    version of that idea - scan_nt_cache only emits it when the id maps to a
+    single distinct image, so uniqueness has already ruled the collision out.
     """
     if not image_map:
         return None
@@ -750,6 +780,12 @@ def get_cached_image(image_map, local_id, create_time, content='', resource_md5s
         return None
     if image_map.get(pair_key):
         return shrink_embedded(image_map[pair_key])
+    try:
+        unique_key = f'unique:{int(local_id)}'
+    except (TypeError, ValueError):
+        return None
+    if image_map.get(unique_key):
+        return shrink_embedded(image_map[unique_key])
     return None
 
 
@@ -1560,8 +1596,14 @@ def format_message(row, talker, wx_dir, image_map=None, sender_map=None, display
     local_id = row[0] or 0
     server_id = row[1] or 0
     local_type = row[2] or 0
+    # WeChat stores some forwards as high-bit variants of type 49. The mask
+    # below turns those into plain 49, which is a known type - so the cached
+    # image branch further down can only recognise them if the pre-mask value
+    # is kept. Dropping this made that branch unreachable.
+    raw_local_type = local_type
     if local_type > 0xffffffff:
         local_type &= 0xffffffff
+    is_encoded_media_type = raw_local_type > 0xffffffff and local_type == 49
     real_sender_id = row[4] or 0
     create_time = row[5] or 0
     source = row[7]
@@ -1611,6 +1653,11 @@ def format_message(row, talker, wx_dir, image_map=None, sender_map=None, display
     if content and content != source_text:
         metadata_parts.append(content)
     metadata_content = '\n'.join(metadata_parts)
+    # A type-49 row carrying a title or url is a link/article card, not a bare
+    # image. Without this guard the encoded-media fallback below would hide the
+    # card (and its title/link) behind a cached thumbnail.
+    has_app_link_metadata = local_type == 49 and bool(
+        extract_xml_text(content, 'title') or extract_xml_text(content, 'url'))
     is_emoji_xml = bool(re.search(r'<(?:msg\s*>)?\s*<emoji\b|<emoji\b', metadata_content, re.IGNORECASE))
     is_contact_card = bool(
         re.search(r'<msg\b[^>]*(?:nickname|username)=', metadata_content, re.IGNORECASE)
@@ -1694,7 +1741,9 @@ def format_message(row, talker, wx_dir, image_map=None, sender_map=None, display
         if img_data:
             image_b64 = img_data
             display += f'<br><img src="data:{mime};base64,{img_data}" loading="lazy" />'
-    elif local_type not in MSG_TYPES and get_cached_image(image_map, local_id, create_time, content, resource_md5s):
+    elif (local_type not in MSG_TYPES or is_encoded_media_type) \
+            and not has_app_link_metadata \
+            and get_cached_image(image_map, local_id, create_time, content, resource_md5s):
         # Some image messages use encoded types (e.g. 21474836529 = images in appmsg)
         # Check image_map for any message type
         img_data, mime = get_cached_image(image_map, local_id, create_time, content, resource_md5s)
@@ -1787,11 +1836,14 @@ def format_message(row, talker, wx_dir, image_map=None, sender_map=None, display
                 builtin_title = _face_index.find_face(title)
                 title_html = (render_builtin_emoji(title, builtin_title)
                               if builtin_title else escape_html(title))
-                # Extract and embed article thumbnail image
+                # Try the conversation cache before the network: a cached
+                # thumbnail is already on disk and costs nothing, and without
+                # this the article branch downloaded covers it already had.
                 thumb_url = extract_appmsg_image(content)
-                if thumb_url:
+                img_data = get_cached_image(image_map, local_id, create_time, metadata_content, resource_md5s)
+                if not img_data and thumb_url:
                     img_data = download_image_as_base64(thumb_url, extract_media_aes_key(content))
-                else:
+                if not img_data:
                     page_url = extract_xml_text(content, 'url')
                     img_data = download_bilibili_cover(page_url)
                     if not img_data:
