@@ -29,7 +29,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      # 这些用例只依赖标准库；它们针对导出器的纯函数，不碰真实数据库。
+      # 只装这两个: 用例在方法内部 import zstandard / Crypto(pycryptodome),
+      # 而 requirements.txt 的其余部分(sqlcipher3 要编译、pymem 仅 Windows)
+      # 对这两个测试文件都不是必需的。
+      - run: python -m pip install --quiet zstandard pycryptodome
       - run: python -m unittest discover -s test -p '*_test.py' -v
 
   # 发布前的一致性校验: 版本号、锁文件、npm 包内容
