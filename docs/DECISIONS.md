@@ -502,6 +502,20 @@ their probabilities. Two rules came out of building it, and both are general:
    `证据：对方末条 N 字 · 对方实质发言 M 条`, and anything resting on fewer than five characters
    is marked as too thin to act on.
 
+**Measured: what you feed sets the ceiling, not the model.** The same 132 questions (44 scripts x
+does-it-write / does-it-network / does-it-spawn) were asked twice, changing only the evidence in
+the state. Given each file's first 14 lines: **77.3%** agreement with a regex baseline. Given its
+first 1500 characters: **88.6%**, with subprocess at **100%** and file-writing at 97.7%, for 2.3s
+and $0.0011. The ceiling moved 11 points without touching a single question.
+
+**And the disagreements are not automatically the model's fault.** Of the remaining `network`
+mismatches, five of the six checked by hand call `call_ai` / `create_engine`, which reaches
+`urllib.request.urlopen` inside `_utils` - so those scripts *do* egress and the model was right
+while the regex baseline (which only looked inside each file) was wrong. **Two imperfect
+instruments agreeing 88.6% of the time is not an accuracy figure for either of them.** Treating
+the baseline as truth would have produced a confidently wrong conclusion about which instrument
+to trust.
+
 **Also:** `waiting` has one mechanically checkable failure mode - claiming the other side is
 waiting while the last message in the transcript is the user's own. That contradiction is
 detected and reported. It is the only part of this output that can be falsified without reading
