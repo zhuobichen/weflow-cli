@@ -411,10 +411,19 @@ def load_contact_names(contact_db_path, contact_key_hex, contact_salt_hex):
 
     Returns dict: {wxid: display_name}
     display_name priority: remark > nick_name > alias > wxid
+
+    取不到就返回空表（名字是装饰性的，调用方会退回 wxid）。**连接必须在 finally
+    里关**：原先 `conn.close()` 写在 try 末尾，异常路径上泄漏——而在 Windows 上
+    一个没关的连接会把文件锁住（同一个坑早先在这个文件的分片读取里踩过一次）。
+    读了一半也保留已经拿到的名字，而不是整份丢掉。
     """
     if not contact_db_path or not contact_key_hex or not contact_salt_hex:
         return {}
+    if not os.path.isfile(contact_db_path):
+        return {}
 
+    name_map = {}
+    conn = None
     try:
         raw_key = f"x'{contact_key_hex}{contact_salt_hex}'"
         conn = require_sqlcipher().connect(contact_db_path)
@@ -423,15 +432,18 @@ def load_contact_names(contact_db_path, contact_key_hex, contact_salt_hex):
 
         # contact.db schema: username, alias, remark, nick_name, ...
         c.execute("SELECT username, COALESCE(NULLIF(remark,''), NULLIF(nick_name,''), NULLIF(alias,''), username) FROM contact")
-        name_map = {}
         for username, display in c.fetchall():
             if username:
                 name_map[username] = display
-
-        conn.close()
-        return name_map
-    except Exception as e:
-        return {}
+    except Exception:
+        pass
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+    return name_map
 
 
 def apply_contact_names(sessions, name_map):
@@ -478,38 +490,16 @@ def connect_nt_db(db_path, key_hex, salt_hex):
 # used to merge shards, so the same chat exported two different histories
 # depending on the format asked for.
 
-SHARD_EXCLUDED = {'message_fts.db', 'message_resource.db'}
-
-
-def discover_message_shards(db_path):
-    """Every NT message shard sitting beside the configured database."""
-    path = Path(db_path)
-    if not path.parent.is_dir():
-        return [str(path)]
-    shards = sorted(str(p) for p in path.parent.glob('message_*.db')
-                    if p.name.lower() not in SHARD_EXCLUDED)
-    return shards or [str(path)]
-
-
-def derive_database_key(path, fallback_key, fallback_salt, passphrase=''):
-    """Per-shard SQLCipher key (WeChat 4.1.12.26+).
-
-    The shared passphrase is PBKDF2-HMAC-SHA512'd against each shard's own
-    16-byte header salt. Without a passphrase the configured pair is used
-    unchanged, which is what shard 0 opens with on older installs.
-    """
-    if not passphrase:
-        return fallback_key, fallback_salt
-    try:
-        with open(path, 'rb') as fh:
-            salt = fh.read(16)
-        if len(salt) != 16:
-            return fallback_key, fallback_salt
-        raw_passphrase = bytes.fromhex(passphrase)
-        key = hashlib.pbkdf2_hmac('sha512', raw_passphrase, salt, 256000, 32).hex()
-        return key, salt.hex()
-    except (OSError, ValueError):
-        return fallback_key, fallback_salt
+# 分片发现、密钥派生、列探测都在 nt_common 里——**只此一份**。
+# 原先 `nt_decrypt` 与 `export_chat_html` 各有一份，而契约并不相同。
+#
+# 这一行不能省：本文件被 `spec_from_file_location` 加载时（测试就是这么加的），
+# 解释器**不会**把脚本目录放进 sys.path——只有直接运行才会。少了它，单独跑
+# `nt_decrypt_shards_test.py` 会以 ModuleNotFoundError 失败，而全套一起跑却能过
+# （别的测试文件先插了路径）。那种"碰巧能过"正是要避免的。
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from nt_common import (discover_message_shards, derive_database_key,
+                       table_columns)
 
 
 def verify_passphrase_native(passphrase_hex, db_path, internal_key_hex=''):
@@ -881,15 +871,6 @@ MESSAGE_COLUMNS = ('local_id', 'server_id', 'local_type', 'real_sender_id',
 # of them a row cannot become a message at all, and that is a schema mismatch
 # rather than an empty conversation.
 MESSAGE_ANCHOR_COLUMNS = ('create_time', 'local_id', 'server_id')
-
-
-def table_columns(cursor, table):
-    """Column names of `table`, or an empty set if it has none to report."""
-    try:
-        rows = cursor.execute('PRAGMA table_info("%s")' % table).fetchall()
-    except Exception:
-        return set()
-    return {row[1] for row in rows}
 
 
 def _message_dict(row, sender_id_map, name_map, own_wxid, is_group=False):

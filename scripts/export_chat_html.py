@@ -25,6 +25,11 @@ except ImportError:
     print("Install sqlcipher3: pip install sqlcipher3")
     sys.exit(1)
 
+# 与 nt_decrypt 共用同一份实现（原先两边各有一份，契约还不一样）。
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from nt_common import (discover_message_shards, derive_database_key,
+                       table_columns)
+
 PAGE_SIZE = 4096
 MSG_TYPES = {
     1: 'text', 3: 'image', 34: 'voice', 42: 'card',
@@ -148,15 +153,6 @@ EXPORT_MESSAGE_COLUMNS = ('local_id', 'server_id', 'local_type', 'sort_seq',
 MISSING_COLUMN_WARNING = '  WARNING: shard has no column %s; reading it as NULL'
 
 
-def table_columns(cursor, table):
-    """Column names of `table`, or an empty set if it has none to report."""
-    try:
-        rows = cursor.execute('PRAGMA table_info("%s")' % table).fetchall()
-    except Exception:
-        return set()
-    return {row[1] for row in rows}
-
-
 def connect(db_path, key_hex, salt_hex):
     raw_key = f"x'{key_hex}{salt_hex}'"
     conn = sqlcipher.connect(db_path)
@@ -218,36 +214,11 @@ def fetch_messages(conn, talker, date=''):
     return messages
 
 
-def discover_message_shards(db_path):
-    """Return all NT message shards alongside the configured database."""
-    db = Path(db_path)
-    candidates = sorted(db.parent.glob('message_*.db'))
-    return [str(path) for path in candidates if path.name.lower() not in {
-        'message_fts.db', 'message_resource.db'
-    }]
-
-
-def derive_database_key(path, fallback_key, fallback_salt, passphrase=''):
-    """Derive a shard-specific SQLCipher key from the shared NT passphrase."""
-    if not passphrase:
-        return fallback_key, fallback_salt
-    try:
-        with open(path, 'rb') as fh:
-            salt = fh.read(16)
-        if len(salt) != 16:
-            return fallback_key, fallback_salt
-        raw_passphrase = bytes.fromhex(passphrase)
-        key = hashlib.pbkdf2_hmac('sha512', raw_passphrase, salt, 256000, 32).hex()
-        return key, salt.hex()
-    except (OSError, ValueError):
-        return fallback_key, fallback_salt
-
-
 def fetch_messages_from_shards(db_path, key_hex, salt_hex, talker, date='', passphrase=''):
     """Read and merge messages from every NT message shard."""
+    # `discover_message_shards` 保证不返回空表，所以这里不需要再兜底——
+    # 原先的 `if not shards: shards = [db_path]` 是给"可能返回空"的那一份实现擦屁股的。
     shards = discover_message_shards(db_path)
-    if not shards:
-        shards = [db_path]
     messages = []
     for shard in shards:
         shard_conn = None

@@ -20,6 +20,13 @@ from unittest.mock import patch
 
 SCRIPTS = Path(__file__).resolve().parents[1] / 'scripts'
 
+# 先把 nt_common 导进来再进 patch 块。**顺序在这里是有意义的**：
+# `patch.dict(sys.modules, ...)` 退出时会把它块内**新增**的条目删掉，而下面两个
+# 模块都是在这个块里加载的——于是各自会新建一个 nt_common，同一个文件变成三个模块
+# 对象，`is` 断言必然失败。先导入它就进了 patch 的快照，恢复时不会被删。
+sys.path.insert(0, str(SCRIPTS))
+import nt_common  # noqa: E402,F401  （见上：必须在 patch 之前）
+
 spec = importlib.util.spec_from_file_location('nt_decrypt', SCRIPTS / 'nt_decrypt.py')
 nt = importlib.util.module_from_spec(spec)
 with patch.dict(sys.modules, {'sqlcipher3': types.SimpleNamespace(dbapi2=sqlite3)}):
@@ -95,20 +102,46 @@ class ShardDiscoveryTests(unittest.TestCase):
                 os.path.join(tmp, 'message_0.db'))]
             self.assertEqual(found, ['message_0.db', 'message_1.db'])
 
-    def test_both_copies_of_discovery_agree(self):
-        """nt_decrypt and export_chat_html each carry a copy; pin them together.
+    def test_there_is_only_one_discovery_implementation(self):
+        """原先 `nt_decrypt` 与 `export_chat_html` **各有一份，而契约不同**。
 
-        They are deliberately not unified yet (unifying would change exporter
-        behaviour), so this test is what stops them drifting apart unnoticed.
+        `nt_decrypt` 版 glob 不到分片时返回 `[配置的那个库]`；导出器版返回空表，
+        由调用点自己补。补偿写在调用点，意味着新调用方忘了它就会静默拿到零个分片。
+        现在两份都是 `nt_common` 的那一个对象——所以这里断言的是**同一性**，
+        而不是"跑出来一样"：相等断言能靠"各抄一份、恰好抄对"通过，而抄一份正是它
+        当初漂掉的方式。
         """
+        import nt_common
+        self.assertIs(nt.discover_message_shards, nt_common.discover_message_shards)
+        self.assertIs(export.discover_message_shards, nt_common.discover_message_shards)
+        self.assertIs(nt.derive_database_key, nt_common.derive_database_key)
+        self.assertIs(export.derive_database_key, nt_common.derive_database_key)
+        self.assertIs(nt.table_columns, nt_common.table_columns)
+        self.assertIs(export.table_columns, nt_common.table_columns)
+
+    def test_discovery_never_returns_an_empty_list(self):
+        """契约：glob 不到就退回配置的那个库，**调用方不必自己兜底**。
+
+        这一条正是两份旧实现的分歧点，也是导出器调用点上那段
+        `if not shards: shards = [db_path]` 的存在理由（现在已删）。
+        """
+        import nt_common
         with tempfile.TemporaryDirectory() as tmp:
-            for name in ('message_0.db', 'message_1.db', 'message_fts.db'):
-                make_shard(os.path.join(tmp, name))
             target = os.path.join(tmp, 'message_0.db')
-            self.assertEqual(
-                sorted(os.path.basename(p) for p in nt.discover_message_shards(target)),
-                sorted(os.path.basename(p) for p in export.discover_message_shards(target)),
-            )
+            make_shard(target)
+            self.assertEqual(nt_common.discover_message_shards(target), [target])
+            # 父目录不存在时也要给出一个可用的答案，而不是空表。
+            ghost = os.path.join(tmp, 'nope', 'message_0.db')
+            self.assertEqual(nt_common.discover_message_shards(ghost), [ghost])
+
+    def test_discovery_excludes_the_derived_databases(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            for name in ('message_0.db', 'message_1.db',
+                         'message_fts.db', 'message_resource.db'):
+                make_shard(os.path.join(tmp, name))
+            found = [os.path.basename(p) for p in nt.discover_message_shards(
+                os.path.join(tmp, 'message_0.db'))]
+            self.assertEqual(found, ['message_0.db', 'message_1.db'])
 
 
 class ShardConnectionTests(unittest.TestCase):
