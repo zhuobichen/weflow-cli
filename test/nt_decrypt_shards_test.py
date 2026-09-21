@@ -118,6 +118,45 @@ class ShardDiscoveryTests(unittest.TestCase):
         self.assertIs(export.derive_database_key, nt_common.derive_database_key)
         self.assertIs(nt.table_columns, nt_common.table_columns)
         self.assertIs(export.table_columns, nt_common.table_columns)
+        self.assertIs(nt.MESSAGE_ANCHOR_COLUMNS, nt_common.MESSAGE_ANCHOR_COLUMNS)
+        self.assertIs(export.MESSAGE_ANCHOR_COLUMNS, nt_common.MESSAGE_ANCHOR_COLUMNS)
+
+
+class AnchorColumnOrderTests(unittest.TestCase):
+    """锚点列的顺序**就是行为**，所以钉住它。
+
+    `MESSAGE_ANCHOR_COLUMNS` 有两种用法，其中只有一种在意顺序：
+
+    * 身份/模式检查（`nt_decrypt` 判断分片是不是根本没有消息表的列）——集合语义
+    * `ORDER BY`——两个读取入口都按这个顺序排，`create_time` 必须在前
+
+    第二处没有测试覆盖（要在真实分片上才走到），而且顺序写反**不会报错**：
+    会话还是能读出来，只是顺序变成另一回事。所以这里把"第一列是 create_time"
+    和"没有人再写一份字面量"一起钉住——原先正是三份（具名一份、同文件
+    `ORDER BY` 一份、导出器一份）。
+    """
+
+    def test_create_time_is_the_primary_sort_key(self):
+        import nt_common
+        self.assertEqual(nt_common.MESSAGE_ANCHOR_COLUMNS[0], 'create_time')
+        self.assertEqual(list(nt_common.MESSAGE_ANCHOR_COLUMNS),
+                         ['create_time', 'local_id', 'server_id'])
+
+    def test_the_constant_is_a_tuple_not_a_set(self):
+        # 集合语义那处不需要顺序，但这一处需要——用 set 会让 `ORDER BY` 的顺序
+        # 随解释器哈希种子变，同一天跑两次可能排出两种顺序。
+        import nt_common
+        self.assertIsInstance(nt_common.MESSAGE_ANCHOR_COLUMNS, tuple)
+
+    def test_no_reader_writes_the_literal_again(self):
+        """两个读取入口都不许再自带一份字面量，只能用这个常量。"""
+        scripts = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        literal = "'create_time', 'local_id', 'server_id'"
+        for name in ('nt_decrypt.py', 'export_chat_html.py'):
+            with open(os.path.join(scripts, 'scripts', name), encoding='utf-8') as fh:
+                source = fh.read()
+            self.assertNotIn(literal, source, name)
+            self.assertIn('MESSAGE_ANCHOR_COLUMNS', source, name)
 
     def test_discovery_never_returns_an_empty_list(self):
         """契约：glob 不到就退回配置的那个库，**调用方不必自己兜底**。

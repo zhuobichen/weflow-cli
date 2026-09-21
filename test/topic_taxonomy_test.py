@@ -20,6 +20,7 @@ SCRIPTS = Path(__file__).resolve().parents[1] / 'scripts'
 sys.path.insert(0, str(SCRIPTS))
 
 from _utils import TOPICS, TOPIC_CRITERIA  # noqa: E402
+from _utils import RELEVANCE_NAMES, DEFAULT_RELEVANCE  # noqa: E402
 
 
 def load(name):
@@ -55,6 +56,94 @@ class SingleDefinitionTests(unittest.TestCase):
         self.assertEqual(TOPICS, ['AI', '学术', '新闻', '文学', '投资', '政治'])
 
 
+class RelevanceVocabularyTests(unittest.TestCase):
+    """相关度的三档是和 `TOPICS` 同一种东西：下游按字面量比较的封闭词表。
+
+    它原先也有两份——`jev_client` 一份具名，`biz_daily` 的成员校验里再写一份
+    `['高','中','低']`。两处一致时看不出问题，等哪天要加一档（或者改一个字），
+    改了一处的那一半就静默按别的标准判。
+
+    **不测 `extract_todos.py` 里的 `['高','中','低']`**：那是待办的紧急度
+    （`--urgency` 的可选值），与文章的 relevance 只是碰巧共用三个汉字。
+    把两者耦合起来会让"待办可以加一档紧急度"变成动到日报契约的事。
+    """
+
+    def test_the_vocabulary_is_read_not_copied(self):
+        # 同 `TOPICS`：断言**同一性**而不是相等。
+        for name in ('jev_client', 'biz_daily'):
+            with self.subTest(module=name):
+                self.assertIs(load(name).RELEVANCE_NAMES, RELEVANCE_NAMES,
+                              '%s 里的 RELEVANCE_NAMES 不是 _utils 那一份' % name)
+
+    def test_the_daily_writer_reads_the_shared_fallback_level(self):
+        # 只有 `biz_daily` 需要这个兜底：`jev_client.score_to_relevance` 是把分数
+        # 映射到档位，任何分数都有档位可返回，不存在"判不出来"的情形。
+        # （第一版这里连 jev_client 一起断言了，跑起来才发现它根本没有这个名字。）
+        self.assertIs(load('biz_daily').DEFAULT_RELEVANCE, DEFAULT_RELEVANCE)
+
+    def test_the_fallback_level_is_a_real_level(self):
+        self.assertIn(DEFAULT_RELEVANCE, RELEVANCE_NAMES)
+
+    def test_the_level_order_is_stable(self):
+        """顺序即语义：`jev_client.RELEVANCE_LEVELS` 按下标与它对一一对应。"""
+        self.assertEqual(RELEVANCE_NAMES, ['低', '中', '高'])
+
+    def test_no_file_writes_the_vocabulary_inline(self):
+        """光"导入了词表"不够——还得**用它**。
+
+        这条是变异测试逼出来的：把 `raw_rel in RELEVANCE_NAMES` 改回
+        `raw_rel in ['高', '中', '低']`，上面那条同一性断言照样绿——导入还在，
+        只是没用。而"手里有源表、却写字面量"正是漂移的下一步。
+
+        例外清单：`extract_todos.py` 的 `['高','中','低']` 是待办的紧急度
+        （`--urgency` 的可选值），与文章 relevance 是两个词汇表，只是碰巧同字。
+        """
+        import ast
+        allowed = {'extract_todos.py'}
+        vocabulary = frozenset(RELEVANCE_NAMES)
+        offenders = []
+        for path in sorted(SCRIPTS.glob('*.py')):
+            if path.name in allowed or path.name == '_utils.py':
+                continue
+            for node in ast.walk(ast.parse(path.read_text(encoding='utf-8'))):
+                if not isinstance(node, (ast.List, ast.Tuple, ast.Set)):
+                    continue
+                values = [e.value for e in node.elts
+                          if isinstance(e, ast.Constant) and isinstance(e.value, str)]
+                if len(values) == len(node.elts) and frozenset(values) == vocabulary:
+                    offenders.append('%s:%d' % (path.name, node.lineno))
+        self.assertEqual(offenders, [],
+                         '相关度词表应只在 _utils 一处：%s' % offenders)
+
+    def test_the_exemption_is_still_a_different_vocabulary(self):
+        """上面的例外清单要能自证：`extract_todos` 那份是**参数可选值**，不是文章档位。"""
+        source = (SCRIPTS / 'extract_todos.py').read_text(encoding='utf-8')
+        self.assertIn("'--urgency'", source)
+        self.assertNotIn('RELEVANCE_NAMES', source)
+
+    def test_no_bare_relevance_default_remains_in_the_daily_writer(self):
+        """日报里不许再出现写死的 relevance 兜底值（`get`/`setdefault` 那种）。
+
+        判据只认"默认值"这两种语法形态。`a['relevance'] = '中'` 那种赋值在
+        遗留解析路径里是**子串命中的结论**（`elif '中' in raw_rel:`），不是兜底，
+        不能一起禁掉——禁掉会逼出一段更绕的代码。
+        """
+        import ast
+        source = (SCRIPTS / 'biz_daily.py').read_text(encoding='utf-8')
+        offenders = []
+        for node in ast.walk(ast.parse(source)):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+                if node.func.attr == 'get' and len(node.args) >= 2:
+                    key, default = node.args[0], node.args[1]
+                    if (isinstance(key, ast.Constant) and key.value == 'relevance'
+                            and isinstance(default, ast.Constant)):
+                        offenders.append(node.lineno)
+                if node.func.attr == 'setdefault' and len(node.args) >= 2:
+                    key, default = node.args[0], node.args[1]
+                    if (isinstance(key, ast.Constant) and key.value == 'relevance'
+                            and isinstance(default, ast.Constant)):
+                        offenders.append(node.lineno)
+        self.assertEqual(offenders, [], 'relevance 兜底值应只用 DEFAULT_RELEVANCE：%s' % offenders)
 class PromptConsistencyTests(unittest.TestCase):
     """提示词里**每一处**枚举都必须覆盖全部类目。
 

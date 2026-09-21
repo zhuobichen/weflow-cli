@@ -384,6 +384,22 @@ TOPIC_CRITERIA = {
     '政治': '党政理论/政策解读/领导人讲话/官方评论',
 }
 
+# 相关度的三个档位。与 `TOPICS` 一样是**下游按字面量比较**的封闭词表：
+# `generate_ai_report.py`、`enrich_backlinks.py`、`generate_html.py` 都在比
+# `'高'`/`'中'`/`'低'` 这三个字。定义收在这里，`jev_client` 与 `biz_daily`
+# 都从这里取——原先 `jev_client` 一份、`biz_daily` 的成员校验里再写一份。
+#
+# **顺序即语义**：`jev_client.RELEVANCE_LEVELS` 是给模型看的判据文本，按下标与
+# 这个列表一一对应（有测试钉住），所以不要重排。
+RELEVANCE_NAMES = ['低', '中', '高']
+
+# 一篇文章**没能被判相关度**时落到哪一档。和 `DEFAULT_TOPIC` 是同一类东西：
+# 兜底不是判断。之所以要具名，是因为"全库 2199/2201 篇都是「中」"这件事的答案
+# 就在这里——分类失败的每条路径最终都落到这个值，而 `'中'` 读起来是
+# 「有启发性」（正面评价），不是「没判断」。值不变更（改档位会动到下游的
+# 收录判据），只是把它写在一处，好让它可被搜索、可被讨论。
+DEFAULT_RELEVANCE = '中'
+
 
 def load_config():
     with open(CONFIG_PATH, 'r', encoding='utf-8') as f:

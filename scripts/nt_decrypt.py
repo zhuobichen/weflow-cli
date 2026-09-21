@@ -499,7 +499,7 @@ def connect_nt_db(db_path, key_hex, salt_hex):
 # （别的测试文件先插了路径）。那种"碰巧能过"正是要避免的。
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from nt_common import (discover_message_shards, derive_database_key,
-                       table_columns)
+                       table_columns, MESSAGE_ANCHOR_COLUMNS)
 
 
 def verify_passphrase_native(passphrase_hex, db_path, internal_key_hex=''):
@@ -870,7 +870,9 @@ MESSAGE_COLUMNS = ('local_id', 'server_id', 'local_type', 'real_sender_id',
 # Any one of these is enough to give rows an identity and an order. With none
 # of them a row cannot become a message at all, and that is a schema mismatch
 # rather than an empty conversation.
-MESSAGE_ANCHOR_COLUMNS = ('create_time', 'local_id', 'server_id')
+# 定义搬去了 `nt_common`：`ORDER BY` 那处（同一个文件下面）过去自己又写了一份
+# 字面量，导出器再写一份——顺序在这里就是行为（先按 create_time 排），
+# 三份各自为政等于谁改一处谁静默换一种排法。
 
 
 def _message_dict(row, sender_id_map, name_map, own_wxid, is_group=False):
@@ -1006,7 +1008,7 @@ def get_messages(conns, talker, limit=100, offset=0, name_map=None, own_wxid=Non
                        missing=missing)
                 continue
 
-            order = [col for col in ('create_time', 'local_id', 'server_id')
+            order = [col for col in MESSAGE_ANCHOR_COLUMNS
                      if col in available]
             sql = 'SELECT %s FROM "%s"' % (
                 ', '.join('"%s"' % col for col in selected), msg_table)

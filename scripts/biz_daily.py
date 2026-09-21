@@ -30,7 +30,8 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _utils import (call_deepseek, load_config, decrypt_lock, get_api_key,
                     write_with_frontmatter, format_wikilinks,
-                    TOPICS, TOPIC_CRITERIA, DEFAULT_TOPIC)
+                    TOPICS, TOPIC_CRITERIA, DEFAULT_TOPIC,
+                    RELEVANCE_NAMES, DEFAULT_RELEVANCE)
 
 try:
     from sqlcipher3 import dbapi2 as sqlcipher
@@ -153,7 +154,7 @@ def _serializable_article(article, date_str):
         # 默认值与分组/md 那条路**必须是同一个**。这里曾经是 `''`，而分组那边是
         # `'学术'`，于是同一次运行里 md 写 `topic: 学术`、json 写 `topic: ""`。
         'topic': article.get('topic') or DEFAULT_TOPIC,
-        'relevance': article.get('relevance', '中'),
+        'relevance': article.get('relevance', DEFAULT_RELEVANCE),
         'tags': _tags_for_write(article, article.get('topic') or DEFAULT_TOPIC),
         'summary': article.get('summary', article.get('digest', '')),
         'url': article.get('url', ''),
@@ -877,7 +878,7 @@ def main():
                         pass  # 已由 _apply_decision 写入
                     elif relevance_match:
                         raw_rel = relevance_match.group(1).strip()
-                        if raw_rel in ['高', '中', '低']:
+                        if raw_rel in RELEVANCE_NAMES:
                             a['relevance'] = raw_rel
                         elif '高' in raw_rel:
                             a['relevance'] = '高'
@@ -886,9 +887,9 @@ def main():
                         elif '低' in raw_rel:
                             a['relevance'] = '低'
                         else:
-                            a['relevance'] = '中'
+                            a['relevance'] = DEFAULT_RELEVANCE
                     else:
-                        a['relevance'] = '中'
+                        a['relevance'] = DEFAULT_RELEVANCE
 
                     # Parse tags: comma-separated, clean up
                     if category_hint:
@@ -926,16 +927,16 @@ def main():
                     a['concepts'] = []
                     # 这三条兜底路径以前完全不设 relevance，靠落盘时的默认值兜成「中」。
                     # 显式写出来，并保留 Jev 已经给出的那一份（setdefault 而不是赋值）。
-                    a.setdefault('relevance', '中')
+                    a.setdefault('relevance', DEFAULT_RELEVANCE)
                     print(f'[{i+1}/{len(articles)}] [{t}] {n} - ERR: {e}')
             elif content:
                 a['summary'] = content[:400]
                 a['topic'] = a.get('source_category') or DEFAULT_TOPIC
-                a.setdefault('relevance', '中')
+                a.setdefault('relevance', DEFAULT_RELEVANCE)
             else:
                 a['summary'] = a.get('digest', '(无内容)')
                 a['topic'] = a.get('source_category') or DEFAULT_TOPIC
-                a.setdefault('relevance', '中')
+                a.setdefault('relevance', DEFAULT_RELEVANCE)
 
         # Print topic distribution
         from collections import Counter
@@ -1002,7 +1003,7 @@ def main():
                 'source': f'"{a["account_name"]}"',
                 'date': date_str,
                 'topic': topic,
-                'relevance': a.get('relevance', '中'),
+                'relevance': a.get('relevance', DEFAULT_RELEVANCE),
                 'tags': tags,
                 'created': date_str,
             }

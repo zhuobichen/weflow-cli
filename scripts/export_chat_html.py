@@ -28,7 +28,7 @@ except ImportError:
 # 与 nt_decrypt 共用同一份实现（原先两边各有一份，契约还不一样）。
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from nt_common import (discover_message_shards, derive_database_key,
-                       table_columns)
+                       table_columns, MESSAGE_ANCHOR_COLUMNS)
 
 PAGE_SIZE = 4096
 MSG_TYPES = {
@@ -194,7 +194,7 @@ def fetch_messages(conn, talker, date=''):
         raise ValueError('shard has no create_time column, so a date-bounded export cannot be produced')
     projection = ', '.join('"%s"' % col if col in available else 'NULL AS "%s"' % col
                            for col in EXPORT_MESSAGE_COLUMNS)
-    order = [col for col in ('create_time', 'local_id', 'server_id')
+    order = [col for col in MESSAGE_ANCHOR_COLUMNS
              if col in available]
     order_sql = ' ORDER BY ' + ', '.join('"%s" ASC' % col for col in order) if order else ''
 

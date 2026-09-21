@@ -37,14 +37,14 @@ INPUT_USD_PER_TOKEN = 0.042 / 1_000_000  # 输出 token 目前不计费
 
 # 分类法（列表 + 每类的判据）只有一份，在 `_utils` 里。这里直接引用它，
 # 所以提示词那条路和决策模型这条路**判的是同一套定义**——回退时不会换标准。
-from _utils import TOPIC_CRITERIA  # noqa: E402  (scripts/ 在 sys.path 上)
+from _utils import TOPIC_CRITERIA, RELEVANCE_NAMES  # noqa: E402  (scripts/ 在 sys.path 上)
 
 # **顺序即语义**：score.criteria 零索引，第一个元素是 0 分。
 # 两件事必须分开：判据文本是**给模型看**的（照抄 TOPIC_PROMPT 里对高/中/低的定义，
 # 少了这段说明模型就没有判档依据），而落盘的值必须是**裸的三个字**——下游
 # generate_ai_report.py:123、enrich_backlinks.py:75,87、generate_html.py:817-820
-# 都在做字面量比较。所以有一份名字表，两者按下标一一对应（有测试钉住）。
-RELEVANCE_NAMES = ['低', '中', '高']
+# 都在做字面量比较。名字表在 `_utils`（词表与 TOPICS 同处），下面这份判据文本
+# 按下标与它一一对应（有测试钉住），所以两者都不能重排。
 RELEVANCE_LEVELS = [
     '低：信息性阅读（纯新闻/娱乐/文学）',
     '中：有启发性（思路/趋势/跨领域技术）',

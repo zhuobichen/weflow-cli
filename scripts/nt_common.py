@@ -19,6 +19,19 @@ from pathlib import Path
 # 与 message_*.db 同目录、但不是消息分片的派生库。
 SHARD_EXCLUDED = {'message_fts.db', 'message_resource.db'}
 
+# 消息行的"锚点"列：任意一列在场，一行才谈得上身份与顺序。
+#
+# **两处语义，顺序只对其中一处有意义**：
+#   * 身份/模式检查——`nt_decrypt` 用它判断"这个分片是不是根本没有消息表该有的列"，
+#     这一处是集合语义，顺序无关。
+#   * `ORDER BY`——两个读取入口都按这个顺序排：`create_time` 优先。这一处顺序**就是
+#     行为**：把 `local_id` 排到前面会让会话顺序变成另一回事，而且没有任何报错。
+#
+# 收在这里是因为它原本有三份：`nt_decrypt` 一份具名、同文件里 `ORDER BY` 又写了一份
+# 字面量、`export_chat_html` 再写一份。三份一致时看不出问题，谁改了一处的顺序，
+# 另一处就静默按别的顺序排消息——正是 `nt_common` 存在的理由那类分叉。
+MESSAGE_ANCHOR_COLUMNS = ('create_time', 'local_id', 'server_id')
+
 
 def discover_message_shards(db_path):
     """配置库旁边的每一个 NT 消息分片。
