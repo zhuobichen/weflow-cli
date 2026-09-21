@@ -718,6 +718,45 @@ the wrong tool, the model receives a result that does not answer the question an
 **Until then** the loop stays as it is. One extra LLM round-trip is not worth an unverifiable
 change to the path that mediates the user's messages.
 
+## D-036: Search your own conversations with the decision model selecting query terms, not ranking sessions
+
+**Status:** Active
+
+`scripts/route_cards.py` answers "which conversation was I talking about X in". Two stages:
+the decision model picks the real query words out of the candidate n-grams the question
+produces, and **ranking is local**, by how many messages in each session literally contain
+those words. Retrieval reads WeChat's own `message_fts.db`.
+
+**Reason:** the obvious design - one card per conversation, ask the model which are
+relevant - **was measured and does not work**. As a per-card `noul` every candidate scored
+0.50-0.51, putting a one-message coupon group in the same band as the conference group with
+213 hits and leaving out the session most worth opening; as a per-card `score` (0/1/2) all
+20 candidates scored 1.74-1.76 whether they had 247 hits or 8. Local sorting by hit count
+ranked the same data correctly. The card carries too little for the judgement being asked -
+the model has never seen the conversation - so the shipped split gives ranking to the
+objective local signal and leaves the model the job it demonstrably does well: choosing
+words from a closed candidate list (it kept 会议 at 0.77 and rejected seven fragments at
+0.11-0.40, consistently across runs). That is also the boundary of what it can do at all -
+it cannot generate the search terms, only select them.
+
+**Consequences and boundaries:**
+- **New egress surface, deliberately small**: only the candidate words and the user's
+  question leave the machine. No message text, and - unlike the first design - no
+  conversation names, counts or timestamps either, since the model no longer sees cards.
+  `--keyword` skips the model entirely and keeps the whole path local.
+- Ranking by literal match is the known limit: "聊过上线的事" will not find a conversation
+  that says 部署. That is what the embedding path (`search`) is for; the two are
+  complementary recall paths, and the tool says so instead of pretending to have found
+  nothing relevant.
+- The article-favourite reading of `message_fts.db` is the enabling fact: `acontent` is
+  plaintext and `session_id` is the rowid of that database's own `name2id` table (595
+  sessions), so retrieval needs no index of our own. `MATCH` is unusable
+  (`no such tokenizer: MMFtsTokenizer`), but `LIKE` over 60k rows is instant.
+- A `noul` answer is a **probability float**, not a boolean (measured: 0.98 true, 0.01
+  false). Reading it as a boolean makes every question look answered "no" while the output
+  blames the model - this happened, and the tool now separates "the answer shape changed"
+  from "the score is low" in what it prints.
+
 ## Decision Template
 
 
