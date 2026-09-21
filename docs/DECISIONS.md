@@ -510,6 +510,23 @@ is asking it to generate more prose, which is the failure this whole line of wor
 avoid. When the articles predate the probability fields, the section says so explicitly: an
 absent section must not be readable as "everything here was certain".
 
+**How the "no gold standard" gap finally gets closed.** `scripts/quality_eval.py sample`
+draws a stratified sample and scores each article through the **production** path at sample
+time, then writes blank `topic` / `include` fields for a person to fill in; `score` prints
+topic agreement (for Jev *and* for the stored labels), a calibration table by probability
+bucket, and a threshold sweep naming the cut point that best matches the human. Two design
+points are load-bearing:
+
+- **The sample is re-scored instead of reusing stored values.** No real artifact on disk
+  carries `includeScore` - the six files in the 2026-09-05 output directory were written by a
+  run of the code from *before* that field existed, so they have `relevanceScore` and
+  `topicConfidence` only. And the stored `topic` is the very thing under test: it labelled 364
+  articles as 学术 in one day. So the (probability, human label) pairs have to be produced
+  fresh, which also means the corpus never has to be re-run and `output/` is only read.
+- **A blank label is "not sure", not "wrong".** Items left `null` are excluded from every
+  number rather than counted as misses, because collapsing the two would make accuracy look
+  worse the more honest the labeller is.
+
 **A field written on one path and not the other is a field that does not exist.** The three
 probability fields were added to the markdown frontmatter but not to `.articles.json`, and the
 report loader prefers the JSON. The new section therefore worked in the fallback path and was
