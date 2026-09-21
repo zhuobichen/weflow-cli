@@ -203,6 +203,7 @@ Management: `weflow-cli assistant status` / `log` / `stop`; send "帮助" in WeC
 | Check environment & config | `weflow-cli check` · `weflow-cli config show` |
 | Initialize or specify paths | `weflow-cli init [--path <dir>]` |
 | Browse chat data | `weflow-cli sessions` · `weflow-cli messages <contact>` · `weflow-cli contacts` |
+| Who is waiting on a reply | `weflow-cli awaiting --dry-run` · `weflow-cli awaiting --yes` |
 | Export chat history | `weflow-cli export <contact> <json\|txt\|html\|excel>` |
 | Sync checkpoint | `weflow-cli sync run <contact> --since <date>` · `sync status` · `sync verify` |
 | Digest & reader | `weflow-cli daily` · `weflow-cli daily-server` · `weflow-cli review` |

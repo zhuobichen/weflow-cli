@@ -249,6 +249,7 @@ weflow-cli config set assistantGroupRequireMention true
 | 检查环境与配置 | `weflow-cli check` · `weflow-cli config show` |
 | 初始化或手动指定路径 | `weflow-cli init [--path <目录>]` |
 | 浏览聊天数据 | `weflow-cli sessions` · `weflow-cli messages <联系人>` · `weflow-cli contacts` |
+| 谁在等我回话 | `weflow-cli awaiting --dry-run` · `weflow-cli awaiting --yes` |
 | 导出聊天记录 | `weflow-cli export <联系人> <json\|txt\|html\|excel>` |
 | 同步检查点 | `weflow-cli sync run <联系人> --since <日期>` · `sync status` · `sync verify` |
 | 公众号日报与阅读器 | `weflow-cli daily` · `weflow-cli daily-server` · `weflow-cli review` |

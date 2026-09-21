@@ -151,10 +151,13 @@ weflow-cli sync verify <会话>                   # 重读记录范围并与当�
 ### 谁在等我回话
 
 ```powershell
-python scripts/reply_debt.py                     # 最近 14 天有动静的会话
-python scripts/reply_debt.py --days 75 --limit 25 --min-prob 0.45
-python scripts/reply_debt.py --json
+weflow-cli awaiting --dry-run          # 预览：会判哪些会话、要发多少字符（不出境）
+weflow-cli awaiting --yes              # 真跑：最近 14 天有动静的会话
+weflow-cli awaiting --days 75 --limit 25 --min-prob 0.45 --yes
 ```
+
+**它会读取聊天正文并发送到决策模型**，所以照 `search` 的规矩来：`--dry-run` 只读本地、
+零出境；`--yes` 才真跑；都没给时会让你确认。它不写任何本地数据。
 
 每个会话一次决策调用（一次请求里同时问：是否停在我该回的位置、多急、有没有没兑现的
 承诺、涉不涉及钱、属于哪类），所以每条判断都知道它属于哪个人。25 个会话约 5 秒。

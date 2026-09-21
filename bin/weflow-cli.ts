@@ -318,6 +318,14 @@ program
         dailyStats: { cli: 'daily-stats --json' },
         diagnostics: { cli: 'check --json' },
         todos: { cli: 'todos list --json' },
+        awaiting: {
+          cli: 'awaiting --yes',
+          preview: 'awaiting --dry-run --json',
+          readsLocalChat: true,
+          invokesAI: true,
+          writesNothing: true,
+          confirmationRequired: true,
+        },
         knowledge: { cli: 'search <query> --yes --json', preview: 'search <query> --dry-run --json', output: 'json', mcp: 'wechat.search_articles' },
       },
       workflows: {
@@ -4941,6 +4949,71 @@ program
         }
       } else {
         await runPython('scripts/annual_report.py', a, opts.apiKey)
+      }
+    })
+
+  // awaiting —— 谁在等我回话。读本地聊天并把正文发给决策模型，所以照 search 的规矩：
+  // --dry-run 预览、--yes 才真跑。它**不写任何本地数据**，但仍是一次正文出境，
+  // 而聊天正文比日报的文章正文敏感一档。
+  program
+    .command('awaiting')
+    .description('谁在等我回话：逐会话判断有没有欠下的回复（读取聊天正文并调用决策模型）')
+    .option('--days <n>', '只看最近多少天有动静的会话', '14')
+    .option('--limit <n>', '最多判多少个会话', '40')
+    .option('--min-prob <p>', 'waiting 概率低于此值不算欠账', '0.5')
+    .option('--dry-run', '仅预览会判哪些会话、要发多少字符，不调用决策模型')
+    .option('--yes', '确认把聊天正文发送到已配置的决策模型服务')
+    .option('--json', '输出机器可读结果；执行仍需 --yes')
+    .action(async (opts) => {
+      const { execFile } = await import('child_process')
+      const { promisify } = await import('util')
+      const execFileAsync = promisify(execFile)
+      const pkgRoot = resolvePackageRoot()
+      const script = join(pkgRoot, 'scripts', 'reply_debt.py')
+      const days = parseCliInteger(opts.days, 'days', 1, 3650, opts.json)
+      const limit = parseCliInteger(opts.limit, 'limit', 1, 500, opts.json)
+      const args = [script, '--days', String(days), '--limit', String(limit),
+                    '--min-prob', String(opts.minProb),
+                    ...(opts.json ? ['--json'] : [])]
+
+      if (opts.dryRun) {
+        // 交给脚本自己报数：它才知道要发多少字符。这一步只读本地，零出境。
+        args.push('--dry-run')
+      } else if (!opts.yes) {
+        const preview = {
+          success: false, dryRun: false, action: 'reply-debt.scan',
+          code: 'CONFIRMATION_REQUIRED', days, limit,
+          readsLocalChat: true, invokesAI: true, writesNothing: true,
+        }
+        if (opts.json) {
+          console.log(JSON.stringify(preview))
+          process.exit(1)
+        }
+        const { confirmed } = await inquirer.prompt([{
+          type: 'confirm',
+          name: 'confirmed',
+          message: '确认把最近这些会话的聊天正文发送到已配置的决策模型服务吗？',
+          default: false,
+        }])
+        if (!confirmed) {
+          console.log(chalk.gray('已取消'))
+          return
+        }
+      }
+
+      try {
+        const { stdout } = await execFileAsync(getPythonCommand(), args, {
+          timeout: 600_000, maxBuffer: 50 * 1024 * 1024,
+          env: pythonProcessEnv(),
+        })
+        process.stdout.write(stdout)
+      } catch (error) {
+        if (opts.json) {
+          console.log(JSON.stringify({ success: false, code: 'AWAITING_FAILED', action: 'reply-debt.scan', error: safeSubprocessError(error) }))
+        } else {
+          console.error(chalk.red(`\n✗ ${safeSubprocessError(error)}`))
+        }
+        process.exit(1)
       }
     })
 

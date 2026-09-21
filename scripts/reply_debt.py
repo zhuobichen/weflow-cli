@@ -185,15 +185,10 @@ def main():
     parser.add_argument('--limit', type=int, default=40, help='最多判多少个会话')
     parser.add_argument('--min-prob', type=float, default=0.5,
                         help='waiting 概率低于此值就不算欠账（默认 0.5）')
+    parser.add_argument('--dry-run', action='store_true',
+                        help='只列出会判哪些会话、要发多少字符，不调用决策模型')
     parser.add_argument('--json', action='store_true')
     args = parser.parse_args()
-
-    client = create_client()
-    if client is None:
-        print('缺少 TypeSafe key。这个命令的全部价值就在那次判断调用上，'
-              '没有 key 就没有可降级的行为：\n'
-              '  weflow-cli config set typesafeApiKey "..."', file=sys.stderr)
-        return 2
 
     config = load_config()
     db = config.get('ntDbPath', '')
@@ -240,6 +235,31 @@ def main():
             # 对方最后一次说话的时间——欠账天数的基准。
             theirs = [m.get('createTime') or 0 for m in messages if not m.get('isSend')]
             owed[item['talker']] = max(theirs) if theirs else 0
+
+        if args.dry_run:
+            # 只读本地、零出境。列出要判什么、要发多少字符——不读一遍就报不出这个数，
+            # 而读数本来也不出境。真正的判断调用在下面。
+            total = sum(len(chr(10).join(lines)) for lines in transcripts.values())
+            preview = {'success': True, 'dryRun': True, 'action': 'reply-debt.scan',
+                       'days': args.days, 'conversations': len(transcripts),
+                       'stateChars': total, 'readsLocalChat': True,
+                       'invokesAI': True, 'writesNothing': True}
+            if args.json:
+                print(json.dumps(preview, ensure_ascii=False))
+            else:
+                print('预览：将把 %d 个会话、约 %d 字符的聊天正文发给决策模型'
+                      % (len(transcripts), total))
+                print('      （api.typesafe.ai）。只读，不写任何本地文件。')
+            return 0
+
+        # key 检查放在预览**之后**：预览要回答的正是"值不值得跑"，
+        # 拿 key 当它的前置条件，等于让人先掏钱再看菜单。
+        client = create_client()
+        if client is None:
+            print('缺少 TypeSafe key。这个命令的全部价值就在那次判断调用上，'
+                  '没有 key 就没有可降级的行为：' + chr(10) +
+                  '  weflow-cli config set typesafeApiKey "..."', file=sys.stderr)
+            return 2
 
         started = time.time()
         rows = []
