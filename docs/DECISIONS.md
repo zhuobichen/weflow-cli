@@ -368,8 +368,15 @@ the "relevance" dimension had never once admitted an article. **That sentence wa
 generous, and a later check corrected it**: the gate lived only in the markdown-scan
 *fallback* loader. The primary loader (`.articles.json`, which exists on every normal run)
 returned every article unfiltered, so the documented rule was not being applied at all. Topic fared little better: it is
-`学术` in **zero** articles on a normal day and in **100%** of them on 2026-09-04/05, which is the
-signature of the `except` branch's `topic = source_category or '学术'` fallback.
+`学术` in **zero** articles on a normal day and in **100%** of them on 2026-09-04/05.
+
+*That last attribution was wrong, and the data said so.* It called 09-04 the signature of the
+`except` branch's `topic = source_category or '学术'` fallback - but that branch would have left
+`topic: 学术` and `tags: ['学术']` **in the JSON**, and 09-04's JSON has neither key populated
+(`""` and `[]` for all 178 articles). Article dicts with no `topic` and no `tags` at all mean the
+classification phase never ran: no API key, or `--no-ai`. The `学术` a reader sees on that day
+comes from the *write* path - the grouping step's default and the md frontmatter's `tags`
+default - which is precisely the divergence the follow-up pass fixed (see below).
 
 A 60-article comparison was run before switching (`scripts/jev_probe.py`, stratified across topics
 and days, sent state = title + body only): agreement with the stored labels was 58.6%, and the
@@ -465,10 +472,22 @@ standard - which is exactly why the switch is reversible and why the raw score i
   write phase still runs. Both writers now read one normalised value (`_utils.DEFAULT_TOPIC`, applied
   by `biz_daily._group_by_topic`), the check is **membership in `TOPICS`** rather than emptiness, and
   the run prints how many articles fell back so a whole-batch fallback cannot read as a normal
-  classification. The same shape sat in `tags` and was fixed the same way. What remains open is a
-  different question: whether the `【标签】` extraction lands at all. The earlier claim that it never
-  does is now doubtful - a 2026-09-05 JSON carries real multi-word tags (`向量检索`, `工程踩坑`) - so
-  that should be re-measured rather than repeated.
+  classification. The same shape sat in `tags` and was fixed the same way.
+
+  **The `tags` question this decision left open is now answered, and the answer is "not a bug".**
+  Measured over the 1584 articles across the 11 stored days: 1396 carry exactly `[topic]`, 182 carry
+  none, and **6 carry real tags** - and those 6 are the whole corpus built without configured source
+  categories. The mechanism is deliberate, in the prompt: when a source has a configured category,
+  `biz_daily` sends a summary-only prompt that says *不要输出主题、标签、相关度或概念字段* and sets
+  `tags = [category]` itself. Every source in those runs had a configured category, so no article
+  ever reached the path that asks for tags. The signature is unambiguous and checkable: **on all 11
+  days every source maps to exactly one topic** (36/40/15/43/41/27/35/36/3/36/6 sources, zero
+  exceptions) - which is what topic-from-config looks like and per-article classification does not.
+  A live call through the production prompt on one stored article returns
+  `AI与数学, 人类数学家, 数学共同体, 人机关系, 学术人文`, so the extraction works whenever that path is
+  used. Two consequences worth keeping: real tags appear only for sources *without* a configured
+  category, and the earlier "tags never persist" reading was wrong - it described the
+  configured-category path, not a defect.
 
 ## D-032: Use the decision model as a reranker - one request per pass
 
