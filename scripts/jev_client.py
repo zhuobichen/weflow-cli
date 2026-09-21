@@ -23,12 +23,16 @@
 """
 import json
 import os
+import time
 import urllib.error
 import urllib.request
 
 ENDPOINT = 'https://api.typesafe.ai/v1/systemone'
 MODELS_ENDPOINT = 'https://api.typesafe.ai/v1/models'
 DEFAULT_MODEL = 'jev-latest'
+# 瞬时故障：官方参考实现（AI SDK 的 evaluate）默认对它们重试 2 次，这里同样。
+# 实测遇到过 529 `system_overloaded`——服务 2026-09-15 才发布，被打满是常态。
+RETRY_STATUS = frozenset({429, 500, 502, 503, 504, 529})
 INPUT_USD_PER_TOKEN = 0.042 / 1_000_000  # 输出 token 目前不计费
 
 # 判据文本与 biz_daily.TOPIC_PROMPT 里的"判断规则"逐条对应，好让新旧路径同类比同类。
@@ -133,7 +137,24 @@ class JevClient:
         self.model = model
         self.timeout = timeout
 
-    def _post(self, url, payload=None):
+    def _post(self, url, payload=None, attempts=3, backoff=0.8):
+        """带重试的请求。
+
+        退避故意很短（最坏约 2.4s）：调用方是**逐篇**分类日报的，服务整体过载时
+        长退避只会把一整天的日报拖成几十分钟，而那时调用方本来就该退回老路。
+        """
+        last_error = None
+        for attempt in range(attempts):
+            try:
+                return self._post_once(url, payload)
+            except JevError as error:
+                if attempt == attempts - 1 or not getattr(error, 'retryable', False):
+                    raise
+                last_error = error
+                time.sleep(backoff * (2 ** attempt))
+        raise last_error  # pragma: no cover - 循环内已覆盖所有出口
+
+    def _post_once(self, url, payload=None):
         data = None if payload is None else json.dumps(payload, ensure_ascii=False).encode('utf-8')
         request = urllib.request.Request(
             url, data=data, method='POST' if data else 'GET',
@@ -154,9 +175,13 @@ class JevClient:
             if error.code == 422:
                 # 422 说明我理解的契约和服务端不一致，是最值得看的一种失败。
                 raise JevError(f'请求被拒（HTTP 422），契约与预期不符：{detail}')
-            raise JevError(f'HTTP {error.code}: {detail}')
+            failure = JevError(f'HTTP {error.code}: {detail}')
+            failure.retryable = error.code in RETRY_STATUS
+            raise failure
         except urllib.error.URLError as error:
-            raise JevError(f'连不上 {url}: {error.reason}')
+            failure = JevError(f'连不上 {url}: {error.reason}')
+            failure.retryable = True   # 连接层失败通常是瞬时的
+            raise failure
 
     def models(self):
         """可用别名。用它可以确认 `--model` 没写错。"""

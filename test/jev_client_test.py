@@ -166,6 +166,13 @@ class DecideArticleTests(unittest.TestCase):
 
 
 class FailureModeTests(unittest.TestCase):
+    def setUp(self):
+        # 重试带退避（最坏 2.4s）。单元测试不该真的等——但也不能因此不测重试，
+        # 所以只把 sleep 桩掉，重试次数与判定逻辑照跑。
+        patcher = patch.object(jev.time, 'sleep')
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def _http_error(self, code, body):
         return urllib.error.HTTPError(jev.ENDPOINT, code, 'err', {},
                                      io.BytesIO(body.encode('utf-8')))
@@ -192,6 +199,34 @@ class FailureModeTests(unittest.TestCase):
                           side_effect=urllib.error.URLError('no route')):
             with self.assertRaises(jev.JevError):
                 jev.JevClient('k').decide('s', {})
+
+    def test_a_transient_failure_is_retried(self):
+        """实测遇到过 529 system_overloaded —— 官方参考实现默认对它重试 2 次。"""
+        calls = []
+
+        def flaky(request, timeout=None):
+            calls.append(request)
+            if len(calls) == 1:
+                raise self._http_error(529, '{"detail":{"error_type":"system_overloaded"}}')
+            return FakeResponse(answer())
+
+        with patch.object(jev.urllib.request, 'urlopen', flaky):
+            answers, _usage = jev.JevClient('k').decide('s', {})
+        self.assertEqual(len(calls), 2)
+        self.assertIn('topic', answers)
+
+    def test_a_rejected_key_is_not_retried(self):
+        # 鉴权失败重试多少次都一样，白等 2.4 秒。
+        calls = []
+
+        def rejected(request, timeout=None):
+            calls.append(request)
+            raise self._http_error(403, '{"detail":"no"}')
+
+        with patch.object(jev.urllib.request, 'urlopen', rejected):
+            with self.assertRaises(jev.JevError):
+                jev.JevClient('k').decide('s', {})
+        self.assertEqual(len(calls), 1)
 
     def test_a_client_without_a_key_cannot_be_built(self):
         with self.assertRaises(jev.JevError):

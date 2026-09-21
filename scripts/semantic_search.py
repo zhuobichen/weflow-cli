@@ -19,17 +19,35 @@ import sys, os, json, hashlib, argparse
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
-try:
-    import numpy as np
-except ImportError:
-    print(json.dumps({"error": "请安装: pip install numpy"}))
-    sys.exit(1)
+# 重依赖一律懒加载（照 nt_decrypt.require_sqlcipher 的做法）：
+# 关键词检索与重排不需要它们，缺了也不该让整份模块 import 就 sys.exit——
+# 那样连不碰向量库的代码路径都用不了，CI 里也没法测任何东西。
+np = None
+sqlcipher = None
 
-try:
-    from sqlcipher3 import dbapi2 as sqlcipher
-except ImportError:
-    print(json.dumps({"error": "请安装: pip install sqlcipher3"}))
-    sys.exit(1)
+
+def require_numpy():
+    global np
+    if np is not None:
+        return np
+    try:
+        import numpy as _np
+    except ImportError:
+        raise RuntimeError('需要 numpy: pip install numpy')
+    np = _np
+    return np
+
+
+def require_sqlcipher():
+    global sqlcipher
+    if sqlcipher is not None:
+        return sqlcipher
+    try:
+        from sqlcipher3 import dbapi2 as _sqlcipher
+    except ImportError:
+        raise RuntimeError('需要 sqlcipher3: pip install sqlcipher3')
+    sqlcipher = _sqlcipher
+    return sqlcipher
 
 try:
     import urllib.request
@@ -39,6 +57,7 @@ except:
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _utils import load_config, decrypt_lock
+from jev_client import create_client
 
 OUTPUT_ROOT = 'output'
 INDEX_DIR = Path(OUTPUT_ROOT) / '.semantic_index'
@@ -99,6 +118,7 @@ def get_embeddings(texts: list[str], api_key: str) -> list[list[float]]:
 # ====== Data Collection ======
 
 def open_db(db_path, key_hex, salt_hex):
+    sqlcipher = require_sqlcipher()
     raw_key = f"x'{key_hex}{salt_hex}'"
     conn = sqlcipher.connect(db_path)
     c = conn.cursor()
@@ -184,7 +204,10 @@ def collect_articles():
         for topic_dir in date_dir.iterdir():
             if not topic_dir.is_dir():
                 continue
-            for f in topic_dir.glob(' marriage*.md'):
+            # 这里原先是 topic_dir.glob(' marriage*.md')——前导空格加 marriage 前缀，
+            # 在真实的「公众号-标题.md」命名下一个都匹配不到。后果是 collect_articles()
+            # 永远返回空表，**语义索引里从来没有任何文章**，只有聊天记录，而且不报错。
+            for f in topic_dir.glob('*.md'):
                 if f.name == 'README.md':
                     continue
                 try:
@@ -218,6 +241,7 @@ def collect_articles():
 # ====== Index Operations ======
 
 def build_index(api_key: str, full: bool = False):
+    np = require_numpy()
     """Build or update the semantic index."""
     INDEX_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -350,11 +374,99 @@ def keyword_search(query: str, top_k: int = 10):
     return results[:top_k]
 
 
-def search(query: str, api_key: str, top_k: int = 10):
+# 送进重排的候选数。检索是粗筛（"语义相近"），重排是细判（"真的回答了问题吗"），
+# 所以池子要比 top_k 大，才有可换的空间。
+RERANK_CANDIDATES = 20
+RERANK_EXCERPT_CHARS = 300
+
+
+def build_rerank_questions(count):
+    """**一次请求问 N 个候选**——这是 Jev 最适合"重排"的地方。
+
+    实测 2 个问题 0.84s、12 个问题 0.91s（`state` 才是开销大头），所以给 20 条候选
+    各问一个是 0.9 秒量级，不是 20 次往返。问题编号与候选编号必须严格对应：
+    错位了不会报错，只会把最相关的排到最后——所以每条候选在 state 里都带【候选k】标签。
+    """
+    return {
+        'c%d' % i: {'type': 'noul',
+                    'instructions': '【候选%d】是否直接回答了上面的问题，'
+                                    '或含有回答它所需的关键信息？仅话题相近不算。' % i}
+        for i in range(count)
+    }
+
+
+def rerank(query, results, client=None, pool_size=RERANK_CANDIDATES):
+    """用**一次**决策请求给检索结果重排。
+
+    没有客户端、候选太少、或调用失败 → 原样返回（也就是这个函数还不存在时的行为）。
+    这是刻意的：重排是加分项，不该让检索本身失败。
+
+    `score` 保持原义（余弦相似度或关键词命中数），新的分数放在 `rerankScore` 里，
+    与 `relevanceScore`/`includeScore` 同一套只增字段的做法——下游可能在展示 score。
+    """
+    if client is None or len(results) < 2:
+        return results
+
+    pool = results[:pool_size]
+    lines = []
+    for i, item in enumerate(pool):
+        excerpt = (item.get('text') or '').strip().replace(chr(10), ' ')
+        lines.append('【候选%d】%s｜%s' % (i, item.get('title') or item.get('source') or '',
+                                          excerpt[:RERANK_EXCERPT_CHARS]))
+    state = '问题：%s\n\n候选：\n%s' % (query, chr(10).join(lines))
+    questions = build_rerank_questions(len(pool))
+    # 同问两次的一致性检查：哪一条最直接地回答了问题。逐条打分与这个单选对不上，
+    # 通常意味着编号被模型搞混了——那正是重排最危险、也最不容易察觉的失效方式。
+    questions['best'] = {
+        'type': 'choice',
+        'instructions': '哪一条候选最直接地回答了上面的问题？',
+        'criteria': {'候选%d' % i: (item.get('title') or None)
+                     for i, item in enumerate(pool)},
+    }
+
+    try:
+        answers, _usage = client.decide(state, questions)
+    except Exception as error:
+        print('  [WARN] 重排失败（%s），保持原检索顺序：%s' % (type(error).__name__, error))
+        return results
+
+    scored = []
+    for i, item in enumerate(pool):
+        value = (answers.get('c%d' % i) or {}).get('noul')
+        try:
+            value = float(value)
+        except (TypeError, ValueError):
+            value = None
+        scored.append((value, i, item))
+
+    if all(value is None for value, _i, _item in scored):
+        print('  [WARN] 重排没有返回任何可用分数，保持原检索顺序')
+        return results
+
+    # 没拿到分数的按原序垫在最后，而不是当成 0 分——"未知"和"不相关"不是一回事。
+    scored.sort(key=lambda triple: (triple[0] is None, -(triple[0] or 0.0), triple[1]))
+    best = (answers.get('best') or {}).get('choice')
+    top = scored[0]
+    if best is not None and best != '候选%d' % top[1]:
+        print('  [WARN] 重排自检不一致：逐条打分最高的是候选%d，单选却答 %s'
+              % (top[1], best))
+
+    ordered = []
+    for value, i, item in scored:
+        entry = dict(item)
+        if value is not None:
+            entry['rerankScore'] = round(value, 3)
+        ordered.append(entry)
+    ordered.extend(results[pool_size:])
+    return ordered
+
+
+def search(query: str, api_key: str, top_k: int = 10, rerank_results: bool = True):
     """Semantic search with keyword fallback."""
     # Try embedding-based search first
     if VECTORS_FILE.exists() and META_FILE.exists():
         try:
+            np = require_numpy()
             vectors = np.load(VECTORS_FILE)
             meta = json.loads(META_FILE.read_text(encoding='utf-8'))
             query_embeddings = get_embeddings([query], api_key)
@@ -362,17 +474,25 @@ def search(query: str, api_key: str, top_k: int = 10):
                 query_vec = np.array(query_embeddings[0], dtype=np.float32)
                 query_vec = query_vec / np.linalg.norm(query_vec)
                 similarities = np.dot(vectors, query_vec)
-                top_indices = np.argsort(similarities)[::-1][:top_k]
+                # 先取一个比重排池更大的候选集，重排才有可以换的空间。
+                pool_size = max(top_k, RERANK_CANDIDATES) if rerank_results else top_k
+                top_indices = np.argsort(similarities)[::-1][:pool_size]
                 results = []
                 for idx in top_indices:
                     item = meta[idx]
                     results.append({**item, 'score': float(similarities[idx])})
-                return results
+                if rerank_results:
+                    results = rerank(query, results, create_client())
+                return results[:top_k]
         except:
             pass
 
     # Fallback: keyword search
-    return keyword_search(query, top_k)
+    results = keyword_search(query, max(top_k, RERANK_CANDIDATES) if rerank_results else top_k)
+    if rerank_results:
+        # 关键词打分比余弦更粗，重排在这里的收益反而更大。
+        results = rerank(query, results, create_client())
+    return results[:top_k]
 
     results = []
     for idx in top_indices:
@@ -410,6 +530,8 @@ def main():
     p.add_argument('query', nargs='?')
     p.add_argument('--api-key', help='DeepSeek API key（向量搜索时需要，关键词 fallback 不需要）')
     p.add_argument('--top-k', type=int, default=10)
+    p.add_argument('--no-rerank', action='store_true',
+                   help='不调用决策模型重排，只按向量/关键词相似度返回（回退到引入重排之前）')
 
     args = parser.parse_args()
     config = load_config()
@@ -424,7 +546,8 @@ def main():
         if not query:
             result = {"error": "missing search query"}
         else:
-            result = search(query, api_key, top_k=args.top_k)
+            result = search(query, api_key, top_k=args.top_k,
+                            rerank_results=not args.no_rerank)
     else:
         result = {"error": f"未知命令: {args.command}"}
 

@@ -428,6 +428,49 @@ standard - which is exactly why the switch is reversible and why the raw score i
   the `tags` field, and `TOPICS` being duplicated across five files. The first group was never
   measured on Chinese; the others are separate defects with their own blast radius.
 
+## D-032: Use the decision model as a reranker - one request per pass
+
+**Status:** Active
+
+`semantic_search.rerank()` takes the top 20 hits from the first-stage search, asks one
+`noul` question per candidate in a **single** request, and reorders by the returned
+probabilities. `search` calls it before slicing to `top_k`; `--no-rerank` restores the
+previous behaviour exactly.
+
+**Reason:** the retrieval stage had no second pass at all. `search()` scored by cosine
+similarity and took `argsort[:top_k]` - one line, no reranking. Embeddings answer "is this
+semantically near the query", not "does this actually answer it", and the keyword fallback
+(used whenever embeddings are unavailable or return zero vectors) answers something cruder
+still. Reranking is the purest form of what this model does, and the cost model makes it
+viable: measured 0.84s for 2 questions against 0.91s for 12, since `state` dominates the
+token count. **One pass over 20 candidates is ~1 second, not 20 round trips.**
+
+**Consequences:**
+
+- **Numbering is the hazard.** If question `c3` gets answered against candidate `c5`, the
+  most relevant hit sinks to the bottom and the result looks like an ordinary "the model
+  thought it was irrelevant" outcome. Nothing errors. So every candidate carries an
+  explicit `【候选k】` label in the `state`, and the request also asks a `choice` for
+  "which candidate best answers this" purely as a **cross-check**: if the single choice
+  disagrees with the argmax of the per-candidate scores, a warning is printed. The check
+  only warns - it does not reorder, because one wrong answer should not be able to swap
+  the whole list.
+- Verified live before shipping: the relevant article was planted at position 4 of 8 and
+  came out first at 0.94 against 0.01-0.04 for the rest, with the self-check agreeing.
+- `score` keeps its meaning (cosine similarity or keyword count) and the new value goes to
+  `rerankScore` - the same additive-key rule as `relevanceScore` and `includeScore`.
+- A candidate the model did not score is ordered **after** the scored ones and carries no
+  `rerankScore`: "unknown" and "irrelevant" are different answers, and collapsing them
+  would silently reorder on a partial response.
+- Fail-soft: no client, fewer than two candidates, or any error returns the original order.
+  Reranking is an improvement to search, not a precondition for it.
+- **Transient failures are retried.** The client got a live `HTTP 529 system_overloaded`
+  while this was being built; TypeSafe's own reference implementation retries transient
+  provider failures twice by default. `JevClient` now retries 429/5xx/529 with a
+  deliberately short backoff (worst case ~2.4s), because the daily pipeline calls it once
+  per article and a long backoff would stretch an already overloaded run into tens of
+  minutes - time the caller should be spending on its fallback path.
+
 ## Decision Template
 
 
