@@ -9,7 +9,7 @@ import sys, os, json, re, time, subprocess
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _utils import create_engine, parse_frontmatter
+from _utils import create_engine, parse_frontmatter, DEFAULT_TOPIC
 
 DAILY_PROMPT = """你是知识管理助手，基于今日文章内容生成学习日报。
 
@@ -67,7 +67,7 @@ def scan_today_articles(target_date: str, source='output/biz-daily') -> list[dic
         articles.append({
             'title': fm.get('title', md_file.stem),
             'source': fm.get('source', ''),
-            'topic': fm.get('topic', '学术'),
+            'topic': fm.get('topic') or DEFAULT_TOPIC,
             'tags': fm.get('tags', []),
             'summary': summary,
         })

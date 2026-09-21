@@ -15,7 +15,7 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _utils import (
     get_api_key,
-    TOPICS,
+    TOPICS, DEFAULT_TOPIC,
     call_ai, parse_frontmatter, write_with_frontmatter,
     DEFAULT_USER_PROFILE, generate_action_suggestion, load_config
 )
@@ -156,7 +156,7 @@ def extract_topic_from_file(content: str) -> str:
     # Fallback: legacy text-based parsing
     m = re.search(r'> 主题：(\S+)', content)
     if m: return m.group(1)
-    return '学术'
+    return DEFAULT_TOPIC
 
 
 def extract_tags_from_file(content: str) -> list[str]:
@@ -223,7 +223,7 @@ def main():
         if topic not in TOPICS:
             for t in TOPICS:
                 if t in topic: topic = t; break
-            else: topic = '学术'
+            else: topic = DEFAULT_TOPIC
         topic_map[fpath] = topic
 
     dist = Counter(topic_map.values())
