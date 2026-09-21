@@ -144,6 +144,88 @@ class GroupingTests(unittest.TestCase):
         self.assertEqual(clean, 0)
 
 
+class TagsAgreeTests(unittest.TestCase):
+    """`tags` 是同一处病灶的第二个例子：md 与 json 对**同一个缺失值**给了不同默认。
+
+    md 写 `a.get('tags', [topic])`，json 写 `article.get('tags', [])`。分类路径自己
+    的约定是"没抽到标签就用 `[主题]`"（`a['tags'] = [a['topic']]`，三处），所以出格
+    的是 json 那一份。触发条件与主题那次完全相同：`--no-ai` 下 Phase 2 不跑，
+    `tags` 键根本不存在。2026-09-04 的 177 篇真实产出里，md 是 `['学术']`、
+    json 是 `[]`。
+    """
+
+    def test_a_missing_key_falls_back_to_the_topic(self):
+        self.assertEqual(biz._tags_for_write({'topic': 'AI'}, 'AI'), ['AI'])
+        self.assertEqual(biz._tags_for_write({}, '新闻'), ['新闻'])
+
+    def test_an_empty_list_is_kept_as_empty(self):
+        """键**存在但为空表**是另一种情况：模型一个标签都没抽出来。
+
+        两条路原本就都保留空表，不要顺手合流成"兜底成主题"——那不是修分叉，
+        那是把一种新的默认又写进两个地方。
+        """
+        self.assertEqual(biz._tags_for_write({'tags': []}, 'AI'), [])
+
+    def test_real_tags_win(self):
+        self.assertEqual(biz._tags_for_write({'tags': ['向量检索']}, 'AI'), ['向量检索'])
+
+    def test_the_json_agrees_with_what_the_md_will_write(self):
+        articles = [{'title': 'a'}, {'title': 'b', 'tags': []},
+                    {'title': 'c', 'topic': 'AI', 'tags': ['工具']}, {'title': 'd'}]
+        groups, _ = biz._group_by_topic(articles)
+        for topic, members in groups.items():
+            for a in members:
+                entry = biz._serializable_article(a, '2026-01-01')
+                # md 写的是 `_tags_for_write(a, 分组键)`。
+                self.assertEqual(entry['tags'], biz._tags_for_write(a, topic))
+
+    @staticmethod
+    def find_tags_defaults(source):
+        """找出写入代码里的 `.get('tags', [])` 这种"空表默认"。两处都要绕开：
+
+        * **文档**：`_tags_for_write` 的 docstring 会引用这个坏写法来说明它错在哪，
+          按文本搜的话，记录问题的那段文字本身会被当成问题——所以走 AST。
+        * **日志**：`print(f'... tags={a.get("tags",[])}')` 是显示"这一趟记下了什么"，
+          不是写入者。它的默认值不会落到任何产物里，而且它周围就是 `except`——
+          给日志行加严格断言（比如直接取 `a["tags"]`）一旦 KeyError，会把一篇文章
+          静默降级成兜底结果，那是**让日志改变行为**。
+        """
+        tree = ast.parse(source)
+        inside_print = set()
+        for node in ast.walk(tree):
+            if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                    and node.func.id == 'print'):
+                for sub in ast.walk(node):
+                    inside_print.add(id(sub))
+
+        found = []
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == 'get' and len(node.args) >= 2):
+                continue
+            key, default = node.args[0], node.args[1]
+            if (isinstance(key, ast.Constant) and key.value == 'tags'
+                    and isinstance(default, ast.List) and not default.elts
+                    and id(node) not in inside_print):
+                found.append(node.lineno)
+        return found
+
+    def test_the_divergent_default_is_gone_from_the_source(self):
+        """`article.get('tags', [])` 这个出格的默认不许再出现（json 那份）。"""
+        source = (SCRIPTS / 'biz_daily.py').read_text(encoding='utf-8')
+        self.assertEqual(self.find_tags_defaults(source), [])
+
+    def test_the_check_would_notice_it_coming_back(self):
+        self.assertEqual(
+            self.find_tags_defaults("entry = {'tags': article.get('tags', [])}\n"), [1])
+        # 这条不算：`_tags_for_write` 自己就是 `article.get('tags', [topic])`。
+        self.assertEqual(
+            self.find_tags_defaults("return article.get('tags', [topic])\n"), [])
+        # 这条也不算：日志行只在显示，不落产物。
+        self.assertEqual(
+            self.find_tags_defaults('print(f"tags={a.get(\'tags\',[])}")\n'), [])
+
+
 class TheTwoWritersAgreeTests(unittest.TestCase):
     """json 与 md 必须对同一篇文章给出同一个主题——这正是当初被打破的契约。"""
 

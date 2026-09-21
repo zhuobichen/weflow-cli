@@ -121,6 +121,23 @@ def _guess_topic(article: dict) -> str:
     return '新闻'
 
 
+def _tags_for_write(article, topic):
+    """两个写入者共用的 tags 取值。
+
+    md 与 json 原本各写各的默认：md 是 `a.get('tags', [topic])`，json 是
+    `article.get('tags', [])`。**键不存在时**（`--no-ai`、或没配 API key，
+    Phase 2 整段不跑，就不会有任何分类路径去设 `tags`）同一篇文章于是变成
+    md `tags: [学术]`、json `tags: []`。2026-09-04 的 177 篇就是这个样子。
+
+    回落成 `[主题]` 而不是 `[]`，是沿用本仓库既有的约定：分类路径自己就是
+    `a['tags'] = [a['topic']]`（三处）。这里只是让 json 那个写入者跟上。
+
+    注意用的是 `.get(k, 默认)` 而不是 `... or [topic]`：键**存在但为空表**
+    （模型一个标签都没抽出来）是另一种情况，两条路都保留空表，不要在这里合流。
+    """
+    return article.get('tags', [topic])
+
+
 def _serializable_article(article, date_str):
     """一篇文章 -> `.articles.json` 里的那条记录。
 
@@ -137,7 +154,7 @@ def _serializable_article(article, date_str):
         # `'学术'`，于是同一次运行里 md 写 `topic: 学术`、json 写 `topic: ""`。
         'topic': article.get('topic') or DEFAULT_TOPIC,
         'relevance': article.get('relevance', '中'),
-        'tags': article.get('tags', []),
+        'tags': _tags_for_write(article, article.get('topic') or DEFAULT_TOPIC),
         'summary': article.get('summary', article.get('digest', '')),
         'url': article.get('url', ''),
     }
@@ -977,7 +994,7 @@ def main():
                     print(f'  [SKIP] 内容过短 ({len(body_text)}字): {a["title"]}')
                     continue
             summary = a.get('summary', a.get('digest', ''))
-            tags = a.get('tags', [topic])
+            tags = _tags_for_write(a, topic)
             concepts = a.get('concepts', [])
 
             fm = {
