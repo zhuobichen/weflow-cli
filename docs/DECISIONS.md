@@ -480,6 +480,42 @@ token count. **One pass over 20 candidates is ~1 second, not 20 round trips.**
   per article and a long backoff would stretch an already overloaded run into tens of
   minutes - time the caller should be spending on its fallback path.
 
+## D-033: Every machine judgement shown to a person carries its evidence
+
+**Status:** Active
+
+`scripts/reply_debt.py` asks, once per conversation, whether the thread is sitting on a reply
+the user owes (`waiting`), how urgent it is, whether a promise is outstanding, whether money or
+delivery is involved, and what kind of conversation it is. Results are ranked and printed with
+their probabilities. Two rules came out of building it, and both are general:
+
+1. **A message with no text must be labelled, not left blank.** WeChat stores images, voice
+   notes, videos and stickers with an empty `message_content`. Unlabelled, they entered the
+   state as a line reading `对方：` with nothing after it - and the model returned a confident
+   `0.48` for "is this person waiting on me" **from an empty line**. Every such message now
+   carries its type (`[图片]` / `[语音]` / `[非文本 localType=N]`). Measured effect: that same
+   conversation dropped to `0.40` and moved out of the result set. A model asked to judge
+   nothing will still answer; supplying the type is what stops it.
+2. **A judgement shown to a human must carry how thin its evidence was.** "Waiting 0.69" derived
+   from a two-character last message is not the same claim as one derived from a full
+   explanation, and the model cannot tell the difference - it only sees text. So each row prints
+   `证据：对方末条 N 字 · 对方实质发言 M 条`, and anything resting on fewer than five characters
+   is marked as too thin to act on.
+
+**Also:** `waiting` has one mechanically checkable failure mode - claiming the other side is
+waiting while the last message in the transcript is the user's own. That contradiction is
+detected and reported. It is the only part of this output that can be falsified without reading
+the messages by hand, which is exactly why it is worth checking.
+
+**Honest limitations:** there is no gold standard, so every number is a prompt, not a fact. On
+the machine this was developed on the tool reports **two** candidates at 0.54 and 0.62 out of 25
+recent conversations, with nine more between 0.30 and 0.45 marked uncertain and three filtered
+out as customer-service or marketing - a modest result, and the right one for someone who
+answers promptly. It is not evidence that the model would be accurate on someone else's data.
+Debt age is measured from the **other side's** last message, not the conversation's last
+activity: if the user replied most recently the debt is zero, and using session activity would
+have flattened exactly the case worth surfacing.
+
 ## Decision Template
 
 
