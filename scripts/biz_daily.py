@@ -22,6 +22,7 @@ import re
 import time
 import urllib.request
 import base64
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
@@ -128,6 +129,48 @@ def _classify_with_jev(client, title, body, topics):
     except Exception as error:
         print(f'    [WARN] Jev 分类失败（{type(error).__name__}），本篇退回 LLM 解析：{error}')
         return None
+
+
+# 分类是纯网络等待（实测 0.97s/篇），而且对摘要没有任何依赖，所以没有理由
+# 把它排在那条串行的 LLM 循环里一篇一篇等。并发数克制一些：服务 2026-09-15 才上线，
+# 打满了会返回 529（已实测遇到过），并发拉高只会换来一堆重试。
+JEV_WORKERS = 6
+
+
+def _classify_articles_parallel(articles, client, topics, workers=JEV_WORKERS):
+    """把能分类的篇目一次性并发问完，返回 {下标: decision}。
+
+    分类对摘要没有任何依赖，两者串在一起只是历史顺序。单独跑这一步之后，
+    串行的摘要循环里就只剩它真正必须串行的那部分。
+
+    eligibility 与主循环保持一致（正文存在且够长）——不一致的话，某些文章会在这
+    一步被跳过、然后在循环里又被问一次，等于白花一次调用。
+    """
+    if client is None:
+        return {}
+    todo = []
+    for index, article in enumerate(articles):
+        content = article.get('fetched_md') or article.get('local_text', '')
+        if content and len(content.strip()) > 50:
+            todo.append((index, article.get('title', ''), content))
+    if not todo:
+        return {}
+
+    started = time.time()
+    decisions = {}
+    with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
+        futures = {
+            pool.submit(_classify_with_jev, client, title, body, topics): index
+            for index, title, body in todo
+        }
+        for future in as_completed(futures):
+            decisions[futures[future]] = future.result()
+
+    ok = sum(1 for value in decisions.values() if value)
+    # 先报个数：并发之后逐篇日志没有意义了，但这三件事必须看得见。
+    print(f'  分类完成 {ok}/{len(todo)} 篇，耗时 {time.time() - started:.1f}s'
+          f'（{workers} 并发；串行约需 {len(todo) * 0.97:.0f}s）')
+    return decisions
 
 
 def _apply_decision(article, decision, set_topic=True):
@@ -676,6 +719,9 @@ def main():
             print(f'  分类：Jev（model={jev_client.model}，生成摘要仍用 {engine}）')
         elif args.classifier == 'jev':
             print('  [WARN] --classifier jev 但没找到 TypeSafe key，本次退回 LLM 解析路径')
+        # 先把分类并发跑完，再进串行的摘要循环。分类对摘要没有任何依赖，
+        # 串行做就是把 N 次网络等待排在 N 次 LLM 调用后面。
+        decisions = _classify_articles_parallel(articles, jev_client, TOPICS)
         for i, a in enumerate(articles):
             t, n, ti = a['time'], a['account_name'], a['title']
             content = a.get('fetched_md') or a.get('local_text', '')
@@ -697,8 +743,7 @@ def main():
                         a['summary'] = response.strip()[:1000]
                         # 主题是人工配的强约束，不动；但相关度以前是硬编码的「中」，
                         # 而那正是"全库 relevance 都是中"的成因之一，交给 Jev。
-                        _apply_decision(a, _classify_with_jev(jev_client, a['title'], content, TOPICS),
-                                        set_topic=False)
+                        _apply_decision(a, decisions.get(i), set_topic=False)
                         a['concepts'] = []
                         print(f'[{i+1}/{len(articles)}] [{t}] {n} - [{category_hint}] 固定来源类别，仅生成摘要')
                         time.sleep(0.3)
@@ -707,8 +752,8 @@ def main():
                     prompt += f'\n\n内容：\n{content[:4000]}'
                     response = call_ai(prompt, engine, api_key, max_tokens=2000)
 
-                    # 判断优先走 Jev（有的话）；问不出来才回落到下面的解析。
-                    decision = _classify_with_jev(jev_client, a['title'], content, TOPICS)
+                    # 判断来自开头那轮并发分类；没拿到才回落到下面的解析。
+                    decision = decisions.get(i)
 
                     # Parse response: 【主题】xxx 【相关度】xxx 【标签】xxx 【摘要】xxx 【概念】xxx
                     topic_match = re.search(r'【主题】\s*(.+)', response)

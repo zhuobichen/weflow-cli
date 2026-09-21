@@ -393,6 +393,15 @@ standard - which is exactly why the switch is reversible and why the raw score i
 - The three-level cut points (`<0.5` 低, `<1.5` 中, else 高) are **provisional and uncalibrated**.
   They are derived from the zero-indexed score scale, and the raw score is stored so recalibrating
   does not require re-running a day's report.
+- **Classification runs before the generation loop, concurrently.** The two stages have no
+  dependency in either direction, so their ordering was only ever historical. Measured: 12
+  real articles in 3.3s at 6 workers against ~12s one at a time. The dependency that *does*
+  exist is positional - `decisions[k]` must belong to `articles[k]` - so the eligibility test
+  in the concurrent stage is kept character-for-character identical to the loop's, and any
+  article that fails still occupies its own key with a `None` rather than being absent (an
+  absent key would let the loop treat a neighbour's judgement as its own). Concurrency is
+  kept at 6 deliberately: the service is new enough to return `529` under load, and raising
+  the fan-out buys retries rather than throughput.
 - The client is **fail-loud** (`JevError` with the HTTP status and a 400-character truncated body,
   never the key); the caller is **fail-soft** (per article, printing a WARN and falling back). One
   unclassifiable article must not abort a day's report - but a client must not disguise a failure
