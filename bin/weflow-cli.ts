@@ -941,7 +941,8 @@ const configCmd = program
 const configurableKeys = [
   'dbPath', 'decryptKey', 'dbPath3x', 'decryptKey3x', 'dataVersion', 'wxid',
   'ntDbPath', 'ntKey', 'ntSalt', 'contactDbPath', 'contactKey', 'contactSalt',
-  'vaultRepo', 'aiEngine', 'aiBaseUrl', 'aiModel', 'deepseekApiKey', 'wereadApiKey',
+  'vaultRepo', 'aiEngine', 'aiBaseUrl', 'aiModel', 'deepseekApiKey', 'typesafeApiKey',
+  'wereadApiKey',
   'assistantPrivacy', 'assistantWhitelist', 'assistantGroupWhitelist',
   'assistantGroupRequireMention', 'dailySources', 'dailySourceCategories', 'dailyAiEnabled',
   'emoticonSeed',

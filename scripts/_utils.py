@@ -440,6 +440,25 @@ def get_api_key(config=None) -> str:
     return decrypt_lock(config.get('deepseekApiKey', ''))
 
 
+def get_typesafe_key(config=None) -> str:
+    """读取 TypeSafe (Jev) 决策模型的 key，自动解密 lock: 前缀。
+
+    解密失败**回空串而不是抛**：TS 侧 lockDecrypt() 失败就是静默回 ''，而
+    decrypt_lock() 是抛的。两份 config.json 一跨机器拷贝，同一份密文在
+    TS 侧表现为"没配 key"、在这里表现为崩——那会让日报整个挂掉，而它本该
+    只是退回到 LLM 解析路径。
+    """
+    if config is None:
+        try:
+            config = load_config()
+        except Exception:
+            return ''
+    try:
+        return decrypt_lock(config.get('typesafeApiKey', ''))
+    except Exception:
+        return ''
+
+
 # ======================================================================
 # Markdown / Frontmatter
 # ======================================================================

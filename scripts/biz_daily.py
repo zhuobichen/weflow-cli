@@ -114,6 +114,37 @@ def _guess_topic(article: dict) -> str:
     return '新闻'
 
 
+def _classify_with_jev(client, title, body, topics):
+    """让 Jev 判断这一篇；**问不出来就返回 None**，由调用方逐篇退回老路。
+
+    这里刻意吞掉异常（包括 `JevError` 之外的意外），因为"分类这一篇失败"
+    不该让整天的日报挂掉。但异常类型会打出来——一个真的写错了的行号不该
+    在日志里长得跟"网络抖了一下"一样。
+    """
+    if client is None:
+        return None
+    try:
+        return client.decide_article(title, body, topics)
+    except Exception as error:
+        print(f'    [WARN] Jev 分类失败（{type(error).__name__}），本篇退回 LLM 解析：{error}')
+        return None
+
+
+def _apply_decision(article, decision, set_topic=True):
+    """把 Jev 的判断写进 article。`set_topic=False` 用于主题已被人工配置钉住的场景。"""
+    if not decision:
+        return False
+    if set_topic:
+        article['topic'] = decision['topic']
+    article['relevance'] = decision['relevance']
+    # 原始分与置信度一起落盘：相关度那三档的切点是暂定的，留着原始值，
+    # 将来校准不用重跑整天的日报。
+    article['relevanceScore'] = decision.get('relevanceScore')
+    if decision.get('topicConfidence') is not None:
+        article['topicConfidence'] = decision['topicConfidence']
+    return True
+
+
 TOPIC_PROMPT = f"""对文章分类、深度摘要、打标签，并评估与读者的相关度。
 
 【读者定位】环境科学研究生，研究方向是计算机与环境的交叉领域（环境模型、大气污染模拟、遥感反演、环境大数据分析、LCA等），关注AI工具如何提升科研效率。
@@ -461,6 +492,9 @@ def main():
     parser.add_argument('--api-key', help='AI API key (或设环境变量 DEEPSEEK_API_KEY)')
     parser.add_argument('--engine', default='deepseek', help='AI 引擎: local/deepseek/claude/ollama')
     parser.add_argument('--no-ai', action='store_true', help='关闭摘要、分类和日报简报的 AI 调用')
+    parser.add_argument('--classifier', choices=['auto', 'llm', 'jev'], default='auto',
+                        help='主题/相关度由谁判断：auto=配了 TypeSafe key 就用 Jev（默认），'
+                             'llm=沿用 LLM 解析路径，jev=强制 Jev')
     parser.add_argument('--source', action='append', default=[], metavar='NAME',
                         help='仅处理指定公众号，可重复或用逗号分隔；默认读取配置 dailySources')
     args = parser.parse_args()
@@ -632,6 +666,13 @@ def main():
     if not args.no_ai and (api_key or engine != 'deepseek'):
         print(f'\n=== Phase 2: AI 摘要 + 主题分类 (engine={engine}) ===\n')
         from _utils import call_ai
+        from jev_client import create_client
+        # 判断交给 Jev，生成留给 LLM。没配 key 就整条走老路（auto 的语义）。
+        jev_client = create_client(config=config) if args.classifier in ('auto', 'jev') else None
+        if jev_client is not None:
+            print(f'  分类：Jev（model={jev_client.model}，生成摘要仍用 {engine}）')
+        elif args.classifier == 'jev':
+            print('  [WARN] --classifier jev 但没找到 TypeSafe key，本次退回 LLM 解析路径')
         for i, a in enumerate(articles):
             t, n, ti = a['time'], a['account_name'], a['title']
             content = a.get('fetched_md') or a.get('local_text', '')
@@ -651,7 +692,10 @@ def main():
                         a['topic'] = category_hint
                         a['tags'] = [category_hint]
                         a['summary'] = response.strip()[:1000]
-                        a['relevance'] = '中'
+                        # 主题是人工配的强约束，不动；但相关度以前是硬编码的「中」，
+                        # 而那正是"全库 relevance 都是中"的成因之一，交给 Jev。
+                        _apply_decision(a, _classify_with_jev(jev_client, a['title'], content, TOPICS),
+                                        set_topic=False)
                         a['concepts'] = []
                         print(f'[{i+1}/{len(articles)}] [{t}] {n} - [{category_hint}] 固定来源类别，仅生成摘要')
                         time.sleep(0.3)
@@ -659,6 +703,9 @@ def main():
                     prompt = TOPIC_PROMPT + f'\n\n标题：{a["title"]}\n来源：{a["account_name"]}'
                     prompt += f'\n\n内容：\n{content[:4000]}'
                     response = call_ai(prompt, engine, api_key, max_tokens=2000)
+
+                    # 判断优先走 Jev（有的话）；问不出来才回落到下面的解析。
+                    decision = _classify_with_jev(jev_client, a['title'], content, TOPICS)
 
                     # Parse response: 【主题】xxx 【相关度】xxx 【标签】xxx 【摘要】xxx 【概念】xxx
                     topic_match = re.search(r'【主题】\s*(.+)', response)
@@ -668,8 +715,8 @@ def main():
                     summary_match = re.search(r'【摘要】\s*(.+?)(?=\n【(?:主题|相关度|标签|概念)】|$)', response, re.DOTALL)
                     concepts_match = re.search(r'【概念】\s*(.+)', response, re.DOTALL)
 
-                    if category_hint:
-                        a['topic'] = category_hint
+                    if decision:
+                        _apply_decision(a, decision)
                     elif topic_match:
                         raw_topic = topic_match.group(1).strip()
                         if raw_topic in TOPICS:
@@ -688,7 +735,9 @@ def main():
                         a['topic'] = _guess_topic(a)
 
                     # Parse relevance: 高/中/低
-                    if relevance_match:
+                    if decision:
+                        pass  # 已由 _apply_decision 写入
+                    elif relevance_match:
                         raw_rel = relevance_match.group(1).strip()
                         if raw_rel in ['高', '中', '低']:
                             a['relevance'] = raw_rel
@@ -737,13 +786,18 @@ def main():
                     a['topic'] = a.get('source_category') or '学术'
                     a['tags'] = [a['topic']]
                     a['concepts'] = []
+                    # 这三条兜底路径以前完全不设 relevance，靠落盘时的默认值兜成「中」。
+                    # 显式写出来，并保留 Jev 已经给出的那一份（setdefault 而不是赋值）。
+                    a.setdefault('relevance', '中')
                     print(f'[{i+1}/{len(articles)}] [{t}] {n} - ERR: {e}')
             elif content:
                 a['summary'] = content[:400]
                 a['topic'] = a.get('source_category') or '学术'
+                a.setdefault('relevance', '中')
             else:
                 a['summary'] = a.get('digest', '(无内容)')
                 a['topic'] = a.get('source_category') or '学术'
+                a.setdefault('relevance', '中')
 
         # Print topic distribution
         from collections import Counter
@@ -827,6 +881,12 @@ def main():
                 'tags': tags,
                 'created': date_str,
             }
+            # 只增字段：下游只做 fm.get('relevance') 的字面量比较，不认识的键会被忽略。
+            # 不留这两个值，Jev 带来的概率信息就在落盘这一步丢掉了。
+            if a.get('relevanceScore') is not None:
+                fm['relevanceScore'] = round(float(a['relevanceScore']), 3)
+            if a.get('topicConfidence') is not None:
+                fm['topicConfidence'] = round(float(a['topicConfidence']), 3)
             if a['url']:
                 fm['url'] = f'"{a["url"]}"'
 

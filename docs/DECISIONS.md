@@ -348,6 +348,66 @@ only answer that stays honest, and it is visible because every in-tree window ca
   unified with `nt_decrypt` here; only the failure mode was fixed on both sides. The two copies are
   pinned together by a test, so the next person to change one is told about the other.
 
+## D-031: Judgement goes to a decision model, generation stays with the LLM
+
+**Status:** Active
+
+The daily pipeline's article **topic** (6-way) and **relevance** (3-level) are now decided by
+TypeSafe's Jev (`POST https://api.typesafe.ai/v1/systemone`, `scripts/jev_client.py`), a model that
+returns typed answers with probabilities instead of text. The LLM still **generates** the summary,
+tags and concepts - that is what it is for, and Jev cannot generate at all. When no TypeSafe key is
+configured, the previous "prompt for a format then parse it with two regexes" path runs unchanged.
+
+**Reason:** the old path was not merely inaccurate, it was inert. Measured over the 2201 stored
+articles, `relevance` is the default `中` in **2199** of them - and the code says why:
+`biz_daily.py` assigned it on only two of five paths, the `category_hint` path hard-coded `'中'`,
+and the exception and short-content paths never assigned it at all, leaving it to the writer's
+`fm.get('relevance', '中')`. So `generate_ai_report.py:123`'s gate
+(`if topic != FOCUS_TOPIC and relevance != '高': continue`) had only ever filtered on topic;
+the "relevance" dimension had never once admitted an article. Topic fared little better: it is
+`学术` in **zero** articles on a normal day and in **100%** of them on 2026-09-04/05, which is the
+signature of the `except` branch's `topic = source_category or '学术'` fallback.
+
+A 60-article comparison was run before switching (`scripts/jev_probe.py`, stratified across topics
+and days, sent state = title + body only): agreement with the stored labels was 58.6%, and the
+disagreements ran **against** the stored labels almost everywhere - `习近平向第八届中俄能源商务论坛
+致贺信` stored as 学术 against Jev's 政治, a `人民日报·夜读` cooking essay stored as 政治 against
+Jev's 文学 (the body was read to confirm), a `Nature Climate Change` paper stored as AI against
+Jev's 学术. **This is not an accuracy measurement** - the labels are the DeepSeek output, not a gold
+standard - which is exactly why the switch is reversible and why the raw score is kept.
+
+**Consequences:**
+
+- `--classifier {auto,llm,jev}` (default `auto`) keeps one-flag rollback and lets anyone re-run a
+  date both ways. `auto` means "Jev if a key is configured, otherwise the old path".
+- **The LLM prompt is deliberately unchanged.** It still asks for `【主题】`/`【相关度】` that we now
+  ignore. That keeps the fallback *byte-identical to the old behaviour* rather than a new, worse
+  fallback; the cost is roughly 20 wasted output tokens per article. Slimming the prompt is a
+  follow-up, not this change.
+- Two **additive** frontmatter keys: `relevanceScore` (raw) and `topicConfidence` (0-1). Downstream
+  compares `relevance` as a literal string and ignores unknown keys. Without these the probability -
+  the entire new information - would be discarded at the write step.
+- The three-level cut points (`<0.5` 低, `<1.5` 中, else 高) are **provisional and uncalibrated**.
+  They are derived from the zero-indexed score scale, and the raw score is stored so recalibrating
+  does not require re-running a day's report.
+- The client is **fail-loud** (`JevError` with the HTTP status and a 400-character truncated body,
+  never the key); the caller is **fail-soft** (per article, printing a WARN and falling back). One
+  unclassifiable article must not abort a day's report - but a client must not disguise a failure
+  as a plausible-looking answer either.
+- **New data egress**: article titles and bodies now also go to `api.typesafe.ai`. Article text
+  already went to DeepSeek for summarisation, so this is a new vendor rather than a new category,
+  but it is a vendor that did not exist before 2026-09-15. Configuring `typesafeApiKey` is the
+  opt-in; `daily --no-ai` remains the way to keep everything local.
+- The key is a first-class config field (`typesafeApiKey`, in `ENCRYPTED_KEYS`, settable via
+  `config set`), and Python reads it through `_utils.get_typesafe_key()`. That function returns an
+  empty string rather than raising when the ciphertext cannot be decrypted - `configService`'s
+  `lockDecrypt()` silently returns `''` in the same situation, and a config copied from another
+  machine must degrade to the old path rather than crash the daily run.
+- **Not done, deliberately**: the other eight "ask the LLM then parse the text" call sites (assistant
+  tool routing, long-term memory extraction, todo urgency, monthly-report task detection, ...),
+  the `tags` field, and `TOPICS` being duplicated across five files. The first group was never
+  measured on Chinese; the others are separate defects with their own blast radius.
+
 ## Decision Template
 
 

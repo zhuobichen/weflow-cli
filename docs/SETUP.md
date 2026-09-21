@@ -89,6 +89,8 @@ weflow-cli config set dailyAiEnabled false
 
 以下内容禁止提交：数据库、导出聊天、日报正文、`.env`、MCP 配置中的密钥、账号标识、完整日志和真实截图。MCP 客户端配置前确认其工作目录和权限；云端 AI 只处理明确选择的内容，敏感聊天优先用本地模型。
 
+日报出网的对象有两个：生成摘要的 LLM（DeepSeek 或你配置的 OpenAI 兼容端点），以及配置了 `typesafeApiKey` 之后判断文章主题与相关度的 TypeSafe Jev（`api.typesafe.ai`）。两者都会看到文章标题与正文。不需要任何出网时用 `weflow-cli daily --no-ai`。
+
 ## 最小验收
 
 ```powershell

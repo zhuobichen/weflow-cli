@@ -138,6 +138,11 @@ weflow-cli daily --date 2026-08-12 --dry-run
 
 # Generate without any AI calls; fetching, HTML, and local indexes remain enabled
 weflow-cli daily --date 2026-08-12 --no-ai
+
+# Optional: decide article topic and relevance with TypeSafe's Jev decision model
+# instead of parsing it out of generated text. Without the key the previous
+# LLM-parse path is used unchanged.
+weflow-cli config set typesafeApiKey "..."
 ```
 
 The reader serves at `http://localhost:8765/` by default.

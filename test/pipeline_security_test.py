@@ -58,5 +58,29 @@ class PipelineSecretTests(unittest.TestCase):
                         os.environ['DEEPSEEK_API_KEY'] = old_key
 
 
+class TypesafeKeyTests(unittest.TestCase):
+    """Jev 的 key 走的是同一条规矩：只从配置来，不解密失败就回空串。"""
+
+    def test_a_missing_field_yields_an_empty_string(self):
+        self.assertEqual(_utils.get_typesafe_key({}), '')
+
+    def test_a_plaintext_value_passes_through(self):
+        self.assertEqual(_utils.get_typesafe_key({'typesafeApiKey': 'plain'}), 'plain')
+
+    def test_an_undecryptable_value_degrades_instead_of_raising(self):
+        # 跨机器拷 config.json 就会遇到：密文解不开。那必须表现为"没配 key"，
+        # 让分类退回 LLM 路径，而不是把整天的日报打挂。
+        self.assertEqual(_utils.get_typesafe_key({'typesafeApiKey': 'lock:not-base64!!'}), '')
+
+    def test_a_missing_config_file_degrades_too(self):
+        with patch.object(_utils, 'CONFIG_PATH', '/nonexistent/weflow/config.json'):
+            self.assertEqual(_utils.get_typesafe_key(), '')
+
+    def test_the_real_key_is_never_the_same_as_a_neighbouring_field(self):
+        # 只读自己那一项，别把 deepseek 的 key 当 Jev 的用。
+        config = {'deepseekApiKey': 'ds-key', 'typesafeApiKey': 'ts-key'}
+        self.assertEqual(_utils.get_typesafe_key(config), 'ts-key')
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -259,6 +259,25 @@ weflow-cli config show
 weflow-cli config set dailySourceCategories '{"公众号A":"新闻","公众号B":"政治"}'
 ```
 
+### 文章分类用谁判断
+
+主题与相关度默认由 TypeSafe 的 Jev 决策模型判断（`choice` 选主题、`score` 打相关度，
+返回概率而不是一段要解析的文字）。配了 key 就用，没配就沿用原来的 LLM 解析路径：
+
+```powershell
+weflow-cli config set typesafeApiKey "..."   # 机器绑定加密保存，和 deepseekApiKey 一样
+weflow-cli config set typesafeApiKey ""      # 清空即回到 LLM 解析路径
+```
+
+- 相关度会写进 frontmatter 的 `relevance`（仍是「高/中/低」三个字），并额外写入
+  `relevanceScore`（原始分值）与 `topicConfidence`（主题的置信度）。那三档的切点是
+  暂定的，原始分留着，将来重新校准时不用重跑历史日报。
+- 单篇分类失败（网络、鉴权、超时）只影响那一篇，会打印一行 WARN 并退回 LLM 解析路径，
+  不会让整天的日报中断。
+- 分类要把文章标题与正文发往 `api.typesafe.ai`——和生成摘要发给 DeepSeek 是同一类动作，
+  想完全不出网就用 `weflow-cli daily --no-ai`。
+- 排查用 `python scripts/biz_daily.py --date <日期> --classifier llm`（强制老路径）对比。
+
 启动指定日期阅读器：
 
 ```powershell
