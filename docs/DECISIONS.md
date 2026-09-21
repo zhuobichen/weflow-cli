@@ -364,7 +364,10 @@ articles, `relevance` is the default `中` in **2199** of them - and the code sa
 and the exception and short-content paths never assigned it at all, leaving it to the writer's
 `fm.get('relevance', '中')`. So `generate_ai_report.py:123`'s gate
 (`if topic != FOCUS_TOPIC and relevance != '高': continue`) had only ever filtered on topic;
-the "relevance" dimension had never once admitted an article. Topic fared little better: it is
+the "relevance" dimension had never once admitted an article. **That sentence was itself too
+generous, and a later check corrected it**: the gate lived only in the markdown-scan
+*fallback* loader. The primary loader (`.articles.json`, which exists on every normal run)
+returned every article unfiltered, so the documented rule was not being applied at all. Topic fared little better: it is
 `学术` in **zero** articles on a normal day and in **100%** of them on 2026-09-04/05, which is the
 signature of the `except` branch's `topic = source_category or '学术'` fallback.
 
@@ -403,6 +406,23 @@ standard - which is exactly why the switch is reversible and why the raw score i
   empty string rather than raising when the ciphertext cannot be decrypted - `configService`'s
   `lockDecrypt()` silently returns `''` in the same situation, and a config copied from another
   machine must degrade to the old path rather than crash the daily run.
+- **The report's admission question is now asked directly.** `worth_including` (a `noul`) rides
+  along in the same request - measured at 0.91s for 12 questions versus 0.84s for 2, with `state`
+  dominating the tokens, so the marginal question is essentially free - and lands in frontmatter as
+  `includeScore`. The gate used to be `relevance != '高'`, which asks "how useful is this to the
+  reader" and then reads the answer as "put it in today's report". Those are different questions and
+  no threshold tuning can reconcile them. The two scores do diverge in practice: an award
+  announcement scored `relevance` 0.79 but `includeScore` 0.03 (related to the field, nothing to
+  use today), and two engineering posts landed at 0.48/0.63 - close enough to the cut point to show
+  the probability is not saturated at the ends.
+- **Both loaders now share one predicate** (`admits()`), with `--include-all` to revert to
+  collecting everything. This is a real behaviour change on the primary path: the report will
+  contain fewer non-focus articles than before, because before it contained *all* of them. Articles
+  written before `includeScore` existed fall back to the old `relevance == '高'` rule, so
+  regenerating an old date does not silently swap its article set.
+- An unused question is worse than no question. `is_research_paper` was added in the first cut of
+  this change and never read by anything - the same "compute it and throw it away" shape as the
+  exporter's old `COVER_STATE` counters. It was removed and replaced by `worth_including`.
 - **Not done, deliberately**: the other eight "ask the LLM then parse the text" call sites (assistant
   tool routing, long-term memory extraction, todo urgency, monthly-report task detection, ...),
   the `tags` field, and `TOPICS` being duplicated across five files. The first group was never

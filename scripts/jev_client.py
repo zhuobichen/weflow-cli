@@ -93,28 +93,34 @@ def score_to_relevance(score):
     return RELEVANCE_NAMES[index]
 
 
-def build_questions(topics, criteria=None, with_paper_probe=True):
-    """与 `TOPIC_PROMPT` 等价的类型化版本。
+def build_questions(topics, criteria=None):
+    """与 `TOPIC_PROMPT` 等价的类型化版本：一个 choice + 一个 score + 一个 noul。
 
-    两个是非题基本白送（问题之间并行、几乎不加延迟）：`is_research_paper`
-    能把「学术 vs 新闻」那类混淆拆开看，`needs_followup` 是留给下游的兜底信号。
+    `worth_including` 是**回答一个以前没人问过的问题**。日报原来拿 `relevance != '高'`
+    当收录门，而那是在用"对读者的实用价值"回答"该不该进今天的日报"——两件事不一样，
+    阈值怎么调都调不准，因为问题本身错了。多问一个问题的边际成本近零（实测 2 个问题
+    0.84s，12 个问题 0.91s，`state` 才是开销大头），所以这个判断基本是白送的。
+
+    这里刻意不放"探测型"问题（比如"是不是科研论文"）：问完没人读，就是
+    `COVER_STATE` 那种"算了就扔"，不如不加。
     """
     table = criteria or TOPIC_CRITERIA
     # 判据必须覆盖传入的每个主题：choice 的 criteria 就是选项集合本身，
     # 少一个选项，模型就永远选不到它。
     choice_criteria = {topic: table.get(topic, topic) for topic in topics}
-    questions = {
+    return {
         'topic': {'type': 'choice',
                   'instructions': '这篇文章属于哪个主题？',
                   'criteria': choice_criteria},
         'relevance': {'type': 'score',
                       'instructions': '对「环境科学研究生，做计算机与环境交叉」的实用价值有多高？',
                       'criteria': list(RELEVANCE_LEVELS)},
+        'worth_including': {
+            'type': 'noul',
+            'instructions': '这篇文章含有读者今天就能用上的具体内容'
+                            '（新工具/新方法/数据源/代码库/可复现的结论），'
+                            '而不是仅有信息性的新闻、观点或生活随笔？'},
     }
-    if with_paper_probe:
-        questions['is_research_paper'] = {
-            'type': 'noul', 'instructions': '这是一篇科研论文或期刊文章吗？'}
-    return questions
 
 
 class JevClient:
@@ -189,7 +195,9 @@ class JevClient:
             'topicProbabilities': topic_answer.get('probabilities'),
             'relevance': score_to_relevance(score),
             'relevanceScore': score,
-            'isResearchPaper': (answers.get('is_research_paper') or {}).get('noul'),
+            # 「该不该收录」的原始概率。落盘而不是在这儿切成布尔：切点是暂定的，
+            # 留着原始值，改阈值不用重跑。
+            'includeScore': (answers.get('worth_including') or {}).get('noul'),
             'usage': usage,
         }
 

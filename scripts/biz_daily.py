@@ -142,6 +142,9 @@ def _apply_decision(article, decision, set_topic=True):
     article['relevanceScore'] = decision.get('relevanceScore')
     if decision.get('topicConfidence') is not None:
         article['topicConfidence'] = decision['topicConfidence']
+    # 收录判断与 relatedness 不是一回事，单独存一个原始概率给日报那道门用。
+    if decision.get('includeScore') is not None:
+        article['includeScore'] = decision['includeScore']
     return True
 
 
@@ -887,6 +890,8 @@ def main():
                 fm['relevanceScore'] = round(float(a['relevanceScore']), 3)
             if a.get('topicConfidence') is not None:
                 fm['topicConfidence'] = round(float(a['topicConfidence']), 3)
+            if a.get('includeScore') is not None:
+                fm['includeScore'] = round(float(a['includeScore']), 3)
             if a['url']:
                 fm['url'] = f'"{a["url"]}"'
 

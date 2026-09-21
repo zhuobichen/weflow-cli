@@ -272,6 +272,13 @@ weflow-cli config set typesafeApiKey ""      # 清空即回到 LLM 解析路径
 - 相关度会写进 frontmatter 的 `relevance`（仍是「高/中/低」三个字），并额外写入
   `relevanceScore`（原始分值）与 `topicConfidence`（主题的置信度）。那三档的切点是
   暂定的，原始分留着，将来重新校准时不用重跑历史日报。
+- 同一批问题里还问了一个**「该不该收进今天的日报」**（`includeScore`，0~1）。
+  日报的收录门用它，而不是拿相关度顶替——相关度答的是"对读者的实用价值"，
+  答不了"今天该不该收它"。切点默认 `0.5`，同样暂定；`generate_ai_report.py`
+  里那个 `INCLUDE_THRESHOLD` 改起来不用重跑历史数据。想一次收全部：
+  `python scripts/generate_ai_report.py --date <日期> --include-all`。
+- `includeScore` 出现之前写下的老文章没有这个字段，会退回旧的
+  「相关度 = 高才收」规则，所以**重新生成旧日期的报告不会突然换一批文章**。
 - 单篇分类失败（网络、鉴权、超时）只影响那一篇，会打印一行 WARN 并退回 LLM 解析路径，
   不会让整天的日报中断。
 - 分类要把文章标题与正文发往 `api.typesafe.ai`——和生成摘要发给 DeepSeek 是同一类动作，

@@ -50,7 +50,7 @@ def answer(topic='学术', confidence=0.93, score=1.8, noul=0.9):
             'relevance': {'type': 'score', 'score': score, 'confidence': 0.8,
                           'legend': {str(i): lv for i, lv in enumerate(jev.RELEVANCE_LEVELS)},
                           'probabilities': {'0': 0.0, '1': 0.2, '2': 0.8}},
-            'is_research_paper': {'type': 'noul', 'noul': noul},
+            'worth_including': {'type': 'noul', 'noul': noul},
         },
         'usage': {'input_tokens': 1200, 'output_tokens': 60},
     }
@@ -62,6 +62,13 @@ class QuestionShapeTests(unittest.TestCase):
         questions = jev.build_questions(TOPICS)
         self.assertEqual(sorted(questions['topic']['criteria']), sorted(TOPICS))
         self.assertEqual(questions['topic']['type'], 'choice')
+
+    def test_the_include_question_is_asked_and_nothing_dead_is(self):
+        """问完没人读的问题就是 `COVER_STATE` 那种"算了就扔"——不加。"""
+        questions = jev.build_questions(TOPICS)
+        self.assertEqual(questions['worth_including']['type'], 'noul')
+        self.assertIn('具体内容', questions['worth_including']['instructions'])
+        self.assertEqual(sorted(questions), ['relevance', 'topic', 'worth_including'])
 
     def test_an_unknown_topic_still_gets_a_criterion(self):
         # 判据表里没有的主题不能变成空描述，否则那个选项等于不存在。
@@ -123,7 +130,7 @@ class DecideArticleTests(unittest.TestCase):
         self.assertEqual(result['topicConfidence'], 0.93)
         self.assertEqual(result['relevance'], '高')
         self.assertEqual(result['relevanceScore'], 1.8)
-        self.assertEqual(result['isResearchPaper'], 0.9)
+        self.assertEqual(result['includeScore'], 0.9)
 
     def test_the_state_carries_no_answer_smelling_fields(self):
         """把 frontmatter 一起发过去，模型照抄就能"一致"——那是个假结论。"""

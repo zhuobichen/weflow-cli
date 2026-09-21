@@ -89,7 +89,37 @@ REPORT_PROMPT = """你是一位为忙碌研究生写作的「深度阅读策展�
 # DATA LOADING
 # ======================================================================
 
-def load_articles_from_date(date_str: str) -> list[dict]:
+# 「该不该进今天的日报」的切点。**暂定且未经校准**：Jev 问的是
+# `worth_including`（含可直接用上的具体内容吗），返回 0~1 的概率，
+# 原始值存在 frontmatter 的 `includeScore` 里，改这个数不用重跑日报。
+INCLUDE_THRESHOLD = 0.5
+
+
+def admits(article: dict, include_all: bool = False) -> bool:
+    """这篇文章该不该收录。
+
+    焦点主题永远收。其余看 `includeScore`——那是**专门为这个问题**问出来的概率，
+    比拿 `relevance != '高'` 顶替准：相关度量的是"对读者的实用价值"，回答不了
+    "今天该不该收它"，阈值怎么调都是在调一个问错了的题。
+
+    没有 `includeScore` 的是这个字段出现之前的产物，退回旧规则，行为不变。
+
+    这里要认字符串：`.articles.json` 里的值是数字，但 md 兜底路径读出来的是
+    YAML 标量文本（`'0.8'`）。只认 `int/float` 的话，那条路径上这个新字段
+    就会被静默忽略——测出来正是如此。
+    """
+    if include_all or article.get('topic') == FOCUS_TOPIC:
+        return True
+    score = article.get('includeScore')
+    if score is not None:
+        try:
+            return float(score) >= INCLUDE_THRESHOLD
+        except (TypeError, ValueError):
+            # 值不是数字（乱改过的产物）。退回旧规则，别让报告生成在这里炸掉。
+            pass
+    return article.get('relevance') == '高'
+
+def load_articles_from_date(date_str: str, include_all: bool = False) -> list[dict]:
     json_path = Path(SOURCE_ROOT) / date_str / '.articles.json'
     if json_path.exists():
         try:
@@ -98,7 +128,14 @@ def load_articles_from_date(date_str: str) -> list[dict]:
             arts = data.get('articles', data) if isinstance(data, dict) else data
             for a in arts:
                 a.setdefault('date', date_str)
-            return arts
+            # 这里原先直接 return，不筛。于是「非焦点主题只收相关度高的文章」
+            # 这条规则**只在下面的 MD 兜底路径里存在**，而 .articles.json 才是
+            # 正常走的那条路 —— 规则因此从未真正生效过。
+            kept = [a for a in arts if admits(a, include_all)]
+            if len(kept) != len(arts):
+                print(f'  收录筛选: {len(arts)} 篇 -> {len(kept)} 篇'
+                      f'（阈值 includeScore >= {INCLUDE_THRESHOLD}）')
+            return kept
         except Exception:
             pass
     # 回退：扫描 MD 文件
@@ -119,8 +156,7 @@ def load_articles_from_date(date_str: str) -> list[dict]:
             if not fm:
                 continue
             relevance = fm.get('relevance', '中')
-            # 非 AI 主题只收录相关度"高"的文章
-            if topic != FOCUS_TOPIC and relevance != '高':
+            if not admits({**fm, 'topic': topic}, include_all):
                 continue
             # AI 主题读取完整正文（最多 5000 字），其他主题读取摘要
             if topic == FOCUS_TOPIC:
@@ -148,11 +184,11 @@ def load_articles_from_date(date_str: str) -> list[dict]:
     return articles
 
 
-def load_articles_range(from_date: date, to_date: date) -> list[dict]:
+def load_articles_range(from_date: date, to_date: date, include_all: bool = False) -> list[dict]:
     all_articles = []
     cur = from_date
     while cur <= to_date:
-        all_articles.extend(load_articles_from_date(cur.strftime('%Y-%m-%d')))
+        all_articles.extend(load_articles_from_date(cur.strftime('%Y-%m-%d'), include_all))
         cur += timedelta(days=1)
     return all_articles
 
@@ -290,6 +326,8 @@ def main():
     parser.add_argument('--to', dest='to_date', help='结束日期 YYYY-MM-DD，默认今天')
     parser.add_argument('--output', help='输出文件路径（默认 output/ai-reports/）')
     parser.add_argument('--dry-run', action='store_true', help='不调用 AI，仅输出统计骨架')
+    parser.add_argument('--include-all', action='store_true',
+                        help='不筛选，收录当天全部文章（回退到引入收录判据之前的行为）')
     args = parser.parse_args()
 
     # 日期解析
@@ -314,7 +352,7 @@ def main():
     print(f'🔧 引擎: {args.engine}' + (' (dry-run)' if args.dry_run else ''))
 
     # 加载文章
-    articles = load_articles_range(from_date, to_date)
+    articles = load_articles_range(from_date, to_date, args.include_all)
     if not articles:
         print(f'\n❌ 未找到 {date_label} 的文章。请先运行：')
         print(f'   python scripts/biz_daily.py')
