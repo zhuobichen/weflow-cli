@@ -50,10 +50,13 @@ except ImportError:
 # ====== Config ======
 
 SCRIPT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-CONFIG_PATH = os.path.join(os.path.expanduser('~'), '.weflow-cli', 'config.json')
+# 配置一律走 _utils.load_config()（它自己解析路径）。这里原先还有一份 CONFIG_PATH，
+# 定义了但没人用过。
 DB_PATH = None  # auto-detect from config
 OUTPUT_ROOT = os.path.join(SCRIPT_DIR, 'output', 'biz-daily')
-MAX_ARTICLES = 50  # 最多抓取篇数
+# 这里曾有一个 MAX_ARTICLES = 50，注释写着"最多抓取篇数"——**它从来没有被读过**。
+# 真正生效的是 --limit（默认 0 = 不限），所以一天 150–270 篇是常态。一个写着上限
+# 却不生效的常量，比没有它更误导人。
 FETCH_TIMEOUT = 15
 DEEPSEEK_TIMEOUT = 60
 FETCH_DELAY_MIN = 8   # 最小抓取间隔 (秒)

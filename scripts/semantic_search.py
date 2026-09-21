@@ -494,20 +494,6 @@ def search(query: str, api_key: str, top_k: int = 10, rerank_results: bool = Tru
         results = rerank(query, results, create_client())
     return results[:top_k]
 
-    results = []
-    for idx in top_indices:
-        item = meta[idx]
-        results.append({
-            **item,
-            "score": float(similarities[idx]),
-        })
-
-    return {
-        "query": query,
-        "total": len(meta),
-        "results": results,
-    }
-
 
 # ====== Main ======
 
