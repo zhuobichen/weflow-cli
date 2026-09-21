@@ -95,6 +95,113 @@ REPORT_PROMPT = """你是一位为忙碌研究生写作的「深度阅读策展�
 INCLUDE_THRESHOLD = 0.5
 
 
+# 「拿不太准」的区间。收录分落在中间，意味着这次收还是不收都说得过去——
+# 报告不该把这种条目当成确定的事报出去。
+UNCERTAIN_BAND = (0.35, 0.65)
+TOPIC_CONFIDENT = 0.7
+UNCERTAIN_LIST_LIMIT = 8
+
+
+def _num(value):
+    """把 includeScore 之类的概率读成 float；读不出返回 None。
+
+    要认字符串：`.articles.json` 里是数字，md 兜底路径读出来是 YAML 标量文本。
+    """
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _score(article):
+    """读 includeScore。`.articles.json` 里是数字，md 兜底路径读出来是字符串。"""
+    value = article.get('includeScore')
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def build_uncertainty_section(included, everything, include_all=False) -> str:
+    """报告末尾那一段「我拿不准的」。**本地算，不经 LLM** —— 让模型去描述自己的不确定，
+    等于又要它生成一段可能被编圆的散文。
+
+    两种不确定分开说，因为处理方式不同：
+      * 收录卡在阈值上 —— 收与不收都说得过去，你看到的是这次掷硬币的结果；
+      * 主题置信度低 —— 它可能被分到了错误的那一栏，位置都可能是错的。
+
+    **没有概率字段时不能沉默。** 早期生成的文章没有 includeScore，那一段的缺席会被
+    读成"这份报告哪里都很确定"，而事实是"它没告诉你"。所以那种情况要明说。
+    """
+    scored = [a for a in everything if _score(a) is not None]
+    if not scored:
+        return (chr(10) + '---' + chr(10) + chr(10) + '## 我拿不准的' + chr(10) + chr(10)
+                + '本期文章没有概率字段（生成早于该字段引入），所以**这份报告无法告诉你'
+                  '它哪里不确定**——不能把上面的结论读成"都已经过确认"。' + chr(10))
+
+    low, high = UNCERTAIN_BAND
+    in_ids = {id(a) for a in included}
+
+    def band(article):
+        value = _score(article)
+        return value is not None and low <= value <= high
+
+    borderline_in = [a for a in included if band(a)]
+    borderline_out = [] if include_all else [a for a in everything
+                                            if not admits(a, include_all) and band(a)]
+    low_confidence = [a for a in included
+                      if isinstance(a.get('topicConfidence'), (int, float))
+                      and a['topicConfidence'] < TOPIC_CONFIDENT]
+
+    lines = [chr(10) + '---' + chr(10), '## 我拿不准的' + chr(10),
+             '这两处不是漏掉，是**判断本身不确定**。列出来，免得被当成定论。' + chr(10)]
+
+    total_borderline = len(borderline_in) + len(borderline_out)
+    if total_borderline:
+        if include_all:
+            # 收录判据没启用，"收与不收"这个区分根本不存在——照抄阈值两侧的措辞
+            # 会让人以为这里做过一次筛选。
+            lines.append('**收录分落在边界上的 %d 篇**（本次未启用收录判据，全部收录）'
+                         '——这些分数本来就说不准：%s' % (total_borderline, chr(10)))
+        else:
+            lines.append('**收录卡在阈值上的 %d 篇**（收了 %d 篇、没收 %d 篇）——'
+                         '收与不收都说得过去：%s'
+                         % (total_borderline, len(borderline_in),
+                            len(borderline_out), chr(10)))
+        listed = borderline_in + borderline_out
+        for article in listed[:UNCERTAIN_LIST_LIMIT]:
+            kept = '' if include_all else (' · 收' if id(article) in in_ids else ' · 没收')
+            lines.append('- %s（收录分 %.2f%s · 主题 %s）'
+                         % (article.get('title', '(无标题)'), _score(article), kept,
+                            article.get('topic', '?')))
+        if total_borderline > UNCERTAIN_LIST_LIMIT:
+            lines.append('- 另有 %d 篇同样卡在边界，未列。' % (total_borderline - UNCERTAIN_LIST_LIMIT))
+        lines.append('')
+
+    if low_confidence:
+        lines.append('**主题可能归错的 %d 篇**（主题置信度低于 %.1f，分栏位置可能不对）：%s'
+                     % (len(low_confidence), TOPIC_CONFIDENT, chr(10)))
+        for article in low_confidence[:UNCERTAIN_LIST_LIMIT]:
+            lines.append('- %s（标为 %s · 置信 %.2f）'
+                         % (article.get('title', '(无标题)'), article.get('topic', '?'),
+                            article['topicConfidence']))
+        if len(low_confidence) > UNCERTAIN_LIST_LIMIT:
+            lines.append('- 另有 %d 篇同样置信偏低，未列。' % (len(low_confidence) - UNCERTAIN_LIST_LIMIT))
+        lines.append('')
+
+    if not total_borderline and not low_confidence:
+        lines.append('本期没有落在边界上的条目——收录分与主题置信度都不在含糊区间。' + chr(10))
+
+    lines.append('> 这些数字来自决策模型，**没有金标准校准过**；概率在阈值附近还会抖'
+                 '（同一批数据两次跑会有出入），别细究 0.48 与 0.52 的区别。')
+    lines.append('')
+    return chr(10).join(lines)
+
+
 def admits(article: dict, include_all: bool = False) -> bool:
     """这篇文章该不该收录。
 
@@ -133,8 +240,20 @@ def load_articles_from_date(date_str: str, include_all: bool = False) -> list[di
             # 正常走的那条路 —— 规则因此从未真正生效过。
             kept = [a for a in arts if admits(a, include_all)]
             if len(kept) != len(arts):
-                print(f'  收录筛选: {len(arts)} 篇 -> {len(kept)} 篇'
-                      f'（阈值 includeScore >= {INCLUDE_THRESHOLD}）')
+                # 说清**实际**用的是哪条规则：有收录分的按概率筛，早于该字段的产物
+                # 退回旧规则。无脑写"阈值 includeScore >= x"，在后一种情况下是撒谎。
+                parsed = [_num(a.get('includeScore')) for a in arts]
+                scored = sum(1 for v in parsed if v is not None)
+                if scored == 0:
+                    print(f'  收录筛选: {len(arts)} 篇 -> {len(kept)} 篇'
+                          f'（这些产物没有收录分，退回旧的 relevance == 高 规则）')
+                elif scored < len(arts):
+                    print(f'  收录筛选: {len(arts)} 篇 -> {len(kept)} 篇'
+                          f'（{scored} 篇按 includeScore >= {INCLUDE_THRESHOLD}，'
+                          f'其余 {len(arts) - scored} 篇按旧规则）')
+                else:
+                    print(f'  收录筛选: {len(arts)} 篇 -> {len(kept)} 篇'
+                          f'（阈值 includeScore >= {INCLUDE_THRESHOLD}）')
             return kept
         except Exception:
             pass
@@ -391,6 +510,18 @@ def main():
     # 生成报告
     t0 = time.time()
     report = generate_report(articles, engine, date_label, dry_run=args.dry_run)
+    # 不确定那一段在本地算：它必须与"模型有没有写、写得漂不漂亮"无关。
+    # 另外单独加载一次全集——被收录判据筛掉的边界条目也要能看见，
+    # 否则"我拿不准"只报告了收进来的那一半。
+    try:
+        everything = load_articles_range(from_date, to_date, include_all=True)
+    except Exception:
+        everything = articles
+    section = build_uncertainty_section(articles, everything, include_all=args.include_all)
+    report += section
+    uncertain_count = section.count(chr(10) + '- ')
+    if uncertain_count:
+        print(f'   不确定条目: {uncertain_count} 条已列入报告末尾')
     elapsed = time.time() - t0
 
     with open(out_path, 'w', encoding='utf-8') as f:

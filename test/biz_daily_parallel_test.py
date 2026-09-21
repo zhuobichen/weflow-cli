@@ -127,5 +127,40 @@ class PartialFailureTests(unittest.TestCase):
         self.assertIn('1/2', buffer.getvalue())
 
 
+class SerializableArticleTests(unittest.TestCase):
+    """`.articles.json` 那条记录里必须带着概率字段。
+
+    **报告优先读这个文件。** 只把概率写进 md 的 frontmatter 的话，它们在报告那条
+    主路径上等于不存在——真的发生过：日报末尾的"我拿不准的"永远只输出一句
+    "没有概率字段"，而 frontmatter 里明明有。这个测试就是钉住那个缺口。
+    """
+
+    def test_the_probability_fields_survive_into_structured_data(self):
+        entry = biz._serializable_article({
+            'title': '甲', 'account_name': '某号', 'topic': '学术', 'relevance': '中',
+            'relevanceScore': 1.74, 'topicConfidence': 0.99, 'includeScore': 0.52,
+        }, '2026-09-05')
+        self.assertEqual(entry['relevanceScore'], 1.74)
+        self.assertEqual(entry['topicConfidence'], 0.99)
+        self.assertEqual(entry['includeScore'], 0.52)
+
+    def test_an_article_without_them_does_not_gain_invented_keys(self):
+        # 老产物没有概率就不该凭空多出字段——那会让报告以为它有。
+        entry = biz._serializable_article(
+            {'title': '老文章', 'topic': 'AI', 'relevance': '中'}, '2026-09-05')
+        for key in ('relevanceScore', 'topicConfidence', 'includeScore'):
+            self.assertNotIn(key, entry)
+
+    def test_the_base_fields_are_unchanged(self):
+        # 既有读者按这些键取值，加字段不能动它们。
+        entry = biz._serializable_article({
+            'title': '甲', 'account_name': '某号', 'time': '08:00', 'topic': '学术',
+            'relevance': '高', 'tags': ['a'], 'summary': '摘要', 'url': 'http://x',
+        }, '2026-09-05')
+        self.assertEqual(entry['source'], '某号')
+        self.assertEqual(entry['summary'], '摘要')
+        self.assertEqual(entry['date'], '2026-09-05')
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -115,6 +115,30 @@ def _guess_topic(article: dict) -> str:
     return '新闻'
 
 
+def _serializable_article(article, date_str):
+    """一篇文章 -> `.articles.json` 里的那条记录。
+
+    **判断的原始概率必须一起写进去。** 报告优先读这个文件，只把概率写进 md 的
+    frontmatter 的话，它们在报告那条主路径上等于不存在——真的发生过：日报末尾的
+    "我拿不准的"永远只输出一句"没有概率字段"，而 frontmatter 里明明有。
+    """
+    entry = {
+        'title': article.get('title', ''),
+        'source': article.get('account_name', ''),
+        'date': date_str,
+        'time': article.get('time', ''),
+        'topic': article.get('topic', ''),
+        'relevance': article.get('relevance', '中'),
+        'tags': article.get('tags', []),
+        'summary': article.get('summary', article.get('digest', '')),
+        'url': article.get('url', ''),
+    }
+    for key in ('relevanceScore', 'topicConfidence', 'includeScore'):
+        if article.get(key) is not None:
+            entry[key] = round(float(article[key]), 3)
+    return entry
+
+
 def _classify_with_jev(client, title, body, topics):
     """让 Jev 判断这一篇；**问不出来就返回 None**，由调用方逐篇退回老路。
 
@@ -868,20 +892,7 @@ def main():
         topic_groups[t].append(a)
 
     # --- 写入结构化 JSON：一次提取，多次复用（供 AI 报告等下游使用） ---
-    serializable = []
-    for a in articles:
-        entry = {
-            'title': a.get('title', ''),
-            'source': a.get('account_name', ''),
-            'date': date_str,
-            'time': a.get('time', ''),
-            'topic': a.get('topic', ''),
-            'relevance': a.get('relevance', '中'),
-            'tags': a.get('tags', []),
-            'summary': a.get('summary', a.get('digest', '')),
-            'url': a.get('url', ''),
-        }
-        serializable.append(entry)
+    serializable = [_serializable_article(a, date_str) for a in articles]
 
     json_path = out_dir / '.articles.json'
     try:

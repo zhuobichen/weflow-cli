@@ -502,6 +502,24 @@ their probabilities. Two rules came out of building it, and both are general:
    `证据：对方末条 N 字 · 对方实质发言 M 条`, and anything resting on fewer than five characters
    is marked as too thin to act on.
 
+**The report now states its own uncertainty.** `generate_ai_report.py` appends a `我拿不准的`
+section listing entries whose `includeScore` sits inside the band (both admitted and excluded)
+plus those whose `topicConfidence` is low enough that the section they were filed under may be
+wrong. It is computed locally from frontmatter - asking a model to describe its own uncertainty
+is asking it to generate more prose, which is the failure this whole line of work exists to
+avoid. When the articles predate the probability fields, the section says so explicitly: an
+absent section must not be readable as "everything here was certain".
+
+**A field written on one path and not the other is a field that does not exist.** The three
+probability fields were added to the markdown frontmatter but not to `.articles.json`, and the
+report loader prefers the JSON. The new section therefore worked in the fallback path and was
+dead on the primary one - which is how it was found, by running a real dry-run and watching it
+report "no probability fields" while the frontmatter plainly carried them. The same shape has
+now appeared five times in this codebase: two loaders, two shard-discovery copies, argv-vs-env
+secrets, the admission gate living only in the fallback, and now serialization. **When adding a
+field whose value is consumed by another script, add it to every representation and test the one
+the consumer actually reads.**
+
 **Measured: what you feed sets the ceiling, not the model.** The same 132 questions (44 scripts x
 does-it-write / does-it-network / does-it-spawn) were asked twice, changing only the evidence in
 the state. Given each file's first 14 lines: **77.3%** agreement with a regex baseline. Given its
