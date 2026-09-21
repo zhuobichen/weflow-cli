@@ -173,6 +173,25 @@ def _normalize_topics(articles):
     return fallbacks
 
 
+def _group_by_topic(articles):
+    """归一化主题并按主题分桶，返回 `(分组, 兜底篇数)`。
+
+    **分组键就是 md 写进 frontmatter 的那个主题**（见 Phase 3 的 `fm['topic']`），
+    所以这张表和 `.articles.json` 里的 `topic` 必须指的是同一个值——md 与 json
+    对同一篇文章给出不同主题，就是从这里分叉出去的。
+
+    归一化放在函数内部而不是让调用方分两步做：两步就能被写颠倒（先分组再归一化，
+    键就落在归一化之前的旧值上），而这类颠倒不会报错。合成一个入口之后，
+    "分组用的主题"和"落盘用的主题"在结构上不可能不是同一个。
+    """
+    fallbacks = _normalize_topics(articles)
+    groups = {t: [] for t in TOPICS}
+    for a in articles:
+        # 直取不兜底：归一化刚保证过成员资格，这里再兜一次就等于又有第二个默认值。
+        groups[a['topic']].append(a)
+    return groups, fallbacks
+
+
 def _classify_with_jev(client, title, body, topics):
     """让 Jev 判断这一篇；**问不出来就返回 None**，由调用方逐篇退回老路。
 
@@ -914,18 +933,12 @@ def main():
         (out_dir / topic).mkdir(parents=True, exist_ok=True)
 
     # --- 主题在这里定稿：**分组、md frontmatter、json 三条路都只读这一次的结果** ---
-    fallback_count = _normalize_topics(articles)
+    topic_groups, fallback_count = _group_by_topic(articles)
     if fallback_count:
         # 说出来，别让它看起来像一次正常分类：`--no-ai`、没配 key、或者来源配置里
         # 写了个不在分类法里的词，都会整批落到兜底类。
         print(f'  [WARN] {fallback_count}/{len(articles)} 篇没有可用主题，'
               f'已归入兜底类「{DEFAULT_TOPIC}」（不是判断结果）')
-
-    # Group articles by topic
-    topic_groups = {t: [] for t in TOPICS}
-    for a in articles:
-        # 直取不兜底：上面刚保证过成员资格，这里再兜一次就等于又有第二个默认值。
-        topic_groups[a['topic']].append(a)
 
     # --- 写入结构化 JSON：一次提取，多次复用（供 AI 报告等下游使用） ---
     serializable = [_serializable_article(a, date_str) for a in articles]

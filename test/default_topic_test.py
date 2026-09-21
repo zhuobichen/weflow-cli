@@ -100,6 +100,50 @@ class NormalizeTests(unittest.TestCase):
         self.assertEqual(articles[0]['topic'], DEFAULT_TOPIC)
 
 
+class GroupingTests(unittest.TestCase):
+    """分组键与落盘主题必须是同一个值。
+
+    md 的 frontmatter 写的**不是** `a['topic']`，而是分组键（Phase 3 里
+    `fm['topic'] = topic`）。所以"md 与 json 说的是同一个主题"这条契约，
+    实际依赖的是"分组键 == `a['topic']`"——归一化必须发生在分组**之前**。
+    """
+
+    def build(self, *topics):
+        return [{'title': 't%d' % i, **({} if t is _MISSING else {'topic': t})}
+                for i, t in enumerate(topics)]
+
+    def test_every_group_key_equals_what_the_json_will_record(self):
+        articles = self.build(_MISSING, '', '生活', 'AI', '政治')
+        groups, _ = biz._group_by_topic(articles)
+        for key, members in groups.items():
+            for a in members:
+                # 分组键 == md 的 topic；.articles.json 的 topic 也必须等于它。
+                self.assertEqual(key, a['topic'])
+                self.assertEqual(key, biz._serializable_article(a, '2026-01-01')['topic'])
+
+    def test_every_category_gets_a_bucket_even_when_empty(self):
+        # Phase 3 按 TOPICS 建目录、也按 TOPICS 遍历分栏，桶缺一个就会少一栏。
+        groups, _ = biz._group_by_topic(self.build('AI'))
+        self.assertEqual(sorted(groups), sorted(TOPICS))
+
+    def test_articles_without_a_topic_land_in_the_fallback_bucket(self):
+        groups, count = biz._group_by_topic(self.build(_MISSING, _MISSING, 'AI'))
+        self.assertEqual([a['title'] for a in groups[DEFAULT_TOPIC]], ['t0', 't1'])
+        self.assertEqual([a['title'] for a in groups['AI']], ['t2'])
+
+    def test_it_reports_how_many_fell_back(self):
+        """兜底篇数必须真的传出来。
+
+        写这个函数的第一版把 `_normalize_topics` 调了两次（先调一次、返回时又调
+        一次），第二次当然返回 0——于是整批兜底时那条 WARN 永远不响，看起来
+        像一次正常分类。这条断言就是钉住那个。
+        """
+        _, count = biz._group_by_topic(self.build(_MISSING, '', 'AI', '政治'))
+        self.assertEqual(count, 2)
+        _, clean = biz._group_by_topic(self.build('AI', '政治'))
+        self.assertEqual(clean, 0)
+
+
 class TheTwoWritersAgreeTests(unittest.TestCase):
     """json 与 md 必须对同一篇文章给出同一个主题——这正是当初被打破的契约。"""
 
