@@ -18,7 +18,7 @@ RAG 智能聊天助手 — 基于语义搜索 + AI 引擎的对话式知识检�
 import sys, os, json
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _utils import load_config, create_engine
+from _utils import load_config, create_engine, get_api_key
 from semantic_search import search as semantic_search, build_index, INDEX_DIR, VECTORS_FILE
 
 PROMPT_TEMPLATE = """你是一个个人知识助手，可以访问用户的微信聊天记录和公众号文章。
@@ -169,7 +169,7 @@ def main():
 
     config = load_config()
     embed_key = os.environ.get('DASHSCOPE_API_KEY', '') or config.get('dashscopeApiKey', '')
-    chat_key = args.api_key or os.environ.get('DEEPSEEK_API_KEY', '') or config.get('deepseekApiKey', '')
+    chat_key = args.api_key or os.environ.get('DEEPSEEK_API_KEY', '') or get_api_key(config)
 
     if not embed_key:
         print('[ERROR] 缺少 Embedding API key。请在 ~/.weflow-cli/config.json 中设置 dashscopeApiKey')

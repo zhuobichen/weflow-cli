@@ -21,7 +21,7 @@ except ImportError:
     sys.exit(1)
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _utils import load_config, decrypt_lock, parse_frontmatter, call_deepseek
+from _utils import load_config, decrypt_lock, parse_frontmatter, call_deepseek, get_api_key
 
 TZ = timezone(timedelta(hours=8))
 OUTPUT_ROOT = 'output'
@@ -733,7 +733,9 @@ def main():
 
     year = args.year
     config = load_config()
-    api_key = args.api_key or os.environ.get('DEEPSEEK_API_KEY', '') or config.get('deepseekApiKey', '')
+    # 一律走 get_api_key：它会解密 lock: 前缀，而直接 config.get 拿到的是密文。
+    # 原先这四处直接读，恰好因为本机那把 key 是明文而没暴露。
+    api_key = args.api_key or os.environ.get('DEEPSEEK_API_KEY', '') or get_api_key(config)
 
     print(f'📊 正在生成 {year} 年度报告...')
 

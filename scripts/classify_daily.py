@@ -14,6 +14,7 @@ from pathlib import Path
 # 公共工具
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _utils import (
+    get_api_key,
     TOPICS,
     call_ai, parse_frontmatter, write_with_frontmatter,
     DEFAULT_USER_PROFILE, generate_action_suggestion, load_config
@@ -181,7 +182,7 @@ def main():
     api_key = args.api_key or ''
     # 本地引擎不需要 api_key
     if engine in ('deepseek', 'claude') and not api_key:
-        api_key = os.environ.get('DEEPSEEK_API_KEY', '') or config.get('deepseekApiKey', '')
+        api_key = os.environ.get('DEEPSEEK_API_KEY', '') or get_api_key(config)
         if not api_key:
             print(f'[ERROR] --engine {engine} 需要 API key。请通过 --api-key、环境变量或配置文件提供')
             sys.exit(1)

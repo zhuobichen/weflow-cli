@@ -18,7 +18,7 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _utils import load_config, decrypt_lock, call_deepseek
+from _utils import load_config, decrypt_lock, call_deepseek, get_api_key
 
 TODOS_FILE = os.path.join(os.path.expanduser('~'), '.weflow-cli', 'todos.json')
 TZ = timezone(timedelta(hours=8))
@@ -341,7 +341,8 @@ def main():
 
     if args.command == 'extract':
         config = load_config()
-        api_key = getattr(args, 'api_key', None) or os.environ.get('DEEPSEEK_API_KEY', '') or config.get('deepseekApiKey', '')
+        api_key = (getattr(args, 'api_key', None)
+                   or os.environ.get('DEEPSEEK_API_KEY', '') or get_api_key(config))
         if not api_key:
             print('[ERROR] 缺少 DeepSeek API key')
             sys.exit(1)
