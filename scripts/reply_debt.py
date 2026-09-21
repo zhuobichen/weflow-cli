@@ -22,6 +22,7 @@
 `--min-prob` 可以把它当阈值用。**没有金标准校准过**，这一点不要忘。
 """
 import argparse
+import html
 import json
 import os
 import sys
@@ -58,6 +59,97 @@ KINDS = {
     '群聊': '群里的讨论',
     '服务': '客服、推销、验证码、公众号推送、系统通知',
 }
+
+
+PAGE_CSS = """
+:root { color-scheme: light dark; }
+* { box-sizing: border-box; }
+body { margin: 0 auto; padding: 40px 24px 64px; max-width: 860px;
+  font: 15px/1.6 -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+  color: #1a1a1a; background: #fafafa; }
+h1 { font-size: 21px; margin: 0 0 4px; }
+.sub { color: #777; font-size: 13px; margin-bottom: 28px; }
+.lede { display: flex; gap: 36px; align-items: baseline; margin: 0 0 28px;
+  padding: 20px 24px; background: #fff; border: 1px solid #e6e6e6; border-radius: 10px; }
+.lede b { font-size: 30px; font-weight: 650; }
+.lede span { color: #666; font-size: 13px; }
+table { width: 100%; border-collapse: collapse; background: #fff;
+  border: 1px solid #e6e6e6; border-radius: 10px; overflow: hidden; }
+th, td { text-align: left; padding: 11px 14px; border-bottom: 1px solid #f0f0f0; }
+th { font-size: 12px; font-weight: 600; color: #666; background: #fcfcfc; }
+tr:last-child td { border-bottom: 0; }
+.num { font-variant-numeric: tabular-nums; }
+.thin { color: #b26a00; }
+.muted { color: #888; }
+.note { margin-top: 26px; font-size: 12.5px; color: #777; }
+.note strong { color: #444; }
+"""
+
+
+def render_html(debts, uncertain, noise_count, meta):
+    """一份**不含任何聊天内容**的可分享页面。
+
+    这是刻意的约束，不是遗漏：只输出概率、天数、类别与证据量，所以它可以给别人看
+    而不泄露对话。名字要转义——联系人的显示名是外部数据，里面完全可能有 `<`。
+    """
+    def esc(value):
+        return html.escape(str(value if value is not None else ''), quote=True)
+
+    def row(item, dim=False):
+        proof = item.get('evidence') or {}
+        thin = proof.get('theirLastChars', 0) < SUBSTANTIVE_CHARS
+        cls = ' class="muted"' if dim else ''
+        return (
+            '<tr%s><td>%s</td><td class="num">%.1f 天</td><td>%s</td>'
+            '<td class="num">%.2f</td><td class="num">%.2f</td>'
+            '<td class="num%s">对方末条 %s 字</td></tr>'
+            % (cls, esc(item.get('name')), item.get('days') or 0, esc(item.get('kind') or '?'),
+               item.get('waiting') or 0, item.get('urgencyScore') or 0,
+               ' thin' if thin else '', proof.get('theirLastChars', '?')))
+
+    longest = max((item.get('days') or 0 for item in debts), default=0)
+    kinds = {}
+    for item in debts:
+        key = item.get('kind') or '?'
+        kinds[key] = kinds.get(key, 0) + 1
+    lede = [
+        '<div class="lede"><div><b>%d</b> <span>个会话在等我回话</span></div>'
+        '<div><b>%.1f</b> <span>最久等了（天）</span></div>'
+        '<div><b>%d</b> <span>个拿不太准</span></div></div>'
+        % (len(debts), longest, len(uncertain)),
+    ]
+    header = ('<tr><th>会话</th><th>等了</th><th>类别</th>'
+              '<th>在等我</th><th>紧急</th><th>证据</th></tr>')
+
+    parts = ['<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">',
+             '<meta name="viewport" content="width=device-width, initial-scale=1">',
+             '<title>谁在等我回话</title><style>%s</style></head><body>' % PAGE_CSS,
+             '<h1>谁在等我回话</h1>',
+             '<div class="sub">最近 %s 天有动静的会话 · 生成于 %s</div>'
+             % (esc(meta.get('days')), esc(meta.get('generatedAt')))]
+    parts.extend(lede)
+    if debts:
+        parts.append('<table>%s%s</table>' % (header, ''.join(row(i) for i in debts)))
+    else:
+        parts.append('<p class="muted">没有判定为欠账的会话（阈值 %.2f）。</p>'
+                     % (meta.get('minProb') or 0))
+    if uncertain:
+        parts.append('<h2 style="font-size:15px;margin:30px 0 10px;">拿不太准</h2>')
+        parts.append('<table>%s%s</table>'
+                     % (header, ''.join(row(i, dim=True) for i in uncertain)))
+    note = ['<div class="note">',
+            '<strong>这不是事实，是提示。</strong>判断来自一个决策模型，没有金标准校准过；'
+            '页面里的概率就是让你自己决定信到哪一档；'
+            '同一批数据两次跑的分数会有出入，阈值附近的差别不必细究。<br>',
+            '「证据」是对方最后一条消息的字数——少于 %d 字的那几条，'
+            '分数建立在很薄的证据上，不足为凭。<br>' % SUBSTANTIVE_CHARS]
+    if noise_count:
+        note.append('另有 %d 个判定为客服/推销/通知类，未计入。' % noise_count)
+    note.append('<br><strong>本页不含任何聊天内容</strong>——只有概率、天数与计数，'
+                '所以它可以被分享。')
+    note.append('</div></body></html>')
+    parts.extend(note)
+    return ''.join(parts)
 
 
 def build_questions():
@@ -185,6 +277,8 @@ def main():
     parser.add_argument('--limit', type=int, default=40, help='最多判多少个会话')
     parser.add_argument('--min-prob', type=float, default=0.5,
                         help='waiting 概率低于此值就不算欠账（默认 0.5）')
+    parser.add_argument('--html', metavar='PATH',
+                        help='额外写一份不含聊天内容的单页 HTML（可分享）')
     parser.add_argument('--dry-run', action='store_true',
                         help='只列出会判哪些会话、要发多少字符，不调用决策模型')
     parser.add_argument('--json', action='store_true')
@@ -301,6 +395,19 @@ def main():
     debts = [r for r in rows if (r['waiting'] or 0) >= args.min_prob and r['kind'] != '服务']
     noise = [r for r in rows if r['kind'] == '服务']
     uncertain = [r for r in rows if 0.3 <= (r['waiting'] or 0) < args.min_prob]
+
+    if args.html:
+        # 名字是外部数据，转义由 render_html 负责；这里只保证目录存在。
+        target = os.path.abspath(args.html)
+        parent = os.path.dirname(target)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        with open(target, 'w', encoding='utf-8') as handle:
+            handle.write(render_html(debts, uncertain, len(noise), {
+                'days': args.days, 'minProb': args.min_prob,
+                'generatedAt': now.strftime('%Y-%m-%d %H:%M'),
+            }))
+        print('已写出：%s（不含聊天内容，可直接分享）' % target)
 
     if args.json:
         print(json.dumps({'debts': debts, 'excluded_service': len(noise),

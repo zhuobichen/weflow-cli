@@ -166,5 +166,64 @@ class CollectTests(unittest.TestCase):
         self.assertEqual(picked[0]['name'], '李四')
 
 
+class RenderedPageTests(unittest.TestCase):
+    """可分享页面的**唯一**安全要求：它不能把聊天内容带出去。
+
+    它只该输出概率、天数、类别与证据量。所以最要紧的一条测试是：给行数据塞一个
+    多出来的字段（比如消息正文），渲染结果里**不许**出现它。
+    """
+
+    def row(self, **extra):
+        base = {'name': '张三', 'days': 1.5, 'kind': '工作', 'waiting': 0.8,
+                'urgencyScore': 2.0, 'evidence': {'theirLastChars': 40}}
+        base.update(extra)
+        return base
+
+    def meta(self):
+        return {'days': 30, 'minProb': 0.5, 'generatedAt': '2026-09-21 20:00'}
+
+    def test_chat_text_never_reaches_the_page(self):
+        secret = '今晚七点老地方见，别迟到'
+        page = rd.render_html([self.row(text=secret)], [], 0, self.meta())
+        self.assertNotIn(secret, page)
+        self.assertNotIn('今晚', page)
+
+    def test_a_display_name_cannot_inject_markup(self):
+        # 联系人显示名是外部数据，里面完全可能有尖括号。
+        page = rd.render_html([self.row(name='<script>alert(1)</script>')], [], 0, self.meta())
+        self.assertNotIn('<script>alert', page)
+        self.assertIn('&lt;script&gt;', page)
+
+    def test_the_headline_carries_the_numbers_worth_quoting(self):
+        rows = [self.row(days=3.2), self.row(name='李四', days=0.5)]
+        page = rd.render_html(rows, [self.row(name='王五')], 4, self.meta())
+        self.assertIn('2', page)      # 欠账数
+        self.assertIn('3.2', page)    # 最久等了几天
+        self.assertIn('另有 4 个', page)
+
+    def test_thin_evidence_is_marked_visually(self):
+        # 证据薄的那行要看得出来，否则页面会把一个 2 字末条得出的分数当成结论。
+        page = rd.render_html([self.row(evidence={'theirLastChars': 2})], [], 0, self.meta())
+        self.assertIn('class="num thin"', page)
+
+    def test_an_empty_result_is_stated_rather_than_rendered_as_an_empty_table(self):
+        page = rd.render_html([], [], 0, self.meta())
+        self.assertIn('没有判定为欠账的会话', page)
+        self.assertNotIn('<table>', page)
+
+    def test_the_page_says_what_it_is_not(self):
+        page = rd.render_html([self.row()], [], 0, self.meta())
+        self.assertIn('没有金标准校准过', page)
+        self.assertIn('本页不含任何聊天内容', page)
+
+    def test_it_is_a_self_contained_document(self):
+        # 可分享 = 一个文件就能打开。不引外部样式、脚本或字体。
+        page = rd.render_html([self.row()], [], 0, self.meta())
+        self.assertTrue(page.startswith('<!doctype html>'))
+        self.assertNotIn('http://', page)
+        self.assertNotIn('https://', page)
+        self.assertNotIn('<script', page)
+
+
 if __name__ == '__main__':
     unittest.main()
