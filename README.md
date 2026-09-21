@@ -183,7 +183,7 @@ weflow-cli config set dailySources "公众号A,公众号B"
 weflow-cli config set dailyAiEnabled false
 weflow-cli config set dailyAiEnabled true
 
-# 为来源设置固定类别；已分类来源只生成摘要，不再调用文章主题分类
+# 为来源设置固定类别；已分类来源只生成摘要，主题用你配的、标签取该类别（不会有真标签）
 weflow-cli config set dailySourceCategories '<JSON object: source name or gh_ ID -> AI/政治/学术/新闻/文学/投资>'
 
 # 文章主题与相关度改由 Jev 决策模型判断（可选；不配则沿用 LLM 解析路径）
