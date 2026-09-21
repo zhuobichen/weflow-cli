@@ -139,5 +139,57 @@ class FailSoftTests(unittest.TestCase):
         self.assertEqual(out[0]['title'], '丙')
 
 
+class KeywordFallbackFilterTests(unittest.TestCase):
+    """关键词兜底不能把**生成的产物**当成文章返回。
+
+    实测搜到过「行动建议 — 2026-08-30」——那是日报生成的报告，不是文章。
+    索引那条路（`collect_articles`）本来就只走子目录，所以这是两条路径不一致。
+
+    同时要防**过度过滤**：`收藏/` 目录里是真内容，不该被一起排掉。
+    """
+
+    def tree(self, tmp):
+        """一棵小树，覆盖**两种深度**的产物——我第一版只按路径判断，漏掉了后者。
+
+        真文章带 `url:`（判据），产物不带。
+        """
+        nl = chr(10)
+        root = Path(tmp) / 'biz-daily' / '2026-01-01'
+        root.mkdir(parents=True, exist_ok=True)
+
+        def write(path, has_url):
+            front = '---%stitle: "x"%s%s---%s' % (
+                nl, nl, ('url: "http://x"%s' % nl) if has_url else '', nl)
+            path.write_text(front + '%s关键词在这里%s' % (nl, nl), encoding='utf-8')
+
+        # 产物：日期目录下与主题目录下**都可能有**（真实数据里各 4 个）。
+        write(root / 'README.md', False)
+        write(root / '行动建议.md', False)
+        (root / 'AI').mkdir(parents=True, exist_ok=True)
+        write(root / 'AI' / '行动建议.md', False)
+        # 真文章。
+        write(root / 'AI' / '一篇真文章.md', True)
+        (root / '收藏').mkdir(parents=True, exist_ok=True)
+        write(root / '收藏' / '一条收藏.md', True)
+        return str(Path(tmp) / 'biz-daily')
+
+    def test_report_artifacts_are_not_returned_as_articles(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            results = ss.keyword_search('关键词', top_k=20, root=self.tree(tmp))
+        titles = [r['title'] for r in results]
+        self.assertNotIn('行动建议', titles)
+        self.assertNotIn('README', titles)
+
+    def test_real_content_is_still_returned(self):
+        # 过度过滤是这条检查最容易犯的错：把"排除产物"写成"只收某种目录"会连收藏一起丢。
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            results = ss.keyword_search('关键词', top_k=20, root=self.tree(tmp))
+        titles = [r['title'] for r in results]
+        self.assertIn('一篇真文章', titles)
+        self.assertIn('一条收藏', titles)
+
+
 if __name__ == '__main__':
     unittest.main()

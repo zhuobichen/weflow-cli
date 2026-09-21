@@ -15,7 +15,7 @@
 输出: JSON 格式
 """
 
-import sys, os, json, hashlib, argparse
+import sys, os, json, hashlib, re, argparse
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
@@ -330,20 +330,33 @@ def build_index(api_key: str, full: bool = False):
     }
 
 
-def keyword_search(query: str, top_k: int = 10):
-    """Simple keyword fallback: scan articles + messages for keyword matches."""
+def keyword_search(query: str, top_k: int = 10, root=None):
+    """Simple keyword fallback: scan articles + messages for keyword matches.
+
+    `root` 只为可测而参数化（默认就是日报目录）。它原先硬编码成相对路径，
+    于是这条路径只能靠 chdir 才能测，也就一直没被测过——而它正是检索不可用时
+    真正跑着的那条（本机索引从未构建过）。
+    """
     results = []
     keywords = query.lower().split()
 
     # Scan biz-daily articles
-    biz_dir = Path('output/biz-daily')
+    biz_dir = Path(root or 'output/biz-daily')
     if biz_dir.exists():
         for md_file in sorted(biz_dir.rglob('*.md'), reverse=True):
-            if md_file.name == 'README.md' or md_file.name.startswith('.'):
-                continue
+            # **只收真文章。** 日报目录里还躺着 <天>/README.md、<天>/行动建议.md
+            # 这类**生成产物**，它们会被当成检索结果返回（实测搜到过
+            # 「行动建议 — 2026-08-30」）。而它们**两种深度都有**：既在日期目录下、
+            # 也在主题目录下（实测各 4 个），所以按路径判断是不够的——我第一版就是这么
+            # 写的，然后拿一个"看不见产物"的 top_k 去验证，误以为修好了。
+            #
+            # 判据用内容：真文章的 frontmatter 里一定有 url。
+            # `quality_eval.read_article` 用的是同一条。
             try:
                 content = md_file.read_text(encoding='utf-8')[:5000]
-            except:
+            except OSError:
+                continue
+            if not re.search(r'^url:\s*\S', content[:800], re.M):
                 continue
             score = sum(content.lower().count(kw) for kw in keywords)
             if score > 0:
