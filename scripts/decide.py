@@ -28,11 +28,18 @@
                 score  → criteria 是有序数组，**位置即分值，从 0 开始**
                 noul   → 不需要 criteria（可选 {true, false}）
 
-**这是出境调用**：state 会被发到 api.typesafe.ai。命令自己**不读任何本地数据**——
-state 是什么，完全由调用方决定。
+批量模式把最常用的那层展开做掉了——一个 glob × 一批问题，自动变成 N×M 个问题：
+
+    python scripts/decide.py --over "scripts/*.py" --ask "会写本地文件吗" --ask "会出网吗" --yes
+
+**这是出境调用**：state 会被发到 api.typesafe.ai。读不读本地由输入方式决定：
+`--request`/stdin **完全由调用方给**，命令自己不读任何文件；`--over` 会读匹配到的
+文件（所以它是一条读本地数据的路径，`capabilities` 里也如实分开写了）。
 """
 import argparse
+import glob
 import json
+import os
 import sys
 import urllib.error
 
@@ -40,6 +47,49 @@ sys.path.insert(0, __import__('os').path.dirname(__import__('os').path.abspath(_
 from jev_client import INPUT_USD_PER_TOKEN, JevError, create_client  # noqa: E402
 
 QUESTION_TYPES = ('choice', 'score', 'noul')
+
+
+def expand_batch(patterns, asks, max_chars, limit):
+    """把「一批文件 × 一批问题」展开成一次请求的 state 与 questions。
+
+    问题名是 `f<序号>|q<序号>` 而不是把文件名编进去：文件名里有 `|`、空格、中文标点，
+    编进去之后调用方要靠解析字符串才能还原。序号 + 响应里的 `batch.files` 是显式的映射。
+
+    **喂多少字符要能看见**：实测同一批问题，只喂每个文件前 14 行和喂前 1500 字符，
+    与基准的一致率从 77.3% 变成 88.6%——证据量决定上限。所以它由参数给出，
+    并且写进返回里，而不是藏在实现里。
+    """
+    paths = []
+    for pattern in patterns:
+        paths.extend(glob.glob(pattern, recursive=True))
+    # 排序 + 去重：同一批文件两次跑应该展开成同样的顺序，否则问题名对不上。
+    paths = sorted({p for p in paths if os.path.isfile(p)})
+    if limit:
+        paths = paths[:limit]
+    if not paths:
+        return None, None, None, '没有匹配到任何文件：%s' % ', '.join(patterns)
+
+    blocks = []
+    for index, path in enumerate(paths):
+        try:
+            with open(path, encoding='utf-8', errors='replace') as handle:
+                body = handle.read()
+        except OSError as error:
+            return None, None, None, '读不到 %s：%s' % (path, error)
+        blocks.append('【f%d】%s\n%s' % (index, os.path.basename(path), body[:max_chars]))
+
+    names = [os.path.basename(p) for p in paths]
+    state = ('下面是 %d 个文件，每个只给出前 %d 个字符：\n\n%s'
+             % (len(paths), max_chars, '\n\n'.join(blocks)))
+    questions = {}
+    for index, name in enumerate(names):
+        for ask_index, instruction in enumerate(asks):
+            questions['f%d|q%d' % (index, ask_index)] = {
+                'type': 'noul',
+                'instructions': '【f%d】（%s）%s' % (index, name, instruction),
+            }
+    return state, questions, {'files': names, 'asks': list(asks),
+                              'maxChars': max_chars}, None
 
 
 def validate_request(payload):
@@ -96,20 +146,48 @@ def main():
     parser = argparse.ArgumentParser(
         description='本机判断层：一个 state + 一批类型化问题，一次调用返回带概率的答案')
     parser.add_argument('--request', help='请求 JSON 的路径，或 - 表示读 stdin（默认读 stdin）')
+    parser.add_argument('--over', action='append', default=[], metavar='GLOB',
+                        help='批量模式：对匹配到的每个文件问 --ask 里的每个问题（可重复）')
+    parser.add_argument('--ask', action='append', default=[], metavar='TEXT',
+                        help='批量模式下的一个是非题，逐文件展开（可重复）')
+    parser.add_argument('--max-chars', type=int, default=1500, metavar='N',
+                        help='批量模式下每个文件喂多少字符（默认 1500；它决定上限）')
+    parser.add_argument('--limit', type=int, default=50, metavar='N',
+                        help='批量模式最多取多少个文件（默认 50，0 表示不限）')
     parser.add_argument('--model', default='', help='模型别名，默认 jev-latest')
     parser.add_argument('--dry-run', action='store_true', help='只校验并回显请求，不调用')
     args = parser.parse_args()
 
-    raw = read_request(args)
-    if not raw.strip():
+    batch_meta = None
+    if args.over:
+        if not args.ask:
+            print(json.dumps({'success': False, 'code': 'INVALID_REQUEST',
+                              'error': '批量模式需要至少一个 --ask（否则没有问题可问）'},
+                             ensure_ascii=False))
+            return 2
+        state, questions, batch_meta, error = expand_batch(
+            args.over, args.ask, args.max_chars, args.limit)
+        if error:
+            print(json.dumps({'success': False, 'code': 'NO_FILES', 'error': error},
+                             ensure_ascii=False))
+            return 2
+        payload = {'state': state, 'questions': questions}
+    elif args.request or not sys.stdin.isatty():
+        raw = read_request(args)
+        if not raw.strip():
+            print(json.dumps({'success': False, 'code': 'EMPTY_REQUEST',
+                              'error': 'stdin 或 --request 里没有内容'}, ensure_ascii=False))
+            return 2
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError as error:
+            print(json.dumps({'success': False, 'code': 'INVALID_JSON',
+                              'error': '请求不是合法 JSON: %s' % error}, ensure_ascii=False))
+            return 2
+    else:
         print(json.dumps({'success': False, 'code': 'EMPTY_REQUEST',
-                          'error': 'stdin 或 --request 里没有内容'}, ensure_ascii=False))
-        return 2
-    try:
-        payload = json.loads(raw)
-    except json.JSONDecodeError as error:
-        print(json.dumps({'success': False, 'code': 'INVALID_JSON',
-                          'error': '请求不是合法 JSON: %s' % error}, ensure_ascii=False))
+                          'error': '没有输入：用 --request/--over，或把请求接到 stdin'},
+                         ensure_ascii=False))
         return 2
 
     state, questions, error = validate_request(payload)
@@ -118,14 +196,23 @@ def main():
                           'error': error}, ensure_ascii=False))
         return 2
 
+    size = len(state) if isinstance(state, str) else len(
+        json.dumps(state, ensure_ascii=False))
+
     if args.dry_run:
-        size = len(state) if isinstance(state, str) else len(
-            json.dumps(state, ensure_ascii=False))
-        print(json.dumps({
+        body = {
             'success': True, 'dryRun': True, 'action': 'decide',
             'questions': list(questions), 'questionCount': len(questions),
-            'stateChars': size, 'invokesAI': True, 'readsLocalData': False,
-        }, ensure_ascii=False))
+            'stateChars': size,
+            # 批量模式下这两件事必须报出来：读了本地什么、每份喂了多少（决定上限）。
+            'readsLocalData': bool(args.over),
+            'invokesAI': True,
+        }
+        if batch_meta:
+            body['batch'] = batch_meta
+            body['fileCount'] = len(batch_meta['files'])
+            body['maxChars'] = batch_meta['maxChars']
+        print(json.dumps(body, ensure_ascii=False))
         return 0
 
     client = create_client(model=args.model) if args.model else create_client()
@@ -147,14 +234,18 @@ def main():
         return 1
 
     tokens = usage.get('input_tokens') or 0
-    print(json.dumps({
+    body = {
         'success': True,
         'model': client.model,
         'answers': answers,
         'usage': usage,
         # 把成本一起回给调用方：一个 Agent 要能自己决定"再问一批"划不划算。
         'costUsd': round(tokens * INPUT_USD_PER_TOKEN, 8),
-    }, ensure_ascii=False))
+    }
+    if batch_meta:
+        # 序号到文件/问题的映射由这里给出，调用方不必去解析问题名。
+        body['batch'] = batch_meta
+    print(json.dumps(body, ensure_ascii=False))
     return 0
 
 

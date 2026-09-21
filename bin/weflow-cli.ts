@@ -330,9 +330,11 @@ program
       },
       primitives: {
         decide: {
-          cli: 'decide --request <file> --yes',
-          preview: 'decide --request <file> --dry-run',
-          readsLocalData: false,
+          cli: 'decide --request <file> --yes | decide --over <glob> --ask <text> --yes',
+          preview: 'decide --dry-run',
+          // 两条路的读法**不一样**，所以不能只写一个 false：
+          // --request 完全由调用方给，--over 会读匹配到的本地文件。
+          readsLocalData: { request: false, over: true },
           invokesAI: true,
           sendsCallerProvidedState: true,
           confirmationRequired: true,
@@ -4971,7 +4973,13 @@ program
   program
     .command('decide')
     .description('本机判断层：一个 state + 一批类型化问题，一次调用返回带概率的答案')
-    .requiredOption('--request <file>', '请求 JSON 的路径（含 state 与 questions）')
+    .option('--request <file>', '请求 JSON 的路径（含 state 与 questions）')
+    .option('--over <glob>', '批量模式：对匹配到的每个文件问 --ask 里的每个问题（可重复）',
+            (value: string, previous: string[]) => previous.concat([value]), [] as string[])
+    .option('--ask <text>', '批量模式下的一个是非题，逐文件展开（可重复）',
+            (value: string, previous: string[]) => previous.concat([value]), [] as string[])
+    .option('--max-chars <n>', '批量模式下每个文件喂多少字符（默认 1500；它决定上限）', '1500')
+    .option('--limit <n>', '批量模式最多取多少个文件（默认 50）', '50')
     .option('--model <name>', '模型别名，默认 jev-latest')
     .option('--dry-run', '只校验请求并回显形状，不调用决策模型')
     .option('--yes', '确认把 state 发送到已配置的决策模型服务')
@@ -4986,18 +4994,32 @@ program
 
       // 预览里要报"这批几个问题"，所以在这里读一眼；**校验仍然只由脚本做**，
       // 免得两处校验逻辑各说各话。
+      // 两种输入方式：--request 一个文件、或 --over 批量展开。脚本自己会拒掉
+      // 两个都没给的情况，所以这里不做重复校验。
+      const batch = Array.isArray(opts.over) && opts.over.length > 0
       let questionCount: number | null = null
-      try {
-        const parsed = JSON.parse(readFileSync(opts.request, 'utf8'))
-        if (parsed && typeof parsed === 'object' && parsed.questions
-            && typeof parsed.questions === 'object') {
-          questionCount = Object.keys(parsed.questions).length
+      if (batch) {
+        questionCount = opts.over.length * opts.ask.length || null
+      } else if (opts.request) {
+        try {
+          const parsed = JSON.parse(readFileSync(opts.request, 'utf8'))
+          if (parsed && typeof parsed === 'object' && parsed.questions
+              && typeof parsed.questions === 'object') {
+            questionCount = Object.keys(parsed.questions).length
+          }
+        } catch {
+          // 读不到或不是 JSON：交给脚本去报一个准确得多的错误。
         }
-      } catch {
-        // 读不到或不是 JSON：交给脚本去报一个准确得多的错误。
       }
+      const limit = parseCliInteger(opts.limit, 'limit', 1, 500, opts.json)
+      const maxChars = parseCliInteger(opts.maxChars, 'max-chars', 1, 100000, opts.json)
 
-      const args = [decideScript, '--request', opts.request,
+      const args = [decideScript,
+                    ...(batch
+                      ? [...opts.over.flatMap((g: string) => ['--over', g]),
+                         ...opts.ask.flatMap((a: string) => ['--ask', a]),
+                         '--max-chars', String(maxChars), '--limit', String(limit)]
+                      : ['--request', opts.request]),
                     ...(opts.model ? ['--model', opts.model] : [])]
       if (opts.dryRun) {
         args.push('--dry-run')
@@ -5005,7 +5027,7 @@ program
         const preview = {
           success: false, dryRun: false, action: 'decide',
           code: 'CONFIRMATION_REQUIRED',
-          questionCount, readsLocalData: false, invokesAI: true,
+          questionCount, readsLocalData: batch, invokesAI: true,
         }
         if (opts.json) {
           console.log(JSON.stringify(preview))

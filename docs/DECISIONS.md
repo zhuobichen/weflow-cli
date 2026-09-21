@@ -568,6 +568,16 @@ unwanted.
 
 **Consequences:**
 
+- **Batch mode exists because the primitive was unusable without it.** Judging 44 files across
+  3 questions by hand meant writing 132 question blocks; the first real use of `decide` was a
+  throwaway loop that built them. `--over <glob> --ask <text>` now does that expansion, and the
+  response carries a `batch` mapping from question name to file and question, so a caller never
+  has to parse names - file names contain spaces, `|` and CJK punctuation, and encoding them into
+  question names would make every reader a string-parsing exercise.
+- **The evidence size is an argument, and it is reported back.** `--max-chars` defaults to 1500
+  and the response echoes it, because the measurement above says the evidence you feed sets the
+  ceiling. A tool that decides that number silently would invite the conclusion that its output
+  means more than it does.
 - **Requests are validated locally.** The service returns `422` for a malformed request, but
   that error can only say which field is invalid - not what the caller meant. Local validation
   names the intent: "a `score` needs at least two ordered levels", "a `choice` needs a non-empty

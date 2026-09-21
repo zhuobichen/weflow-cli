@@ -47,8 +47,11 @@ test('decide is discoverable and declares what leaves the machine', () => {
     const decide = body.primitives?.decide
     assert.ok(decide, 'decide should be registered in capabilities (D-018)')
     assert.equal(decide.invokesAI, true)
-    assert.equal(decide.readsLocalData, false)
     assert.equal(decide.confirmationRequired, true)
+    // 两条输入路径读不读本地不一样，所以它是分开声明的——只写一个 false
+    // 会在 `--over` 上撒谎。
+    assert.equal(decide.readsLocalData.request, false)
+    assert.equal(decide.readsLocalData.over, true)
     assert.equal(decide.sendsCallerProvidedState, true)
     // 这一版刻意不暴露成 MCP 工具：远端客户端不该能驱动本机出境调用。
     assert.equal(decide.mcpExposed, false)
@@ -78,6 +81,22 @@ test('a malformed request is rejected locally, never sent', () => {
     const body = payload(result.stdout)
     assert.equal(body.code, 'INVALID_REQUEST')
     assert.notEqual(result.status, 0)
+  })
+})
+
+test('a batch dry run reports how many files and how much of each', () => {
+  withHome((home) => {
+    // 先放一个文件进去：空的临时目录里 glob 匹配不到任何东西，脚本会正确地
+    // 报 NO_FILES——那测的就不是展开逻辑了。
+    writeRequest(home, { state: '随便', questions: { 甲: { type: 'noul' } } })
+    const result = runCli(home, ['decide', '--over', join(home, '*.json'),
+                                 '--ask', '会写文件吗', '--dry-run', '--json'])
+    const body = payload(result.stdout)
+    assert.equal(result.status, 0)
+    assert.equal(body.fileCount, 1)
+    assert.equal(body.maxChars, 1500)
+    // 批量模式读本地文件，这一点必须与 --request 那条路区分开。
+    assert.equal(body.readsLocalData, true)
   })
 })
 
