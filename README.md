@@ -257,7 +257,7 @@ weflow-cli config set assistantGroupRequireMention true
 | 朋友圈缓存 | `weflow-cli sns timeline` · `weflow-cli sns users` · `weflow-cli sns stats` |
 | 微信收藏 | `weflow-cli fav list` · `weflow-cli fav export markdown` · `weflow-cli fav set-key` |
 | 微信读书 | `weflow-cli weread shelf` · `notes` · `search` · `stats` |
-| 知识库 | `weflow-cli vault` · `weflow-cli wiki` · `weflow-cli search <query>` · `weflow-cli chat` |
+| 知识库 | `weflow-cli vault` · `weflow-cli wiki` · `weflow-cli search <query>` · `weflow-cli chat`（语义检索需先 `config set dashscopeApiKey`）|
 | 总结与任务 | `weflow-cli report` · `annual-report` · `todos` |
 | 第二大脑助手 | `weflow-cli assistant start` · `status` · `log` · `stop` |
 | AI 编辑器集成 | `weflow-cli mcp-config` |

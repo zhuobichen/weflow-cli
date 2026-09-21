@@ -26,8 +26,8 @@ sys.path.insert(0, str(SCRIPTS))
 # （test_…same_as_the_ts_list）比对两边集合相等。
 ENCRYPTED_KEYS = {
     'decryptKey', 'decryptKey3x', 'ntKey', 'contactKey', 'wechatOcToken',
-    'wereadApiKey', 'deepseekApiKey', 'typesafeApiKey', 'snsKey', 'favKey',
-    'favPassphrase',
+    'wereadApiKey', 'deepseekApiKey', 'typesafeApiKey', 'dashscopeApiKey', 'snsKey',
+    'favKey', 'favPassphrase',
 }
 # 允许直接读的文件：解密助手就住在这里。
 SANCTIONED = {'_utils.py'}
@@ -75,7 +75,7 @@ class EncryptedConfigReadTests(unittest.TestCase):
         # 上一条测试把 `_utils` 排除在外，所以它自己必须确实解密——否则整条链断了
         # 而没有任何东西会发现。
         text = (SCRIPTS / '_utils.py').read_text(encoding='utf-8')
-        for key in ('deepseekApiKey', 'typesafeApiKey'):
+        for key in ('deepseekApiKey', 'typesafeApiKey', 'dashscopeApiKey'):
             self.assertIn("decrypt_lock(config.get('%s'" % key, text,
                           '%s 的读取没有经过 decrypt_lock' % key)
 

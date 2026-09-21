@@ -56,7 +56,7 @@ except:
     pass
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _utils import load_config, decrypt_lock
+from _utils import load_config, decrypt_lock, get_dashscope_key
 from jev_client import create_client
 
 OUTPUT_ROOT = 'output'
@@ -521,7 +521,7 @@ def main():
 
     args = parser.parse_args()
     config = load_config()
-    api_key = args.api_key or os.environ.get('DASHSCOPE_API_KEY', '') or config.get('dashscopeApiKey', '')
+    api_key = args.api_key or os.environ.get('DASHSCOPE_API_KEY', '') or get_dashscope_key(config)
 
     if args.command == 'build':
         result = build_index(api_key, full=args.full)

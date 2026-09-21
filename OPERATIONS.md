@@ -265,6 +265,27 @@ python scripts/quality_eval.py score ~/.weflow-cli/labels/labels-<时间戳>.jso
 
 标注文件落在 `~/.weflow-cli/labels/`，里面是文章标题与你的判断，不进仓库。
 
+### 语义检索要用的 embedding key
+
+语义检索和 RAG 问答需要阿里云百炼（DashScope）的 key：
+
+```powershell
+weflow-cli config set dashscopeApiKey "sk-..."
+```
+
+它和别的密钥一样**机器绑定加密保存**。不设的话 `search`/`chat` 会直接说缺 key，
+而不会拿一个空 key 去请求。`--api-key` 参数或 `DASHSCOPE_API_KEY` 环境变量仍然优先，
+临时用一次时更方便。
+
+顺带一提，`favPassphrase`（解锁收藏与 biz 库的口令）现在也能这样设置了——
+
+```powershell
+weflow-cli config set favPassphrase "..."
+```
+
+在此之前它是个"一等机密却设不了"的项：在加密名单里、被日报与欠账雷达读，
+却不在 `config set` 的允许名单里。
+
 ### 检索与重排
 
 ```powershell

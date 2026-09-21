@@ -408,6 +408,24 @@ def get_api_key(config=None) -> str:
     return decrypt_lock(config.get('deepseekApiKey', ''))
 
 
+def get_dashscope_key(config=None) -> str:
+    """读取阿里云百炼（DashScope）的 embedding key，自动解密 lock: 前缀。
+
+    和 `get_api_key` / `get_typesafe_key` 同一形状：**不要直接 config.get**——
+    这个键进了 `ENCRYPTED_KEYS`，磁盘上是密文。解密失败回空串而不是抛，
+    理由同 get_typesafe_key（跨机器拷配置时它该表现为"没配"，不是崩）。
+    """
+    if config is None:
+        try:
+            config = load_config()
+        except Exception:
+            return ''
+    try:
+        return decrypt_lock(config.get('dashscopeApiKey', ''))
+    except Exception:
+        return ''
+
+
 def get_typesafe_key(config=None) -> str:
     """读取 TypeSafe (Jev) 决策模型的 key，自动解密 lock: 前缀。
 
