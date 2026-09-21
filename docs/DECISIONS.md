@@ -567,6 +567,44 @@ unwanted.
   this is just an extra hop. It pays off at scale, where the alternative is many calls and prose
   to parse.
 
+## D-035: The assistant's single-round fast path is designed but deliberately not shipped
+
+**Status:** Deferred (design recorded, no code written)
+
+The assistant's ReAct loop costs two LLM round-trips for the common "answer from local data"
+question: round 1 picks a tool and its arguments, round 2 phrases the reply from the result. A
+decision-model pre-router could resolve `{needs_tool, tool, closed-set arguments}` in one ~1s
+call before the loop, execute that tool, and let the very first `callLLM` see the result - turning
+two round-trips into one. Measured elsewhere in this repo, the call model supports it: 12
+questions cost 0.91s against 0.84s for two, so the routing decision is nearly free.
+
+**Why it is not implemented here:** `handleMessage` is a privacy-audited, daemon-resident path.
+It carries the access-control gate, `privacyGate.audit` on every tool call, the daily limit, and
+three-tier memory - and it can only be exercised end to end against a **live** WeChat channel
+(bind by QR, whitelist a sender, run the daemon). None of that is reproducible in the environment
+this was built in, so the change would have shipped unverified into a path that handles the user's
+real messages.
+
+The failure mode is not a crash, which is what makes it worth writing down: if the router picks
+the wrong tool, the model receives a result that does not answer the question and will phrase a
+**confident** reply around it. That is worse than being slow.
+
+**What it would take to land it safely:**
+
+- an opt-in switch on the model of `--classifier` / `--no-rerank` / `--include-all`, **default
+  off**, so live behaviour is unchanged until someone watches it;
+- a routing-confidence threshold that falls back to the normal loop, plus an assertion that the
+  fallback path is bit-identical to today's behaviour;
+- a synthetic harness that drives `handleMessage` with a stubbed `callLLM` and a stubbed tool
+  executor, covering: routing correct, routing wrong (must degrade), routing uncertain (must
+  degrade), and **no tool dispatched without the audit line** - the last one is the security
+  property that must not regress;
+- a way to observe real traffic before trusting it, e.g. run it in log-only mode ("would have
+  routed to X") alongside the normal loop for a week and compare.
+
+**Until then** the loop stays as it is. One extra LLM round-trip is not worth an unverifiable
+change to the path that mediates the user's messages.
+
 ## Decision Template
 
 
