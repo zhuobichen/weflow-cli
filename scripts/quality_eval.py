@@ -97,6 +97,51 @@ def collect_pool(days):
     return buckets
 
 
+def band_of(score):
+    """收录分落在哪个档。没有分数返回 None。"""
+    if score is None:
+        return None
+    for low, high in BUCKETS:
+        if low <= score < high:
+            return (low, high)
+    return None
+
+
+def draw_by_band(items, n, seed):
+    """按**概率档位**分层取样。
+
+    只按主题取样的样本会出现这种形状：49 篇里 45 篇的收录分都在 0.2 以下，真正处在
+    决策边界上的只有 4 篇。拿这样的样本去标，校准曲线只有 4 个点，阈值扫描被一堆
+    容易的负例主导——**标了 49 条，买到的信息量等于标了 4 条**。
+
+    所以先按概率分档，再在档内轮转取。代价是样本不再是自然分布，所以**档位在全池里
+    的占比要单独报出来**（`prevalence`）——它回答另一个问题："这个阈值每天会影响
+    多少篇文章"。
+    """
+    rng = random.Random(seed)
+    groups = defaultdict(list)
+    for item in items:
+        groups[band_of(_num((item.get('jev') or {}).get('includeScore')))].append(item)
+    for group in groups.values():
+        rng.shuffle(group)
+
+    picked, index = [], 0
+    # 每轮从每个档位各取一条。空档位（分数从不落在那里）自然跳过。
+    while len(picked) < n:
+        took = False
+        for band in sorted(groups, key=lambda b: (b is None, b)):
+            group = groups[band]
+            if index < len(group):
+                picked.append(group[index])
+                took = True
+                if len(picked) >= n:
+                    break
+        if not took:
+            break
+        index += 1
+    return picked
+
+
 def draw_sample(buckets, n, seed):
     """轮转取样：逐轮从每个主题各取一条，样本不被某一天某一类刷屏。
 
@@ -133,8 +178,10 @@ def cmd_sample(args):
                           'error': '最近 %d 天没有可抽样的文章（先跑日报）' % args.days},
                          ensure_ascii=False))
         return 2
-    picked = draw_sample(buckets, args.n, args.seed)
-    print('抽样 %d 篇（seed=%d），用生产路径逐篇打分…' % (len(picked), args.seed))
+    # 先给一个**比最终样本大得多**的候选池打分：分档取样需要每个档位都有候选，
+    # 而低分档占绝大多数，只打 n 篇的话边界档位往往只有个位数。
+    picked = draw_sample(buckets, args.pool, args.seed)
+    print('候选池 %d 篇（seed=%d），用生产路径逐篇打分…' % (len(picked), args.seed))
 
     started = time.time()
     scored, failed = [], 0
@@ -157,22 +204,41 @@ def cmd_sample(args):
             scored.append(item)
     print('打分完成 %d/%d，耗时 %.1fs' % (len(scored), len(picked), time.time() - started))
 
+    # 全池的档位占比：这是**另一个问题**的答案——"阈值一动，每天会多收或少收多少篇"。
+    prevalence = defaultdict(int)
+    for item in scored:
+        prevalence[band_of(_num(item['jev']['includeScore']))] += 1
+    total_pool = max(1, len(scored))
+
+    picked = draw_by_band(scored, args.n, args.seed)
+    by_band = defaultdict(int)
+    for item in picked:
+        by_band[band_of(_num(item['jev']['includeScore']))] += 1
+    print('按档位取样 %d 篇：%s' % (
+        len(picked), ' · '.join('%.2f-%.2f 取 %d 篇' % (b[0], b[1], c) for b, c in
+                                sorted(by_band.items(), key=lambda kv: (kv[0] is None, kv[0])))))
+
     os.makedirs(LABEL_DIR, exist_ok=True)
     stamp = datetime.now(TZ).strftime('%Y%m%d-%H%M%S')
     target = os.path.join(LABEL_DIR, 'labels-%s.json' % stamp)
     payload = {
         'meta': {'createdAt': datetime.now(TZ).isoformat(timespec='seconds'),
                  'seed': args.seed, 'days': args.days, 'count': len(scored),
+                 'poolSize': total_pool,
+                 # 样本按档位分层，所以它不是自然分布；档位占比必须单独给，
+                 # 否则"样本里 20% 该收"会被误读成"每天有 20% 的文章该收"。
+                 'prevalence': {'%.2f-%.2f' % band: round(count / total_pool, 3)
+                                for band, count in prevalence.items() if band},
                  'howTo': ('把每条的 label 填上：{"topic": "AI|学术|新闻|文学|投资|政治",'
                            ' "include": true|false}；没把握的留 null（算未标注，不算标错）。'
                            '填完运行：python scripts/quality_eval.py score <本文件>')},
-        'items': scored,
+        'items': picked,
     }
     with open(target, 'w', encoding='utf-8') as handle:
         json.dump(payload, handle, ensure_ascii=False, indent=1)
 
     print('\n' + '=' * 64)
-    for index, item in enumerate(scored, 1):
+    for index, item in enumerate(picked, 1):
         print('%2d. [%s] %s' % (index, item['jev']['topic'] or '?', item['title'][:52]))
         print('    历史标注 %s/%s · Jev 收录分 %s · %s'
               % (item['storedTopic'] or '?', item['storedRelevance'] or '-',
@@ -306,7 +372,9 @@ def main():
     sub = parser.add_subparsers(dest='command')
 
     sample = sub.add_parser('sample', help='抽样并用生产路径打分，导出待标注清单')
-    sample.add_argument('--n', type=int, default=50)
+    sample.add_argument('--n', type=int, default=50, help='最终要标注多少篇')
+    sample.add_argument('--pool', type=int, default=150,
+                        help='先给多大的候选池打分，再按概率档位取 n 篇（默认 150）')
     sample.add_argument('--days', type=int, default=90, help='只从最近多少天的文章里抽')
     sample.add_argument('--seed', type=int, default=20260921, help='固定种子：两次抽样结果一致')
     sample.add_argument('--json', action='store_true')

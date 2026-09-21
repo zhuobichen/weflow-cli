@@ -158,5 +158,47 @@ class ArticleReadingTests(unittest.TestCase):
             self.assertIn('正文内容', body)
 
 
+class BandStratifiedSamplingTests(unittest.TestCase):
+    """按**概率档位**分层取样。
+
+    只按主题取样会得到这种样本：49 篇里 45 篇的收录分都在 0.2 以下。拿它去标，
+    校准曲线只有 4 个点，阈值扫描被一堆容易的负例主导——**标了 49 条，买到的信息量
+    等于标了 4 条**。所以取样必须先分档。
+    """
+
+    def scored(self, score, n=1):
+        return [{'id': '%s-%d' % (score, i), 'jev': {'includeScore': score}}
+                for i in range(n)]
+
+    def test_band_boundaries(self):
+        self.assertEqual(qe.band_of(0.5), (0.5, 0.65))
+        self.assertEqual(qe.band_of(0.0), (0.0, 0.2))
+        self.assertEqual(qe.band_of(1.0), (0.8, 1.01))
+        self.assertIsNone(qe.band_of(None))
+
+    def test_rare_bands_still_get_represented(self):
+        # 45 条 0.1 + 2 条 0.55 + 1 条 0.9 —— 边界档位少，但必须被取到，
+        # 否则曲线就只剩一个点。
+        pool = self.scored(0.1, 45) + self.scored(0.55, 2) + self.scored(0.9, 1)
+        picked = qe.draw_by_band(pool, 12, seed=1)
+        scores = [p['jev']['includeScore'] for p in picked]
+        self.assertIn(0.55, scores)
+        self.assertIn(0.9, scores)
+
+    def test_it_is_deterministic(self):
+        pool = self.scored(0.1, 10) + self.scored(0.9, 10)
+        first = [p['id'] for p in qe.draw_by_band(pool, 6, seed=3)]
+        second = [p['id'] for p in qe.draw_by_band(pool, 6, seed=3)]
+        self.assertEqual(first, second)
+
+    def test_asking_for_more_than_the_pool_has(self):
+        self.assertEqual(len(qe.draw_by_band(self.scored(0.1, 3), 50, seed=1)), 3)
+
+    def test_an_unscored_item_does_not_crash_the_bucketing(self):
+        pool = self.scored(0.1, 4) + [{'id': 'x', 'jev': {'includeScore': None}}]
+        picked = qe.draw_by_band(pool, 5, seed=1)
+        self.assertEqual(len(picked), 5)
+
+
 if __name__ == '__main__':
     unittest.main()
