@@ -443,9 +443,32 @@ standard - which is exactly why the switch is reversible and why the raw score i
   this change and never read by anything - the same "compute it and throw it away" shape as the
   exporter's old `COVER_STATE` counters. It was removed and replaced by `worth_including`.
 - **Not done, deliberately**: the other eight "ask the LLM then parse the text" call sites (assistant
-  tool routing, long-term memory extraction, todo urgency, monthly-report task detection, ...),
-  the `tags` field, and `TOPICS` being duplicated across five files. The first group was never
-  measured on Chinese; the others are separate defects with their own blast radius.
+  tool routing, long-term memory extraction, todo urgency, monthly-report task detection, ...).
+  That group was never measured on Chinese, so switching it would be a bet rather than a change.
+- **Superseded by later work, kept so the reasoning stays readable**: this decision listed `tags` and
+  "`TOPICS` duplicated across five files" as deliberately-not-done. `TOPICS` and `TOPIC_CRITERIA` are
+  now single-sourced in `_utils` (the prompt path and the decision-model path read one table), and
+  `test/topic_taxonomy_test.py` pins every consumer by identity. The four `TOPIC_ORDER` copies in
+  `auto_tag` / `create_reading_notes` / `enrich_backlinks` / `generate_html` remain, because two of
+  those files have no `_utils` import edge and whether an import resolves would then depend on the
+  caller's working directory - so a test asserts the four copies still equal `TOPICS` instead, turning
+  a silent future drift (adding a seventh category would drop a section from the report) into a
+  failure.
+- **A follow-up pass found the root cause behind the 2199-of-2201 number and fixed it.** The default
+  was not merely applied too often - it was applied **inconsistently by the two writers**: the JSON
+  writer defaulted a missing topic to `''` and the grouping step that names the folder and writes the
+  md frontmatter defaulted it to `学术`, seven lines apart, so a single run could emit `topic: 学术` in
+  the md and `topic: ""` in the JSON with nothing reported either way. The 2026-09-04 output is that
+  failure in full (178 articles, all under `学术/` in the md, all `""` in the JSON, two of them
+  "OpenAI 深夜发布 GPT-6 Astra"). The reachable trigger is ordinary: `daily --no-ai`, or a run with
+  no API key, skips classification entirely, leaving every article without a `topic` key while the
+  write phase still runs. Both writers now read one normalised value (`_utils.DEFAULT_TOPIC`, applied
+  by `biz_daily._group_by_topic`), the check is **membership in `TOPICS`** rather than emptiness, and
+  the run prints how many articles fell back so a whole-batch fallback cannot read as a normal
+  classification. The same shape sat in `tags` and was fixed the same way. What remains open is a
+  different question: whether the `【标签】` extraction lands at all. The earlier claim that it never
+  does is now doubtful - a 2026-09-05 JSON carries real multi-word tags (`向量检索`, `工程踩坑`) - so
+  that should be re-measured rather than repeated.
 
 ## D-032: Use the decision model as a reranker - one request per pass
 
