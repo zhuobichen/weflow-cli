@@ -171,6 +171,44 @@ weflow-cli awaiting --days 75 --limit 25 --min-prob 0.45 --yes
 - **没有金标准校准过**，当提示看，不当事实用。图片/语音等非文本消息以类型标签进入判断，
   不会被当成空内容。
 
+### 本机判断层
+
+把"判断"从"生成"里拆出来，做成一条命令行原语：**一个 state、一批类型化问题、一次调用**，
+返回带概率的类型化答案，外加这次调用的 token 数与花费。它**不读任何本地数据**——
+state 是什么完全由你给。
+
+```powershell
+# 从文件（CLI）：
+weflow-cli decide --request req.json --dry-run     # 只校验并回显形状，不出境、不需要 key
+weflow-cli decide --request req.json --yes
+
+# 从 stdin（直接调脚本，管道里更好用）：
+echo '{"state":"...","questions":{"相关":{"type":"noul","instructions":"..."}}}' | python scripts/decide.py
+```
+
+请求格式：
+
+```json
+{"state": "字符串 / JSON 对象 / 数组都行",
+ "questions": {
+   "要退款": {"type": "noul", "instructions": "对方明确要求退款吗？"},
+   "紧急度": {"type": "score", "instructions": "多急？", "criteria": ["不急", "一般", "紧急"]},
+   "部门":   {"type": "choice", "instructions": "转给谁？",
+              "criteria": {"billing": "账单", "tech": "报错"}}
+ }}
+```
+
+**`score` 的 criteria 是零索引的有序数组**——位置即分值，`criteria[0]` 是 0 分。
+只有一档时会被本机拒掉，因为那样 score 恒等于 0，问不出东西。
+
+什么时候值得用它：**一批**判断（比如给 200 个条目各打几个标签），一次请求约 1 秒，
+问题数几乎不影响成本。**一次性的单个判断不值得**——调用方自己的模型就够了，
+多这一跳只是绕路。
+
+它对**不生成文本**这一点是有意的：答案不会以散文形式回来，所以放在控制流里是安全的。
+这一版**没有**把它暴露成 MCP 工具——那会让远端 MCP 客户端能驱动本机往第三方发文，
+属于要单独决策的出境面。
+
 ### 检索与重排
 
 ```powershell

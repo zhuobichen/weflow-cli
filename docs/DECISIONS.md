@@ -516,6 +516,43 @@ Debt age is measured from the **other side's** last message, not the conversatio
 activity: if the user replied most recently the debt is zero, and using session activity would
 have flattened exactly the case worth surfacing.
 
+## D-034: Expose the decision model as a local primitive, but not over MCP
+
+**Status:** Active
+
+`weflow-cli decide --request <file>` (and `scripts/decide.py`, which also reads stdin) takes a
+caller-supplied `{state, questions}` and returns `{answers, usage, costUsd}` from one decision
+request. The command reads **no local data of its own** - the entire state is whatever the
+caller hands it.
+
+**Reason:** the value is not that this judges better than the caller's own model; it is that a
+batch of judgements becomes affordable. Measured: ~1s for a request regardless of whether it
+carries 2 questions or 12, since `state` dominates the token count, and 20 candidates cost
+around two ten-thousandths of a cent more than 1. So "label 200 items across six dimensions"
+stops being a token-budget decision. Two further properties come from it being non-generative:
+the answers arrive **typed with probabilities** rather than as prose to be parsed, and nothing
+is being *written*, so it is safe to place inside control flow where generated text would be
+unwanted.
+
+**Consequences:**
+
+- **Requests are validated locally.** The service returns `422` for a malformed request, but
+  that error can only say which field is invalid - not what the caller meant. Local validation
+  names the intent: "a `score` needs at least two ordered levels", "a `choice` needs a non-empty
+  criteria object", "a `score` with one level is a constant zero and carries no information".
+- **Deliberately not exposed over MCP this round.** An MCP client - explicitly a separate trust
+  boundary per D-002 - would be able to drive local outbound calls carrying arbitrary text of
+  its choosing. That is a new egress surface and it needs its own decision, not a side effect of
+  adding a convenience tool. `capabilities --json` records `mcpExposed: false` with the reason,
+  so the omission is visible rather than inferred.
+- Follows the `search`/`awaiting` discipline: `--dry-run` validates and echoes the shape with
+  **no egress**, `--yes` runs, and neither given means confirm. `--dry-run` needs no key, on the
+  same reasoning as `awaiting`: a preview exists to answer "is this worth spending?".
+- Honest limitation: this is a *different* model, not a strictly better one, and there is no gold
+  standard behind its numbers. For a single one-off judgement the caller's own model is fine and
+  this is just an extra hop. It pays off at scale, where the alternative is many calls and prose
+  to parse.
+
 ## Decision Template
 
 
