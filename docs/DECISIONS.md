@@ -415,6 +415,16 @@ standard - which is exactly why the switch is reversible and why the raw score i
   empty string rather than raising when the ciphertext cannot be decrypted - `configService`'s
   `lockDecrypt()` silently returns `''` in the same situation, and a config copied from another
   machine must degrade to the old path rather than crash the daily run.
+- **The taxonomy is one table, and both paths read it.** `TOPICS` had been copied into six
+  files and `TOPIC_CRITERIA` lived separately inside `jev_client`; both now sit in `_utils` and
+  every consumer imports them. The trigger was a concrete contradiction: `TOPIC_PROMPT`
+  generated its "must be one of" line from `TOPICS` (six categories, including 政治) while
+  hardcoding **five** in its two reminders and omitting 政治 from the judging rules - a category
+  holding 26% of the corpus had no definition, in a prompt whose whole job is to be strict about
+  the list. Prose enumerations drift; a table does not. The criteria table is shared rather than
+  mirrored precisely so that "falling back to the LLM path" means judging by the same standards
+  it always did. Pinned by identity in `test/topic_taxonomy_test.py`, because a copy that happens
+  to be correct passes an equality check.
 - **The report's admission question is now asked directly.** `worth_including` (a `noul`) rides
   along in the same request - measured at 0.91s for 12 questions versus 0.84s for 2, with `state`
   dominating the tokens, so the marginal question is essentially free - and lands in frontmatter as

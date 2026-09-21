@@ -23,7 +23,7 @@ from pathlib import Path
 from collections import Counter
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _utils import create_engine, parse_frontmatter
+from _utils import create_engine, parse_frontmatter, TOPICS, TOPIC_CRITERIA
 
 SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR = os.path.dirname(SCRIPTS_DIR)
@@ -31,7 +31,7 @@ SOURCE_ROOT = os.path.join(ROOT_DIR, 'output', 'biz-daily')
 OUTPUT_DIR = os.path.join(ROOT_DIR, 'output', 'ai-reports')
 
 TZ = timezone(timedelta(hours=8))
-TOPICS = ['AI', '学术', '新闻', '文学', '投资', '政治']
+
 FOCUS_TOPIC = 'AI'
 
 

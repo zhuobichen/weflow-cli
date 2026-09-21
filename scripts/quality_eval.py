@@ -36,13 +36,14 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _utils import TOPICS  # noqa: E402
 from jev_client import create_client  # noqa: E402
 
 TZ = timezone(timedelta(hours=8))
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DAILY_ROOT = os.path.join(ROOT, 'output', 'biz-daily')
 LABEL_DIR = os.path.join(os.path.expanduser('~'), '.weflow-cli', 'labels')
-TOPICS = ['AI', '学术', '新闻', '文学', '投资', '政治']
+
 WORKERS = 6
 EXCERPT = 400
 # 校准时按概率分桶。桶要窄到能看出斜率，又不能窄到每桶只剩两三条。

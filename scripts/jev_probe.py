@@ -42,6 +42,7 @@ for _stream in (sys.stdout, sys.stderr):
 
 # 契约与客户端只有一份实现（scripts/jev_client.py，产品代码用的就是它）。
 # 这里原先抄了一份，抄本的判据文本和产品版一旦漂开，"测过的"和"上线的"就不是同一个东西。
+from _utils import TOPICS  # noqa: E402
 from jev_client import (  # noqa: E402  (scripts/ 已由 main 插进 sys.path)
     DEFAULT_MODEL,
     ENDPOINT,
@@ -52,8 +53,9 @@ from jev_client import (  # noqa: E402  (scripts/ 已由 main 插进 sys.path)
     create_client,
 )
 
-# 探针自己的取样词表（产品侧的枚举在 biz_daily.TOPICS，仓库里另有多份，本轮不合并）。
-TOPICS = ['AI', '学术', '新闻', '文学', '投资', '政治']
+# 取样词表也从 _utils 来：分类法只有一份定义（曾经在五个文件里各有一份，其中
+# 提示词里那份还漂成了五类而 TOPICS 是六类）。
+
 
 
 def split_frontmatter(text):

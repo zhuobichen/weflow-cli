@@ -14,12 +14,13 @@ from pathlib import Path
 # 公共工具
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _utils import (
+    TOPICS,
     call_ai, parse_frontmatter, write_with_frontmatter,
     DEFAULT_USER_PROFILE, generate_action_suggestion, load_config
 )
 
 OUTPUT_ROOT = 'output/biz-daily'
-TOPICS = ['AI', '学术', '新闻', '文学', '投资', '政治']
+
 
 AD_PATTERNS = [
     re.compile(r'在小说阅读器读本章\s*'),

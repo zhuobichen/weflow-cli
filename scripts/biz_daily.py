@@ -28,7 +28,9 @@ from pathlib import Path
 
 # 公共工具
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _utils import call_deepseek, load_config, decrypt_lock, get_api_key, write_with_frontmatter, format_wikilinks
+from _utils import (call_deepseek, load_config, decrypt_lock, get_api_key,
+                    write_with_frontmatter, format_wikilinks,
+                    TOPICS, TOPIC_CRITERIA)
 
 try:
     from sqlcipher3 import dbapi2 as sqlcipher
@@ -57,7 +59,8 @@ DEEPSEEK_TIMEOUT = 60
 FETCH_DELAY_MIN = 8   # 最小抓取间隔 (秒)
 FETCH_DELAY_MAX = 12  # 最大抓取间隔 (秒)
 
-TOPICS = ['AI', '学术', '新闻', '文学', '投资', '政治']
+# TOPICS 现在从 _utils 导入（见文件头的 import）——分类法只有一份定义，
+# 因为"散文写的枚举"已经漂过一次：这里曾硬编码五类，而 TOPICS 是六类。
 
 
 def load_source_categories(config: dict) -> dict[str, str]:
@@ -221,12 +224,8 @@ TOPIC_PROMPT = f"""对文章分类、深度摘要、打标签，并评估与读�
 
 【主题】必须且只能是：{' / '.join(TOPICS)} 中的一个词。
 
-判断规则：
-- AI：AI大模型/Agent/编程/开源/科技产品/工具教程
-- 投资：股票基金/融资/经济分析/商业市场
-- 新闻：时事政策/社会热点/娱乐/招聘促销/会议通知
-- 文学：散文小说/美食旅游/生活随笔/历史文化
-- 学术：科研论文/期刊文章/实验室成果/学术会议/高校研究（环境/气候/地理/海洋/生态/化学/材料/生物医学等）
+判断规则（每一类都必须落到其中一条）：
+{chr(10).join('- %s：%s' % (name, desc) for name, desc in TOPIC_CRITERIA.items())}
 
 【相关度】对上述读者的实用价值：
 - 高：可直接用于科研（新工具/新方法/数据源/代码库）
@@ -234,7 +233,7 @@ TOPIC_PROMPT = f"""对文章分类、深度摘要、打标签，并评估与读�
 - 低：信息性阅读（纯新闻/娱乐/文学）
 
 **分类关键**：
-- 【主题】只写一个词（AI/学术/新闻/文学/投资），不要写其他文字
+- 【主题】只写一个词（{'/'.join(TOPICS)}），不要写其他文字
 - 【相关度】只写一个词（高/中/低）
 - 科研论文、期刊文章优先归学术；AI技术/工具/产品归AI
 
