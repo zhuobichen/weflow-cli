@@ -2026,6 +2026,19 @@ program
       if (session.status === 'confirmed') {
         console.log(chalk.green('\n✓ 登录成功!'))
         console.log(chalk.gray('  消息通道登录状态已安全保存'))
+        // 助手的白名单为空时**拒绝所有人**。你自己的发送者 ID 只有这一刻拿得到
+        // （登录 session 不落盘），所以在这里打出来：没这一句，用户登录完对着自己的
+        // 机器人说话什么也收不到，只能翻日志猜为什么。
+        // 只打在人看的这条路上——`--json` 那条路照旧不返回账号标识。
+        if (session.userId) {
+          console.log('')
+          console.log(chalk.cyan('  助手还没启用：白名单为空 = 拒绝所有人。'))
+          console.log(chalk.gray('  你自己的发送者 ID：') + chalk.cyan(session.userId))
+          console.log(chalk.gray('  启用（只回复你自己）：')
+            + chalk.cyan(`weflow-cli config set assistantWhitelist "${session.userId}"`))
+          console.log(chalk.gray('  只想先看它「本来会怎么答」而不改行为：')
+            + chalk.cyan('weflow-cli config set assistantFastRoute log'))
+        }
       } else {
         console.log(chalk.red(`\n✗ 登录失败: ${session.error || '超时'}`))
       }

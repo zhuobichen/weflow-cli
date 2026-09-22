@@ -529,6 +529,14 @@ weflow-cli assistant status
 
 助手默认拒绝所有发送者，需明确设置 `assistantWhitelist`。群聊还需要群白名单、成员白名单和 @ 门槛；项目不通过客户端自动化或非官方协议拉群。
 
+**第一次启用**要两步，两步都做完之前助手什么都不会回：
+
+1. `weflow-cli login-wechat` —— 扫码登录消息通道。**成功后它会把你自己的发送者 ID 打出来**
+   （只有那一刻拿得到，登录 session 不落盘），照抄它给的 `config set assistantWhitelist` 那行；
+2. `weflow-cli config set assistantWhitelist "<你的 ID>"` —— 白名单为空 = 拒绝所有人。
+
+想让助手先"只看不答"式地跑一段（记下它本来会怎么走，行为不改）：`config set assistantFastRoute log`。
+
 **启动前先确认两件事**，否则 `assistant start` 会如实地告诉你它起不来：
 
 1. **消息通道要已登录**（`weflow-cli login-wechat`）。没登录时子进程会退出，启动命令会把
