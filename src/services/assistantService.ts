@@ -31,10 +31,8 @@ const BASE_PROMPT = `你是"第二大脑", 运行在用户自己的电脑上, �
 - 回复用微信聊天风格, 简洁, 不用 markdown 符号
 - 数据不足时直说需要什么, 不要瞎猜
 - 回复控制在 300 字内, 列表类可放宽
-- 若因「严格隐私模式」读不到聊天正文: 如实说明你只能看到时间与字数, 并给出全部三条路——
-  ①改 balanced 模式(正文会发给当前模型, 但工具结果里的电话/证件/邮箱/密钥/链接仍会打码);
-  ②改用本地模型(aiEngine=ollama 或 lmstudio, 数据不出这台机器, 此时严格模式的屏蔽会自动不生效);
-  ③保持现状。不要只说「关掉严格模式」——那漏掉了②这条最贴合隐私顾虑的路。`
+- **必须真的调用过工具之后**才能对结果下结论。没调工具就说「内容被屏蔽了」「我查到了」
+  都是编造, 审计里会留下 tools=0。`
 
 interface ApiMessage {
   role: 'system' | 'user' | 'assistant' | 'tool'
@@ -152,9 +150,31 @@ export class AssistantService {
     }
   }
 
-  /** 组装系统提示: 基础人格 + L2 摘要 + L3 事实 */
+  /** 当前的隐私状态，作为**事实**写进系统提示。
+   *
+   *  曾经这里是一段写死的假设句（「若因严格模式读不到正文…」），实测撞了车：模型把它当成
+   *  当前状态，于是**一次工具都没调**就回用户"我调了工具，但内容被严格模式挡掉了"——
+   *  审计里 `tools=0`，是编造。现在按实际档位说，且与"没调工具不许下结论"那条配套。
+   */
+  private privacyStateLine(): string {
+    const mode = privacyGate.mode()
+    const local = privacyGate.isLocalInference()
+    if (local) {
+      return '[隐私] 本地推理：数据不出这台机器，工具结果里的聊天正文是原文，可以如实引用。'
+    }
+    if (mode === 'strict') {
+      return '[隐私] 当前 strict 模式：第三方聊天正文会以「[内容N字已按严格模式屏蔽]」的形式出现在'
+        + '工具结果里，那时你只能看到时间与字数。遇到这种情况如实说明，并给出三条路：'
+        + '①改 balanced（正文发给当前模型，电话/证件/邮箱/密钥/链接仍打码）；'
+        + '②改用本地模型 aiEngine=ollama/lmstudio（数据不出机器，屏蔽自动不生效）；③保持现状。'
+    }
+    return `[隐私] 当前 ${mode} 模式：工具结果里的聊天正文是原文（电话/证件/邮箱/密钥/链接已打成`
+      + '占位符），可以直接引用，不必声称被屏蔽。'
+  }
+
+  /** 组装系统提示: 基础人格 + 隐私状态 + L2 摘要 + L3 事实 */
   private buildSystemPrompt(userId: string): string {
-    const parts = [BASE_PROMPT]
+    const parts = [BASE_PROMPT, this.privacyStateLine()]
     const summary = this.memory.summary(userId)
     if (summary) parts.push(`\n[此前对话摘要]\n${summary}`)
     const facts = this.memory.facts(userId)

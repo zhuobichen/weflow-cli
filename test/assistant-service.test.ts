@@ -243,40 +243,51 @@ test('save_memory 工具真的写进长期记忆', async () => {
   assert.deepEqual(h.svc.memory.facts(user).map((f: any) => f.content), ['用户的猫叫豆豆'])
 })
 
-test('被严格模式挡住时，系统提示要求它给出全部三条路（含本地模型那条）', async () => {
-  // 实测过一次：它只说了"关掉严格模式"，漏掉了"换本地模型"——那恰恰是最贴合隐私顾虑的路，
-  // 而且本地推理下严格模式的屏蔽**本来就不生效**（isLocalInference 为真时直接返回原文）。
-  const h = harness([])
-  const prompt: string = h.svc.buildSystemPrompt('u-prompt')
+// ------------------------------------------------------- 隐私状态写进系统提示
 
-  assert.match(prompt, /严格隐私模式/)
-  assert.match(prompt, /balanced/)
-  assert.match(prompt, /ollama/)
-  assert.match(prompt, /不要只说/)
+const { configService } = await import('../src/services/configService.js')
+const realGet = configService.get.bind(configService)
+
+/** 让系统提示里那行隐私状态按指定档位生成 */
+function withPrivacy(mode: string, run: () => void): void {
+  ;(configService as any).get = (key: string) => (key === 'assistantPrivacy' ? mode : realGet(key))
+  try { run() } finally { ;(configService as any).get = realGet }
+}
+
+test('strict 档：提示里说明正文会被屏蔽，并给出全部三条路', () => {
+  withPrivacy('strict', () => {
+    const prompt: string = harness([]).svc.buildSystemPrompt('u-privacy')
+    assert.match(prompt, /strict 模式/)
+    assert.match(prompt, /严格模式屏蔽/)
+    assert.match(prompt, /balanced/)
+    assert.match(prompt, /ollama/)
+    assert.match(prompt, /保持现状/)
+  })
 })
 
-test('「隐私」指令报出当前档位与改法，且不叫模型', async () => {
-  const h = harness([])
-  const report = await h.svc.handleMessage(newUser(), '隐私', 'text')
-
-  assert.match(report, /隐私模式: strict/, '测试环境没有配置，取默认档')
-  assert.match(report, /只能看到时间与字数|被屏蔽/)
-  assert.match(report, /config set assistantPrivacy balanced/)
-  assert.match(report, /config set assistantPrivacy open/)
-  assert.equal(h.rounds.length, 0, '查隐私档不该产生任何模型调用')
+test('balanced 档：提示说正文可用，且**不出现"被屏蔽"**的说法', () => {
+  // 这条是回归测试：上一版的提示写死了一段"若因严格模式读不到正文…"，模型把它当成当前状态，
+  // 于是**一次工具都没调**就回"我调了工具，但内容被严格模式挡掉了"（审计 tools=0，是编造）。
+  withPrivacy('balanced', () => {
+    const prompt: string = harness([]).svc.buildSystemPrompt('u-privacy')
+    assert.match(prompt, /当前 balanced 模式/)
+    assert.match(prompt, /可以直接引用/)
+    assert.doesNotMatch(prompt, /严格模式屏蔽/, 'balanced 下不该再提"屏蔽"——那是上次编造的诱因')
+  })
 })
 
-test('云端推理时，「隐私」还会给出换本地模型这条路', async () => {
-  const h = harness([])
-  const report = await h.svc.handleMessage(newUser(), '隐私', 'text')
-
-  assert.match(report, /aiEngine ollama/, '正文不出机器的那条路必须一并给出')
+test('本地推理时提示说数据不出机器、正文是原文', () => {
+  ;(configService as any).get = (key: string) =>
+    key === 'aiEngine' ? 'ollama' : realGet(key)
+  try {
+    const prompt: string = harness([]).svc.buildSystemPrompt('u-privacy')
+    assert.match(prompt, /本地推理/)
+    assert.match(prompt, /原文/)
+  } finally { ;(configService as any).get = realGet }
 })
 
-test('一条微信消息改不了隐私档位：它只报不改', async () => {
-  const h = harness([])
-  await h.svc.handleMessage(newUser(), '隐私', 'text')
-  // 尝试用自然语言"改"它 —— 应当仍然只是被当成普通提问，由模型回答，而不是写配置
-  const before = h.svc.privacyModeForTest ?? null
-  assert.equal(before, null, '服务里不该存在"按消息改档位"的入口')
+test('提示里有一条反编造规则：没实际调过工具不许下结论', () => {
+  const prompt: string = harness([]).svc.buildSystemPrompt('u-privacy')
+  assert.match(prompt, /必须真的调用过工具/)
+  assert.match(prompt, /tools=0/)
 })

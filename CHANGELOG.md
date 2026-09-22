@@ -151,6 +151,17 @@ All notable user-facing changes are recorded here. This project follows [Semanti
   purpose**: a chat message must not be able to weaken a privacy setting, so the mode is changed on the
   machine, not from inside the conversation.
 
+- The assistant claimed it had called a tool and been blocked by strict mode, **without calling any tool at
+  all** - the audit line read `TURN_DONE 264B tools=0`. The cause was the prompt itself: the previous
+  version described strict mode as a hypothesis ("if strict mode hides chat bodies, then ..."), and the
+  model read that as the current state and skipped the lookup. The privacy state is now written into the
+  system prompt as a **fact about the current mode** (`strict` says bodies are masked and lists the three
+  ways out; `balanced`/`open` say the bodies are available and say nothing about masking; local inference
+  says nothing leaves the machine), and a rule was added: do not conclude anything about a tool result
+  before actually calling the tool - "content is masked" without a call is fabrication, and the audit
+  will show `tools=0`. Tests cover all three modes plus the anti-fabrication rule, with the balanced case
+  asserting the prompt does **not** mention masking.
+
 ### Changed
 - Image downloads during the daily run are concurrent (6-way). They were sequential at 0.37 s and 135 KB each - about 18 minutes per 190-article day - even though they come from `.qpic.cn`, WeChat's CDN, which a browser fetches in parallel anyway. Same three articles: 17.2 s → 2.1 s. The same change fixed the map: a failed download used to be recorded in `.image_map.json` **before** it was attempted, and the reader injects that map as `window._IMG_MAP`, so the page was told to look for a local file that did not exist. Only files that are actually on disk are mapped now, and duplicates in a page are fetched once (31 image links in one article were 17 distinct images).
 - LLM summaries are generated concurrently, so a 190-article day spends about 2 minutes there instead of 9 (measured 2.27/2.92/2.45 s per article). The calls are **prefetched, not the loop rewritten**: responses are filled back by their original index and the existing loop still does the parsing and the field writes in the same order, so every fallback branch behaves exactly as before - a failed call comes back as an error and the loop re-raises it into its own `except`. The per-article 0.3 s pacing moved into the worker, so the request rate to the provider is unchanged. The stage now prints `摘要完成 N/M 篇，耗时 Xs（6 并发；串行约需 Ys）`, the shape the classification stage already used.
