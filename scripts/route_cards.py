@@ -367,8 +367,15 @@ def main():
         print('=== 第一步：让 Jev 从候选词里挑 ===')
         print('  候选：%s' % '、'.join(terms))
         if args.dry_run:
-            print('  （每个词一个问题："「X」是用户在找的那个词吗？"）')
-        elif not args.yes:
+            # **预览必须真的预览完就停**。改版时这里漏了 `return`，于是 `--dry-run`
+            # 变成"不问了、直接本地检索"——虽然仍不出网（`create_client` 没被调用），
+            # 但 docstring 承诺的"打印将要发送的请求"名存实亡。由测试抓回。
+            print('  将发送（不含消息正文）：')
+            for j, term in enumerate(terms):
+                print('    t%d：「%s」是用户在找的那个词吗？' % (j, term))
+            print('\n（--dry-run：没有发送任何东西）')
+            return
+        if not args.yes:
             print('  需要 --yes 才会发给 Jev（出网，发的是候选词与问题，不含聊天内容）')
             return
         else:

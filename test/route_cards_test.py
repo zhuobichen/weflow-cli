@@ -14,6 +14,8 @@
 不联网：Jev 客户端是桩。
 """
 import importlib.util
+import io
+import json
 import sqlite3
 import sys
 import types
@@ -220,6 +222,180 @@ class PickTermsTests(unittest.TestCase):
         client = StubClient({})
         self.assertEqual(rc.pick_terms(client, '问', []), ([], {}, 0))
         self.assertEqual(client.calls, [])
+
+
+class _Out:
+    """接住 stdout。`main()` 开头会 `sys.stdout.reconfigure(...)`，StringIO 没有这个方法。"""
+
+    def __init__(self):
+        self.buf = io.StringIO()
+
+    def write(self, text):
+        self.buf.write(text)
+
+    def flush(self):
+        pass
+
+    def reconfigure(self, **kwargs):
+        pass
+
+    def getvalue(self):
+        return self.buf.getvalue()
+
+
+class _Conn:
+    """夹具连接：`close()` 是空操作。
+
+    生产代码里 `count_hits` 与 `fetch_messages` **各开一次连接、各自 close**。夹具若是
+    同一个连接对象，第一次 close 就让第二次炸在 `Cannot operate on a closed database`
+    ——那是夹具的问题，不是被测代码的问题。所以这里只把 close 变空操作，
+    而不是给每条路径各造一份数据（那会让测试开始测夹具）。
+    """
+
+    def __init__(self, conn):
+        self._conn = conn
+
+    def cursor(self):
+        return self._conn.cursor()
+
+    def close(self):
+        pass
+
+
+def fixture_db():
+    """内存里的 `message_fts.db` 替身：只建代码真正会读的东西。
+
+    含 `_aux` 与 FTS5 内部表各一张——它们必须被 `fts_tables` 排除（否则消息数翻倍，
+    这是踩过的坑）。刻意**不建**真实库里的其它表：夹具多一分，就多一分"测试在测夹具"
+    的机会。
+    """
+    conn = sqlite3.connect(':memory:')
+    c = conn.cursor()
+    c.execute('CREATE TABLE message_fts_v4_0 (acontent TEXT, message_local_id INTEGER, '
+              'sort_seq INTEGER, local_type INTEGER, session_id INTEGER, sender_id INTEGER, '
+              'create_time INTEGER)')
+    # 内部表与 aux：名字像正文表（同后缀数字），但结构不同
+    c.execute('CREATE TABLE message_fts_v4_0_content (id INTEGER, c0 TEXT)')
+    c.execute('CREATE TABLE message_fts_v4_aux_0 (message_local_id INTEGER, sort_seq INTEGER, '
+              'session_id INTEGER)')
+    c.execute('CREATE TABLE name2id (username TEXT)')
+    rows = [
+        ('会议通知：ABaCAS 2026 第四轮', 1, 1, 1, 1, 7, 1758400000),
+        ('会议议程 v06 发你了', 2, 2, 1, 1, 7, 1758400100),
+        ('今天的会议纪要', 3, 3, 1, 1, 8, 1758400200),
+        ('会议人数统计一下', 4, 4, 1, 2, 9, 1758400300),
+        ('中午吃什么', 5, 5, 1, 3, 9, 1758400400),
+    ]
+    c.executemany('INSERT INTO message_fts_v4_0 VALUES (?,?,?,?,?,?,?)', rows)
+    c.executemany('INSERT INTO message_fts_v4_aux_0 VALUES (?,?,?)',
+                  [(r[1], r[2], r[4]) for r in rows])       # 一行对一条：收进来就翻倍
+    c.executemany('INSERT INTO name2id VALUES (?)',
+                  [('群A@chatroom',), ('群B@chatroom',), ('联系人C',)])
+    conn.commit()
+    return conn
+
+
+class MainWiringTests(unittest.TestCase):
+    """`main()` 的全链路（§8 点名无测试的那条）。**全程离线**。
+
+    最要紧的一条是**安全闸门**：没有 `--yes` 就不许把候选词发出去。它此前只有代码，
+    没有测试——而"会不会发出去"正是这个脚本里唯一有外部后果的动作。
+    """
+
+    def setUp(self):
+        import tempfile
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        path = Path(self.tmp.name) / 'cards.json'
+        path.write_text(json.dumps({
+            'sessions': 3, 'messages': 5,
+            'cards': [{'id': 1, 'kind': '群聊', 'label': '群A', 'messages': 3,
+                       'span_days': 1, 'last_days_ago': 0.1},
+                      {'id': 2, 'kind': '群聊', 'label': '群B', 'messages': 1,
+                       'span_days': 0, 'last_days_ago': 0.1},
+                      {'id': 3, 'kind': '单聊', 'label': '联系人C', 'messages': 1,
+                       'span_days': 0, 'last_days_ago': 0.2}],
+        }, ensure_ascii=False), encoding='utf-8')
+        self.cards_path = str(path)
+        # 连接与配置都换成夹具：不碰真实微信库，也不需要 sqlcipher3。
+        self.conn = fixture_db()
+        self.addCleanup(self.conn.close)
+        for obj, name, value in (
+            (rc, '_open_fts', lambda config: (_Conn(self.conn), 'fixture.db')),
+            (rc, 'CARDS_PATH', self.cards_path),
+            (rc, 'load_config', lambda: {'ntDbPath': 'X:/nonexistent/message_0.db'}),
+        ):
+            patcher = patch.object(obj, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def run_main(self, argv):
+        out = _Out()
+        with patch.object(sys, 'argv', ['route_cards.py'] + argv):
+            with patch.object(rc.sys, 'stdout', out):
+                try:
+                    rc.main()
+                    code = None
+                except SystemExit as exc:
+                    code = exc.code
+        return out.getvalue(), code
+
+    def test_a_keyword_run_ranks_by_local_hits_and_stays_offline(self):
+        """`--keyword` 是全程不出网的那条路：连客户端都不该被建。
+
+        钉住的是行为：排序按命中数（群A 有 3 条、群B 1 条），以及**没有调用
+        `create_client`**。若哪天有人把客户端调用挪到闸门前面，这条会红。
+        """
+        with patch('jev_client.create_client') as build:
+            text, code = self.run_main(['ask', '会议', '--keyword', '会议'])
+        self.assertIsNone(code)
+        self.assertFalse(build.called, '--keyword 不该建客户端（那是出网）')
+        self.assertIn('#1', text)
+        self.assertLess(text.index('群A'), text.index('群B'))
+        self.assertIn('命中 会议×3', text)
+
+    def test_without_yes_nothing_is_sent(self):
+        """**安全闸门**：没有 `--yes` 时不许把候选词发出去。"""
+        with patch('jev_client.create_client') as build:
+            text, code = self.run_main(['ask', '哪个群在发会议通知'])
+        self.assertIsNone(code)
+        self.assertFalse(build.called, '没有 --yes 却建了客户端——这就是把内容发出去了')
+        self.assertIn('--yes', text)
+
+    def test_a_dry_run_shows_the_request_and_sends_nothing(self):
+        with patch('jev_client.create_client') as build:
+            text, code = self.run_main(['ask', '哪个群在发会议通知', '--dry-run'])
+        self.assertIsNone(code)
+        self.assertFalse(build.called)
+        self.assertIn('没有发送任何东西', text)
+
+    def test_a_question_with_no_local_hit_says_so_instead_of_pretending(self):
+        """字面命中为 0 时如实说，不假装找到——这条路只匹配字面词。"""
+        text, code = self.run_main(['ask', '完全不相干的词', '--keyword', '量子纠缠'])
+        self.assertIsNone(code)
+        self.assertIn('字面命中', text)
+
+    def test_a_missing_card_index_asks_for_build_first(self):
+        with patch.object(rc, 'CARDS_PATH', str(Path(self.tmp.name) / 'nope.json')):
+            text, code = self.run_main(['ask', '会议', '--keyword', '会议'])
+        # `raise SystemExit('...')` 的字符串是被我们捕获的，不会写进 stdout——
+        # 所以这里断言的是退出码本身，而不是输出文本。
+        self.assertIn('build', str(code))
+
+    def test_build_writes_the_index_it_reads_back(self):
+        """`build` 的产物要被 `ask` 认。夹具里 aux 表与内部表都不该被算成正文。"""
+        out_path = str(Path(self.tmp.name) / 'built.json')
+        text, code = self.run_main(['build', '--out', out_path])
+        self.assertIsNone(code)
+        data = json.loads(Path(out_path).read_text(encoding='utf-8'))
+        self.assertEqual(data['messages'], 5)          # aux 或内部表算进来就会翻倍
+        self.assertEqual(data['sessions'], 3)
+        # 夹具环境没有 contact 库，所以标签**按设计**退回 username
+        # （`display_names` 取不到名字就返回空表，名字是装饰性的）。
+        labels = {c['id']: c['label'] for c in data['cards']}
+        self.assertEqual(labels[1], '群A@chatroom')
+        kinds = {c['id']: c['kind'] for c in data['cards']}
+        self.assertEqual(kinds[1], '群聊')
 
 
 if __name__ == '__main__':
