@@ -162,6 +162,93 @@ class SerializableArticleTests(unittest.TestCase):
         self.assertEqual(entry['date'], '2026-09-05')
 
 
+class DecodeBodyTests(unittest.TestCase):
+    """响应体解压。加这个的原因是一次实测：微信文章页 3–4 MB，`urllib` 默认不发
+    `Accept-Encoding`，于是整页未压缩地传——同一篇 33–40s，发了 gzip 后 6–10s。
+    少传的字节就是省下的时间，上游压力反而更小。
+    """
+
+    TEXT = '中文正文' * 50
+
+    def test_gzip(self):
+        import gzip
+        self.assertEqual(biz._decode_body(gzip.compress(self.TEXT.encode()), 'gzip'), self.TEXT)
+
+    def test_gzip_is_case_insensitive(self):
+        import gzip
+        self.assertEqual(biz._decode_body(gzip.compress(self.TEXT.encode()), 'GZIP'), self.TEXT)
+
+    def test_raw_deflate(self):
+        import zlib
+        c = zlib.compressobj(wbits=-zlib.MAX_WBITS)
+        raw = c.compress(self.TEXT.encode()) + c.flush()
+        self.assertEqual(biz._decode_body(raw, 'deflate'), self.TEXT)
+
+    def test_zlib_wrapped_deflate(self):
+        # 有的服务器发带 zlib 头的 deflate；认不出来会退化成"抓不到文章"。
+        import zlib
+        self.assertEqual(biz._decode_body(zlib.compress(self.TEXT.encode()), 'deflate'), self.TEXT)
+
+    def test_an_absent_or_unknown_encoding_passes_through(self):
+        # 退回原样解码，而不是抛错——抛错会触发重试与回退，把优化变成故障。
+        for enc in ('', 'identity', 'br'):
+            with self.subTest(encoding=enc):
+                self.assertEqual(biz._decode_body(self.TEXT.encode(), enc), self.TEXT)
+
+
+class FetchArticleEncodingTests(unittest.TestCase):
+    """`fetch_article` 必须**真的发出** `Accept-Encoding`，并且能读懂回来的压缩体。"""
+
+    HTML = ('<html><body><div id="js_content"><p>' + ('这是一段足够长的正文内容。' * 12) +
+            '</p></div></body></html>')
+
+    class Resp:
+        def __init__(self, body, encoding=''):
+            import io
+            self._body = body
+            self.headers = {'Content-Encoding': encoding}
+
+        def read(self):
+            return self._body
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    def run_fetch(self, body, encoding):
+        import gzip
+        sent = {}
+
+        def fake_urlopen(request, timeout=None):
+            sent['headers'] = {k.lower(): v for k, v in request.header_items()}
+            return self.Resp(body, encoding)
+
+        with patch.object(biz.urllib.request, 'urlopen', fake_urlopen):
+            md = biz.fetch_article('https://mp.weixin.qq.com/s/x')
+        return md, sent
+
+    def test_it_asks_for_compression_and_parses_a_gzipped_page(self):
+        import gzip
+        md, sent = self.run_fetch(gzip.compress(self.HTML.encode()), 'gzip')
+        self.assertEqual(sent['headers'].get('accept-encoding'), 'gzip, deflate')
+        self.assertIsNotNone(md)
+        self.assertIn('这是一段足够长的正文内容', md)
+
+    def test_an_uncompressed_response_still_works(self):
+        # 服务器忽略这个头时不能反过来坏掉——这是最常见的兼容路径。
+        md, _ = self.run_fetch(self.HTML.encode(), '')
+        self.assertIsNotNone(md)
+        self.assertIn('这是一段足够长的正文内容', md)
+
+    def test_a_body_without_the_content_node_is_still_rejected(self):
+        # 原有的验证不能被这次改动放松：没有 js_content 就是没抓到。
+        import gzip
+        md, _ = self.run_fetch(gzip.compress(b'<html><body>nope</body></html>'), 'gzip')
+        self.assertIsNone(md)
+
+
 class ClassifierPlanTests(unittest.TestCase):
     """`--classifier` 的接线：三条分支决定**有没有数据出境**。
 

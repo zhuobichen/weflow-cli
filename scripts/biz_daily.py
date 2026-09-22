@@ -402,6 +402,27 @@ WECHAT_UA = (
     'MicroMessenger/8.0.38(0x18002633) NetType/WIFI Language/zh_CN'
 )
 
+def _decode_body(raw: bytes, content_encoding: str) -> str:
+    """按 `Content-Encoding` 解压响应体。认不出来就原样解码。
+
+    **只认我们主动要求的两种**（`gzip`/`deflate`）——请求里声明的就是这两种，
+    服务器不该回别的；真回了不认识的，退回原样解码而不是抛错：那就会走
+    `fetch_article` 的重试与回退，把一次"少传了字节"的优化变成"抓不到文章"。
+    """
+    enc = (content_encoding or '').strip().lower()
+    if enc == 'gzip':
+        import gzip
+        raw = gzip.decompress(raw)
+    elif enc == 'deflate':
+        import zlib
+        # 裸 deflate（无 zlib 头）是这里的常见形态，先按裸的试，再退回带头的。
+        try:
+            raw = zlib.decompress(raw, -zlib.MAX_WBITS)
+        except zlib.error:
+            raw = zlib.decompress(raw)
+    return raw.decode('utf-8', errors='ignore')
+
+
 def fetch_article(url: str, max_retries: int = 3) -> str | None:
     """Fetch WeChat article with WeChat browser UA to bypass WAF.
     Retries up to max_retries times if content is too short."""
@@ -415,9 +436,16 @@ def fetch_article(url: str, max_retries: int = 3) -> str | None:
                 'Origin': 'https://mp.weixin.qq.com',
                 'Accept': 'text/html,application/xhtml+xml',
                 'Accept-Language': 'zh-CN,zh;q=0.9',
+                # **`urllib` 默认不发这个头**，于是服务器只好把整页未压缩地传过来。
+                # 微信文章页是 3–4 MB（大量内联 JS/CSS），实测同一篇：不发头 33–40s，
+                # 发了 gzip 后 0.7–0.8 MB / 6–10s——正文一模一样（解压后同尺寸，
+                # `js_content` 与 `rich_media_content` 都在）。传的字节更少，
+                # 上游压力是**变小**的，与"按篇节流"同一个方向。
+                'Accept-Encoding': 'gzip, deflate',
             })
             with urllib.request.urlopen(req, timeout=FETCH_TIMEOUT) as resp:
-                html = resp.read().decode('utf-8', errors='ignore')
+                raw = resp.read()
+                html = _decode_body(raw, resp.headers.get('Content-Encoding', ''))
 
             # Validate: article content must include js_content div
             if 'js_content' not in html and 'rich_media_content' not in html:
