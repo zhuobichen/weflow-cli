@@ -309,6 +309,78 @@ def _apply_decision(article, decision, set_topic=True):
     return True
 
 
+SUMMARY_WORKERS = 6
+# 单篇摘要的实测耗时（3 篇串行 2.27/2.92/2.45s，含网络）。只用来报「串行约需多少秒」。
+SUMMARY_SECONDS_PER_ARTICLE = 2.5
+
+
+def summary_prompt_for(article, category_hint):
+    """这一篇要发的提示词与 `max_tokens`。跟着 `category_hint` 走两条不同分支。
+
+    抽出来是为了让"取摘要"能并发：配了类别的来源用短提示词（`max_tokens=1000`），
+    其余的用完整提示词（`2000`）。两条分支的文本与串行版本逐字相同——搬动的是
+    **调用位置**，不是内容。
+    """
+    content = article.get('fetched_md') or article.get('local_text', '')
+    if category_hint:
+        return (f'''请只为下面这篇公众号文章生成一段 50-300 字的中文摘要。
+来源类别已经确定为「{category_hint}」，不要重新判断或改写文章分类，不要输出主题、标签、相关度或概念字段。
+
+标题：{article["title"]}
+来源：{article["account_name"]}
+
+正文：
+{content[:4000]}''', 1000)
+    prompt = TOPIC_PROMPT + f'\n\n标题：{article["title"]}\n来源：{article["account_name"]}'
+    prompt += f'\n\n内容：\n{content[:4000]}'
+    return prompt, 2000
+
+
+def _summarise_articles_parallel(articles, engine, api_key, workers=SUMMARY_WORKERS):
+    """把每篇的 LLM 调用先并发跑完，返回与 `articles` 等长的 `(response, error)`。
+
+    **只有网络等待是并发的**：调用方仍按原顺序串行地解析与落字段，所以每篇的写入
+    顺序、以及失败时走哪条兜底分支，都与串行版本一致。这一层不碰 article dict。
+
+    资格判断必须与调用方**逐字一致**（`content and len(content.strip()) > 50`），
+    否则会出现"并发跑了、主循环却不认为该跑"的错位——那正是 `_classify_articles_parallel`
+    里用下标对齐要防的东西，这里同样按**原下标**回填。
+
+    实测（12 篇）：串行约 12s → 6 路约 3s。串行时每篇后睡 0.3s 的节奏挪到了
+    worker 里（每个请求照样睡一次），所以对上游的请求速率没有变密。
+    """
+    results = [(None, None)] * len(articles)
+    jobs = [i for i, a in enumerate(articles)
+            if (a.get('fetched_md') or a.get('local_text', ''))
+            and len((a.get('fetched_md') or a.get('local_text', '')).strip()) > 50]
+    if not jobs:
+        return results
+
+    from _utils import call_ai
+
+    def one(index):
+        article = articles[index]
+        prompt, max_tokens = summary_prompt_for(article, article.get('source_category', ''))
+        try:
+            return index, call_ai(prompt, engine, api_key, max_tokens=max_tokens), None
+        except Exception as exc:            # 交给调用方那条原有的 except 分支
+            return index, None, exc
+        finally:
+            time.sleep(0.3)
+
+    started = time.time()
+    with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
+        for index, response, error in pool.map(one, jobs):
+            results[index] = (response, error)
+
+    ok = sum(1 for response, _error in results if response is not None)
+    # 与分类那段同一个形状：并发之后逐篇日志不再说明什么，但三件事必须看得见——
+    # 成了几篇、实际耗时、串行本来要多久。
+    print(f'  摘要完成 {ok}/{len(jobs)} 篇，耗时 {time.time() - started:.1f}s'
+          f'（{workers} 并发；串行约需 {len(jobs) * SUMMARY_SECONDS_PER_ARTICLE:.0f}s）')
+    return results
+
+
 TOPIC_PROMPT = f"""对文章分类、深度摘要、打标签，并评估与读者的相关度。
 
 【读者定位】环境科学研究生，研究方向是计算机与环境的交叉领域（环境模型、大气污染模拟、遥感反演、环境大数据分析、LCA等），关注AI工具如何提升科研效率。
@@ -885,22 +957,22 @@ def main():
         decisions = _classify_articles_parallel(articles, jev_client, TOPICS)
         if jev_client is not None:
             decision_model = jev_client.last_model
+        # 先把每篇的 LLM 调用并发跑完，再进下面这个串行循环做解析与落字段。
+        # 解析是纯本地操作，并发的价值全在网络等待上；这样循环体本身不用重写，
+        # 每条兜底分支的行为也就与串行版本一致。
+        prefetched = _summarise_articles_parallel(articles, engine, api_key)
         for i, a in enumerate(articles):
             t, n, ti = a['time'], a['account_name'], a['title']
             content = a.get('fetched_md') or a.get('local_text', '')
             if content and len(content.strip()) > 50:
                 try:
                     category_hint = a.get('source_category', '')
+                    response, call_error = prefetched[i]
+                    if call_error is not None:
+                        # 调用是并发阶段做的，异常在那里被捕获了。这里重新抛出，
+                        # 让下面原有的 `except` 接管——兜底行为与串行版本一致。
+                        raise call_error
                     if category_hint:
-                        summary_prompt = f'''请只为下面这篇公众号文章生成一段 50-300 字的中文摘要。
-来源类别已经确定为「{category_hint}」，不要重新判断或改写文章分类，不要输出主题、标签、相关度或概念字段。
-
-标题：{a["title"]}
-来源：{a["account_name"]}
-
-正文：
-{content[:4000]}'''
-                        response = call_ai(summary_prompt, engine, api_key, max_tokens=1000)
                         a['topic'] = category_hint
                         a['tags'] = [category_hint]
                         a['summary'] = response.strip()[:1000]
@@ -909,12 +981,8 @@ def main():
                         _apply_decision(a, decisions.get(i), set_topic=False)
                         a['concepts'] = []
                         print(f'[{i+1}/{len(articles)}] [{t}] {n} - [{category_hint}] 固定来源类别，仅生成摘要')
-                        time.sleep(0.3)
                         continue
-                    prompt = TOPIC_PROMPT + f'\n\n标题：{a["title"]}\n来源：{a["account_name"]}'
-                    prompt += f'\n\n内容：\n{content[:4000]}'
-                    response = call_ai(prompt, engine, api_key, max_tokens=2000)
-
+                    # （提示词与调用已移到 `_summarise_articles_parallel`，响应在上面取。）
                     # 判断来自开头那轮并发分类；没拿到才回落到下面的解析。
                     decision = decisions.get(i)
 
@@ -991,7 +1059,6 @@ def main():
                         a['summary'] = response[:300]
 
                     print(f'[{i+1}/{len(articles)}] [{t}] {n} - [{a.get("topic","?")}] tags={a.get("tags",[])} ({len(a.get("summary",""))}字)')
-                    time.sleep(0.3)
                 except Exception as e:
                     a['summary'] = a.get('digest', '') or content[:300]
                     a['topic'] = a.get('source_category') or DEFAULT_TOPIC

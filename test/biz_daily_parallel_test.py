@@ -12,6 +12,7 @@ import importlib.util
 import io
 import sqlite3
 from pathlib import Path
+import json
 import sys
 import types
 import unittest
@@ -160,6 +161,94 @@ class SerializableArticleTests(unittest.TestCase):
         self.assertEqual(entry['source'], '某号')
         self.assertEqual(entry['summary'], '摘要')
         self.assertEqual(entry['date'], '2026-09-05')
+
+
+class SummaryPrefetchTests(unittest.TestCase):
+    """摘要阶段的**预取**：并发只发生在网络等待上，解析与落字段仍由主循环串行做。
+
+    这个设计的全部价值就是"循环体不用重写、每条兜底分支行为不变"。所以测试重点不是
+    快，而是那两条前提不被破坏：**这一层不碰 article dict**，以及**失败要以异常的形式
+    交回主循环**（主循环的 `except` 才知道该走哪条兜底）。
+    """
+
+    def setUp(self):
+        # worker 里每篇睡 0.3s（保持对上游的请求节奏）。测试不该真的等。
+        patcher = patch.object(biz.time, 'sleep')
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.calls = []
+
+    def install(self, fail_on=()):
+        def fake_call_ai(prompt, engine, api_key, max_tokens=2000):
+            self.calls.append({'prompt': prompt, 'max_tokens': max_tokens})
+            if len(self.calls) in fail_on:
+                raise RuntimeError('llm down')
+            return '【摘要】好的\n【标签】a, b'
+        import _utils
+        patcher = patch.object(_utils, 'call_ai', fake_call_ai)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def articles(self, n_long=2, n_short=1):
+        out = [{'title': '标题%d' % i, 'account_name': '某号',
+                'fetched_md': '正文' * 200} for i in range(n_long)]
+        out += [{'title': '短%d' % i, 'account_name': '某号', 'fetched_md': '太短'}
+                for i in range(n_short)]
+        out += [{'title': '没正文', 'account_name': '某号'}]
+        return out
+
+    def test_only_eligible_articles_are_called_and_results_align_by_index(self):
+        self.install()
+        arts = self.articles()
+        results = biz._summarise_articles_parallel(arts, 'deepseek', 'k')
+        self.assertEqual(len(results), len(arts))          # 与 articles 等长
+        self.assertEqual(len(self.calls), 2)               # 只问了够长的那两篇
+        self.assertIsNotNone(results[0][0])
+        self.assertIsNotNone(results[1][0])
+        self.assertEqual(results[2], (None, None))         # 太短：没问
+        self.assertEqual(results[3], (None, None))         # 没正文：没问
+
+    def test_it_does_not_touch_the_articles(self):
+        """这是整个设计的前提：并发层只回填结果表，文章的写入全在主循环里。
+
+        一旦这里顺手改了 article，串行版本的写入顺序与兜底分支就不再等价了。
+        """
+        self.install()
+        arts = self.articles()
+        before = json.loads(json.dumps(arts, ensure_ascii=False, default=str))
+        biz._summarise_articles_parallel(arts, 'deepseek', 'k')
+        self.assertEqual(json.loads(json.dumps(arts, ensure_ascii=False, default=str)), before)
+
+    def test_a_failed_call_comes_back_as_an_error_not_an_exception(self):
+        """失败必须以 `(None, error)` 交回，好让主循环原有的 `except` 接管。
+
+        这里若直接抛，主循环就永远看不到——那些兜底字段（summary/topic/tags）也就
+        不会写，文章会带着空字段进 Phase 3。
+        """
+        self.install(fail_on=(1,))
+        results = biz._summarise_articles_parallel(self.articles(), 'deepseek', 'k')
+        self.assertIsNone(results[0][0])
+        self.assertIsInstance(results[0][1], RuntimeError)
+        self.assertIsNotNone(results[1][0])           # 另一篇不受影响
+
+    def test_the_prompt_follows_the_category_hint(self):
+        """配了类别的来源走短提示词、max_tokens 1000；其余走完整提示词、2000。"""
+        self.install()
+        hinted = [{'title': 'T', 'account_name': 'A', 'fetched_md': '正文' * 200,
+                   'source_category': '学术'}]
+        plain = [{'title': 'T', 'account_name': 'A', 'fetched_md': '正文' * 200}]
+        biz._summarise_articles_parallel(hinted, 'deepseek', 'k')
+        biz._summarise_articles_parallel(plain, 'deepseek', 'k')
+        self.assertEqual(self.calls[0]['max_tokens'], 1000)
+        self.assertEqual(self.calls[1]['max_tokens'], 2000)
+        self.assertNotIn('【主题】', self.calls[0]['prompt'])   # 短提示词不要分类字段
+        self.assertIn('【标签】', self.calls[1]['prompt'])      # 完整提示词要
+
+    def test_nothing_eligible_means_no_calls(self):
+        self.install()
+        results = biz._summarise_articles_parallel([{'title': 'x'}], 'deepseek', 'k')
+        self.assertEqual(self.calls, [])
+        self.assertEqual(results, [(None, None)])
 
 
 class ImageDownloadTests(unittest.TestCase):
