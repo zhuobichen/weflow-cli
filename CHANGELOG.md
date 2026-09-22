@@ -238,6 +238,14 @@ All notable user-facing changes are recorded here. This project follows [Semanti
   can guarantee. The idea came from the same `deepseek-harness` audit: it treats referenced session content
   as untrusted and keeps its injected instructions tag-safe for exactly this reason.
 
+- Fact selection now has a **relevance floor**, applied **before** the budget cut. Measuring the earlier
+  version showed the flaw: the budget is counted in characters, thirty short facts came to about 1,080
+  characters, everything fitted, and "select by relevance" had degraded into sorting - i.e. full injection
+  again (2,483 bytes of facts per request). With the floor, an unrelated question injects eight recent
+  facts as a fallback (791 bytes) and a question matching one fact injects 390 bytes; the "另有 N 条" note
+  appears in both cases. A relevance-only fallback is intentional: memory itself is context, so injecting
+  nothing at all is worse than injecting the most recent few.
+
 ### Changed
 - Image downloads during the daily run are concurrent (6-way). They were sequential at 0.37 s and 135 KB each - about 18 minutes per 190-article day - even though they come from `.qpic.cn`, WeChat's CDN, which a browser fetches in parallel anyway. Same three articles: 17.2 s → 2.1 s. The same change fixed the map: a failed download used to be recorded in `.image_map.json` **before** it was attempted, and the reader injects that map as `window._IMG_MAP`, so the page was told to look for a local file that did not exist. Only files that are actually on disk are mapped now, and duplicates in a page are fetched once (31 image links in one article were 17 distinct images).
 - LLM summaries are generated concurrently, so a 190-article day spends about 2 minutes there instead of 9 (measured 2.27/2.92/2.45 s per article). The calls are **prefetched, not the loop rewritten**: responses are filled back by their original index and the existing loop still does the parsing and the field writes in the same order, so every fallback branch behaves exactly as before - a failed call comes back as an error and the loop re-raises it into its own `except`. The per-article 0.3 s pacing moved into the worker, so the request rate to the provider is unchanged. The stage now prints `摘要完成 N/M 篇，耗时 Xs（6 并发；串行约需 Ys）`, the shape the classification stage already used.

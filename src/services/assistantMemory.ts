@@ -47,6 +47,10 @@ export const FACTS_MAX = 30
 export const FACT_EXTRACT_EVERY = 6
 /** 每次注入事实的字符预算：30 条 × 72 字 ≈ 2.1KB 全塞进去是纯噪声，按相关度取一部分 */
 export const FACTS_INJECT_BUDGET_CHARS = 1200
+/** 相关度低于这个值就不进上下文：**预算空着也不填无关事实** */
+export const FACT_RELEVANCE_FLOOR = 0.2
+/** 一条都不相关时至少给最近这么多条——「记忆」本身也是上下文 */
+export const FACTS_INJECT_MIN_RECENT = 8
 /** 两条事实的包含关系达到这个比例才当"同一条"（长的、更具体的那条胜出） */
 const FACT_SAME_RATIO = 0.5
 
@@ -476,13 +480,25 @@ export function selectFactsForInjection(facts: Fact[], question: string,
     // 直接包含（整串或关键片段）算强相关；否则用二元组重合
     const direct = qText.length >= 2 && (fText.includes(qText) || qText.includes(fText))
     const sim = direct ? 1 : overlap(q, bigrams(f.content))
-    return { fact: f, index, rank: sim * 10 + (f.usedAt ? 0.5 : 0) + (f.ts ? 0.1 : 0) }
+    // sim 单独留着：闸门按它判，排序才用 rank（后者含「最近用过」与时间的权重）
+    return { fact: f, index, sim, rank: sim * 10 + (f.usedAt ? 0.5 : 0) + (f.ts ? 0.1 : 0) }
   })
 
   scored.sort((a, b) => b.rank - a.rank || a.index - b.index)
+
+  // **先按相关度筛，再按预算裁**——这个顺序是要紧的：预算够大时不该拿无关事实去填空，
+  // 否则"按相关度注入"只是排了个序而已（实测：30 条短事实全装得下，等于全量注入）。
+  const relevant = scored.filter(item => item.sim >= FACT_RELEVANCE_FLOOR)
+  // 兜底要取**最近**的几条（按原始下标＝时间顺序），不是 rank 排在前面的那些：
+  // 一条都不相关时 rank 全都一样，按 rank 取到的是最旧的那批，正好反了。
+  const oldestToKeep = Math.max(0, facts.length - FACTS_INJECT_MIN_RECENT)
+  const pool = relevant.length
+    ? relevant
+    : scored.filter(item => item.index >= oldestToKeep)
+
   const selected: Fact[] = []
   let used = 0
-  for (const item of scored) {
+  for (const item of pool) {
     const size = item.fact.content.length + 2
     if (selected.length && used + size > budgetChars) break
     selected.push(item.fact)

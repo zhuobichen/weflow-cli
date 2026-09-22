@@ -25,7 +25,7 @@ const { AssistantMemory } = await import('../src/services/assistantMemory.js')
 const { CONTEXT_BUDGET_CHARS: BUDGET, FACT_EXTRACT_EVERY: FACT_EVERY, WORKING_MAX,
         WORKING_MIN_TURNS, WORKING_RETAIN_RATIO, MEMORY_FORMAT_VERSION,
         buildSummaryPrompt, buildFactPrompt, selectFactsForInjection, frameLocalData,
-        FACTS_MAX } = await import('../src/services/assistantMemory.js')
+        FACTS_MAX, FACTS_INJECT_MIN_RECENT } = await import('../src/services/assistantMemory.js')
 
 let seq = 0
 /** 每个用例一个独立的 userId：记忆是持久化的，用例之间不该互相看见 */
@@ -449,3 +449,38 @@ test('the frame cannot be closed from inside the data', () => {
   assert.match(framed, /source="memory.facts"/)
   assert.match(framed, /‹\/weflow-local-data/, '数据里的那个被改成了不像标签的形式')
 })
+
+test('irrelevant facts are left out even when the budget has room', async () => {
+  // 实测撞到的：预算按**字符**算，30 条短事实加起来才 ~1080 字，全装得下——于是"按相关度注入"
+  // 只是排了个序，等于全量注入。真正该有的是**相关度下限**：不相关就不进，预算空着也不填。
+  const memory = new AssistantMemory()
+  const user = newUser()
+  for (let i = 0; i < FACTS_MAX; i++) memory.addFact(user, `第 ${i} 号偏好：${'完全无关的内容'.repeat(3)}`)
+
+  const { selected, withheld } = selectFactsForInjection(memory.facts(user), '今天天气怎么样')
+
+  assert.ok(selected.length <= FACTS_INJECT_MIN_RECENT + 1, `只该给最近几条兜底，实际 ${selected.length}`)
+  assert.ok(withheld > 0, '落下的条数要报出来')
+})
+
+test('a relevant fact always makes it in, however many irrelevant ones exist', async () => {
+  const memory = new AssistantMemory()
+  const user = newUser()
+  for (let i = 0; i < FACTS_MAX; i++) memory.addFact(user, `第 ${i} 号偏好：${'完全无关的内容'.repeat(3)}`)
+  memory.addFact(user, '住在成都')
+
+  const { selected } = selectFactsForInjection(memory.facts(user), '我住在成都哪里')
+  assert.ok(selected.some(f => f.content === '住在成都'), '相关的那条必须在里面')
+})
+
+test('with nothing relevant, the most recent few are still injected', async () => {
+  // 「记忆」本身也是上下文：一条都不相关时全空手不合适，给最近几条兜底
+  const memory = new AssistantMemory()
+  const user = newUser()
+  for (let i = 0; i < 20; i++) memory.addFact(user, `第 ${i} 号偏好：${'无关内容'.repeat(4)}`)
+
+  const { selected } = selectFactsForInjection(memory.facts(user), '毫不相干的问题')
+  assert.ok(selected.length > 0 && selected.length <= FACTS_INJECT_MIN_RECENT, `实际 ${selected.length}`)
+  assert.match(selected[selected.length - 1].content, /第 19 号/, '兜底给的是最近的')
+})
+

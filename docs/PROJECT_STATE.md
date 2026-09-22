@@ -96,7 +96,7 @@ Documentation was synchronized with the current source baseline on 2026-09-19. C
   fact can contain text that looks like our own framing, so the summary and fact blocks are wrapped in a
   `<weflow-local-data>` frame whose tags are neutralised inside the content - data cannot close the frame and
   speak as the system. That is the guarantee; instructions hidden in data are a separate, unsolved problem
-  and are not claimed to be solved here. Selection is capped by a character budget, and the prompt states
+  and are not claimed to be solved here. Selection applies a **relevance floor before** the character budget (measured: without the floor, thirty short facts all fitted and "select by relevance" was only sorting - 2,483 bytes of facts per request; with it, an unrelated question injects eight recent facts as a fallback, 791 bytes). The prompt states
   how many facts were withheld rather than implying it sees everything.
 - **The assistant's memory is versioned now, and an unknown version is refused rather than guessed at**
   (D-041). Auditing `deepseek-harness` for a memory design turned up something else worth having: it has
