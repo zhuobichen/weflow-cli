@@ -637,6 +637,41 @@ def fetch_article(url: str, max_retries: int = 3) -> str | None:
     return None
 
 
+FETCH_CACHE_DIR = os.path.join(SCRIPT_DIR, 'output', '.cache', 'fetch')
+
+
+def fetch_article_cached(url: str, use_cache: bool = True) -> tuple[str | None, bool]:
+    """抓正文，带本地缓存。返回 `(markdown 或 None, 是否命中缓存)`。
+
+    **为什么需要它**：日报是**全有全无**的——要把当天的文章**全部抓完**才进 Phase 3
+    写盘，抓取结果只存在内存里。一天 400 篇光是抓取（10s/篇 + 8–12s 节流）就一个多
+    小时，任何中断（被收走、网络断、手滑）都会把前面的抓取全部作废。2026-09-22 那天
+    实测停在 105/403，什么都没写出来。
+    按 URL 缓存正文之后：**重跑只抓缺的那些**，也顺带让"改代码 / 换分类器 /
+    `--no-summary` 与正常模式之间切换"重跑同一天几乎免费。
+
+    **只缓存成功**：失败的下次照旧重试（`None` 不落盘）。
+    """
+    path = os.path.join(FETCH_CACHE_DIR, hashlib.md5(url.encode()).hexdigest() + '.md')
+    if use_cache and os.path.isfile(path) and os.path.getsize(path) > 0:
+        try:
+            with open(path, encoding='utf-8') as fh:
+                body = fh.read()
+            if body.strip():
+                return body, True
+        except OSError:
+            pass                      # 读不了就当没缓存，走网络
+    body = fetch_article(url)
+    if body and body.strip():
+        try:
+            os.makedirs(FETCH_CACHE_DIR, exist_ok=True)
+            with open(path, 'w', encoding='utf-8') as fh:
+                fh.write(body)
+        except OSError:
+            pass                      # 缓存写不进去不该让这一天的日报失败
+    return body, False
+
+
 def _download_one_image(url: str, local_path: Path) -> bool:
     """取一张图。成功返回 True；失败**不抛**——一张图挂了不该影响这一篇的其它图。"""
     try:
@@ -815,6 +850,8 @@ def main():
     parser.add_argument('--api-key', help='AI API key (或设环境变量 DEEPSEEK_API_KEY)')
     parser.add_argument('--engine', default='deepseek', help='AI 引擎: local/deepseek/claude/ollama')
     parser.add_argument('--no-ai', action='store_true', help='关闭摘要、分类和日报简报的 AI 调用')
+    parser.add_argument('--no-fetch-cache', action='store_true',
+                        help='忽略正文抓取缓存，强制重新抓取（默认命中缓存，用于续跑与重跑）')
     parser.add_argument('--no-summary', action='store_true',
                         help='只要判断、不要生成：完全跳过 LLM 调用（摘要/标签/概念/简报），'
                              '主题与相关度仍由 Jev 判断；因此**不需要 DeepSeek key**')
@@ -974,21 +1011,33 @@ def main():
 
     # ====== Phase 1: Fetch all articles ======
     print(f'=== Phase 1: 抓取 {len(articles)} 篇文章 ===\n')
+    cache_hits = 0
     for i, a in enumerate(articles):
         t, n, ti = a['time'], a['account_name'], a['title']
         print(f'[{i+1}/{len(articles)}] [{t}] {n} - {ti[:50]}')
 
         if a['url']:
             delay = FETCH_DELAY_MIN + random.random() * (FETCH_DELAY_MAX - FETCH_DELAY_MIN)
-            md = fetch_article(a['url'])
+            md, cached = fetch_article_cached(a['url'], use_cache=not args.no_fetch_cache)
             if md:
                 a['fetched_md'] = md
-                print(f'  OK ({len(md)}字, {delay:.1f}s)')
+                if cached:
+                    cache_hits += 1
+                    print(f'  OK ({len(md)}字, 缓存)')
+                else:
+                    print(f'  OK ({len(md)}字, {delay:.1f}s)')
             else:
                 print(f'  FAIL, 回退本地缓存')
-            time.sleep(delay)
+            # **命中缓存就不睡**：节流是为了少打扰上游，而缓存命中根本没有请求。
+            # 这也正是"重跑快"的来源——续跑那部分几乎是瞬时的，且与节流同向。
+            if not cached:
+                time.sleep(delay)
         elif a.get('local_text'):
             print(f'  无URL, 使用本地缓存')
+
+    if cache_hits:
+        print(f'  抓取完成：{len(articles) - cache_hits} 篇走网络，'
+              f'{cache_hits} 篇命中本地缓存（少发 {cache_hits} 次请求）')
 
     # ====== Phase 2: AI summary + topic classification ======
     # **实际服务我们的判断模型**（如 `jev-1.13.0`），不是请求的别名（`jev-latest`）。

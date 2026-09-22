@@ -12,6 +12,7 @@ import importlib.util
 import io
 import sqlite3
 from pathlib import Path
+import hashlib
 import json
 import sys
 import types
@@ -161,6 +162,108 @@ class SerializableArticleTests(unittest.TestCase):
         self.assertEqual(entry['source'], '某号')
         self.assertEqual(entry['summary'], '摘要')
         self.assertEqual(entry['date'], '2026-09-05')
+
+
+class FetchCacheTests(unittest.TestCase):
+    """抓取缓存 = **断点续传**。
+
+    日报全有全无：要把当天文章全部抓完才写盘，抓取结果只在内存里。一天 400 篇光抓取
+    就一个多小时，任何中断都会让前面的抓取全部作废（2026-09-22 实测停在 105/403，
+    什么都没写出来）。按 URL 缓存正文之后，重跑只抓缺的那些。
+    """
+
+    HTML = ('<html><body><div id="js_content"><p>' + ('足够长的正文内容。' * 20) +
+            '</p></div></body></html>')
+
+    def setUp(self):
+        import tempfile
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        patcher = patch.object(biz, 'FETCH_CACHE_DIR', self.tmp.name)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        # fetch_article 失败会重试（3s/6s 退避）——夹具必须桩掉，否则一个失败的用例
+        # 要跑 9 秒（第一版就吃了这个）。
+        sleeper = patch.object(biz.time, 'sleep')
+        sleeper.start()
+        self.addCleanup(sleeper.stop)
+        self.network = []
+
+    def serve(self, html=None):
+        # 注意 `payload` 在类外算好：`Resp.read` 里的 `self` 是 Resp 实例，
+        # 不是测试用例——写成 `self.HTML` 会 AttributeError（第一版就是这么错的）。
+        payload = (html if html is not None else self.HTML).encode()
+
+        class Resp:
+            def __init__(self):
+                self.headers = {}      # fetch_article 会读 Content-Encoding（gzip 那次改动）
+
+            def read(self, size=None):
+                return payload
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        def fake_urlopen(request, timeout=None):
+            self.network.append(request.full_url)
+            return Resp()
+
+        patcher = patch.object(biz.urllib.request, 'urlopen', fake_urlopen)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_a_miss_fetches_and_stores(self):
+        self.serve()
+        body, cached = biz.fetch_article_cached('https://mp.weixin.qq.com/s/a')
+        self.assertFalse(cached)
+        self.assertIn('足够长的正文内容', body)
+        self.assertEqual(len(self.network), 1)
+        self.assertEqual(len(list(Path(self.tmp.name).glob('*'))), 1)
+
+    def test_a_hit_does_not_touch_the_network(self):
+        """这条是断点续传的全部价值：第二次跑**一个请求都不发**。"""
+        self.serve()
+        biz.fetch_article_cached('https://mp.weixin.qq.com/s/a')
+        self.network.clear()
+        body, cached = biz.fetch_article_cached('https://mp.weixin.qq.com/s/a')
+        self.assertTrue(cached)
+        self.assertEqual(self.network, [])
+        self.assertIn('足够长的正文内容', body)
+
+    def test_a_different_url_is_a_different_cache_entry(self):
+        self.serve()
+        biz.fetch_article_cached('https://mp.weixin.qq.com/s/a')
+        self.network.clear()
+        _b, cached = biz.fetch_article_cached('https://mp.weixin.qq.com/s/b')
+        self.assertFalse(cached)
+        self.assertEqual(len(self.network), 1)
+
+    def test_a_failure_is_not_cached(self):
+        """失败不落盘，下次照旧重试——把失败缓存起来等于永久记住一次抖动。"""
+        self.serve(html='<html><body>没有正文节点</body></html>')
+        body, cached = biz.fetch_article_cached('https://mp.weixin.qq.com/s/c')
+        self.assertIsNone(body)
+        self.assertFalse(cached)
+        self.assertEqual(list(Path(self.tmp.name).glob('*')), [])
+
+    def test_use_cache_false_refetches_over_an_existing_entry(self):
+        self.serve()
+        biz.fetch_article_cached('https://mp.weixin.qq.com/s/a')
+        self.network.clear()
+        _b, cached = biz.fetch_article_cached('https://mp.weixin.qq.com/s/a', use_cache=False)
+        self.assertFalse(cached)
+        self.assertEqual(len(self.network), 1)
+
+    def test_an_empty_cache_file_is_treated_as_a_miss(self):
+        self.serve()
+        path = Path(self.tmp.name) / (hashlib.md5(b'https://mp.weixin.qq.com/s/a').hexdigest() + '.md')
+        path.write_text('   ', encoding='utf-8')
+        _b, cached = biz.fetch_article_cached('https://mp.weixin.qq.com/s/a')
+        self.assertFalse(cached)
+        self.assertEqual(len(self.network), 1)
 
 
 class SummaryPromptTests(unittest.TestCase):
