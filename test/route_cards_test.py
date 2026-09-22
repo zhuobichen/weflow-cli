@@ -120,6 +120,63 @@ class CandidateTermTests(unittest.TestCase):
         self.assertEqual(rc.candidate_terms('openai 与 模型'), ['模型'] or True)
 
 
+class RankingTests(unittest.TestCase):
+    """会话排序**只由本地命中数决定**——这条实测结论原来只有注释和文档，没有断言。
+
+    实测（写在模块 docstring 与 D-036 里）：让 Jev 排会话不成立——noul 全落
+    0.50~0.51（一条消息的领券群与命中 213 次的会务群同档），score 全落 1.74~1.76
+    （命中 247 与命中 8 一模一样），而同一批数据按命中数排得很准。
+
+    没有断言时，下一个接手人很容易把"让模型排序"当成改进加回来。所以这里既钉行为，
+    也钉**签名**（见最后一条）。
+    """
+
+    CARDS = [{'id': 3, 'label': 'c3'}, {'id': 1, 'label': 'c1'}, {'id': 2, 'label': 'c2'}]
+
+    def hits(self, per_id):
+        return {'词': {sid: n for sid, n in per_id.items() if n}}
+
+    def test_it_orders_by_hit_count_descending(self):
+        ranked = rc.rank_sessions(self.CARDS, self.hits({1: 5, 2: 50, 3: 7}), ['词'])
+        self.assertEqual([c['id'] for c in ranked], [2, 3, 1])
+
+    def test_sessions_without_a_hit_are_left_out(self):
+        ranked = rc.rank_sessions(self.CARDS, self.hits({2: 3}), ['词'])
+        self.assertEqual([c['id'] for c in ranked], [2])
+
+    def test_a_tie_is_broken_deterministically(self):
+        """同分不能靠输入顺序决定——同一份数据两次跑给出两种顺序，就没法复核。"""
+        a = rc.rank_sessions(self.CARDS, self.hits({1: 9, 2: 9, 3: 9}), ['词'])
+        b = rc.rank_sessions(list(reversed(self.CARDS)), self.hits({1: 9, 2: 9, 3: 9}), ['词'])
+        self.assertEqual([c['id'] for c in a], [1, 2, 3])
+        self.assertEqual([c['id'] for c in a], [c['id'] for c in b])
+
+    def test_the_highest_single_term_wins_not_the_sum(self):
+        """两个词各命中 5 次，与一个词命中 9 次：后者更可能是"就是这个会话"。"""
+        hits = {'甲': {1: 5, 2: 9}, '乙': {1: 5}}
+        ranked = rc.rank_sessions(self.CARDS, hits, ['甲', '乙'])
+        self.assertEqual([c['id'] for c in ranked], [2, 1])
+
+    def test_order_does_not_depend_on_which_terms_were_kept_only_their_hits(self):
+        # 换一个更小的词表（模拟 Jev 否掉了碎词）：顺序由剩下的词的命中数决定，
+        # 而不是由"词是谁"决定——这正是"Jev 只筛词、不排序"的含义。
+        hits = {'会议': {1: 3, 2: 40}, '发会': {2: 1}}
+        self.assertEqual([c['id'] for c in rc.rank_sessions(self.CARDS, hits, ['会议'])],
+                         [2, 1])
+        self.assertEqual([c['id'] for c in rc.rank_sessions(self.CARDS, hits, ['会议', '发会'])],
+                         [2, 1])
+
+    def test_the_signature_has_nowhere_to_put_a_model_score(self):
+        """**这条是防回归的**：想让 Jev 参与排序，就得先删掉这条测试。
+
+        （文档 §5.4.4 点名要的加固；做法是把"排序不依赖模型分数"变成可断言的事实，
+        而不是留在注释里。）
+        """
+        import inspect
+        params = list(inspect.signature(rc.rank_sessions).parameters)
+        self.assertEqual(params, ['cards', 'hits', 'terms'])
+
+
 class ClassifyTests(unittest.TestCase):
     def test_the_three_shapes_are_told_apart(self):
         self.assertEqual(rc.classify('12345@chatroom'), '群聊')

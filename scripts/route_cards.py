@@ -273,6 +273,24 @@ def pick_terms(client, question, terms):
     return kept, scores, missing
 
 
+def rank_sessions(cards, hits, terms):
+    """按本地命中数排序会话。**排序只看命中数，Jev 的分数不参与——这是量出来的结论。**
+
+    最初的设计是让 Jev 排会话（每张卡一个 noul / score 问题），实测不成立：noul 全落
+    0.50~0.51（领券群与会务群同档），score 全落 1.74~1.76（命中 247 与命中 8 一样高），
+    而同一批数据按命中数排得很准。原因写在模块 docstring 里。
+
+    所以这个函数**只接 (cards, hits, terms)**——没有任何地方可以塞进一个模型分数。
+    测试会连签名一起钉住：想把它改回"让模型排"，得先删掉那条测试，而不是顺手加一个
+    参数就能改掉行为。
+    """
+    scored = [(card, max(hits[t].get(card['id'], 0) for t in terms))
+              for card in cards if any(hits[t].get(card['id']) for t in terms)]
+    # 次键用 id，保证同分时顺序稳定（否则同一份输入两次跑可能给出不同顺序）。
+    scored.sort(key=lambda pair: (-pair[1], pair[0]['id']))
+    return [card for card, _ in scored]
+
+
 def fetch_messages(config, session_ids, terms, per_card=5):
     """在选中的会话里取命中消息。LIKE 扫明文——微信的 MATCH 用不了（分词器不在）。"""
     if not terms:
@@ -379,8 +397,7 @@ def main():
 
     hits = count_hits(config, use)
     print('\n=== 第二步：本地按命中数排序（共 %d 个会话）===' % len(data['cards']))
-    ranked = sorted((c for c in data['cards'] if any(hits[t].get(c['id']) for t in use)),
-                    key=lambda c: -max(hits[t].get(c['id'], 0) for t in use))
+    ranked = rank_sessions(data['cards'], hits, use)
     if not ranked:
         print('  一个会话都没有字面命中。换词再试——这条路只匹配字面词，'
               '同义改写要靠 search 的向量那条路。')

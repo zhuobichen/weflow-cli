@@ -162,5 +162,67 @@ class SerializableArticleTests(unittest.TestCase):
         self.assertEqual(entry['date'], '2026-09-05')
 
 
+class ApplyDecisionTests(unittest.TestCase):
+    """`_apply_decision` 是每个 Jev 字段落进文章的**唯一**写入点，此前零覆盖。
+
+    （施工文档 §8 点名了这一条：全仓库没有任何测试引用它。）它错了不会报错，只会让
+    判断结果少写或多写一个字段——而"少写一个"的后果是日报那道门静默按旧规则走。
+    """
+
+    DECISION = {'topic': 'AI', 'relevance': '高', 'relevanceScore': 1.8,
+                'topicConfidence': 0.93, 'includeScore': 0.71}
+
+    def test_it_writes_the_topic_and_every_probability_field(self):
+        article = {}
+        self.assertTrue(biz._apply_decision(article, dict(self.DECISION)))
+        self.assertEqual(article['topic'], 'AI')
+        self.assertEqual(article['relevance'], '高')
+        self.assertEqual(article['relevanceScore'], 1.8)
+        self.assertEqual(article['topicConfidence'], 0.93)
+        self.assertEqual(article['includeScore'], 0.71)
+
+    def test_set_topic_false_keeps_the_configured_category(self):
+        """人工配了类别的来源，主题以配置为准（D-005），但相关度仍由判断给出。
+
+        这条是那个分支的核心：`set_topic=False` 时**主题不许被覆盖**，其余照写。
+        """
+        article = {'topic': '学术', 'source_category': '学术'}
+        biz._apply_decision(article, dict(self.DECISION), set_topic=False)
+        self.assertEqual(article['topic'], '学术')
+        self.assertEqual(article['relevance'], '高')
+        self.assertEqual(article['includeScore'], 0.71)
+
+    def test_no_decision_leaves_the_article_untouched(self):
+        """判不出来时**一个字段都不许写**——调用方靠这个 False 决定走哪条老路。"""
+        article = {'topic': '学术', 'summary': '已有摘要'}
+        before = dict(article)
+        for empty in (None, {}):
+            with self.subTest(decision=empty):
+                self.assertFalse(biz._apply_decision(article, empty))
+        self.assertEqual(article, before)
+
+    def test_a_decision_without_the_optional_scores_does_not_invent_keys(self):
+        """没给的字段不许凭空出现——凭空出现一个 `includeScore` 会改变日报的收录判断。"""
+        article = {}
+        biz._apply_decision(article, {'topic': 'AI', 'relevance': '中'})
+        self.assertNotIn('topicConfidence', article)
+        self.assertNotIn('includeScore', article)
+        # `relevanceScore` 是唯一例外的写法（无条件写，可能是 None）。这不有害：
+        # 下游两处都按 `is not None` 判断（`_serializable_article`、md 写入方），
+        # 所以 None 落不了盘。钉住它是为了别被当成 bug 顺手改掉——改了会让这个键
+        # 有时存在有时不存在，而"存在但为 None"至少是一致的。
+        self.assertIn('relevanceScore', article)
+        self.assertIsNone(article['relevanceScore'])
+
+    def test_the_written_fields_survive_serialization(self):
+        """写入 → 序列化这条链要能接上：概率字段必须真的进 `.articles.json`。"""
+        article = {}
+        biz._apply_decision(article, dict(self.DECISION))
+        entry = biz._serializable_article(article, '2026-09-05')
+        self.assertEqual(entry['includeScore'], 0.71)
+        self.assertEqual(entry['topicConfidence'], 0.93)
+        self.assertEqual(entry['relevanceScore'], 1.8)
+
+
 if __name__ == '__main__':
     unittest.main()

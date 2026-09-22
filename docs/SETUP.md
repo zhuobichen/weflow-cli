@@ -81,6 +81,15 @@ weflow-cli daily-server --date YYYY-MM-DD --open
 weflow-cli config set dailyAiEnabled false
 ```
 
+文章的主题与相关度默认可以交给 TypeSafe 的 Jev 决策模型判断（返回概率而不是一段要解析的文字）。这一步可选：**不配就沿用原来的 LLM 解析路径，行为不变。**
+
+```powershell
+weflow-cli config set typesafeApiKey "..."   # 机器绑定加密保存，和 deepseekApiKey 一样
+weflow-cli config set typesafeApiKey ""      # 清空即回到 LLM 解析路径
+```
+
+配了它之后，文章标题与正文会同时发给 DeepSeek 和 `api.typesafe.ai` 两处（出网范围见下节）。
+
 日报输出和阅读器均为本地文件/回环服务。阅读器默认地址是 `http://127.0.0.1:8765/`，不要把端口暴露到局域网或公网。
 
 ## 配置与隐私
