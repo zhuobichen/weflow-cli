@@ -87,6 +87,16 @@ All notable user-facing changes are recorded here. This project follows [Semanti
   instead of rethrowing into the ReAct loop. **Not covered, deliberately**: `get_todos` spawns a
   Python subprocess against the real database and has no cheap stub point.
 
+- The assistant's resident loop is now driven by tests too - who gets answered and who is denied,
+  without a WeChat channel: `WechatMessageService.prototype` is replaced, the token comes from a
+  stubbed `configService.get`, and the queue is drained by awaiting it. Pinned: an empty allowlist
+  denies everyone with an audit line and **no model call**; a non-text message is ignored without
+  spending quota; an exhausted quota replies "额度已用完" and does not call the model; the quota
+  resets across a date change; two messages are processed strictly in arrival order (the serial
+  queue is what keeps the memory window from interleaving); a group needs all three controls
+  (group allowlist, sender allowlist, @ mention) and is denied with a distinct reason for each
+  missing one; and one message that throws does not take the loop down with it.
+
 ### Changed
 - Image downloads during the daily run are concurrent (6-way). They were sequential at 0.37 s and 135 KB each - about 18 minutes per 190-article day - even though they come from `.qpic.cn`, WeChat's CDN, which a browser fetches in parallel anyway. Same three articles: 17.2 s → 2.1 s. The same change fixed the map: a failed download used to be recorded in `.image_map.json` **before** it was attempted, and the reader injects that map as `window._IMG_MAP`, so the page was told to look for a local file that did not exist. Only files that are actually on disk are mapped now, and duplicates in a page are fetched once (31 image links in one article were 17 distinct images).
 - LLM summaries are generated concurrently, so a 190-article day spends about 2 minutes there instead of 9 (measured 2.27/2.92/2.45 s per article). The calls are **prefetched, not the loop rewritten**: responses are filled back by their original index and the existing loop still does the parsing and the field writes in the same order, so every fallback branch behaves exactly as before - a failed call comes back as an error and the loop re-raises it into its own `except`. The per-article 0.3 s pacing moved into the worker, so the request rate to the provider is unchanged. The stage now prints `摘要完成 N/M 篇，耗时 Xs（6 并发；串行约需 Ys）`, the shape the classification stage already used.
