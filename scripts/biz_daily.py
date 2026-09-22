@@ -230,6 +230,9 @@ def _classify_with_jev(client, title, body, topics):
 # 把它排在那条串行的 LLM 循环里一篇一篇等。并发数克制一些：服务 2026-09-15 才上线，
 # 打满了会返回 529（已实测遇到过），并发拉高只会换来一堆重试。
 JEV_WORKERS = 6
+# 图片并发。取的是 qpic.cn（微信 CDN），浏览器本来就并发取图；串行只是实现选择。
+# 实测每张 0.37s、135 KB、一篇 14–31 张，串行下来 190 篇约 18 分钟。
+IMAGE_WORKERS = 6
 
 
 def classifier_plan(no_ai, classifier, deepseek_key, engine):
@@ -513,31 +516,50 @@ def fetch_article(url: str, max_retries: int = 3) -> str | None:
     return None
 
 
-def download_images_to_local(markdown: str, images_dir: Path) -> tuple[str, dict]:
-    """Download mmbiz images to local directory. Returns (markdown, url_mapping)."""
+def _download_one_image(url: str, local_path: Path) -> bool:
+    """取一张图。成功返回 True；失败**不抛**——一张图挂了不该影响这一篇的其它图。"""
+    try:
+        req = urllib.request.Request(url, headers={
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Referer': 'https://mp.weixin.qq.com/',
+        })
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = resp.read(10 * 1024 * 1024)  # max 10MB
+        if data:
+            local_path.write_bytes(data)
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def download_images_to_local(markdown: str, images_dir: Path,
+                             workers: int = IMAGE_WORKERS) -> tuple[str, dict]:
+    """Download mmbiz images to local directory. Returns (markdown, url_mapping).
+
+    **并发取图**（`IMAGE_WORKERS`）：串行只是实现选择，实测 190 篇约 18 分钟。
+
+    只登记**真的在本地存在**的文件。原先每张图在下载前就写进映射，于是下载失败的
+    也留一条——而映射会被注入阅读器（`window._IMG_MAP`，见 `generate_html.py`），
+    让页面去找一个不存在的文件。保留远程链接才是对的：阅读器按远程取照样能看。
+    """
     url_mapping = {}  # remote_url -> local_rel_path
 
     if not markdown:
         return markdown, url_mapping
 
-    # Create images directory
     images_dir.mkdir(parents=True, exist_ok=True)
 
-    # Find all image URLs in markdown
-    img_pattern = re.compile(r'!\[(.*?)\]\((https?://[^)]+)\)')
-    img_matches = img_pattern.findall(markdown)
-
+    img_matches = re.compile(r'!\[(.*?)\]\((https?://[^)]+)\)').findall(markdown)
     if not img_matches:
         return markdown, url_mapping
 
-    downloaded_count = 0
-    for alt, url in img_matches:
+    targets, seen = [], set()
+    for _alt, url in img_matches:
         # Process any qpic.cn (mmbiz/mmecoa) images
-        if '.qpic.cn' not in url:
+        if '.qpic.cn' not in url or url in seen:
             continue
-
-        # Generate filename from URL hash
-        url_hash = hashlib.md5(url.encode()).hexdigest()[:12]
+        seen.add(url)                     # 同一张图在页面上可能出现多次，只取一次
         ext = '.jpg'  # default
         if '.png' in url or 'wx_fmt=png' in url:
             ext = '.png'
@@ -545,33 +567,28 @@ def download_images_to_local(markdown: str, images_dir: Path) -> tuple[str, dict
             ext = '.gif'
         elif '.webp' in url or 'wx_fmt=webp' in url:
             ext = '.webp'
+        local_filename = f'{hashlib.md5(url.encode()).hexdigest()[:12]}{ext}'
+        targets.append((url, images_dir / local_filename, f'images/{local_filename}'))
 
-        local_filename = f'{url_hash}{ext}'
-        local_path = images_dir / local_filename
-        rel_path = f'images/{local_filename}'
-
-        # Store mapping
-        url_mapping[url] = rel_path
-
-        # Skip if already downloaded
+    downloaded_count = 0
+    todo = []
+    for url, local_path, rel_path in targets:
+        # Skip if already downloaded——重跑同一天时这一步就把它们全跳过了
         if local_path.exists() and local_path.stat().st_size > 0:
+            url_mapping[url] = rel_path
             downloaded_count += 1
-            continue
+        else:
+            todo.append((url, local_path, rel_path))
 
-        # Download image
-        try:
-            req = urllib.request.Request(url, headers={
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                'Referer': 'https://mp.weixin.qq.com/',
-            })
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                data = resp.read(10 * 1024 * 1024)  # max 10MB
-                if len(data) > 0:
-                    local_path.write_bytes(data)
+    if todo:
+        with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
+            futures = {pool.submit(_download_one_image, url, path): (url, rel_path)
+                       for url, path, rel_path in todo}
+            for future in as_completed(futures):
+                url, rel_path = futures[future]
+                if future.result():
+                    url_mapping[url] = rel_path
                     downloaded_count += 1
-        except Exception as e:
-            # Keep original URL if download fails
-            pass
 
     if downloaded_count > 0:
         print(f'  图片下载: {downloaded_count}张')

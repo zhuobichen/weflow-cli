@@ -162,6 +162,87 @@ class SerializableArticleTests(unittest.TestCase):
         self.assertEqual(entry['date'], '2026-09-05')
 
 
+class ImageDownloadTests(unittest.TestCase):
+    """图片并发取图，以及**映射必须指向真的存在的文件**。
+
+    并发是实测的收益：同一批 17.2s → 2.1s，190 篇从约 18 分钟降到约 3 分钟。
+    但更要紧的是映射那条：原先每张图在**下载前**就登记，于是下载失败的也留一条，
+    而映射会被注入阅读器（`window._IMG_MAP`）——页面于是去找一个不存在的文件，
+    比保留远程链接更糟。
+    """
+
+    MD = ('![a](https://mmbiz.qpic.cn/a.jpg)\n'
+          '![b](https://mmbiz.qpic.cn/b.png)\n'
+          '![a 又一次](https://mmbiz.qpic.cn/a.jpg)\n'
+          '![外面的](https://example.com/x.jpg)')
+
+    def setUp(self):
+        import tempfile
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.dir = Path(self.tmp.name) / 'images'
+        self.requested = []
+
+    def install(self, failing=()):
+        class Resp:
+            def read(self, size=None):
+                return b'x' * 64
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        def fake_urlopen(request, timeout=None):
+            url = request.full_url
+            self.requested.append(url)
+            if url in failing:
+                raise OSError('boom')
+            return Resp()
+
+        patcher = patch.object(biz.urllib.request, 'urlopen', fake_urlopen)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_every_distinct_qpic_image_lands_once(self):
+        self.install()
+        _md, mapping = biz.download_images_to_local(self.MD, self.dir)
+        self.assertEqual(sorted(self.requested),
+                         ['https://mmbiz.qpic.cn/a.jpg', 'https://mmbiz.qpic.cn/b.png'])
+        self.assertEqual(len(list(self.dir.glob('*'))), 2)
+        self.assertEqual(len(mapping), 2)
+        # 非 qpic 的图不管（原样留在正文里，按远程取）
+        self.assertNotIn('https://example.com/x.jpg', mapping)
+
+    def test_every_mapping_entry_names_a_file_that_exists(self):
+        self.install()
+        _md, mapping = biz.download_images_to_local(self.MD, self.dir)
+        for rel_path in mapping.values():
+            with self.subTest(rel_path=rel_path):
+                self.assertTrue((Path(self.tmp.name) / rel_path).exists())
+
+    def test_a_failed_image_is_not_mapped_and_does_not_break_the_others(self):
+        self.install(failing={'https://mmbiz.qpic.cn/a.jpg'})
+        _md, mapping = biz.download_images_to_local(self.MD, self.dir)
+        self.assertNotIn('https://mmbiz.qpic.cn/a.jpg', mapping)
+        self.assertIn('https://mmbiz.qpic.cn/b.png', mapping)
+
+    def test_a_rerun_makes_no_requests_at_all(self):
+        """重跑同一天时**一张图都不再请求**——这是"先检查存在"那个 early-return 的价值。
+
+        （第一版这里我写成"只会再请求 b.png"，其实第一次调用已经把两张都下下来了；
+        断言写错的是我，不是代码。桩也必须在调用之前装好，否则那次调用就是真实网络请求。）
+        """
+        self.install()
+        _md, first = biz.download_images_to_local(self.MD, self.dir)
+        self.assertEqual(len(first), 2)
+        self.requested.clear()
+        _md, second = biz.download_images_to_local(self.MD, self.dir)
+        self.assertEqual(self.requested, [])
+        self.assertEqual(second, first)
+
+
 class DecodeBodyTests(unittest.TestCase):
     """响应体解压。加这个的原因是一次实测：微信文章页 3–4 MB，`urllib` 默认不发
     `Accept-Encoding`，于是整页未压缩地传——同一篇 33–40s，发了 gzip 后 6–10s。
