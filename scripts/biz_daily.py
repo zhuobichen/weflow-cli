@@ -232,6 +232,26 @@ def _classify_with_jev(client, title, body, topics):
 JEV_WORKERS = 6
 
 
+def classifier_plan(no_ai, classifier, deepseek_key, engine):
+    """这次日报用哪条判断路径。返回 `'skip' | 'jev' | 'llm'`。
+
+    这是 D-031 那句"`--classifier` 是一条命令回滚"的**全部实现**——三条分支此前
+    没有任何测试，而回滚承诺就压在它们上面：
+
+    * `'llm'` 必须**不碰 Jev**（一键回退，也是"同一天两条路各跑一遍"的做法）；
+    * `'jev'` 只是**意图**，不是结果——没有 key、或 key 解不开时，建客户端会失败，
+      由调用方按 `classifier == 'jev'` 决定要不要告警，然后安静退回老路（`auto` 的语义）；
+    * `'skip'` 让**整块 Phase 2 都不执行**：`--no-ai`，或 `dailyAiEnabled=false`
+      （那个配置项在更早处被折进 `no_ai`），或 deepseek 引擎但没 key。
+
+    单独成函数是为了能**离线枚举**这几种组合——它们决定"有没有数据出境"，
+    不该只靠读代码确认。
+    """
+    if no_ai or not (deepseek_key or engine != 'deepseek'):
+        return 'skip'
+    return 'jev' if classifier in ('auto', 'jev') else 'llm'
+
+
 def _classify_articles_parallel(articles, client, topics, workers=JEV_WORKERS):
     """把能分类的篇目一次性并发问完，返回 {下标: decision}。
 
@@ -804,12 +824,13 @@ def main():
     # 别名会漂：今天跑的和测过的可能不是同一个东西，而结果看起来一切正常。落盘它，
     # 是为了让这件事**可见**。（没走 Jev 时保持 None，如实表示"没用判断模型"。）
     decision_model = None
-    if not args.no_ai and (api_key or engine != 'deepseek'):
+    plan = classifier_plan(args.no_ai, args.classifier, api_key, engine)
+    if plan != 'skip':
         print(f'\n=== Phase 2: AI 摘要 + 主题分类 (engine={engine}) ===\n')
         from _utils import call_ai
         from jev_client import create_client
         # 判断交给 Jev，生成留给 LLM。没配 key 就整条走老路（auto 的语义）。
-        jev_client = create_client(config=config) if args.classifier in ('auto', 'jev') else None
+        jev_client = create_client(config=config) if plan == 'jev' else None
         if jev_client is not None:
             print(f'  分类：Jev（model={jev_client.model}，生成摘要仍用 {engine}）')
         elif args.classifier == 'jev':

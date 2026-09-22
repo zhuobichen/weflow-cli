@@ -162,6 +162,55 @@ class SerializableArticleTests(unittest.TestCase):
         self.assertEqual(entry['date'], '2026-09-05')
 
 
+class ClassifierPlanTests(unittest.TestCase):
+    """`--classifier` 的接线：三条分支决定**有没有数据出境**。
+
+    D-031 承诺"`--classifier` 是一条命令回滚"，而这句话的实现就是这三个返回值。
+    此前没有任何测试——也就是说，没人能离线确认"`llm` 真的不碰 Jev"或
+    "`--no-ai` 真的连 Phase 2 都不进"，只能读代码。
+    """
+
+    def test_no_ai_skips_phase_two_for_every_classifier(self):
+        """总闸。`--no-ai`（或 `dailyAiEnabled=false`，它被折进 no_ai）下，
+        无论 `--classifier` 给什么，整块 Phase 2 都不执行——这是"全本地"的保证。"""
+        for classifier in ('auto', 'llm', 'jev'):
+            with self.subTest(classifier=classifier):
+                self.assertEqual(biz.classifier_plan(True, classifier, 'key', 'deepseek'),
+                                 'skip')
+
+    def test_a_deepseek_run_without_a_key_skips_phase_two_entirely(self):
+        """没 key 就没摘要——老路的解析也要靠 LLM 产出那段文字，所以是整块不跑，
+        不是"跑起来再退回老路"。"""
+        self.assertEqual(biz.classifier_plan(False, 'auto', '', 'deepseek'), 'skip')
+        self.assertEqual(biz.classifier_plan(False, 'jev', '', 'deepseek'), 'skip')
+
+    def test_a_non_deepseek_engine_still_runs_without_a_deepseek_key(self):
+        # 无 key 时引擎会切到 local（`biz_daily` 里更早的一处），摘要照样做。
+        self.assertEqual(biz.classifier_plan(False, 'llm', '', 'local'), 'llm')
+
+    def test_llm_never_asks_for_a_jev_client(self):
+        """**这就是那一条命令回滚**：`--classifier llm` 下不许建客户端。
+
+        建客户端是唯一会让文章标题与正文发往 `api.typesafe.ai` 的动作，所以这一条
+        等于"回滚之后不出网"。"""
+        for key in ('key', ''):
+            with self.subTest(key=bool(key)):
+                self.assertEqual(biz.classifier_plan(False, 'llm', key, 'local'), 'llm')
+
+    def test_auto_and_jev_both_ask_for_a_client(self):
+        self.assertEqual(biz.classifier_plan(False, 'auto', 'key', 'deepseek'), 'jev')
+        self.assertEqual(biz.classifier_plan(False, 'jev', 'key', 'deepseek'), 'jev')
+
+    def test_jev_is_an_intention_not_a_promise(self):
+        """`'jev'` 只表示"去试着建客户端"。
+
+        没配 `typesafeApiKey` 时 `create_client` 返回 None，`auto` 安静退回老路、
+        `jev` 打一行 WARN——两种都由调用方处理。把它们当成"已经用上了 Jev"是错的，
+        这也是为什么这个返回值叫 plan 而不是 used。
+        """
+        self.assertEqual(biz.classifier_plan(False, 'auto', 'key', 'deepseek'), 'jev')
+
+
 class ApplyDecisionTests(unittest.TestCase):
     """`_apply_decision` 是每个 Jev 字段落进文章的**唯一**写入点，此前零覆盖。
 
