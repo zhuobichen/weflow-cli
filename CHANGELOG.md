@@ -97,6 +97,17 @@ All notable user-facing changes are recorded here. This project follows [Semanti
   (group allowlist, sender allowlist, @ mention) and is denied with a distinct reason for each
   missing one; and one message that throws does not take the loop down with it.
 
+- The privacy wiring - which config value decides "this data does not leave the machine" - is now
+  tested. Existing privacy tests called `redactText(text, mode, localInference)` with explicit
+  arguments, so the function was covered while the thing that *derives* that boolean in
+  production was not: `PrivacyGate.isLocalInference()` reads `aiEngine`, and `engineConfig()`
+  decides where the request is actually sent. Pinned: only `ollama`/`lmstudio`/`local` count as
+  local inference and skip redaction; a custom `aiBaseUrl` is still cloud, so swapping in a relay
+  does not quietly stop PII masking; local engines point at `localhost` with `key: null` and a
+  trailing slash on a custom base URL is stripped; and `reviewEvidence` refuses to put chat text
+  on the wire without an explicit `--allow-cloud` (**without issuing any request**), redacts the
+  transcript when it does, and keeps it intact under local inference.
+
 ### Changed
 - Image downloads during the daily run are concurrent (6-way). They were sequential at 0.37 s and 135 KB each - about 18 minutes per 190-article day - even though they come from `.qpic.cn`, WeChat's CDN, which a browser fetches in parallel anyway. Same three articles: 17.2 s → 2.1 s. The same change fixed the map: a failed download used to be recorded in `.image_map.json` **before** it was attempted, and the reader injects that map as `window._IMG_MAP`, so the page was told to look for a local file that did not exist. Only files that are actually on disk are mapped now, and duplicates in a page are fetched once (31 image links in one article were 17 distinct images).
 - LLM summaries are generated concurrently, so a 190-article day spends about 2 minutes there instead of 9 (measured 2.27/2.92/2.45 s per article). The calls are **prefetched, not the loop rewritten**: responses are filled back by their original index and the existing loop still does the parsing and the field writes in the same order, so every fallback branch behaves exactly as before - a failed call comes back as an error and the loop re-raises it into its own `except`. The per-article 0.3 s pacing moved into the worker, so the request rate to the provider is unchanged. The stage now prints `摘要完成 N/M 篇，耗时 Xs（6 并发；串行约需 Ys）`, the shape the classification stage already used.
