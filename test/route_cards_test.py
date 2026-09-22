@@ -397,6 +397,25 @@ class MainWiringTests(unittest.TestCase):
         kinds = {c['id']: c['kind'] for c in data['cards']}
         self.assertEqual(kinds[1], '群聊')
 
+    def test_json_output_is_the_last_line_and_stays_offline(self):
+        """`--json` 是给程序读的出口（助手工具就用它）。
 
-if __name__ == '__main__':
-    unittest.main()
+        JSON 在**最后一行**——前面仍有给人看的进度行，所以调用方按"最后一行能解析成
+        JSON"取，而不是假设整份 stdout 就是 JSON。同时钉住：`--keyword` 下依然不出网。
+        """
+        with patch('jev_client.create_client') as build:
+            text, code = self.run_main(['ask', '会议', '--keyword', '会议', '--json'])
+
+        self.assertIsNone(code)
+        self.assertFalse(build.called, '--json 走 --keyword 时同样不该出网')
+
+        last = [line for line in text.splitlines() if line.strip()][-1]
+        data = json.loads(last)
+        self.assertTrue(data['success'])
+        self.assertEqual(data['terms'], ['会议'])
+        self.assertEqual(data['ranked'][0]['label'], '群A', '命中最多的排第一')
+        self.assertGreaterEqual(data['ranked'][0]['hits']['会议'], 3)
+        self.assertIn('messages', data)
+        self.assertIn('lastDaysAgo', data['ranked'][0])
+
+if __name__ == '__main__':unittest.main()

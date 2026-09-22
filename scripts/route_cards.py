@@ -334,8 +334,11 @@ def main():
     a.add_argument('question')
     a.add_argument('--keyword', help='手动指定查询词（逗号分隔）；不给就从问题里取')
     a.add_argument('--per-card', type=int, default=5, help='每个会话最多取几条消息')
+    a.add_argument('--json-cards', type=int, default=5, help='--json 时最多给几个会话取消息')
     a.add_argument('--dry-run', action='store_true', help='只打印将要发送的请求，不发送')
     a.add_argument('--yes', action='store_true', help='确认把卡片发给 Jev（这是出网）')
+    a.add_argument('--json', action='store_true',
+                   help='输出机器可读结果（会话/命中数/取到的消息），供其它程序调用')
 
     args = parser.parse_args()
     config = load_config()
@@ -403,8 +406,24 @@ def main():
         print('\n  它认为这些候选词都不是你要找的，改用原始候选继续（结果可能不相关）。')
 
     hits = count_hits(config, use)
-    print('\n=== 第二步：本地按命中数排序（共 %d 个会话）===' % len(data['cards']))
     ranked = rank_sessions(data['cards'], hits, use)
+
+    # 机器可读出口：给把它做成工具的调用方（助手工具）。文本那份仍然是给人看的。
+    if args.json:
+        fetched = fetch_messages(config, [c['id'] for c in ranked[:args.json_cards]], use,
+                                 args.per_card) if ranked else {}
+        print(json.dumps({
+            'success': True,
+            'terms': use,
+            'ranked': [{'id': c['id'], 'kind': c['kind'], 'label': c['label'],
+                        'messages': c['messages'], 'lastDaysAgo': c.get('last_days_ago'),
+                        'hits': {t: hits[t].get(c['id'], 0) for t in use}} for c in ranked],
+            'messages': {str(cid): [{'time': ts, 'text': text} for text, ts in rows]
+                         for cid, rows in fetched.items()},
+        }, ensure_ascii=False))
+        return
+
+    print('\n=== 第二步：本地按命中数排序（共 %d 个会话）===' % len(data['cards']))
     if not ranked:
         print('  一个会话都没有字面命中。换词再试——这条路只匹配字面词，'
               '同义改写要靠 search 的向量那条路。')

@@ -246,6 +246,25 @@ All notable user-facing changes are recorded here. This project follows [Semanti
   appears in both cases. A relevance-only fallback is intentional: memory itself is context, so injecting
   nothing at all is worse than injecting the most recent few.
 
+- Two more assistant tools, and the Python-calling code is now one implementation instead of two.
+- `search_chats`: "where did we talk about X" across every conversation. It runs `scripts/route_cards.py`
+  (the decision model picks the query words, ranking is local against the message full-text index) and
+  reuses that script's own egress gate; only the question and the candidate words leave the machine, never
+  chat bodies - and the excerpts it does return go through `privacyGate.maskMessageBody`, the same rule
+  `get_messages` follows, so strict mode masks them here too.
+- `who_owes_reply`: who is waiting on you, from `scripts/reply_debt.py --json`. It reports who/ how long /
+  how likely and deliberately **not** what they wrote; ask for a specific person with `get_messages`, which
+  does the masking properly.
+- `route_cards.py` gained a `--json` output for this (the JSON is the last line, since the human-readable
+  progress lines still go first) with a test asserting that shape and that `--keyword` stays offline.
+- New `src/services/pythonBridge.ts`: the single way to call an in-repo Python script and get JSON back.
+  There were two implementations before (`get_todos` via `execFile` with argv, the router via `spawn` with
+  stdin), each with its own timeout and error handling - exactly the duplication this repo keeps finding.
+  The bridge classifies failures (timeout / non-zero exit / no JSON / the script reporting `success:false`)
+  instead of collapsing them into "execution failed", does not throw at callers, and is injectable so the
+  tool branches can be tested without spawning a process - which is what finally makes `get_todos`
+  testable, the one tool that had been left uncovered for that reason.
+
 ### Changed
 - Image downloads during the daily run are concurrent (6-way). They were sequential at 0.37 s and 135 KB each - about 18 minutes per 190-article day - even though they come from `.qpic.cn`, WeChat's CDN, which a browser fetches in parallel anyway. Same three articles: 17.2 s → 2.1 s. The same change fixed the map: a failed download used to be recorded in `.image_map.json` **before** it was attempted, and the reader injects that map as `window._IMG_MAP`, so the page was told to look for a local file that did not exist. Only files that are actually on disk are mapped now, and duplicates in a page are fetched once (31 image links in one article were 17 distinct images).
 - LLM summaries are generated concurrently, so a 190-article day spends about 2 minutes there instead of 9 (measured 2.27/2.92/2.45 s per article). The calls are **prefetched, not the loop rewritten**: responses are filled back by their original index and the existing loop still does the parsing and the field writes in the same order, so every fallback branch behaves exactly as before - a failed call comes back as an error and the loop re-raises it into its own `except`. The per-article 0.3 s pacing moved into the worker, so the request rate to the provider is unchanged. The stage now prints `摘要完成 N/M 篇，耗时 Xs（6 并发；串行约需 Ys）`, the shape the classification stage already used.

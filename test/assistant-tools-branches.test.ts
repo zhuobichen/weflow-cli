@@ -364,3 +364,105 @@ test('get_messages：文本消息仍然用原文（parsedContent 被截断过）
     assert.match(await run('get_messages', { contact: '甲' }), /一段完整的文本/)
   } finally { ;(configService as any).get = realGet2 }
 })
+
+// ------------------------------------------------- 脚本类工具（走 pythonBridge）
+
+const bridge = await import('../src/services/pythonBridge.js')
+
+/** 装上假 runner，返回它收到的调用，便于断言参数 */
+function stubScript(stdout: string, code = 0, stderr = '') {
+  const calls: { script: string; args: string[] }[] = []
+  bridge.setScriptRunner(async (script: string, args: string[]) => {
+    calls.push({ script, args })
+    return { stdout, stderr, code }
+  })
+  return calls
+}
+
+test('search_chats：把命中会话与消息渲染出来，并带上查询词', async () => {
+  // 这个文件默认跑在 strict 下（正文会被遮罩），而这条测的是渲染本身
+  const realGet = configService.get.bind(configService)
+  ;(configService as any).get = (k: string) => (k === 'assistantPrivacy' ? 'balanced' : realGet(k))
+  stubScript(JSON.stringify({
+    success: true, terms: ['部署', '上线'],
+    ranked: [{ id: 1, kind: '群聊', label: '群A', messages: 12, lastDaysAgo: 2, hits: { 部署: 3 } },
+             { id: 2, kind: '单聊', label: '甲', messages: 5, lastDaysAgo: 9, hits: { 上线: 1 } }],
+    messages: { '1': [{ time: 1758000000, text: '部署脚本我改好了' }] },
+  }))
+  try {
+    const out = await run('search_chats', { question: '上次说的部署方案' })
+    assert.match(out, /命中 2 个会话/)
+    assert.match(out, /部署、上线/)
+    assert.match(out, /群A/)
+    assert.match(out, /部署脚本我改好了/)
+  } finally {
+    bridge.setScriptRunner(null)
+    ;(configService as any).get = realGet
+  }
+})
+
+test('search_chats：严格模式下对话正文不许出现在结果里', async () => {
+  const realGet = configService.get.bind(configService)
+  ;(configService as any).get = (k: string) => (k === 'assistantPrivacy' ? 'strict' : realGet(k))
+  stubScript(JSON.stringify({
+    success: true, terms: ['部署'],
+    ranked: [{ id: 1, kind: '群聊', label: '群A', messages: 3, lastDaysAgo: 1, hits: { 部署: 1 } }],
+    messages: { '1': [{ time: 1758000000, text: '这是第三方聊天正文' }] },
+  }))
+  try {
+    const out = await run('search_chats', { question: '部署' })
+    assert.doesNotMatch(out, /这是第三方聊天正文/, '严格模式下正文不许出现——与 get_messages 同一条纪律')
+    assert.match(out, /已按严格模式屏蔽/)
+  } finally {
+    bridge.setScriptRunner(null)
+    ;(configService as any).get = realGet
+  }
+})
+
+test('search_chats：一个都没命中时说实话，而不是回空', async () => {
+  stubScript(JSON.stringify({ success: true, terms: ['xyz'], ranked: [], messages: {} }))
+  try {
+    assert.match(await run('search_chats', { question: 'xyz' }), /没有会话字面命中/)
+  } finally { bridge.setScriptRunner(null) }
+})
+
+test('search_chats：脚本失败时给出分类过的原因', async () => {
+  stubScript('', 2, '缺少 TypeSafe key')
+  try {
+    const out = await run('search_chats', { question: '部署' })
+    assert.match(out, /会话检索失败/)
+    assert.match(out, /退出码 2/)
+  } finally { bridge.setScriptRunner(null) }
+})
+
+test('search_chats：脚本参数带上 --yes 与 --json（前者是它自己的出网闸门）', async () => {
+  const calls = stubScript(JSON.stringify({ success: true, terms: [], ranked: [], messages: {} }))
+  try {
+    await run('search_chats', { question: '部署', per_card: 4 })
+    assert.deepEqual(calls[0].args.slice(0, 5), ['ask', '部署', '--yes', '--json', '--per-card'])
+    assert.equal(calls[0].args[5], '4')
+  } finally { bridge.setScriptRunner(null) }
+})
+
+test('who_owes_reply：列出谁在等、等了多久、概率多少', async () => {
+  stubScript(JSON.stringify({
+    success: true, excluded_service: 2,
+    debts: [{ name: '甲', days: 3.5, waiting: 0.82, urgencyScore: 2, kind: '单聊' },
+            { name: '群B', days: 1.2, waiting: 0.61, urgencyScore: null, kind: '群聊' }],
+  }))
+  try {
+    const out = await run('who_owes_reply', {})
+    assert.match(out, /在等你回话的 2 个会话/)
+    assert.match(out, /甲（等了 3.5 天 · 概率 0.82 · 紧急度 2 · 单聊）/)
+    assert.match(out, /群B（等了 1.2 天 · 概率 0.61 · 群聊）/, '没有紧急度时不该写成 null')
+    assert.match(out, /只报谁在等/)
+  } finally { bridge.setScriptRunner(null) }
+})
+
+test('who_owes_reply：没人欠账时说实话', async () => {
+  stubScript(JSON.stringify({ success: true, debts: [] }))
+  try {
+    assert.match(await run('who_owes_reply', { days: 7 }), /最近 7 天没有明显在等你回话/)
+  } finally { bridge.setScriptRunner(null) }
+})
+

@@ -19,11 +19,7 @@
  * 隐私：出境的是**用户这条消息本身**加一份固定的能力表说明。消息本来就会发给配置的 LLM
  * （生成回答时），所以这不是新的出境类别；但这里的 state **不含**历史对话与任何本地数据。
  */
-import { spawn } from 'node:child_process'
-import { join } from 'node:path'
-import { resolvePackageRoot } from '../utils/packageRoot.js'
-import { createPythonProcessEnv } from '../utils/pythonProcessEnv.js'
-import { getPythonCommand } from '../utils/python.js'
+import { runPythonJson } from './pythonBridge.js'
 
 export type FastRouteMode = 'off' | 'log' | 'on'
 
@@ -107,30 +103,19 @@ interface RouterOptions {
   minConfidence?: number
 }
 
-/** 本机判断层的默认出口：request 从 stdin 进，答案从 stdout 出，路径里没有密钥 */
-function runDecideViaPython(request: unknown): Promise<any> {
-  const script = join(resolvePackageRoot(import.meta.url), 'scripts', 'decide.py')
-  const python = getPythonCommand()
-  return new Promise((resolve, reject) => {
-    const child = spawn(python, [script, '--request', '-'], {
-      env: createPythonProcessEnv(),
-      stdio: ['pipe', 'pipe', 'pipe'],
-    })
-    let out = ''
-    let err = ''
-    child.stdout.on('data', (chunk: Buffer) => { out += chunk.toString() })
-    child.stderr.on('data', (chunk: Buffer) => { err += chunk.toString() })
-    child.on('error', reject)
-    child.on('close', () => {
-      try {
-        resolve(JSON.parse(out))
-      } catch {
-        // 判断层不给答案时不能装作拿到了：调用方按"回退"处理，原因里带上 stderr 尾巴
-        reject(new Error(`判断层没有返回 JSON（${err.trim().slice(0, 200)}）`))
-      }
-    })
-    child.stdin.end(JSON.stringify(request))
-  })
+/** 本机判断层的默认出口：request 从 stdin 进，答案从 stdout 出，路径里没有密钥。
+ *
+ *  走 pythonBridge（唯一的脚本调用入口）——此前这里自己 spawn 了一遍，与 get_todos 那份
+ *  各写一套超时与错误处理，正是"同一件事两处实现"的老毛病。
+ */
+async function runDecideViaPython(request: unknown): Promise<any> {
+  const result = await runPythonJson(
+    'decide.py', ['--request', '-'], { stdin: JSON.stringify(request), timeoutMs: 60_000 })
+  if (!result.ok) {
+    // 调用方（decideRoute）用抛错来表达"判断层不可用"，这里保持那个契约
+    throw new Error(`${result.error}${result.stderr ? " · " + result.stderr : ""}`)
+  }
+  return result.data
 }
 
 function asProbability(value: unknown): number | null {
