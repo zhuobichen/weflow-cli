@@ -11,7 +11,7 @@
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -21,9 +21,10 @@ process.env.USERPROFILE = HOME
 
 const { AssistantMemory } = await import('../src/services/assistantMemory.js')
 
-// 当前常量（assistantMemory.ts）：窗口 16 条、摘要 800 字、事实 30 条、每 6 个用户轮提取一次
-const WORKING_MAX = 16
-const FACT_EVERY = 6
+// 常量的真值从模块导入，不在测试里抄一份（抄的那份会漂）
+const { CONTEXT_BUDGET_CHARS: BUDGET, FACT_EXTRACT_EVERY: FACT_EVERY, WORKING_MAX,
+        WORKING_MIN_TURNS, WORKING_RETAIN_RATIO, MEMORY_FORMAT_VERSION,
+        buildSummaryPrompt, buildFactPrompt } = await import('../src/services/assistantMemory.js')
 
 let seq = 0
 /** 每个用例一个独立的 userId：记忆是持久化的，用例之间不该互相看见 */
@@ -134,15 +135,24 @@ test('fact extraction finds the JSON array inside noisy model output', async () 
   assert.deepEqual(memory.facts(user).map(f => f.content), ['项目叫 weflow-cli', '周末常去爬山'])
 })
 
-test('a fact that is already covered is not added again', async () => {
+test('a more specific fact replaces the general one instead of piling up', async () => {
+  // 旧规则是"互相包含就算重复"——于是**更具体的那条进不来**（丢信息）。
+  // 现在长的、更具体的那条胜出，条数不涨。
   const memory = new AssistantMemory()
   const user = newUser()
   memory.addFact(user, '项目叫 weflow-cli')
   for (let i = 0; i < FACT_EVERY; i++) memory.addTurn(user, 'user', '随便说点')
 
-  // "项目叫 weflow-cli 并开源" 与已有事实互相包含 → 去重
-  assert.equal(await memory.extractFactsIfNeeded(user, llmReturning('["项目叫 weflow-cli 并开源"]')), 0)
-  assert.equal(memory.facts(user).length, 1)
+  assert.equal(await memory.extractFactsIfNeeded(user, llmReturning('["项目叫 weflow-cli 并开源"]')), 1)
+  assert.deepEqual(memory.facts(user).map(f => f.content), ['项目叫 weflow-cli 并开源'])
+})
+
+test('a general fact does not replace a more specific one', () => {
+  const memory = new AssistantMemory()
+  const user = newUser()
+  memory.addFact(user, '项目叫 weflow-cli 并开源')
+  assert.equal(memory.addFact(user, '项目叫 weflow-cli'), false)
+  assert.deepEqual(memory.facts(user).map(f => f.content), ['项目叫 weflow-cli 并开源'])
 })
 
 test('a failed extraction adds nothing and does not throw', async () => {
@@ -175,16 +185,24 @@ test('facts are capped, keeping the newest', () => {
   assert.equal(facts[29].content, '第 35 号偏好')
 })
 
-test('the containment rule also blocks a longer fact that starts with a shorter one', () => {
-  // 去重用的是**互相包含**判断。代价：已有「事实 1」时，「事实 10」会被判成重复。
-  // 实战里表现为"更具体的那条记不进来"（如已有「项目叫 weflow」，新的
-  // 「项目叫 weflow-cli 并开源」也进不来）。写下来是为了下次有人问"我明明说了新事实
-  // 却没记住"时有据可查——这是去重规则的代价，不是随机故障。
+test('two short facts that merely share a prefix: the longer wins (documented ambiguity)', () => {
+  // 包含式去重有固有模糊：`事实 1` 与 `事实 10` 并不互含，但归一化后一个是另一个的前缀，
+  // 按"更具体的胜出"就会顶掉。真实事实极少是这种形状，而"更具体胜出"在真实场景里是对的，
+  // 所以保留这条规则并把边界写在这里（不是随机故障，是有据可查的取舍）。
   const memory = new AssistantMemory()
   const user = newUser()
   memory.addFact(user, '事实 1')
-  assert.equal(memory.addFact(user, '事实 10'), false)
-  assert.deepEqual(memory.facts(user).map(f => f.content), ['事实 1'])
+  assert.equal(memory.addFact(user, '事实 10'), true)
+  assert.deepEqual(memory.facts(user).map(f => f.content), ['事实 10'])
+})
+
+test('two facts that only share a short fragment stay separate', () => {
+  // 长度差得远时不算同一条：碰巧包含不是重复
+  const memory = new AssistantMemory()
+  const user = newUser()
+  memory.addFact(user, '喝茶')
+  assert.equal(memory.addFact(user, '今天想买个保温杯泡茶喝，顺便带点茶叶'), true)
+  assert.equal(memory.facts(user).length, 2)
 })
 
 test('addFact refuses duplicates instead of piling them up', () => {
@@ -221,6 +239,29 @@ test('reset clears that user and leaves the others alone', () => {
   assert.equal(memory.workingWindow(b).length, 1)
 })
 
+test('facts carry provenance so a stored fact can be checked later', async () => {
+  const memory = new AssistantMemory()
+  const user = newUser()
+  for (let i = 0; i < FACT_EVERY; i++) {
+    memory.addTurn(user, 'user', i === FACT_EVERY - 1 ? '我住在成都，平时喝绿茶' : '随便说点')
+  }
+  await memory.extractFactsIfNeeded(user, llmReturning('["住在成都"]'))
+
+  const fact = memory.facts(user)[0]
+  assert.equal(fact.sourceTurn, FACT_EVERY, '记下这是第几个用户轮抽出来的')
+  assert.match(fact.sourceQuote ?? '', /住在成都/, '记下触发它的是哪句用户话')
+})
+
+test('a fact that was retrieved records when it was last used', () => {
+  const memory = new AssistantMemory()
+  const user = newUser()
+  memory.addFact(user, '喜欢喝茶')
+  assert.equal(memory.facts(user)[0].usedAt, undefined)
+
+  memory.searchFacts(user, '喝茶')
+  assert.ok(memory.facts(user)[0].usedAt, '被检索过就要留痕——用来识别陈旧事实')
+})
+
 test('memory survives a restart', () => {
   const user = newUser()
   const first = new AssistantMemory()
@@ -232,3 +273,125 @@ test('memory survives a restart', () => {
   assert.equal(second.workingWindow(user)[0].content, '重启前说的话')
   assert.deepEqual(second.facts(user).map(f => f.content), ['重启前记住的事'])
 })
+
+// ------------------------------------------------- 文件格式：版本、迁移、拒绝
+
+const MEMORY_PATH = join(HOME, '.weflow-cli', 'assistant_memory.json')
+const MEMORY_DIR = join(HOME, '.weflow-cli')
+
+function writeRaw(value: unknown): void {
+  mkdirSync(MEMORY_DIR, { recursive: true })
+  writeFileSync(MEMORY_PATH, typeof value === 'string' ? value : JSON.stringify(value), 'utf8')
+}
+
+function quarantined(): string[] {
+  return readdirSync(MEMORY_DIR).filter(f => f.startsWith('assistant_memory.json.unreadable-'))
+}
+
+test('a legacy v0 file (no version, flat) is migrated, not discarded', () => {
+  // v0 = 顶层直接是会话 id，是我们自己的历史格式，所以**迁移**而不是拒绝。
+  writeRaw({ 'u-legacy': { working: [{ role: 'user', content: '旧窗口' }], summary: '旧摘要',
+                           facts: [{ content: '旧事实', ts: 1 }], turnCount: 3 } })
+  const memory = new AssistantMemory()
+
+  assert.equal(memory.summary('u-legacy'), '旧摘要')
+  assert.deepEqual(memory.facts('u-legacy').map(f => f.content), ['旧事实'])
+  assert.equal(memory.workingWindow('u-legacy').length, 1)
+  assert.match(memory.problem, /v0/, '迁移这件事要说出来')
+
+  memory.save()
+  const shape = JSON.parse(readFileSync(MEMORY_PATH, 'utf8'))
+  assert.equal(shape.version, MEMORY_FORMAT_VERSION, '落盘时带上版本')
+  assert.ok(shape.users['u-legacy'], '结构变成 users 这一层')
+})
+
+test('an unknown version is refused, kept as a file, and reported', () => {
+  // 版本比我们新时**不猜、不迁移**：宁可留档重来，也不把对方的字段读歪。
+  writeRaw({ version: 99, users: { 'u-future': { working: [], summary: '未来的形状', facts: [] } } })
+  const memory = new AssistantMemory()
+
+  assert.deepEqual(memory.facts('u-future'), [], '不拿未来格式的数据冒险')
+  assert.match(memory.problem, /99/, '问题要说出来，不能静默空手起步')
+  const kept = quarantined()
+  assert.equal(kept.length, 1, '原文件必须留档')
+  assert.match(readFileSync(join(MEMORY_DIR, kept[0]), 'utf8'), /未来的形状/, '留档的是原文')
+})
+
+test('a broken JSON file is kept too, not silently dropped', () => {
+  writeRaw('{这不是 JSON')
+  const memory = new AssistantMemory()
+  assert.equal(memory.userCount(), 0)
+  assert.match(memory.problem, /无法解析/)
+  assert.ok(quarantined().length >= 1)
+})
+
+test('unknown fields inside a user object are ignored, known ones load', () => {
+  writeRaw({ version: MEMORY_FORMAT_VERSION, users: {
+    'u-x': { working: [], summary: 's', facts: [{ content: 'f', ts: 1, 未来字段: 1 }], turnCount: 2, 另一个: 'x' } } })
+  const memory = new AssistantMemory()
+  assert.deepEqual(memory.facts('u-x').map(f => f.content), ['f'])
+  assert.equal(memory.problem, '', '同版本的未知字段不算问题')
+})
+
+test('a fact with no content is dropped rather than kept as an empty string', () => {
+  writeRaw({ version: MEMORY_FORMAT_VERSION, users: {
+    'u-y': { working: [], summary: '', facts: [{ content: '  ', ts: 1 }, { content: 'ok', ts: 2 }], turnCount: 0 } } })
+  assert.deepEqual(new AssistantMemory().facts('u-y').map(f => f.content), ['ok'])
+})
+
+// ------------------------------------------------- 预算闸与保留比率
+
+test('a window of a few long turns compresses on the budget gate, not the count gate', () => {
+  const memory = new AssistantMemory()
+  const user = newUser()
+  const long = '很长的内容'.repeat(1200)          // 单条约 6000 字
+  let turns = 0
+  while (!memory.needsCompression(user) && turns < WORKING_MAX + 1) {
+    memory.addTurn(user, 'user', long)
+    turns++
+  }
+  assert.ok(turns <= WORKING_MAX, `应当由预算闸先触发（实际 ${turns} 条才触发）`)
+  assert.equal(memory.needsCompression(user), true)
+})
+
+test('long turns: the char budget wins over the turn-count floor', async () => {
+  // 两条约束会互斥：6000 字的轮次保 6 条＝36000 字，远超 24k 预算。字符上限优先（硬预算），
+  // 条数下限只在短轮次那种情形下才有意义。也钉住"至少压出去一条"与"不超窗口长度"。
+  const memory = new AssistantMemory()
+  const user = newUser()
+  const long = '很长的内容'.repeat(1200)          // 单条约 6000 字
+  for (let i = 0; i < 5; i++) memory.addTurn(user, 'user', long)
+
+  assert.equal(memory.compressionGate(user), 'budget', '五条长轮次撑爆的是预算闸')
+  await memory.compressIfNeeded(user, llmReturning('摘要'))
+  assert.equal(memory.workingWindow(user).length, 1, '只留装得进预算的那一条')
+})
+
+test('short turns: the count gate keeps about half, with the turn floor', async () => {
+  const memory = new AssistantMemory()
+  const user = newUser()
+  for (let i = 0; i < WORKING_MAX + 2; i++) memory.addTurn(user, 'user', `第 ${i} 句短话`)
+
+  assert.equal(memory.compressionGate(user), 'count', '短轮次堆到条数上限，触发的是条数闸')
+  await memory.compressIfNeeded(user, llmReturning('摘要'))
+  const kept = memory.workingWindow(user).length
+  assert.ok(kept >= WORKING_MIN_TURNS && kept < WORKING_MAX + 2, `保留一半左右，实际 ${kept}`)
+})
+
+test('the compression prompt demands the fixed sections and the merge law', () => {
+  const prompt = buildSummaryPrompt('旧摘要', [{ role: 'user', content: '说了点什么' }])
+  for (const section of ['用户诉求', '技术要点', '涉及的文件与命令', '错误与修复', '待办', '当前进展', '下一步', '关键上下文']) {
+    assert.match(prompt, new RegExp('## ' + section), `缺了这一节：${section}`)
+  }
+  assert.match(prompt, /一节不删/)
+  assert.match(prompt, /仍然成立/)
+  assert.match(prompt, /不许逐字复制/)
+  assert.match(prompt, /旧摘要/, '要把已有摘要喂进去')
+})
+
+test('the extraction prompt asks for what the user said, not the assistant guesses', () => {
+  const prompt = buildFactPrompt([{ role: 'user', content: '我住在成都' }])
+  assert.match(prompt, /用户自己说过/)
+  assert.match(prompt, /推测不算/)
+})
+

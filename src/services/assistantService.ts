@@ -425,6 +425,14 @@ export class AssistantService {
 
     this.svc = new WechatMessageService({ token })
     this.running = true
+
+    // 记忆加载出过事（版本不认识 / 文件坏了）要说出来：否则用户面对一份空记忆，
+    // 只会以为「它忘了我」。原文件此时已经留档，所以这句话里带着文件名。
+    if (this.memory.problem) {
+      appendLog(`[记忆] ${this.memory.problem}`)
+      privacyGate.audit('MEMORY_LOAD_ISSUE', 0, this.memory.problem.slice(0, 80))
+      onLog?.(`⚠ 记忆: ${this.memory.problem}`)
+    }
     const { local } = this.engineConfig()
     onLog?.(`助手已启动 (bot: ${configService.get('wechatOcAccountId')}, ` +
       `引擎: ${local ? '本地' : '云端'}, 记忆用户数: ${this.memory.userCount()})`)

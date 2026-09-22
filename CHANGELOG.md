@@ -190,6 +190,38 @@ All notable user-facing changes are recorded here. This project follows [Semanti
   value: `getMediaStream` labelled **everything** that was not a video as `mediaType: 'image'`, text
   included (it has no callers today, but a wrong value in a public method gets believed eventually).
 
+- The assistant's memory file now carries a **format version** (`version: 1`, conversations under a
+  `users` key). A file without a version is the previous shape and is migrated; any other version is
+  **refused** - renamed to `assistant_memory.json.unreadable-<timestamp>` and announced in the log and the
+  audit - rather than parsed by guesswork. A file that cannot be parsed at all takes the same path, because
+  it may be the only copy. The criterion for what counts as a structural change (and therefore a bump) is
+  written down next to the constant: renaming/removing a field, changing its meaning or units, or changing
+  the key space; **adding an optional field does not**, and a test pins that unknown fields in a
+  same-version file are ignored.
+- Long-term facts gained **provenance and usage**: each fact records the user turn it was extracted from
+  and the sentence that triggered it (`sourceTurn`, `sourceQuote`), and the time it was last retrieved
+  (`usedAt`). A fact can now be checked against what the user actually said, and stale facts are
+  distinguishable from live ones.
+- Fact de-duplication no longer loses the more specific version. It used to treat mutual containment as a
+  duplicate, so `项目叫 weflow-cli` blocked `项目叫 weflow-cli 并开源` - the more precise statement could never
+  be stored. Now the longer, more specific fact replaces the general one (normalised comparison, with a
+  length-ratio guard so that two facts merely sharing a short fragment stay separate). The remaining
+  ambiguity is documented in a test: two facts that are prefixes of each other resolve in favour of the
+  longer.
+- The working window compresses on **two gates with different retention rules**, because a fixed turn count
+  is window-independent and goes wrong as soon as the model changes. The turn gate (many short turns) keeps
+  about half; the budget gate (a few long turns) keeps what fits 16% of the input budget, and the character
+  bound wins over the turn floor - six 6,000-character turns are 36,000 characters, and no turn floor
+  justifies exceeding the budget. Both rules are clamped to the window length, which fixed a real bug: a
+  computed retain of 6 in a 5-turn window turned into `slice(-1)`, i.e. keeping exactly one turn.
+- The rolling summary is now a **fixed eight-section skeleton** (用户诉求 / 技术要点 / 涉及的文件与命令 /
+  错误与修复 / 待办 / 当前进展 / 下一步 / 关键上下文) with an explicit merge law: keep what is still true, drop
+  what is stale, produce one summary, never copy the previous one verbatim. An empty section writes
+  `(none)`; a section is never dropped. Free-form summaries were where compression quietly lost information.
+  The extraction prompt also now asks only for what **the user stated**, not for the assistant's guesses.
+- A memory file that could not be loaded is announced at startup (`⚠ 记忆: …` plus a `MEMORY_LOAD_ISSUE`
+  audit line) instead of silently presenting an empty memory, which reads as "it forgot me".
+
 ### Changed
 - Image downloads during the daily run are concurrent (6-way). They were sequential at 0.37 s and 135 KB each - about 18 minutes per 190-article day - even though they come from `.qpic.cn`, WeChat's CDN, which a browser fetches in parallel anyway. Same three articles: 17.2 s → 2.1 s. The same change fixed the map: a failed download used to be recorded in `.image_map.json` **before** it was attempted, and the reader injects that map as `window._IMG_MAP`, so the page was told to look for a local file that did not exist. Only files that are actually on disk are mapped now, and duplicates in a page are fetched once (31 image links in one article were 17 distinct images).
 - LLM summaries are generated concurrently, so a 190-article day spends about 2 minutes there instead of 9 (measured 2.27/2.92/2.45 s per article). The calls are **prefetched, not the loop rewritten**: responses are filled back by their original index and the existing loop still does the parsing and the field writes in the same order, so every fallback branch behaves exactly as before - a failed call comes back as an error and the loop re-raises it into its own `except`. The per-article 0.3 s pacing moved into the worker, so the request rate to the provider is unchanged. The stage now prints `摘要完成 N/M 篇，耗时 Xs（6 并发；串行约需 Ys）`, the shape the classification stage already used.

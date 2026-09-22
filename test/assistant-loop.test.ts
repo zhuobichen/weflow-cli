@@ -12,7 +12,7 @@
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { existsSync, mkdtempSync, readFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -264,3 +264,23 @@ test('群聊被拒时不提示：群里的 sender_id 是群成员，不该被加
   assert.equal(s.logs.some(line => line.includes('[首次配置]')), false)
   assert.match(s.audit(), /DENY_GROUP_NOT_WHITELISTED/)
 })
+
+test('a broken memory file is announced at startup instead of looking like amnesia', async () => {
+  // 记忆加载出过事（版本不认识 / 文件坏了）时，用户面对的是"它忘了我"——必须说出来。
+  // 原文件此时已经留档，所以这句话里带着文件名；审计里也留一行。
+  const stateDir = join(HOME, '.weflow-cli')
+  mkdirSync(stateDir, { recursive: true })
+  writeFileSync(join(stateDir, 'assistant_memory.json'),
+    JSON.stringify({ version: 99, users: {} }), 'utf8')
+
+  const s = await boot({ assistantWhitelist: 'wxid_me' })
+
+  assert.ok(s.logs.some(line => line.includes('⚠ 记忆')), s.logs.join(' / '))
+  assert.match(s.audit(), /MEMORY_LOAD_ISSUE/)
+})
+
+test('a healthy memory file says nothing at startup', async () => {
+  const s = await boot({ assistantWhitelist: 'wxid_me' })
+  assert.equal(s.logs.some(line => line.includes('⚠ 记忆')), false)
+})
+
