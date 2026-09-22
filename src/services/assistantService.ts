@@ -273,12 +273,32 @@ export class AssistantService {
         '「记住: 我的项目叫weflow-cli」',
         '', '记忆: 三层 (窗口/摘要/长期事实), 重启不丢',
         '隐私: 数据库不出本机, 出境内容自动脱敏',
-        '', '指令: 记忆 | 清空记忆'].join('\n')
+        '', '指令: 记忆 | 隐私 | 清空记忆'].join('\n')
     }
     if (t === '清空记忆' || t === '重置') {
       this.memory.reset(userId)
       privacyGate.audit('MEMORY_RESET', 0, userId.slice(0, 8))
       return '✓ 对话记忆已清空, 重新开始'
+    }
+    if (t === '隐私' || t === 'privacy') {
+      // 只读：把当前档位和改法说清楚。**不让一条微信消息直接改隐私档位**——
+      // 那等于把隐私开关搬进对话里，而配置本来就是用户在自己电脑上显式设定的东西。
+      const mode = privacyGate.mode()
+      const local = privacyGate.isLocalInference()
+      const lines = [`隐私模式: ${mode}${local ? '(本地推理, 数据不出机器)' : '(云端推理)'}`]
+      lines.push(`工具拿到的聊天正文: ${local ? '原文(不出机器)'
+        : mode === 'strict' ? '被屏蔽, 只剩时间与字数'
+        : mode === 'open' ? '原文, 不脱敏'
+        : '原文, 但电话/证件/邮箱/密钥/链接会打码'}`)
+      lines.push('在电脑上改(改完要重启助手):')
+      lines.push('weflow-cli config set assistantPrivacy balanced   # 正文出境, PII 打码')
+      lines.push('weflow-cli config set assistantPrivacy open       # 全不打码')
+      lines.push('weflow-cli config set assistantPrivacy strict     # 正文不出境')
+      if (!local) {
+        lines.push('或者换本地模型, 内容根本不出机器:')
+        lines.push('weflow-cli config set aiEngine ollama')
+      }
+      return lines.join(String.fromCharCode(10))
     }
     if (t === '记忆') {
       const facts = this.memory.facts(userId)

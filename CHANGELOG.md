@@ -145,6 +145,12 @@ All notable user-facing changes are recorded here. This project follows [Semanti
   it to list balanced (bodies leave, PII masked), a local engine (nothing leaves), or staying as is -
   rather than presenting one of them as the only choice.
 
+- A `隐私` built-in command in the assistant: send it and the reply lists the current privacy mode, what the
+  tools actually receive (masked, original, or not sent at all), and the exact `config set` lines to
+  change it - including the local-engine option when inference is in the cloud. It is **read-only on
+  purpose**: a chat message must not be able to weaken a privacy setting, so the mode is changed on the
+  machine, not from inside the conversation.
+
 ### Changed
 - Image downloads during the daily run are concurrent (6-way). They were sequential at 0.37 s and 135 KB each - about 18 minutes per 190-article day - even though they come from `.qpic.cn`, WeChat's CDN, which a browser fetches in parallel anyway. Same three articles: 17.2 s → 2.1 s. The same change fixed the map: a failed download used to be recorded in `.image_map.json` **before** it was attempted, and the reader injects that map as `window._IMG_MAP`, so the page was told to look for a local file that did not exist. Only files that are actually on disk are mapped now, and duplicates in a page are fetched once (31 image links in one article were 17 distinct images).
 - LLM summaries are generated concurrently, so a 190-article day spends about 2 minutes there instead of 9 (measured 2.27/2.92/2.45 s per article). The calls are **prefetched, not the loop rewritten**: responses are filled back by their original index and the existing loop still does the parsing and the field writes in the same order, so every fallback branch behaves exactly as before - a failed call comes back as an error and the loop re-raises it into its own `except`. The per-article 0.3 s pacing moved into the worker, so the request rate to the provider is unchanged. The stage now prints `摘要完成 N/M 篇，耗时 Xs（6 并发；串行约需 Ys）`, the shape the classification stage already used.

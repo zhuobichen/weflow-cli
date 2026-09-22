@@ -95,7 +95,7 @@ test('内置指令直接回答，不叫 LLM', async () => {
 
   const help = await h.svc.handleMessage(user, '帮助', 'text')
   assert.match(help, /第二大脑/)
-  assert.match(help, /指令: 记忆 \| 清空记忆/)
+  assert.match(help, /指令: 记忆 \| 隐私 \| 清空记忆/)
 
   assert.match(await h.svc.handleMessage(user, 'help', 'text'), /第二大脑/)
   assert.equal(h.rounds.length, 0, '内置指令不该产生任何 LLM 调用')
@@ -253,4 +253,30 @@ test('被严格模式挡住时，系统提示要求它给出全部三条路（�
   assert.match(prompt, /balanced/)
   assert.match(prompt, /ollama/)
   assert.match(prompt, /不要只说/)
+})
+
+test('「隐私」指令报出当前档位与改法，且不叫模型', async () => {
+  const h = harness([])
+  const report = await h.svc.handleMessage(newUser(), '隐私', 'text')
+
+  assert.match(report, /隐私模式: strict/, '测试环境没有配置，取默认档')
+  assert.match(report, /只能看到时间与字数|被屏蔽/)
+  assert.match(report, /config set assistantPrivacy balanced/)
+  assert.match(report, /config set assistantPrivacy open/)
+  assert.equal(h.rounds.length, 0, '查隐私档不该产生任何模型调用')
+})
+
+test('云端推理时，「隐私」还会给出换本地模型这条路', async () => {
+  const h = harness([])
+  const report = await h.svc.handleMessage(newUser(), '隐私', 'text')
+
+  assert.match(report, /aiEngine ollama/, '正文不出机器的那条路必须一并给出')
+})
+
+test('一条微信消息改不了隐私档位：它只报不改', async () => {
+  const h = harness([])
+  await h.svc.handleMessage(newUser(), '隐私', 'text')
+  // 尝试用自然语言"改"它 —— 应当仍然只是被当成普通提问，由模型回答，而不是写配置
+  const before = h.svc.privacyModeForTest ?? null
+  assert.equal(before, null, '服务里不该存在"按消息改档位"的入口')
 })

@@ -544,6 +544,9 @@ weflow-cli config set assistantPrivacy balanced   # 降档（正文会出境，P
 weflow-cli config set aiEngine ollama             # 或换本地引擎（内容不出机器）
 ```
 
+在微信里发「**隐私**」可以随时问出当前档位、工具实际拿到的是原文还是被屏蔽、以及该执行哪条命令
+（它只报不改——**不让一条微信消息能改隐私档位**，那等于把隐私开关搬进对话里）。
+
 **改完必须重启助手**：配置是**启动时**读进进程内存的（`configService.get` 不回读磁盘），
 所以对一个正在跑的助手，外部 `config set` 不生效——`assistant stop` 再 `assistant start`。
 
