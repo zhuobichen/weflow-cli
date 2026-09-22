@@ -8,6 +8,7 @@
  *     └─ 隐私关卡: 工具结果脱敏后才出境到云端 LLM (本地引擎则完全不出境)
  */
 import { WechatMessageService } from './wechatMessageService.js'
+import { decideRoute, type FastRouteMode } from './assistantRouter.js'
 import { configService } from './configService.js'
 import { AssistantMemory, type ChatTurn } from './assistantMemory.js'
 import { privacyGate } from './assistantPrivacy.js'
@@ -39,6 +40,10 @@ interface ApiMessage {
 }
 
 export class AssistantService {
+  constructor(options: { routeDecider?: (request: unknown) => Promise<any> } = {}) {
+    this.routeDecider = options.routeDecider
+  }
+
   private svc: WechatMessageService | null = null
   private memory = new AssistantMemory()
   private running = false
@@ -47,6 +52,8 @@ export class AssistantService {
   /** 每日用量计数 (内存态, 重启重置 — 配额护栏防烧钱, 无需持久精确) */
   private dailyCount = 0
   private dailyDate = new Date().toDateString()
+  /** 快路径的判断调用。留出注入点：测试用假判断层驱动，不联网、不 spawn Python */
+  private routeDecider: ((request: unknown) => Promise<any>) | undefined
 
   private engineConfig(): { url: string; model: string; key: string | null; local: boolean } {
     const engine = String(configService.get('aiEngine') || 'deepseek')
@@ -154,6 +161,74 @@ export class AssistantService {
   }
 
   /** 单条消息处理: 指令路由 → ReAct 循环 → 记忆更新 */
+  /** 快路径开关。默认 `off`：不改行为，直到有人愿意盯着它（D-035） */
+  private fastRouteMode(): FastRouteMode {
+    const raw = String(configService.get('assistantFastRoute') || '').trim().toLowerCase()
+    return raw === 'on' || raw === 'log' ? raw : 'off'
+  }
+
+  /** 执行一次工具调用：脱敏、审计、把结果塞回对话。
+   *
+   *  快路径与 ReAct 循环**共用这一份**：D-035 里那条不可回归的安全属性是「没有审计行就不得
+   *  派发工具」，两条路各写一遍，早晚有一条会漏。
+   */
+  private async runToolCall(userId: string, messages: ApiMessage[], callId: string,
+                            name: string, args: Record<string, any>): Promise<void> {
+    const raw = await executeTool(name, args, { userId, memory: this.memory })
+    const { safe, redactions } = privacyGate.redact(raw)
+    privacyGate.audit(`TOOL:${name}`, raw.length, redactions ? `redacted=${redactions}` : '')
+    messages.push({ role: 'tool', tool_call_id: callId, content: safe })
+  }
+
+  /** 快路径：先问一次「该查哪个能力」，把这一个工具执行掉，于是循环第一轮就看得到结果。
+   *
+   *  返回派发了几个工具（0 = 回退）。**任何不确定都回退**，而回退就是原样跑循环——不是
+   *  「另一个更差的兜底」。`log` 模式下只算不派发，用来在真实流量上观察它本来会怎么走。
+   */
+  private async maybeFastRoute(userId: string, text: string, messages: ApiMessage[]): Promise<number> {
+    const mode = this.fastRouteMode()
+    if (mode === 'off') return 0
+
+    let decision
+    try {
+      decision = await decideRoute(text, { runDecide: this.routeDecider })
+    } catch (error: any) {
+      appendLog(`[快路径] 路由异常，按原样回退: ${error?.message ?? error}`)
+      return 0
+    }
+
+    if (!decision.capability) {
+      appendLog(`[快路径] 回退: ${decision.reason}`)
+      privacyGate.audit('FASTROUTE_SKIP', 0, decision.reason.slice(0, 120))
+      return 0
+    }
+
+    if (mode === 'log') {
+      // 灰度期：只记「本来会走哪条」，行为一个字不改
+      appendLog(`[快路径/只记] ${decision.reason}`)
+      privacyGate.audit('FASTROUTE_WOULD', 0, `${decision.capability.name} ${decision.model}`)
+      return 0
+    }
+
+    const callId = `fastroute-${Date.now()}`
+    appendLog(`[快路径] ${decision.reason}`)
+    privacyGate.audit('FASTROUTE_HIT', 0, `${decision.capability.name} ${decision.model}`)
+    messages.push({
+      role: 'assistant',
+      content: '',
+      tool_calls: [{
+        id: callId,
+        type: 'function',
+        function: {
+          name: decision.capability.tool,
+          arguments: JSON.stringify(decision.capability.args),
+        },
+      }],
+    })
+    await this.runToolCall(userId, messages, callId, decision.capability.tool, decision.capability.args)
+    return 1
+  }
+
   async handleMessage(userId: string, text: string, kind: string): Promise<string> {
     if (kind !== 'text') return '目前只支持文字消息哦'
 
@@ -197,6 +272,7 @@ export class AssistantService {
     let reply = ''
     let toolCalls = 0
     try {
+      toolCalls += await this.maybeFastRoute(userId, t, messages)
       for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
         const data = await this.callLLM(messages, TOOL_DEFS)
         const msg = data.choices?.[0]?.message
@@ -208,10 +284,7 @@ export class AssistantService {
             toolCalls++
             let args: Record<string, any> = {}
             try { args = JSON.parse(tc.function?.arguments || '{}') } catch { /* 参数容错 */ }
-            const raw = await executeTool(tc.function?.name || '', args, { userId, memory: this.memory })
-            const { safe, redactions } = privacyGate.redact(raw)
-            privacyGate.audit(`TOOL:${tc.function?.name}`, raw.length, redactions ? `redacted=${redactions}` : '')
-            messages.push({ role: 'tool', tool_call_id: tc.id, content: safe })
+            await this.runToolCall(userId, messages, tc.id, tc.function?.name || '', args)
           }
           continue
         }

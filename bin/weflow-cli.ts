@@ -967,7 +967,8 @@ const configurableKeys = [
   'dashscopeApiKey', 'favPassphrase',
   'wereadApiKey',
   'assistantPrivacy', 'assistantWhitelist', 'assistantGroupWhitelist',
-  'assistantGroupRequireMention', 'dailySources', 'dailySourceCategories',
+  'assistantGroupRequireMention', 'assistantFastRoute',
+  'dailySources', 'dailySourceCategories',
   'dailyExcludeTopics', 'dailyAiEnabled',
   'emoticonSeed',
 ] as const

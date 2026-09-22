@@ -694,9 +694,9 @@ unwanted.
   this is just an extra hop. It pays off at scale, where the alternative is many calls and prose
   to parse.
 
-## D-035: The assistant's single-round fast path is designed but deliberately not shipped
+## D-035: The assistant's single-round fast path: default-off, and how it got there
 
-**Status:** Deferred (design recorded, no code written)
+**Status:** Active (shipped 2026-09-22 behind a default-off switch; see the update at the end)
 
 The assistant's ReAct loop costs two LLM round-trips for the common "answer from local data"
 question: round 1 picks a tool and its arguments, round 2 phrases the reply from the result. A
@@ -755,6 +755,48 @@ is most of what the official-account console, n8n and conference-site work consi
 drives its own stack (browser-harness + CDP + a reused Chrome profile), separate from whatever
 browser automation this repo has. The transferable parts are the **question organisation** above
 and the discipline of publishing measurement boundaries with the numbers, not the transport.
+
+### Update 2026-09-22: shipped behind a default-off switch
+
+The four prerequisites above are met, so the fast path now exists in
+`src/services/assistantRouter.ts` and is wired into `handleMessage`. It is **off by
+default**: `assistantFastRoute` accepts `off` (default, byte-identical to before), `log`
+(decide, record "would have routed to X", dispatch nothing) and `on`.
+
+What changed versus the deferred design:
+
+- **Only tools with closed or empty arguments are routable.** The design assumed
+  `{tool, arguments}` could be resolved in one call; the arguments cannot, because a
+  `choice` can only pick from a closed set and "which contact", "which keyword" are free
+  text. Nine capabilities over six tools (`list_sessions`, `get_stats`, `get_daily_report`,
+  `get_sns` ×2, `get_weread` ×2, `get_todos` ×2) carry their arguments inside the option
+  text; everything else falls back. Passing the user's whole message as the argument would
+  have manufactured the exact failure this decision was written to avoid.
+- The routing question is a `noul` ("must this be answered from local data?") plus a
+  `choice` over those nine capabilities **plus `none`**, whose criterion covers both "no
+  local data needed" and "local data needed, but not by any of these ways" - without the
+  second half the model is forced to pick among nine wrong options.
+- **Every uncertain exit falls back**, and falling back *is* today's behaviour, not a
+  weaker new one: judge failure, non-numeric probability, sub-threshold confidence, an
+  unknown capability name. `asProbability` refuses booleans (`Number(true)` is `1`, so a
+  `noul: true` would have routed *certainly* - the same misread as the earlier client,
+  in the opposite direction).
+- The dispatch and audit are now **one implementation** (`runToolCall`) shared by the loop
+  and the fast path, because "no tool dispatched without the audit line" is exactly the
+  kind of invariant that rots when written twice.
+
+**Measured** (`scripts/assistant_route_probe.ts`, 17 representative questions, real
+decision layer, 2026-09-22, free period): 15 matched the expectation I wrote in the probe,
+**0 routed to a wrong capability**, 10 routed concretely, ~1.33 s per decision (two
+outliers at 2.6 s and 4.2 s). The two mismatches fell back rather than routing: 我明天该干嘛
+(needs_tool 0.40) and 最近有没有什么书可以读 (0.17) - and for the second one the *probe's*
+expectation is the arguable one, since it asks for a recommendation rather than for what is
+being read. The expectations are mine, not a human-labelled gold standard.
+
+**Still not done, deliberately:** the log-only week on real traffic. That needs the
+daemon running against a live channel, which is the user's to start; `log` mode exists for
+exactly that. Free-text-argument tools remain unroutable until something can select a
+value rather than a label - the same job `route_cards.py` does for conversation search.
 
 ## D-036: Search your own conversations with the decision model selecting query terms, not ranking sessions
 

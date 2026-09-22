@@ -537,6 +537,21 @@ weflow-cli assistant status
 2. **改了源码要先 `npm run build`**。守护进程优先运行 `dist/bin/weflow-cli.js`，只要这个文件
    存在就不会用 `bin/weflow-cli.ts`；不重建，守护进程跑的还是旧的编译产物。
 
+助手还有一个**默认关闭**的单轮快路径（D-035）：先用本机判断层问一次"这条要不要查本机数据、
+查哪一项"，把那个工具先跑掉，于是模型第一轮就看得到结果（两次往返变一次）。
+
+```powershell
+weflow-cli config set assistantFastRoute log   # 灰度：只记"本来会走哪条"，行为一个字不改
+weflow-cli config set assistantFastRoute on    # 打开
+weflow-cli config set assistantFastRoute off   # 关（默认）
+```
+
+灰度期看两个地方：`assistant log` 里的 `[快路径/只记] 路由到 X（...）`，以及
+`~/.weflow-cli/assistant_audit.log` 里的 `FASTROUTE_WOULD` / `FASTROUTE_SKIP`（回退时那行会写
+明原因：不需要查本机数据、置信度不足、能力名不认识…）。只有参数是固定集合的工具会被路由；
+像"总结一下我和某某的聊天"这种要点名某个人的，一律回退到原来的循环——这是刻意的，硬凑参数
+会让模型拿着不相关的结果自信作答。
+
 启动失败时**不会**留下 pid 文件 —— 写 pid 就等于对外宣称它在运行。排查用
 `weflow-cli assistant status`（不碰数据库）与 `weflow-cli assistant log`。
 
