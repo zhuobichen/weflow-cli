@@ -242,3 +242,15 @@ test('save_memory 工具真的写进长期记忆', async () => {
 
   assert.deepEqual(h.svc.memory.facts(user).map((f: any) => f.content), ['用户的猫叫豆豆'])
 })
+
+test('被严格模式挡住时，系统提示要求它给出全部三条路（含本地模型那条）', async () => {
+  // 实测过一次：它只说了"关掉严格模式"，漏掉了"换本地模型"——那恰恰是最贴合隐私顾虑的路，
+  // 而且本地推理下严格模式的屏蔽**本来就不生效**（isLocalInference 为真时直接返回原文）。
+  const h = harness([])
+  const prompt: string = h.svc.buildSystemPrompt('u-prompt')
+
+  assert.match(prompt, /严格隐私模式/)
+  assert.match(prompt, /balanced/)
+  assert.match(prompt, /ollama/)
+  assert.match(prompt, /不要只说/)
+})

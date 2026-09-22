@@ -527,6 +527,26 @@ weflow-cli assistant start
 weflow-cli assistant status
 ```
 
+### 助手能读到多少：隐私三档，以及本地引擎这个例外
+
+| `assistantPrivacy` | 工具拿到的聊天正文 | 出境 |
+| --- | --- | --- |
+| `strict`（默认） | 换成 `[内容N字已按严格模式屏蔽]` | 不出 |
+| `balanced` | **原文**，但电话/证件/邮箱/密钥/链接被打成 `[电话]` 这类占位 | 出（到当前模型） |
+| `open` | 原文，什么都不打 | 出 |
+
+**换本地引擎时严格模式的屏蔽会自动让路**：`aiEngine=ollama` 或 `lmstudio` 时数据不出机器，
+`maskMessageBodyText` 直接返回原文，不需要动 `assistantPrivacy`。所以"我想让它读得到聊天内容，
+但又不想把内容发出去"的正解是**换引擎**，不是降档——降档等于把原文交给第三方。
+
+```powershell
+weflow-cli config set assistantPrivacy balanced   # 降档（正文会出境，PII 打码）
+weflow-cli config set aiEngine ollama             # 或换本地引擎（内容不出机器）
+```
+
+**改完必须重启助手**：配置是**启动时**读进进程内存的（`configService.get` 不回读磁盘），
+所以对一个正在跑的助手，外部 `config set` 不生效——`assistant stop` 再 `assistant start`。
+
 助手默认拒绝所有发送者，需明确设置 `assistantWhitelist`。群聊还需要群白名单、成员白名单和 @ 门槛；项目不通过客户端自动化或非官方协议拉群。
 
 **第一次启用**：扫码一次，剩下的它会告诉你。
