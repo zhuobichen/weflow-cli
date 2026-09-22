@@ -453,6 +453,7 @@ weflow-cli config set typesafeApiKey ""      # 清空即回到 LLM 解析路径
 - 分类要把文章标题与正文发往 `api.typesafe.ai`——和生成摘要发给 DeepSeek 是同一类动作，
   想完全不出网就用 `weflow-cli daily --no-ai`。
 - 排查用 `python scripts/biz_daily.py --date <日期> --classifier llm`（强制老路径）对比。
+- 只要判断、不要生成（连 DeepSeek key 都不需要）：`weflow-cli daily --no-summary`。摘要/标签/简报一律不生成，md 里不会有 `## AI 摘要` 段；主题与相关度仍由 Jev 判断。流水线里下游步骤（行动建议/概念编译/AI 报告）仍会用 LLM，要全关再加 `--skip-classify --skip-wiki --skip-ai-report`。
 
 启动指定日期阅读器：
 

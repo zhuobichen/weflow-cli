@@ -48,6 +48,11 @@ def main():
     parser.add_argument('--skip-html', action='store_true', help='跳过 HTML 生成')
     parser.add_argument('--skip-ai-report', action='store_true', help='跳过 AI 深度阅读报告')
     parser.add_argument('--no-ai', action='store_true', help='关闭所有 AI 调用，但保留抓取和本地输出')
+    parser.add_argument('--no-summary', action='store_true',
+                        help='biz_daily 只做判断不做生成（不调 LLM 写摘要/标签/简报，'
+                             '主题与相关度仍由 Jev 判断），因此**不需要 DeepSeek key**。'
+                             '注意：下游步骤（行动建议/概念编译/AI 报告）仍会用 LLM，'
+                             '要全关请再加 --skip-classify --skip-wiki --skip-ai-report')
     parser.add_argument('--ai-report-range', type=int, default=1, help='AI 报告覆盖最近 N 天（默认 1=仅当天）')
     parser.add_argument('--source', action='append', default=[], metavar='NAME',
                         help='仅处理指定公众号，可重复或用逗号分隔')
@@ -59,9 +64,15 @@ def main():
     if str(config.get('dailyAiEnabled', 'true')).strip().lower() == 'false':
         args.no_ai = True
 
-    # api_key：本地/ollama 引擎不需要；云端需要
+    # api_key：本地/ollama 引擎不需要；云端需要。
+    # `--no-summary` 时 biz_daily 不生成任何文字，所以这一步不需要 key——但**下游步骤
+    # 仍需要**，所以只在"下游也全关"时才整段跳过校验，否则照旧检查（免得后面某一步
+    # 在跑到一半时才发现没 key）。
     api_key = args.api_key or ''
-    if args.engine in ('deepseek', 'claude') and not api_key and not args.no_ai:
+    downstream_ai = not (args.skip_classify and args.skip_wiki and args.skip_ai_report)
+    needs_key = args.engine in ('deepseek', 'claude') and not args.no_ai and (
+        not args.no_summary or downstream_ai)
+    if needs_key and not api_key:
         api_key = os.environ.get('DEEPSEEK_API_KEY', '') or get_api_key(config)
         if not api_key:
             print(f'[ERROR] --engine {args.engine} 需要 API key。请通过 --api-key、'
@@ -81,6 +92,12 @@ def main():
         step1_args += ['--source', source]
     if args.no_ai:
         step1_args += ['--no-ai']
+    if args.no_summary and not args.no_ai:
+        # 只对 biz_daily 转发：它跳过摘要/简报的生成，判断仍走 Jev。
+        step1_args += ['--no-summary']
+        if downstream_ai:
+            print('  [提示] --no-summary 只关掉本步骤的 LLM 生成；下游步骤仍会用 LLM，'
+                  '要全关请加 --skip-classify --skip-wiki --skip-ai-report')
     if not run_step('biz_daily — 抓取+摘要', step1_args):
         sys.exit(1)
 

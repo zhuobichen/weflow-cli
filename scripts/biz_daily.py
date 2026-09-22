@@ -235,7 +235,7 @@ JEV_WORKERS = 6
 IMAGE_WORKERS = 6
 
 
-def classifier_plan(no_ai, classifier, deepseek_key, engine):
+def classifier_plan(no_ai, classifier, deepseek_key, engine, needs_llm=True):
     """这次日报用哪条判断路径。返回 `'skip' | 'jev' | 'llm'`。
 
     这是 D-031 那句"`--classifier` 是一条命令回滚"的**全部实现**——三条分支此前
@@ -245,12 +245,18 @@ def classifier_plan(no_ai, classifier, deepseek_key, engine):
     * `'jev'` 只是**意图**，不是结果——没有 key、或 key 解不开时，建客户端会失败，
       由调用方按 `classifier == 'jev'` 决定要不要告警，然后安静退回老路（`auto` 的语义）；
     * `'skip'` 让**整块 Phase 2 都不执行**：`--no-ai`，或 `dailyAiEnabled=false`
-      （那个配置项在更早处被折进 `no_ai`），或 deepseek 引擎但没 key。
+      （那个配置项在更早处被折进 `no_ai`）。
+
+    `needs_llm=False`（`--no-summary`：只要判断、不要生成）时，**不再要求 LLM key**——
+    那一层的 key 校验是为了调 LLM 生成摘要，而这条路上根本不生成。少了这一句，
+    "没有 DeepSeek key 也能只用 Jev 分类"这个诉求会静默变成"整段不跑"。
 
     单独成函数是为了能**离线枚举**这几种组合——它们决定"有没有数据出境"，
     不该只靠读代码确认。
     """
-    if no_ai or not (deepseek_key or engine != 'deepseek'):
+    if no_ai:
+        return 'skip'
+    if needs_llm and not (deepseek_key or engine != 'deepseek'):
         return 'skip'
     return 'jev' if classifier in ('auto', 'jev') else 'llm'
 
@@ -496,6 +502,16 @@ def _decode_body(raw: bytes, content_encoding: str) -> str:
         except zlib.error:
             raw = zlib.decompress(raw)
     return raw.decode('utf-8', errors='ignore')
+
+
+def summary_section(summary):
+    """md 正文里的摘要段。**空就不写这一段**（`--no-summary` 就是这种情况）。
+
+    为什么要单独一条规则：没有摘要时，把标题写上去会看起来像"摘要生成失败"，而用
+    本地 digest 顶上又会看起来像 AI 写的摘要——两者都是把不存在的东西说成存在。
+    判据用"去空白后非空"，顺带挡住空串与纯空白。
+    """
+    return f'## AI 摘要\n\n{summary}\n\n' if str(summary or '').strip() else ''
 
 
 def fetch_article(url: str, max_retries: int = 3) -> str | None:
@@ -766,6 +782,9 @@ def main():
     parser.add_argument('--api-key', help='AI API key (或设环境变量 DEEPSEEK_API_KEY)')
     parser.add_argument('--engine', default='deepseek', help='AI 引擎: local/deepseek/claude/ollama')
     parser.add_argument('--no-ai', action='store_true', help='关闭摘要、分类和日报简报的 AI 调用')
+    parser.add_argument('--no-summary', action='store_true',
+                        help='只要判断、不要生成：完全跳过 LLM 调用（摘要/标签/概念/简报），'
+                             '主题与相关度仍由 Jev 判断；因此**不需要 DeepSeek key**')
     parser.add_argument('--classifier', choices=['auto', 'llm', 'jev'], default='auto',
                         help='主题/相关度由谁判断：auto=配了 TypeSafe key 就用 Jev（默认），'
                              'llm=沿用 LLM 解析路径，jev=强制 Jev')
@@ -794,7 +813,9 @@ def main():
     # API key — only required for cloud engines
     engine = args.engine or 'deepseek'
     api_key = args.api_key or os.environ.get('DEEPSEEK_API_KEY', '') or get_api_key(config)
-    if not args.dry_run and engine in ('deepseek', 'claude') and not api_key:
+    # `--no-summary` 下不生成任何文字，也就不需要 LLM key——这条校验是"要调 LLM"的前提，
+    # 不是"要跑 Phase 2"的前提。不改这一句，"没有 DeepSeek 也能只用 Jev 分类"会被它挡死。
+    if not args.dry_run and not args.no_summary and engine in ('deepseek', 'claude') and not api_key:
         print(f'[ERROR] --engine {engine} 需要 API key。请通过 --api-key、环境变量或配置文件提供')
         sys.exit(1)
     # Auto-detect local engine if no api_key and engine is deepseek
@@ -941,15 +962,18 @@ def main():
     # 别名会漂：今天跑的和测过的可能不是同一个东西，而结果看起来一切正常。落盘它，
     # 是为了让这件事**可见**。（没走 Jev 时保持 None，如实表示"没用判断模型"。）
     decision_model = None
-    plan = classifier_plan(args.no_ai, args.classifier, api_key, engine)
+    plan = classifier_plan(args.no_ai, args.classifier, api_key, engine,
+                           needs_llm=not args.no_summary)
     if plan != 'skip':
-        print(f'\n=== Phase 2: AI 摘要 + 主题分类 (engine={engine}) ===\n')
+        stage = '只分类（--no-summary）' if args.no_summary else 'AI 摘要 + 主题分类'
+        print(f'\n=== Phase 2: {stage} (engine={engine}) ===\n')
         from _utils import call_ai
         from jev_client import create_client
         # 判断交给 Jev，生成留给 LLM。没配 key 就整条走老路（auto 的语义）。
         jev_client = create_client(config=config) if plan == 'jev' else None
         if jev_client is not None:
-            print(f'  分类：Jev（model={jev_client.model}，生成摘要仍用 {engine}）')
+            tail = '本次不生成摘要' if args.no_summary else f'生成摘要仍用 {engine}'
+            print(f'  分类：Jev（model={jev_client.model}，{tail}）')
         elif args.classifier == 'jev':
             print('  [WARN] --classifier jev 但没找到 TypeSafe key，本次退回 LLM 解析路径')
         # 先把分类并发跑完，再进串行的摘要循环。分类对摘要没有任何依赖，
@@ -957,11 +981,30 @@ def main():
         decisions = _classify_articles_parallel(articles, jev_client, TOPICS)
         if jev_client is not None:
             decision_model = jev_client.last_model
-        # 先把每篇的 LLM 调用并发跑完，再进下面这个串行循环做解析与落字段。
-        # 解析是纯本地操作，并发的价值全在网络等待上；这样循环体本身不用重写，
-        # 每条兜底分支的行为也就与串行版本一致。
-        prefetched = _summarise_articles_parallel(articles, engine, api_key)
-        for i, a in enumerate(articles):
+        if args.no_summary:
+            # **只要判断、不要生成**：不调 LLM，也不留摘要。`prefetched = None` 让下面
+            # 那个串行循环整段跳过——它是围绕 LLM 响应写的，没有响应就没有它的事。
+            judged = 0
+            for i, a in enumerate(articles):
+                if _apply_decision(a, decisions.get(i)):
+                    judged += 1
+                # **明确写空**而不是留着不写：md 那条路的缺省是本地 digest、json 那条路
+                # 另有缺省，写空才能让两边都如实表示"没有摘要"，而不是拿平台摘要冒充。
+                a['summary'] = ''
+            print(f'  判出 {judged}/{len(articles)} 篇；未生成：摘要、标签、概念')
+            if jev_client is None:
+                print('  [WARN] 没有 TypeSafe key，本次**没有任何判断**——只抓取与归档，'
+                      '主题与相关度保持默认值')
+            prefetched = None
+        else:
+            # 先把每篇的 LLM 调用并发跑完，再进下面这个串行循环做解析与落字段。
+            # 解析是纯本地操作，并发的价值全在网络等待上；这样循环体本身不用重写，
+            # 每条兜底分支的行为也就与串行版本一致。
+            prefetched = _summarise_articles_parallel(articles, engine, api_key)
+        # `--no-summary` 时 prefetched 是 None，这个循环整段不跑（循环体是围绕 LLM
+        # 响应写的）。用变量而不是把循环体缩进进 if，是为了让 diff 只碰这一行。
+        pending = list(enumerate(articles)) if prefetched is not None else []
+        for i, a in pending:
             t, n, ti = a['time'], a['account_name'], a['title']
             content = a.get('fetched_md') or a.get('local_text', '')
             if content and len(content.strip()) > 50:
@@ -1165,7 +1208,7 @@ def main():
             if a['url']:
                 body_parts.append(f'> 原文：[阅读原文]({a["url"]})\n')
             body_parts.append('\n---\n\n')
-            body_parts.append(f'## AI 摘要\n\n{summary}\n\n')
+            body_parts.append(summary_section(summary))
 
             if concepts:
                 body_parts.append(format_wikilinks(concepts))
@@ -1273,7 +1316,9 @@ def main():
                 break
 
         highlight_text = '\n'.join(highlights[:25])
-        if highlight_text and not args.no_ai:
+        # `--no-summary` 同样跳过简报的 LLM 调用（它是"生成"）：落到下面那条由标题拼的
+        # 确定性兜底上。兜底路径本来就在（AI 失败时走它），所以这里不新增一种产物形状。
+        if highlight_text and not args.no_ai and not args.no_summary:
             try:
                 briefing_prompt = f"""你是公众号日报助手。基于今天 {len(all_articles)} 篇文章（{topic_summary}），生成一段200字以内的今日简报。
 

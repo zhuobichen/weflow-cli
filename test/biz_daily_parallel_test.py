@@ -163,6 +163,45 @@ class SerializableArticleTests(unittest.TestCase):
         self.assertEqual(entry['date'], '2026-09-05')
 
 
+class NoSummaryModeTests(unittest.TestCase):
+    """`--no-summary`：只要判断、不要生成。
+
+    这条路的卖点是"不调 LLM 也能有分类"，所以两件事必须成立：**判定函数不再要求
+    LLM key**，以及**产物里不出现任何假装是摘要的东西**（空标题像"生成失败"，
+    本地 digest 冒充摘要则更糟）。
+    """
+
+    def test_the_plan_no_longer_requires_an_llm_key(self):
+        """没有 DeepSeek key 时，`--no-summary` 下 Phase 2 仍要跑（因为要判断）。
+
+        改之前这里是 `skip`——那会让"只用 Jev 分类"静默变成"整段不跑"。
+        """
+        self.assertEqual(biz.classifier_plan(False, 'auto', '', 'deepseek', needs_llm=False),
+                         'jev')
+        self.assertEqual(biz.classifier_plan(False, 'llm', '', 'deepseek', needs_llm=False),
+                         'llm')
+
+    def test_the_plan_still_skips_under_no_ai(self):
+        # 总闸优先：--no-ai 时哪怕 --no-summary 也给 skip（两处一起给也一样）。
+        for needs_llm in (True, False):
+            with self.subTest(needs_llm=needs_llm):
+                self.assertEqual(
+                    biz.classifier_plan(True, 'auto', 'key', 'deepseek', needs_llm=needs_llm),
+                    'skip')
+
+    def test_needing_an_llm_key_is_still_the_default(self):
+        # 别把默认改掉了：正常模式下没有 key 就是整段不跑。
+        self.assertEqual(biz.classifier_plan(False, 'auto', '', 'deepseek'), 'skip')
+
+    def test_no_summary_means_no_summary_section_in_the_markdown(self):
+        """没有摘要就不写那一段——空标题像"生成失败"，digest 冒充摘要更糟。"""
+        self.assertEqual(biz.summary_section(''), '')
+        self.assertEqual(biz.summary_section(None), '')
+        self.assertEqual(biz.summary_section('   \n  '), '')
+        self.assertIn('## AI 摘要', biz.summary_section('一段摘要'))
+        self.assertIn('一段摘要', biz.summary_section('一段摘要'))
+
+
 class SummaryPrefetchTests(unittest.TestCase):
     """摘要阶段的**预取**：并发只发生在网络等待上，解析与落字段仍由主循环串行做。
 

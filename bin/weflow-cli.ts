@@ -3738,6 +3738,7 @@ program
         .option('--skip-html', '跳过 HTML 阅读器生成')
         .option('--skip-ai-report', '跳过 AI 深度阅读报告')
         .option('--no-ai', '关闭全部 AI 调用，保留抓取和本地输出')
+  .option('--no-summary', '只判断不生成：biz_daily 不调 LLM 写摘要/标签/简报（判断仍走 Jev）')
         .option('--ai-report-range <n>', 'AI 报告覆盖最近 N 天', '1')
         .option('--dry-run', '仅预览步骤，不读取聊天数据、调用网络或写入文件')
         .option('--yes', '确认运行流水线')
@@ -3820,6 +3821,7 @@ program
           if (opts.skipHtml) args.push('--skip-html')
           if (opts.skipAiReport) args.push('--skip-ai-report')
           if (noAi) args.push('--no-ai')
+          if (opts.noSummary && !noAi) args.push('--no-summary')
 
           try {
             if (!opts.json) console.log(chalk.cyan('\n启动端到端流水线...\n'))
@@ -5252,6 +5254,7 @@ program
   .option('--dry-run', '仅预览文章，不调用 AI 或写入日报')
   .option('--yes', '确认执行日报生成；JSON 模式需要此选项')
   .option('--no-ai', '关闭本次日报的所有 AI 处理')
+  .option('--no-summary', '只判断不生成：不调 LLM 写摘要/标签/简报（主题与相关度仍由 Jev 判断），无需 DeepSeek key')
   .option('--json', '输出机器可读的最终结果；运行日志写入 stderr')
   .action(async (opts) => {
     const { spawn } = await import('child_process')
@@ -5284,6 +5287,8 @@ program
     const runPipeline = (targetDate: string): Promise<number> => new Promise((resolve) => {
       const args = [pipeline, '--date', targetDate, '--engine', noAi ? 'local' : 'deepseek', '--interest', 'AI', '--skip-wiki']
       if (noAi) args.push('--no-ai')
+      // 与 --no-ai 不同：这一条保留判断（Jev），只关掉 LLM 的文字生成。
+      if (opts.noSummary && !noAi) args.push('--no-summary')
       for (const source of opts.source || []) args.push('--source', source)
       if (opts.skipClassify) args.push('--skip-classify')
 
