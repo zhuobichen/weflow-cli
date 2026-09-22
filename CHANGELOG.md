@@ -125,11 +125,18 @@ All notable user-facing changes are recorded here. This project follows [Semanti
   against the real decision layer (`scripts/assistant_route_probe.ts`): 0 wrong routes, 10 routed
   concretely, ~1.33 s per decision, 2 fell back - with the probe's own expectations, not human labels.
 
-- `login-wechat` now prints the next step on success, including the sender ID to allowlist. The assistant
-  denies every sender until `assistantWhitelist` is set, and the ID needed to set it is only available in
-  the login session (it is not persisted) - so without this line the first-run experience was: log in, talk
-  to your own bot, get silence, and go digging through logs for the reason. Printed on the human path only;
-  the `--json` path still returns no account identifiers.
+- First-run setup for the assistant now says what to do and, more importantly, **which ID to allowlist is
+  not guessed**. The assistant denies every sender until `assistantWhitelist` is set, so a fresh
+  `login-wechat` used to end in silence: talk to your own bot, get nothing back, and go digging through
+  logs for the reason. Two sources of that ID exist and only one is verified - the login response carries
+  an `ilink_user_id` while the allowlist matches the inbound `from_user_id` (documented as an
+  `@im.wechat` ID), and nothing in this repo connects the two, so the login path does not write the
+  allowlist. Instead, while the allowlist is empty the daemon prints the **first denied direct message's**
+  full sender ID together with the exact `config set` line to run, once, and never for a group (a group's
+  sender is a member, not the person to allowlist). Auto-configuring an allowlist from an unverified
+  identifier would have failed in the worst way available here - non-empty, so it looks configured, and
+  still denying you, with the one-time hint disabled because the list is no longer empty.
+  `assistant log --json` still returns metadata only, never log content.
 
 ### Changed
 - Image downloads during the daily run are concurrent (6-way). They were sequential at 0.37 s and 135 KB each - about 18 minutes per 190-article day - even though they come from `.qpic.cn`, WeChat's CDN, which a browser fetches in parallel anyway. Same three articles: 17.2 s → 2.1 s. The same change fixed the map: a failed download used to be recorded in `.image_map.json` **before** it was attempted, and the reader injects that map as `window._IMG_MAP`, so the page was told to look for a local file that did not exist. Only files that are actually on disk are mapped now, and duplicates in a page are fetched once (31 image links in one article were 17 distinct images).

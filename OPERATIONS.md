@@ -529,11 +529,18 @@ weflow-cli assistant status
 
 助手默认拒绝所有发送者，需明确设置 `assistantWhitelist`。群聊还需要群白名单、成员白名单和 @ 门槛；项目不通过客户端自动化或非官方协议拉群。
 
-**第一次启用**要两步，两步都做完之前助手什么都不会回：
+**第一次启用**：扫码一次，剩下的它会告诉你。
 
-1. `weflow-cli login-wechat` —— 扫码登录消息通道。**成功后它会把你自己的发送者 ID 打出来**
-   （只有那一刻拿得到，登录 session 不落盘），照抄它给的 `config set assistantWhitelist` 那行；
-2. `weflow-cli config set assistantWhitelist "<你的 ID>"` —— 白名单为空 = 拒绝所有人。
+1. `weflow-cli login-wechat` —— 扫码登录消息通道（这一步只能人来做：iLink 只有扫码这一条官方登录路）；
+2. `weflow-cli assistant start`；
+3. 从你的微信给机器人发一条消息。**助手会拒绝它**（白名单为空 = 拒绝所有人），但日志里会出现一行
+   `[首次配置]`，带着**你自己的发送者 ID** 和该执行的那条 `config set assistantWhitelist` ——
+   照抄执行即可。之后它就开始回话了。
+
+为什么不让登录自己把白名单写好：登录响应给的是 `ilink_user_id`，而白名单要的是入站消息里的
+`from_user_id`（文档里写成 `@im.wechat ID`），**这两者是不是同一个值这个仓库里没有任何东西验证过**。
+猜错的后果是"白名单非空、看着配好了、却仍然拒你"，而且提示也不会再出现（白名单已经不空了）——
+所以这里宁可多一次复制粘贴。真值在第 3 步那条消息里，它自己会来。
 
 想让助手先"只看不答"式地跑一段（记下它本来会怎么走，行为不改）：`config set assistantFastRoute log`。
 

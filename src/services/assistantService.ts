@@ -161,6 +161,32 @@ export class AssistantService {
   }
 
   /** 单条消息处理: 指令路由 → ReAct 循环 → 记忆更新 */
+  /** 白名单为空的首次配置提示是否已经打过了（只打一次，别把日志刷满） */
+  private firstRunHintShown = false
+
+  /** 白名单为空时，把"该把谁加进去"连同**完整**的发送者 ID 打一行。
+   *
+   *  为什么可以打完整的 ID：填白名单用的就是这个值，而它只在入站消息里出现——登录响应给的
+   *  `ilink_user_id` 与它是不是同一个值**没有验证过**，所以不能拿登录来猜（猜错的后果是
+   *  "白名单非空、看着配好了、却仍然拒你"）。启发式在这里正好用得上：真值自己会来。
+   *
+   *  三条自我约束：白名单非空时不提示（那时人已经配过了）、只对**直聊**提示（群里的
+   *  sender_id 是群成员，把它加进白名单是错的）、只提示一次。
+   *  `assistant log --json` 照旧只回元数据，不返回日志内容。
+   */
+  private maybeAnnounceWhitelistBootstrap(access: { reason: string }, msg: WechatInboundMessage,
+                                          onLog?: (line: string) => void): void {
+    if (this.firstRunHintShown) return
+    if (String(configService.get('assistantWhitelist') || '').trim()) return
+    if (access.reason !== 'direct-not-whitelisted') return
+    this.firstRunHintShown = true
+    const line = '[首次配置] 白名单为空，所以谁都没回。若刚才这条是你本人发的，执行：'
+      + ` weflow-cli config set assistantWhitelist "${msg.senderId}"`
+    onLog?.(line)
+    appendLog(line)
+    privacyGate.audit('WHITELIST_BOOTSTRAP_HINT', 0, 'whitelist-empty')
+  }
+
   /** 快路径开关。默认 `off`：不改行为，直到有人愿意盯着它（D-035） */
   private fastRouteMode(): FastRouteMode {
     const raw = String(configService.get('assistantFastRoute') || '').trim().toLowerCase()
@@ -329,6 +355,7 @@ export class AssistantService {
         if (!access.allowed) {
           privacyGate.audit(`DENY_${access.reason.toUpperCase().replace(/-/g, '_')}`, 0, sessionId.slice(0, 12))
           onLog?.(`  → 拒绝: ${sessionId.slice(0, 12)}… ${access.reason} (未回复, 不耗 LLM)`)
+          this.maybeAnnounceWhitelistBootstrap(access, msg, onLog)
           return
         }
         if (msg.messageKind !== 'text') {

@@ -221,3 +221,46 @@ test('stop 之后到达的消息不再处理', async () => {
   assert.deepEqual(sent, [])
   assert.equal(llmCalls, 0)
 })
+
+test('白名单为空时，第一条被拒的直聊消息会把完整 ID 和该执行的命令打出来', async () => {
+  // 首次启用的死结：不配白名单就拒所有人，而填白名单用的那个 ID 只在入站消息里出现
+  // （登录响应给的 ilink_user_id 与它是不是同一个值没有被验证过，所以不该拿登录来猜）。
+  const s = await boot({ assistantWhitelist: '' })
+
+  await s.deliver(directMessage('你好', 'wxid_from_you'))
+
+  const hint = s.logs.find(line => line.includes('[首次配置]'))
+  assert.ok(hint, s.logs.join(' / '))
+  assert.match(hint!, /wxid_from_you/, '必须打完整 ID：截断过的前缀填不进白名单')
+  assert.match(hint!, /config set assistantWhitelist "wxid_from_you"/)
+  assert.deepEqual(sent, [], '提示归提示，这条消息仍然是拒绝、不回复')
+})
+
+test('首次配置提示只打一次，不刷屏', async () => {
+  const s = await boot({ assistantWhitelist: '' })
+
+  await s.deliver(directMessage('第一条', 'wxid_from_you'))
+  await s.deliver(directMessage('第二条', 'wxid_from_you'))
+
+  assert.equal(s.logs.filter(line => line.includes('[首次配置]')).length, 1)
+})
+
+test('白名单非空时不再提示（那时人已经配过了）', async () => {
+  const s = await boot({ assistantWhitelist: 'wxid_someone_else' })
+
+  await s.deliver(directMessage('你好', 'wxid_from_you'))
+
+  assert.equal(s.logs.some(line => line.includes('[首次配置]')), false)
+  assert.match(s.audit(), /DENY_DIRECT_NOT_WHITELISTED/, '照旧拒绝，只是不再提示')
+})
+
+test('群聊被拒时不提示：群里的 sender_id 是群成员，不该被加进白名单', async () => {
+  const s = await boot({ assistantWhitelist: '', assistantGroupWhitelist: '' })
+
+  await s.deliver({ conversationType: 'group', conversationId: 'room@chatroom',
+                    senderId: 'wxid_a_member', mentionedBot: true, messageKind: 'text',
+                    messageStr: 'hi' })
+
+  assert.equal(s.logs.some(line => line.includes('[首次配置]')), false)
+  assert.match(s.audit(), /DENY_GROUP_NOT_WHITELISTED/)
+})

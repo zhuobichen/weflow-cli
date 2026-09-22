@@ -2026,19 +2026,20 @@ program
       if (session.status === 'confirmed') {
         console.log(chalk.green('\n✓ 登录成功!'))
         console.log(chalk.gray('  消息通道登录状态已安全保存'))
-        // 助手的白名单为空时**拒绝所有人**。你自己的发送者 ID 只有这一刻拿得到
-        // （登录 session 不落盘），所以在这里打出来：没这一句，用户登录完对着自己的
-        // 机器人说话什么也收不到，只能翻日志猜为什么。
+        // 助手的白名单为空时**拒绝所有人**：登录完对着自己的机器人说话，什么都不会回来。
+        // 所以这里必须说清"下一步该干什么"。
         // 只打在人看的这条路上——`--json` 那条路照旧不返回账号标识。
-        if (session.userId) {
-          console.log('')
-          console.log(chalk.cyan('  助手还没启用：白名单为空 = 拒绝所有人。'))
-          console.log(chalk.gray('  你自己的发送者 ID：') + chalk.cyan(session.userId))
-          console.log(chalk.gray('  启用（只回复你自己）：')
-            + chalk.cyan(`weflow-cli config set assistantWhitelist "${session.userId}"`))
-          console.log(chalk.gray('  只想先看它「本来会怎么答」而不改行为：')
-            + chalk.cyan('weflow-cli config set assistantFastRoute log'))
-        }
+        console.log('')
+        console.log(chalk.cyan('  助手默认拒绝所有人（白名单为空）。'))
+        // 这里**不**替用户写白名单：登录响应给的是 ilink_user_id，而白名单要的是入站消息里
+        // 那个 from_user_id（文档里写成 <@im.wechat ID>），两者是不是同一个值**没有被验证过**
+        // ——猜错的后果是"白名单非空、看着配好了、却仍然拒你"。真值在第一条被拒的消息里，
+        // 所以让它自己现形（见 assistant log 的 [首次配置] 那行）。
+        console.log(chalk.gray('  启用方式：先 assistant start，从你的微信给机器人发一条消息，'))
+        console.log(chalk.gray('  日志里会出现一行 ' + chalk.cyan('[首次配置]')
+          + chalk.gray(' 带着你自己的发送者 ID 和该执行的命令。')))
+        console.log(chalk.gray('  只想先看它「本来会怎么答」而不改行为：')
+          + chalk.cyan('weflow-cli config set assistantFastRoute log'))
       } else {
         console.log(chalk.red(`\n✗ 登录失败: ${session.error || '超时'}`))
       }
