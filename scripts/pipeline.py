@@ -68,8 +68,13 @@ def main():
     # `--no-summary` 时 biz_daily 不生成任何文字，所以这一步不需要 key——但**下游步骤
     # 仍需要**，所以只在"下游也全关"时才整段跳过校验，否则照旧检查（免得后面某一步
     # 在跑到一半时才发现没 key）。
+    #
+    # **只算真的会调 LLM 的那两步**（行动建议、概念编译）：`generate_ai_report.py` 虽然
+    # 叫 AI 报告，但一次 LLM 都不调（它读已落盘的概率与判断），把它算进来会让
+    # `--no-summary --skip-classify --skip-wiki` 仍然索要 DeepSeek key——那正是这条
+    # 路要摆脱的东西。
     api_key = args.api_key or ''
-    downstream_ai = not (args.skip_classify and args.skip_wiki and args.skip_ai_report)
+    downstream_ai = not (args.skip_classify and args.skip_wiki)
     needs_key = args.engine in ('deepseek', 'claude') and not args.no_ai and (
         not args.no_summary or downstream_ai)
     if needs_key and not api_key:
@@ -96,8 +101,11 @@ def main():
         # 只对 biz_daily 转发：它跳过摘要/简报的生成，判断仍走 Jev。
         step1_args += ['--no-summary']
         if downstream_ai:
-            print('  [提示] --no-summary 只关掉本步骤的 LLM 生成；下游步骤仍会用 LLM，'
-                  '要全关请加 --skip-classify --skip-wiki --skip-ai-report')
+            print('  [提示] --no-summary 只关掉本步骤的 LLM 生成；下游仍会调 LLM 的步骤：'
+                  '%s。要全关请补上对应 --skip-*'
+                  % '、'.join(n for n, skipped in (('classify_daily（行动建议）', args.skip_classify),
+                                                   ('compile_wiki（概念编译）', args.skip_wiki))
+                              if not skipped))
     if not run_step('biz_daily — 抓取+摘要', step1_args):
         sys.exit(1)
 

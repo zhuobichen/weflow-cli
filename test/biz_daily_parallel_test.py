@@ -163,6 +163,74 @@ class SerializableArticleTests(unittest.TestCase):
         self.assertEqual(entry['date'], '2026-09-05')
 
 
+class SummaryPromptTests(unittest.TestCase):
+    """Jev 判过时给 LLM 的提示词不再要分类字段——省的是**白写的 token**。
+
+    原来无论谁判，提示词都把【主题】【相关度】连"六类判据 + 三档定义"一起塞进去，
+    而 Jev 那条路上这两个答案是丢掉的：每篇约 20 个输出 token + 约 300 个输入 token。
+    一天 400 篇就是十万量级的纯浪费。
+
+    但**摘要要求那一段必须与完整提示词逐字相同**——只许去掉分类那几段，
+    否则生成的摘要/标签会跟着变，那就不是"省 token"而是"换了产物"。
+    """
+
+    ARTICLE = {'title': '标题', 'account_name': '某号', 'fetched_md': '正文' * 100}
+
+    def test_the_shared_summary_rules_are_identical_in_both_prompts(self):
+        """防漂移：这段抄了两份，就必须断言它们一样（同 `TOPIC_ORDER` 那份的做法）。"""
+        def block(text):
+            start = text.index('**摘要要求**：')
+            end = text.index('返回格式（严格）：')
+            return text[start:end]
+        self.assertEqual(block(biz.TOPIC_PROMPT), block(biz.SUMMARY_ONLY_PROMPT))
+
+    def test_judged_prompts_drop_the_classification_fields(self):
+        slim, mt = biz.summary_prompt_for(self.ARTICLE, '', judged=True)
+        self.assertNotIn('【主题】', slim)
+        self.assertNotIn('【相关度】', slim)
+        self.assertIn('【标签】', slim)          # 标签仍要生成
+        self.assertIn('【概念】', slim)
+        self.assertEqual(mt, 2000)
+        # 真的更短：判据表（六类）不在了
+        full, _ = biz.summary_prompt_for(self.ARTICLE, '', judged=False)
+        self.assertLess(len(slim), len(full))
+
+    def test_unjudged_prompts_are_byte_identical_to_the_old_behaviour(self):
+        """回退路径（`--classifier llm`、或单篇 Jev 失败）不能换标准。"""
+        prompt, mt = biz.summary_prompt_for(self.ARTICLE, '', judged=False)
+        expected = (biz.TOPIC_PROMPT + '\n\n标题：标题\n来源：某号'
+                    + '\n\n内容：\n' + self.ARTICLE['fetched_md'][:4000])
+        self.assertEqual(prompt, expected)
+        self.assertEqual(mt, 2000)
+
+    def test_a_category_hint_still_wins_over_judged(self):
+        # 人工配了类别的来源，提示词本来就是"只要摘要"，与是否判过无关。
+        prompt, mt = biz.summary_prompt_for(self.ARTICLE, '学术', judged=True)
+        self.assertIn('来源类别已经确定为「学术」', prompt)
+        self.assertEqual(mt, 1000)
+
+    def test_the_choice_is_per_article_not_per_batch(self):
+        """一篇 Jev 判过、一篇判失败：必须各用各的提示词。
+
+        整批一刀切的话，判失败的那篇就拿不到【主题】/【相关度】的兜底。
+        """
+        seen = []
+
+        def fake_call_ai(prompt, engine, api_key, max_tokens=2000):
+            seen.append(prompt)
+            return '【摘要】x【标签】a'
+
+        import _utils
+        with patch.object(_utils, 'call_ai', fake_call_ai):
+            with patch.object(biz.time, 'sleep'):
+                biz._summarise_articles_parallel(
+                    [dict(self.ARTICLE), dict(self.ARTICLE)], 'deepseek', 'k',
+                    decisions={0: {'topic': 'AI'}})
+        self.assertEqual(len(seen), 2)
+        self.assertNotIn('【主题】', seen[0])      # 判过的：精简
+        self.assertIn('【主题】', seen[1])         # 没判的：完整
+
+
 class NoSummaryModeTests(unittest.TestCase):
     """`--no-summary`：只要判断、不要生成。
 

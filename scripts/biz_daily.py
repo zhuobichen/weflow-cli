@@ -320,12 +320,16 @@ SUMMARY_WORKERS = 6
 SUMMARY_SECONDS_PER_ARTICLE = 2.5
 
 
-def summary_prompt_for(article, category_hint):
-    """这一篇要发的提示词与 `max_tokens`。跟着 `category_hint` 走两条不同分支。
+def summary_prompt_for(article, category_hint, judged=False):
+    """这一篇要发的提示词与 `max_tokens`。
 
-    抽出来是为了让"取摘要"能并发：配了类别的来源用短提示词（`max_tokens=1000`），
-    其余的用完整提示词（`2000`）。两条分支的文本与串行版本逐字相同——搬动的是
-    **调用位置**，不是内容。
+    三条分支：
+    * 配了类别的来源 → 短提示词（只要摘要，`max_tokens=1000`）；
+    * `judged=True`（Jev 已经判过这一篇）→ `SUMMARY_ONLY_PROMPT`，不再要它写主题/相关度；
+    * 其余（`--classifier llm`，或单篇 Jev 失败退回来的）→ 完整的 `TOPIC_PROMPT`，
+      **与旧行为逐字节一致**，回退路径不能换标准。
+
+    抽出来是为了让"取摘要"能并发：搬动的是**调用位置**，不是内容。
     """
     content = article.get('fetched_md') or article.get('local_text', '')
     if category_hint:
@@ -337,12 +341,14 @@ def summary_prompt_for(article, category_hint):
 
 正文：
 {content[:4000]}''', 1000)
-    prompt = TOPIC_PROMPT + f'\n\n标题：{article["title"]}\n来源：{article["account_name"]}'
+    base = SUMMARY_ONLY_PROMPT if judged else TOPIC_PROMPT
+    prompt = base + f'\n\n标题：{article["title"]}\n来源：{article["account_name"]}'
     prompt += f'\n\n内容：\n{content[:4000]}'
     return prompt, 2000
 
 
-def _summarise_articles_parallel(articles, engine, api_key, workers=SUMMARY_WORKERS):
+def _summarise_articles_parallel(articles, engine, api_key, workers=SUMMARY_WORKERS,
+                                 decisions=None):
     """把每篇的 LLM 调用先并发跑完，返回与 `articles` 等长的 `(response, error)`。
 
     **只有网络等待是并发的**：调用方仍按原顺序串行地解析与落字段，所以每篇的写入
@@ -366,7 +372,11 @@ def _summarise_articles_parallel(articles, engine, api_key, workers=SUMMARY_WORK
 
     def one(index):
         article = articles[index]
-        prompt, max_tokens = summary_prompt_for(article, article.get('source_category', ''))
+        # 逐篇判断，不是整批一刀切：Jev 判过的那篇用精简提示词，判失败的仍用完整提示词
+        # （它要靠 LLM 的【主题】/【相关度】兜底）。
+        judged = bool((decisions or {}).get(index))
+        prompt, max_tokens = summary_prompt_for(article, article.get('source_category', ''),
+                                               judged=judged)
         try:
             return index, call_ai(prompt, engine, api_key, max_tokens=max_tokens), None
         except Exception as exc:            # 交给调用方那条原有的 except 分支
@@ -414,6 +424,29 @@ TOPIC_PROMPT = f"""对文章分类、深度摘要、打标签，并评估与读�
 返回格式（严格）：
 【主题】AI
 【相关度】高
+【标签】tag1, tag2, tag3
+【摘要】【核心观点】一句话。【关键细节】1. 要点一；2. 要点二；3. 要点三
+【概念】概念名|一句话说明, 概念名|一句话说明"""
+
+# Jev 已经判过主题与相关度时，给 LLM 的提示词改成这一份：**不再要它输出那两个字段**。
+#
+# 原来无论谁判，提示词都把【主题】【相关度】连"六类判据 + 三档定义"一起塞进去，
+# 而 Jev 那条路上这两个答案是白写的——每篇约 20 个输出 token，加上那几段判据约
+# 300 个输入 token，一天 400 篇就是十来万 token 的纯浪费。
+#
+# **摘要要求那一段与 `TOPIC_PROMPT` 逐字相同**（有测试钉住）——只动分类那几段，
+# 生成的摘要/标签/概念不受影响。`--classifier llm`、以及单篇 Jev 失败退回来的那些，
+# 仍然用完整的 `TOPIC_PROMPT`，回退路径与旧行为逐字节一致（D-031 的约束）。
+SUMMARY_ONLY_PROMPT = f"""为文章写深度摘要、打标签，并抽取概念。
+
+【读者定位】环境科学研究生，研究方向是计算机与环境的交叉领域（环境模型、大气污染模拟、遥感反演、环境大数据分析、LCA等），关注AI工具如何提升科研效率。
+
+**摘要要求**：
+- 【摘要】写一段完整的深度摘要（150-300字），不要只写一两句
+- 格式：【核心观点】一句话概括中心思想。【关键细节】列出3-5个具体要点（工具/方法/数据/结论/人物/事件等），每个要点一句话
+- 摘要不需要包含分类/相关度/标签信息，那些由上面的字段处理
+
+返回格式（严格）：
 【标签】tag1, tag2, tag3
 【摘要】【核心观点】一句话。【关键细节】1. 要点一；2. 要点二；3. 要点三
 【概念】概念名|一句话说明, 概念名|一句话说明"""
@@ -1000,7 +1033,8 @@ def main():
             # 先把每篇的 LLM 调用并发跑完，再进下面这个串行循环做解析与落字段。
             # 解析是纯本地操作，并发的价值全在网络等待上；这样循环体本身不用重写，
             # 每条兜底分支的行为也就与串行版本一致。
-            prefetched = _summarise_articles_parallel(articles, engine, api_key)
+            prefetched = _summarise_articles_parallel(articles, engine, api_key,
+                                                      decisions=decisions)
         # `--no-summary` 时 prefetched 是 None，这个循环整段不跑（循环体是围绕 LLM
         # 响应写的）。用变量而不是把循环体缩进进 if，是为了让 diff 只碰这一行。
         pending = list(enumerate(articles)) if prefetched is not None else []
