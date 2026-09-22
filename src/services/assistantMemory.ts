@@ -45,6 +45,8 @@ export const WORKING_MAX = 16
 export const SUMMARY_MAX = 800
 export const FACTS_MAX = 30
 export const FACT_EXTRACT_EVERY = 6
+/** 每次注入事实的字符预算：30 条 × 72 字 ≈ 2.1KB 全塞进去是纯噪声，按相关度取一部分 */
+export const FACTS_INJECT_BUDGET_CHARS = 1200
 /** 两条事实的包含关系达到这个比例才当"同一条"（长的、更具体的那条胜出） */
 const FACT_SAME_RATIO = 0.5
 
@@ -435,3 +437,80 @@ export function buildFactPrompt(recent: ChatTurn[]): string {
 [对话]
 ${transcript}`
 }
+
+/** 字符二元组集合——中文没有词边界，用二元组算重合比"包含"稳，也不用引模型 */
+function bigrams(text: string): Set<string> {
+  const norm = normalizeFact(text)
+  const out = new Set<string>()
+  for (let i = 0; i + 1 < norm.length; i++) out.add(norm.slice(i, i + 2))
+  return out
+}
+
+function overlap(a: Set<string>, b: Set<string>): number {
+  if (!a.size || !b.size) return 0
+  let hit = 0
+  for (const g of a) if (b.has(g)) hit++
+  return hit / Math.min(a.size, b.size)
+}
+
+/**
+ * 该把哪几条事实放进这次请求：**先相关、再近期用过、最后按时间**，总量受字符预算约束。
+ *
+ * 为什么不全量注入：30 条 × ~72 字 ≈ 2.1KB **每轮**都发，而且与当前问题无关的那些是纯噪声——
+ * 噪声不只是花钱，它是"模型被无关信息带偏"的来源之一。
+ *
+ * **相关度决定"谁进"，展示保持时序**：入选的按时间先后排列（读起来像一份清单，而不是一堆碎片），
+ * 没进的按相关度+近期用过来决定顺序。
+ *
+ * 返回未被选中的条数，调用方要**如实说出来**（`另有 N 条未列出`）。谎报"全部记忆如下"比少给
+ * 几条更糟：模型会以为自己看到了全部。
+ */
+export function selectFactsForInjection(facts: Fact[], question: string,
+                                        budgetChars = FACTS_INJECT_BUDGET_CHARS): { selected: Fact[]; withheld: number } {
+  if (!facts.length) return { selected: [], withheld: 0 }
+  const q = bigrams(question || '')
+  const qText = normalizeFact(question || '')
+
+  const scored = facts.map((f, index) => {
+    const fText = normalizeFact(f.content)
+    // 直接包含（整串或关键片段）算强相关；否则用二元组重合
+    const direct = qText.length >= 2 && (fText.includes(qText) || qText.includes(fText))
+    const sim = direct ? 1 : overlap(q, bigrams(f.content))
+    return { fact: f, index, rank: sim * 10 + (f.usedAt ? 0.5 : 0) + (f.ts ? 0.1 : 0) }
+  })
+
+  scored.sort((a, b) => b.rank - a.rank || a.index - b.index)
+  const selected: Fact[] = []
+  let used = 0
+  for (const item of scored) {
+    const size = item.fact.content.length + 2
+    if (selected.length && used + size > budgetChars) break
+    selected.push(item.fact)
+    used += size
+  }
+  // 保持原来的顺序（时间先后），读起来才像一份清单而不是一堆碎片
+  selected.sort((a, b) => facts.indexOf(a) - facts.indexOf(b))
+  return { selected, withheld: facts.length - selected.length }
+}
+
+const FRAME_OPEN = 'weflow-local-data'
+const FRAME_CLOSE = '/' + FRAME_OPEN
+
+/**
+ * 把一段**本地数据**包进框里再进提示词，并转义内容里出现的框标签。
+ *
+ * 防的是"框欺骗"：聊天正文、文章正文、事实里完全可能写着 `</weflow-local-data>` 再跟一段
+ * 像系统指令的话——不转义就等于让数据自己把框关上、直接以系统身份说话。转义后它只能是数据。
+ * （这不等于防住提示词注入本身：数据里仍可以有指令性文字；我们只保证它**关不掉这个框**。）
+ */
+export function frameLocalData(label: string, body: string): string {
+  // 用 split/join 而不是正则：这里只需要"把框标签的尖括号改掉一个字"，正则只会给它引入转义问题。
+  // 开标签与闭标签都要挡：数据里出现任一形式，都不能让它把框关上。
+  const safe = String(body ?? '')
+    .split('<' + FRAME_OPEN).join('<‹' + FRAME_OPEN)
+    .split('<' + FRAME_CLOSE).join('<‹' + FRAME_CLOSE)
+  const crlf = String.fromCharCode(10)
+  return '<' + FRAME_OPEN + ' source="' + label + '">' + crlf + safe + crlf + '<' + FRAME_CLOSE + '>'
+}
+
+

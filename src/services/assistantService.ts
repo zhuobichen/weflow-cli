@@ -9,6 +9,7 @@
  */
 import { WechatMessageService } from './wechatMessageService.js'
 import { decideRoute, MIN_NEEDS_TOOL, type FastRouteMode } from './assistantRouter.js'
+import { selectFactsForInjection, frameLocalData } from './assistantMemory.js'
 import { configService } from './configService.js'
 import { AssistantMemory, type ChatTurn } from './assistantMemory.js'
 import { privacyGate } from './assistantPrivacy.js'
@@ -21,6 +22,8 @@ import { evaluateAssistantAccess } from './assistantRouting.js'
 const MAX_TOOL_ROUNDS = 6
 /** 每日 LLM 处理上限 (护栏: 防 bug 死循环/异常流量烧钱; 0 = 不限制) */
 const DAILY_LIMIT = 100
+
+const SEP = String.fromCharCode(10)   // 提示词里的换行。写成常量，省得在每种写入路径上各自操心转义
 
 const BASE_PROMPT = `你是"第二大脑", 运行在用户自己的电脑上, 通过微信与用户对话。
 你可以调用工具查询用户本地微信数据(会话/聊天记录/收藏), 以及读写关于用户的长期记忆。
@@ -172,19 +175,29 @@ export class AssistantService {
       + '占位符），可以直接引用，不必声称被屏蔽。'
   }
 
-  /** 组装系统提示: 基础人格 + 隐私状态 + L2 摘要 + L3 事实 */
-  private buildSystemPrompt(userId: string): string {
+  /** 组装系统提示: 基础人格 + 隐私状态 + L2 摘要 + L3 事实。
+   *
+   *  两个纪律：
+   *  1. **事实按相关度取一部分**，而不是 30 条全塞——无关的那些是噪声，不只是花钱；
+   *  2. 本地数据（摘要、事实）一律**加帧 + 转义框标签**：它们的内容里完全可能写着
+   *     `</weflow-local-data>` 再跟一段像系统指令的话，不转义就等于让数据自己把框关上。
+   */
+  private buildSystemPrompt(userId: string, question = ''): string {
     const parts = [BASE_PROMPT, this.privacyStateLine()]
     const summary = this.memory.summary(userId)
-    if (summary) parts.push(`\n[此前对话摘要]\n${summary}`)
-    const facts = this.memory.facts(userId)
-    if (facts.length) {
-      parts.push(`\n[关于用户的长期记忆]\n${facts.map(f => `· ${f.content}`).join('\n')}`)
+    if (summary) {
+      parts.push('[此前对话摘要]' + SEP + frameLocalData('memory.summary', summary))
     }
-    return parts.join('\n')
+    const { selected, withheld } = selectFactsForInjection(this.memory.facts(userId), question)
+    if (selected.length) {
+      const lines = selected.map(f => `· ${f.content}`).join(SEP)
+      // 少给了几条要**如实说**：谎报「以下是全部记忆」比少给更糟——模型会以为自己看到了全部。
+      const note = withheld > 0 ? `${SEP}（另有 ${withheld} 条与这次问题关系较远，未列出）` : ''
+      parts.push('[关于用户的长期记忆]' + SEP + frameLocalData('memory.facts', lines + note))
+    }
+    return parts.join(SEP)
   }
 
-  /** 单条消息处理: 指令路由 → ReAct 循环 → 记忆更新 */
   /** 白名单为空的首次配置提示是否已经打过了（只打一次，别把日志刷满） */
   private firstRunHintShown = false
   /** 最近一次路由认为「这条消息需要查本机数据」的概率（0 = 没问过） */
@@ -312,6 +325,7 @@ export class AssistantService {
     return 1
   }
 
+  /** 单条消息处理: 指令路由 → ReAct 循环 → 记忆更新 */
   async handleMessage(userId: string, text: string, kind: string): Promise<string> {
     if (kind !== 'text') return '目前只支持文字消息哦'
 
@@ -368,7 +382,7 @@ export class AssistantService {
     // === ReAct 主循环 ===
     this.memory.addTurn(userId, 'user', t)
     const messages: ApiMessage[] = [
-      { role: 'system', content: this.buildSystemPrompt(userId) },
+      { role: 'system', content: this.buildSystemPrompt(userId, t) },
       ...this.memory.workingWindow(userId).map(turn => ({ role: turn.role, content: turn.content })),
     ]
 

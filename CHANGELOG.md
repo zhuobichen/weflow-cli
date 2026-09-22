@@ -222,6 +222,22 @@ All notable user-facing changes are recorded here. This project follows [Semanti
 - A memory file that could not be loaded is announced at startup (`⚠ 记忆: …` plus a `MEMORY_LOAD_ISSUE`
   audit line) instead of silently presenting an empty memory, which reads as "it forgot me".
 
+- Facts are now **selected for injection by relevance** instead of all being sent every turn. Thirty facts at
+  ~72 characters each is about 2.1 KB per request, and the ones unrelated to the question are noise - which
+  costs more than money. Selection ranks by direct containment first, then character-bigram overlap, then
+  recent use (`usedAt`) and recency; the selected facts keep their chronological order so the block still
+  reads as a list. The prompt now **says how many were left out** ("另有 N 条与这次问题关系较远，未列出"):
+  claiming "here is everything I remember" while sending a subset is worse than sending less, because the
+  model then believes it has seen it all.
+- Local data entering the system prompt (the rolling summary and the memory facts) is now wrapped in a
+  `<weflow-local-data source="…">` frame, with **any occurrence of the frame tags inside the content
+  neutralised**. The threat is frame spoofing: chat text, article text and a stored fact can all contain
+  `</weflow-local-data>` followed by something that reads like a system instruction, and without escaping
+  the data could close the frame and speak as the system. This does not make the model immune to
+  instructions hidden in data - it only removes the ability to **close our frame**, which is the part we
+  can guarantee. The idea came from the same `deepseek-harness` audit: it treats referenced session content
+  as untrusted and keeps its injected instructions tag-safe for exactly this reason.
+
 ### Changed
 - Image downloads during the daily run are concurrent (6-way). They were sequential at 0.37 s and 135 KB each - about 18 minutes per 190-article day - even though they come from `.qpic.cn`, WeChat's CDN, which a browser fetches in parallel anyway. Same three articles: 17.2 s → 2.1 s. The same change fixed the map: a failed download used to be recorded in `.image_map.json` **before** it was attempted, and the reader injects that map as `window._IMG_MAP`, so the page was told to look for a local file that did not exist. Only files that are actually on disk are mapped now, and duplicates in a page are fetched once (31 image links in one article were 17 distinct images).
 - LLM summaries are generated concurrently, so a 190-article day spends about 2 minutes there instead of 9 (measured 2.27/2.92/2.45 s per article). The calls are **prefetched, not the loop rewritten**: responses are filled back by their original index and the existing loop still does the parsing and the field writes in the same order, so every fallback branch behaves exactly as before - a failed call comes back as an error and the loop re-raises it into its own `except`. The per-article 0.3 s pacing moved into the worker, so the request rate to the provider is unchanged. The stage now prints `摘要完成 N/M 篇，耗时 Xs（6 并发；串行约需 Ys）`, the shape the classification stage already used.
