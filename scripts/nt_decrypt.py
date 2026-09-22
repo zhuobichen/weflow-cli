@@ -912,10 +912,25 @@ def _decode_content(raw):
     return data.decode('utf-8', 'ignore')
 
 
+def _xml_block(xml, tag):
+    """取一个元素的起始标签到它自己的结束标签之间的整段（含标签）。
+
+    只在区块内找 `title`/`des`：整份 payload 里还有 `<emotionpageshared><title>` 这类
+    同名标签，在全文里搜会匹配到那个去（自验时真的把一段 XML 当文本吐出来过）。
+    """
+    text = xml or ''
+    match = re.search(r'<%s(?:\s[^>]*)?>.*?</%s>' % (tag, tag), text, re.S)
+    return match.group(0) if match else ''
+
+
 def _xml_text(xml, tag):
-    """取一个标签的文本（含 CDATA）。取不到回空串——`<title />` 这种自闭合就是取不到。"""
+    """取一个标签的文本（含 CDATA）。取不到回空串——`<title />` 这种自闭合就是取不到。
+
+    起始标签里**不许出现 `/`**：否则 `<title />` 会被当成开标签，一路吃到后面某个
+    `</title>`，把中间整段 XML 当成文本返回（自验时真的吐出来过）。
+    """
     match = re.search(
-        r'<%s[^>]*>(?:<!\[CDATA\[)?(.*?)(?:\]\]>)?</%s>' % (tag, tag), xml or '', re.S)
+        r'<%s(?:\s[^>/]*)?>(?:<!\[CDATA\[)?(.*?)(?:\]\]>)?</%s>' % (tag, tag), xml or '', re.S)
     return match.group(1).strip() if match else ''
 
 
@@ -931,7 +946,14 @@ def non_text_display(local_type, raw):
     if lt & 0xFFFFFFFF == APPMSG_SUBTYPE:
         apptype = lt >> 32
         label = APPMSG_LABELS.get(apptype, APPMSG_UNKNOWN_LABEL)
-        title = _xml_text(text, 'title') or _xml_text(text, 'des')
+        block = _xml_block(text, 'appmsg')
+        title = _xml_text(block, 'title') or _xml_text(block, 'des')
+        # 实测 payload 里 `<emotionpageshared>` 这类**嵌套容器**也带 `<title>`，取到的是
+        # 它们自己的占位值（`null`）。这种不是标题，按"没有标题"处理。
+        if title.lower() in ('null', 'undefined', '0'):
+            title = ''
+        # 截断：解析万一走偏，也不许把一段 XML 当成标题交给下游。
+        title = title[:60]
         return '[%s] %s' % (label, title) if title else '[%s]' % label
 
     label = NON_TEXT_LABELS.get(lt)

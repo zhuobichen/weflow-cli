@@ -86,6 +86,25 @@ class NonTextDisplayTests(unittest.TestCase):
         self.assertEqual(nt.non_text_display(88 * 2 ** 32 + 49, payload), '[应用消息] 某个东西')
         self.assertEqual(nt.non_text_display(88 * 2 ** 32 + 49, ''), '[应用消息]')
 
+    def test_a_self_closing_tag_is_not_mistaken_for_an_open_tag(self):
+        # 回归：`<des />` 曾被当成开标签，正则一路吃到后面某个 `</des>`，把整段
+        # XML 当文本返回（自验时真的吐出过 `<des />` 加一串标签）。开标签里不许出现 `/`。
+        # 文本返回（自验时真的吐出过 `<des />
+        self.assertEqual(nt._xml_text('<msg><appmsg><title /><des /></appmsg></msg>', 'title'), '')
+        payload = '<msg><appmsg><title /><des /><type>8</type></appmsg></msg>'
+        self.assertEqual(nt.non_text_display(8 * 2 ** 32 + 49, payload), '[应用消息]')
+
+    def test_a_nested_containers_placeholder_title_is_not_a_title(self):
+        # 实测：payload 里 <emotionpageshared><title>null</title> 会被当成标题，
+        # 于是助手读到"[应用消息] null"。占位值一律按"没有标题"处理。
+        payload = ('<msg><appmsg><title /><des />'
+                   '<emotionpageshared><tid>0</tid><title>null</title></emotionpageshared>'
+                   '</appmsg></msg>')
+        self.assertEqual(nt.non_text_display(8 * 2 ** 32 + 49, payload), '[应用消息]')
+
+    def test_a_tag_with_attributes_is_still_read(self):
+        self.assertEqual(nt._xml_text('<title lang="zh">带属性的</title>', 'title'), '带属性的')
+
     def test_an_unknown_type_still_says_something(self):
         self.assertEqual(nt.non_text_display(987654321, ''), '[未识别的消息类型 987654321]')
 
