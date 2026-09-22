@@ -2015,7 +2015,7 @@ export class WcdbCore {
     items?: Array<{
       sessionId: string
       sessionDisplayName?: string
-      mediaType: 'image' | 'video'
+      mediaType?: 'image' | 'video' | undefined
       localId: number
       serverId?: string
       createTime: number
@@ -2473,7 +2473,11 @@ export class WcdbCore {
         return {
           sessionId,
           sessionDisplayName: sessionNameMap.get(sessionId) || sessionId,
-          mediaType: localType === 43 ? 'video' as const : 'image' as const,
+          // 只有明确的图片/视频才是媒体。原先这里对**一切非视频**都写 'image'
+          // （连纯文本也是），是个没人消费的错值——公开方法里的错值迟早会被当真。
+          mediaType: localType === 43 ? 'video' as const
+            : localType === 3 ? 'image' as const
+              : undefined,
           localId: toInt(row.local_id ?? row.localId),
           serverId: pickString(row, ['server_id', 'serverId']) || undefined,
           createTime: toInt(row.create_time ?? row.createTime),

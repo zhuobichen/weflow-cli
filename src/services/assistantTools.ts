@@ -374,7 +374,13 @@ export async function executeTool(name: string, args: Record<string, any>, ctx: 
         const msgs = await chatService.getMessages(talker, limit)
         if (!msgs.length) return `(没找到「${contact}」的消息)`
         return msgs.map(m => {
-          const body = privacyGate.maskMessageBody((m.content || m.parsedContent || '').replace(/\n/g, ' ').slice(0, 80))
+          // 非文本消息优先用 `parsedContent`：它是读取器给的**显示形态**（`[图片]`、
+          // `[文件] Base.csv`、`某人 撤回了一条消息`…），而 `content` 对这类消息可能是
+          // 原始 XML（含 md5 与 cdn 链接）——那是给机器看的，不该塞进模型上下文。
+          const raw = m.localType === 1
+            ? (m.content || m.parsedContent || '')
+            : (m.parsedContent || m.content || '')
+          const body = privacyGate.maskMessageBody(raw.replace(/\n/g, ' ').slice(0, 80))
           return `[${fmtTime(m.createTime)}] ${m.isSend ? '用户' : (m.senderUsername || '对方')}: ${body}`
         }).join('\n')
       }

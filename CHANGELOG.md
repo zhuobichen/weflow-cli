@@ -175,6 +175,21 @@ All notable user-facing changes are recorded here. This project follows [Semanti
   contradiction, and a failed push-back keeps the reply it already had. `TOOL_GUARD_PUSHBACK` in the
   audit is the line to grep; the loop is now one shared implementation for both passes.
 
+- **Non-text messages are no longer dropped when reading a conversation.** `parsedContent` was filled only
+  for `local_type == 1`, and a non-text body is a zstd-compressed BLOB that "is not a str, so it becomes
+  an empty string" - so images, stickers, files, quotes, transfers, red packets and **revoke notices**
+  all arrived downstream as empty. In a real 44-message conversation the three "empty" messages turned out
+  to be a revoke notice and two stickers, and the assistant answered, truthfully, that it could not read
+  the content. They now get a display form: the type code is derived (`local_type = apptype * 2**32 + 49`,
+  49 being the appmsg family) rather than tabulated, the XML is decompressed when it is zstd, and the
+  useful part is carried through - `[文件] Base.csv`, `[引用] <quoted text>`, `"某人" 撤回了一条消息`,
+  `[转账] 微信转账`, `[表情]`. An unknown app type says `[应用消息]` rather than guessing "link", and an
+  unknown type says `[未识别的消息类型 N]`: **a non-text message never becomes an empty string again**, and
+  a test asserts that over a list of types. The assistant tool now prefers `parsedContent` for non-text
+  messages, so raw XML (md5, cdn urls) no longer goes into the model's context. Also fixed a latent wrong
+  value: `getMediaStream` labelled **everything** that was not a video as `mediaType: 'image'`, text
+  included (it has no callers today, but a wrong value in a public method gets believed eventually).
+
 ### Changed
 - Image downloads during the daily run are concurrent (6-way). They were sequential at 0.37 s and 135 KB each - about 18 minutes per 190-article day - even though they come from `.qpic.cn`, WeChat's CDN, which a browser fetches in parallel anyway. Same three articles: 17.2 s → 2.1 s. The same change fixed the map: a failed download used to be recorded in `.image_map.json` **before** it was attempted, and the reader injects that map as `window._IMG_MAP`, so the page was told to look for a local file that did not exist. Only files that are actually on disk are mapped now, and duplicates in a page are fetched once (31 image links in one article were 17 distinct images).
 - LLM summaries are generated concurrently, so a 190-article day spends about 2 minutes there instead of 9 (measured 2.27/2.92/2.45 s per article). The calls are **prefetched, not the loop rewritten**: responses are filled back by their original index and the existing loop still does the parsing and the field writes in the same order, so every fallback branch behaves exactly as before - a failed call comes back as an error and the loop re-raises it into its own `except`. The per-article 0.3 s pacing moved into the worker, so the request rate to the provider is unchanged. The stage now prints `摘要完成 N/M 篇，耗时 Xs（6 并发；串行约需 Ys）`, the shape the classification stage already used.

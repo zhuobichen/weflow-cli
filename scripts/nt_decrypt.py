@@ -875,6 +875,73 @@ MESSAGE_COLUMNS = ('local_id', 'server_id', 'local_type', 'real_sender_id',
 # 三份各自为政等于谁改一处谁静默换一种排法。
 
 
+# ---- 非文本消息的显示形态 ---------------------------------------------------
+#
+# 这条路径此前**把非文本消息丢掉了**：`parsedContent` 只在 local_type == 1 时才有值，
+# 而 BLOB 内容不是 str，会在下面被置成空串。于是图片/表情/文件/引用/撤回/红包在下游
+# 一律表现为"空内容"——实测那 44 条里"空"的三条，分别是**一条撤回提示**和两个表情。
+#
+# 类型编码有结构：`local_type = apptype * 2**32 + 49`，49 表示 appmsg 家族。所以这里
+# 是**推导**而不是一张长表；只有少数几个固定类型需要单独列。
+APPMSG_SUBTYPE = 49
+NON_TEXT_LABELS = {
+    3: '图片', 34: '语音', 42: '名片', 43: '视频', 47: '表情', 48: '位置',
+}
+APPMSG_LABELS = {
+    4: '链接', 5: '链接', 6: '文件', 19: '聊天记录', 33: '小程序', 57: '引用', 63: '直播',
+    2000: '转账', 2001: '红包',
+}
+# 不认识的 apptype 回 `[应用消息]` 而不是猜成"链接"：标签是给下游读的，不能支撑不起也写。
+APPMSG_UNKNOWN_LABEL = '应用消息'
+
+
+ZSTD_MAGIC = bytes([0x28, 0xB5, 0x2F, 0xFD])
+def _decode_content(raw):
+    """消息内容 → 文本。BLOB 先按 zstd 解压（公众号消息同一套机制）。解不出回空串。"""
+    if isinstance(raw, str):
+        return raw
+    if not raw:
+        return ''
+    data = bytes(raw)
+    if data[:4] == ZSTD_MAGIC:        # zstd frame header
+        try:
+            import zstandard
+            return zstandard.ZstdDecompressor().decompress(data).decode('utf-8', 'ignore')
+        except Exception:
+            return ''
+    return data.decode('utf-8', 'ignore')
+
+
+def _xml_text(xml, tag):
+    """取一个标签的文本（含 CDATA）。取不到回空串——`<title />` 这种自闭合就是取不到。"""
+    match = re.search(
+        r'<%s[^>]*>(?:<!\[CDATA\[)?(.*?)(?:\]\]>)?</%s>' % (tag, tag), xml or '', re.S)
+    return match.group(1).strip() if match else ''
+
+
+def non_text_display(local_type, raw):
+    """非文本消息 → 给下游看的文本。**绝不返回空串**——这是这次修复的全部要点。
+
+    宁可写 `[未识别的消息类型 81604378673]`，也不要让下游看到空字符串：空串在下游与
+    "这条消息不存在"无法区分，而它的真实后果是助手回答"我没解析出内容"。
+    """
+    lt = int(local_type or 0)
+    text = _decode_content(raw)
+
+    if lt & 0xFFFFFFFF == APPMSG_SUBTYPE:
+        apptype = lt >> 32
+        label = APPMSG_LABELS.get(apptype, APPMSG_UNKNOWN_LABEL)
+        title = _xml_text(text, 'title') or _xml_text(text, 'des')
+        return '[%s] %s' % (label, title) if title else '[%s]' % label
+
+    label = NON_TEXT_LABELS.get(lt)
+    if label:
+        return '[%s]' % label
+    if lt == 10000:                       # 系统消息：撤回、拍一拍、入群提示
+        return _xml_text(text, 'content') or '[系统消息]'
+    return '[未识别的消息类型 %d]' % lt
+
+
 def _message_dict(row, sender_id_map, name_map, own_wxid, is_group=False):
     """One message row -> the CLI's message shape.
 
@@ -909,12 +976,19 @@ def _message_dict(row, sender_id_map, name_map, own_wxid, is_group=False):
         sender_display = name_map.get(sender_username, sender_username) if sender_username else sender_username
 
     # Parse message_content - TEXT column
-    content = row.get('message_content')
-    content = content if isinstance(content, str) else ""
+    raw_content = row.get('message_content')
+    content = raw_content if isinstance(raw_content, str) else ""
 
     # `content`/`rawContent` stay exactly as stored; only `parsedContent` - the
     # field every consumer reads first - gets the display-ready form.
-    display = _strip_group_speaker(content, set(sender_id_map.values())) if is_group else content
+    #
+    # 非文本消息（图片/表情/文件/引用/撤回/红包…）在过去得到的是**空串**：它们的内容是
+    # JSON 里不是 str 的 BLOB，上面那行会把它置空。现在它们走 `non_text_display`，
+    # 至少拿到 `[图片]`，多数还能带上文件名、被引用的原文或"谁撤回了一条消息"。
+    if content:
+        display = _strip_group_speaker(content, set(sender_id_map.values())) if is_group else content
+    else:
+        display = non_text_display(local_type, raw_content)
 
     return {
         "localId": row.get('local_id') or 0,
@@ -926,7 +1000,7 @@ def _message_dict(row, sender_id_map, name_map, own_wxid, is_group=False):
         "senderDisplay": sender_display,
         "content": content,
         "rawContent": content,
-        "parsedContent": display[:200] if local_type == 1 else "",
+        "parsedContent": display[:200] if local_type == 1 else display[:200],
     }
 
 

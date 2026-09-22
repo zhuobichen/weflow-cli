@@ -27,6 +27,7 @@ const { chatService } = await import('../src/services/chatService.js')
 const { wereadService } = await import('../src/services/wereadService.js')
 const { AssistantMemory } = await import('../src/services/assistantMemory.js')
 const { executeTool } = await import('../src/services/assistantTools.js')
+const { configService } = await import('../src/services/configService.js')
 
 const svc = chatService as any
 const weread = wereadService as any
@@ -325,4 +326,41 @@ test('工具执行结果永远是字符串（主循环会把它塞进 messages�
   svc.listSessions = async () => { throw new Error('boom') }
   assert.equal(typeof await run('list_sessions', {}), 'string')
   assert.equal(typeof await run('search_memory', { keyword: 'x' }), 'string')
+})
+
+test('get_messages：非文本消息显示为标签，而不是原始 XML 或空白', async () => {
+  // 严格模式会把正文整体遮罩（那是另一条测试的事），这里测的是**取哪个字段**。
+  const realGet = configService.get.bind(configService)
+  ;(configService as any).get = (k: string) => (k === 'assistantPrivacy' ? 'balanced' : realGet(k))
+  try {
+  // 实测：助手曾只看到"空内容"——因为读取器把非文本消息丢掉了（修在 nt_decrypt.py）。
+  // 这里钉住工具侧的取正文顺序：非文本用 parsedContent，不要让原始 XML 进模型上下文。
+  svc.listSessions = async () => ([{ displayName: '甲', username: 'wxid_a' }])
+  svc.getMessages = async () => ([
+    { createTime: 1758000000, isSend: false, senderUsername: '甲', localType: 47,
+      parsedContent: '[表情]', content: '<msg><emoji md5="dd6f13ec" cdnurl="http://x"/></msg>' },
+    { createTime: 1758000060, isSend: false, senderUsername: '甲', localType: 10000,
+      parsedContent: '"甲" 撤回了一条消息', content: '' },
+  ])
+
+  const out = await run('get_messages', { contact: '甲' })
+
+  assert.match(out, /\[表情\]/)
+  assert.match(out, /撤回了一条消息/)
+  assert.doesNotMatch(out, /emoji/, '原始 XML 不该进上下文')
+  assert.doesNotMatch(out, /cdnurl/)
+  } finally { ;(configService as any).get = realGet }
+})
+
+test('get_messages：文本消息仍然用原文（parsedContent 被截断过）', async () => {
+  const realGet2 = configService.get.bind(configService)
+  ;(configService as any).get = (k: string) => (k === 'assistantPrivacy' ? 'balanced' : realGet2(k))
+  svc.listSessions = async () => ([{ displayName: '甲', username: 'wxid_a' }])
+  svc.getMessages = async () => ([
+    { createTime: 1758000000, isSend: false, senderUsername: '甲', localType: 1,
+      content: '一段完整的文本', parsedContent: '一段完整的文本' },
+  ])
+  try {
+    assert.match(await run('get_messages', { contact: '甲' }), /一段完整的文本/)
+  } finally { ;(configService as any).get = realGet2 }
 })
