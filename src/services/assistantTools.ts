@@ -37,21 +37,48 @@ function fmtTime(ts: number): string {
   return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
 }
 
-/** SSRF 防护: 仅 http(s), 拒绝内网/环回地址 */
-function isSafeUrl(raw: string): boolean {
+/** SSRF 防护: 仅 http(s), 拒绝内网/环回地址
+ *
+ * 导出是为了能测它：这是**抓取前的安全边界**，而它守着的是"别让助手被一条收藏里的链接
+ * 带去访问内网"。纯函数，没有副作用。
+ */
+export function isSafeUrl(raw: string): boolean {
   try {
     const u = new URL(raw)
     if (u.protocol !== 'http:' && u.protocol !== 'https:') return false
-    const h = u.hostname
-    if (h === 'localhost' || h === '[::1]') return false
-    if (/^(127\.|10\.|192\.168\.|169\.254\.|0\.)/.test(h)) return false
-    if (/^172\.(1[6-9]|2\d|3[01])\./.test(h)) return false
+    const h = u.hostname.toLowerCase()
+    if (!h) return false
+
+    // IPv6 字面量（URL 里带方括号）。Node 会把 [0:0:0:0:0:0:0:1] 归一成 [::1]，
+    // 但不碰 [fd00::1] 这类——所以下面按前缀逐个挡。
+    if (h.startsWith('[')) {
+      const inner = h.slice(1, -1)
+      if (inner === '::' || inner === '::1') return false
+      if (inner.startsWith('::ffff:')) return false      // IPv4 映射（可能是 127.0.0.1）
+      if (/^f[cd]/.test(inner)) return false             // fc00::/7 唯一本地
+      if (/^fe[89ab]/.test(inner)) return false          // fe80::/10 链路本地
+      return true
+    }
+
+    if (h === 'localhost') return false
+    // 纯数字或 0x 形式的整型主机名：内核会把它当 IPv4 用，而域名不可能是这种形状。
+    // （实测 Node 对 2130706433 / 0x7f000001 会归一成 127.0.0.1，这道是双保险。）
+    if (/^(0x[0-9a-f]+|[0-9]+)$/.test(h)) return false
+    // 私网前缀**只在真的是点分四段时**才判：否则 `10.example.com` 这种公网域名会被
+    // `^10\.` 误杀，工具会回一句「链接不安全，拒绝抓取」，而链接其实是好的。
+    if (/^[0-9]{1,3}(\.[0-9]{1,3}){3}$/.test(h)) {
+      if (/^(127\.|10\.|192\.168\.|169\.254\.|0\.)/.test(h)) return false
+      if (/^172\.(1[6-9]|2[0-9]|3[01])\./.test(h)) return false
+    }
+    // 这是一份已知形态的黑名单，不是"这地址一定可公网路由"的证明：
+    // NAT64（64:ff9b::/96）等映射形式不在覆盖范围内。
     return true
   } catch { return false }
 }
 
+
 /** 标签剥离 → 纯文本 */
-function stripTags(seg: string): string {
+export function stripTags(seg: string): string {
   return seg.replace(/<script[\s\S]*?<\/script>/gi, ' ')
     .replace(/<style[\s\S]*?<\/style>/gi, ' ')
     .replace(/<[^>]+>/g, '\n')
@@ -61,7 +88,7 @@ function stripTags(seg: string): string {
 }
 
 /** WAF 挑战页兜底: 正文藏在 cgiDataNew.content_noencode (JS 转义字符串) */
-function extractFromChallengePage(html: string): string | null {
+export function extractFromChallengePage(html: string): string | null {
   const start = html.indexOf("content_noencode: '")
   if (start < 0) return null
   let i = start + "content_noencode: '".length
@@ -88,7 +115,7 @@ function extractFromChallengePage(html: string): string | null {
 }
 
 /** 从 HTML 提取正文文本 (微信公众号 js_content 优先, 配平 div 边界; 兜底 body) */
-function extractText(html: string): string {
+export function extractText(html: string): string {
   let seg = html
   const jc = html.indexOf('id="js_content"')
   if (jc >= 0) {

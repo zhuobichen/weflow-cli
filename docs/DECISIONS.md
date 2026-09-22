@@ -903,6 +903,37 @@ not have worked even if something read it - a dead mechanism that made the path 
   loop, because both require a logged-in WeChat channel. The per-message logic is covered by a
   synthetic harness instead (stubbed `callLLM`, local-only tools).
 
+## D-040: The fetch guard is a denylist of known forms, and it says so
+
+**Status:** Active
+
+`assistantTools.isSafeUrl` decides whether the assistant may fetch a URL found in a favourite.
+It is now covered by tests, and two real holes were found and closed: IPv6 forms were not
+handled at all (`[::ffff:127.0.0.1]` - an IPv4-mapped loopback - as well as `[fd00::1]` and
+`[fe80::1]` were **allowed**), while the private-range regexes were matched against any
+hostname, so a legitimate public domain such as `10.example.com` was refused.
+
+**Reason:** the guard runs immediately before a `fetch` made by a process that also holds the
+local database handle, and its failure mode is silent in both directions - a bypass reaches
+loopback or a cloud metadata address, and an over-block merely looks like a broken link
+(`(链接不安全, 拒绝抓取: …)`). Neither raises. Testing it was the only way to find out which
+direction it was wrong in; the measurement also settled an assumption: Node's URL parser
+normalises integer IPv4 forms (`2130706433`, `0x7f000001`) to `127.0.0.1` **before** this
+function sees them, so the dotted-quad check already covered them - that is now a test rather
+than a belief.
+
+**Consequences and boundaries:**
+- IPv6 is handled by prefix: `::`, `::1`, `::ffff:` (IPv4-mapped), `fc00::/7` (unique-local),
+  `fe80::/10` (link-local) are refused. `[0:0:0:0:0:0:0:1]` arrives already normalised to
+  `[::1]`.
+- The dotted-quad private-range checks now apply **only when the hostname really is four
+  dotted octets**, which is what stops `10.example.com` from being caught by `^10\.`.
+- This is a denylist of known forms, **not a proof that an address is publicly routable**.
+  NAT64 (`64:ff9b::/96`) and similar mappings are not covered. The comment in the code says so,
+  so nobody reads the guard as a stronger guarantee than it is.
+- The pure helpers (`isSafeUrl`, `stripTags`, `extractText`, `extractFromChallengePage`) are
+  exported for testing. They take strings and return strings - no side effects, no configuration.
+
 ## Decision Template
 
 

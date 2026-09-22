@@ -87,6 +87,20 @@ All notable user-facing changes are recorded here. This project follows [Semanti
 - Two closed vocabularies that the code compares by literal are now declared once instead of twice. The message **anchor columns** (`create_time`, `local_id`, `server_id`) had three copies - a named one, a second literal in the same file's `ORDER BY`, and a third in the exporter - and moved into `nt_common` alongside the other shared NT plumbing. Their **order is behaviour**: one use is a set membership test (order irrelevant) and the other is the sort key, so listing `local_id` first would silently reorder every conversation read. A test pins `create_time` first, the tuple type (a set would let the order follow the interpreter's hash seed), and the literal's absence from both readers. The relevance levels moved to `_utils` beside `TOPICS`, with `DEFAULT_RELEVANCE` naming what an unclassified article is recorded as - the value every failed classification path lands on, and the reason the corpus once read 中 for 2199 of 2201 articles even though 中 reads as a positive judgement rather than "not judged". `extract_todos.py`'s identical `['高','中','低']` is deliberately left uncoupled: that is the `--urgency` vocabulary, which merely shares three characters.
 
 ### Fixed
+- The fetch guard in the assistant (`isSafeUrl`, used by `read_favorite` before it fetches
+  a link found in a favourite) had two holes, found by testing it for the first time. **IPv6 was
+  not handled at all**: `[::ffff:127.0.0.1]` (an IPv4-mapped loopback), `[fd00::1]` and
+  `[fe80::1]` were all allowed, so a favourite could have pointed the assistant - a process
+  holding the local database handle - at loopback or link-local space. In the other direction,
+  the private-range regexes were matched against any hostname, so the legitimate public domain
+  `10.example.com` was refused as unsafe. The dotted-quad checks now apply only when the
+  hostname really is four dotted octets, and IPv6 is refused by prefix (`::`, `::1`, `::ffff:`,
+  `fc00::/7`, `fe80::/10`). Measuring also retired an assumption: Node normalises integer IPv4
+  forms (`2130706433`, `0x7f000001`) to `127.0.0.1` before this function runs, so those were
+  never a bypass - now pinned by a test instead of believed. The guard remains a denylist of
+  known forms, not a proof that an address is publicly routable (NAT64 is uncovered), and the
+  code says so. See D-040.
+
 - `assistant start` now actually starts the daemon, and reports success only when it does. The child
   was spawned without `--yes` while `assistant run` confirms through `inquirer` on a stdin the
   daemon had set to `ignore` - so the child died on the prompt while the parent printed
