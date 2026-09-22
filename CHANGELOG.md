@@ -74,6 +74,19 @@ All notable user-facing changes are recorded here. This project follows [Semanti
   text. One sharp edge was found and **documented instead of changed**: fact de-duplication uses
   mutual containment, so an existing `事实 1` silently blocks a new `事实 10`.
 
+- 11 of the assistant's 12 tool branches are now executed by tests, through stubs on the exported
+  `chatService` / `wereadService` singletons and a replaced `fetch` - so no database, no network
+  and no real home directory. Before this, no test had ever run a tool branch: only three pure
+  helpers were covered, and the rest of the surface was unverified. The branches now pinned
+  include: the strict-mode body mask applied **inside** `get_messages` (so third-party chat text
+  cannot appear in a tool result), `read_favorite` refusing an unsafe link **without issuing any
+  request at all**, its single retry for WeChat's WAF challenge page and the `content_noencode`
+  fallback, the "deleted by the publisher" case, out-of-range tool arguments becoming a readable
+  parameter error, ambiguous contact names asking for a more precise one (and an exact name
+  winning over a partial match), and a tool that throws internally returning a readable failure
+  instead of rethrowing into the ReAct loop. **Not covered, deliberately**: `get_todos` spawns a
+  Python subprocess against the real database and has no cheap stub point.
+
 ### Changed
 - Image downloads during the daily run are concurrent (6-way). They were sequential at 0.37 s and 135 KB each - about 18 minutes per 190-article day - even though they come from `.qpic.cn`, WeChat's CDN, which a browser fetches in parallel anyway. Same three articles: 17.2 s → 2.1 s. The same change fixed the map: a failed download used to be recorded in `.image_map.json` **before** it was attempted, and the reader injects that map as `window._IMG_MAP`, so the page was told to look for a local file that did not exist. Only files that are actually on disk are mapped now, and duplicates in a page are fetched once (31 image links in one article were 17 distinct images).
 - LLM summaries are generated concurrently, so a 190-article day spends about 2 minutes there instead of 9 (measured 2.27/2.92/2.45 s per article). The calls are **prefetched, not the loop rewritten**: responses are filled back by their original index and the existing loop still does the parsing and the field writes in the same order, so every fallback branch behaves exactly as before - a failed call comes back as an error and the loop re-raises it into its own `except`. The per-article 0.3 s pacing moved into the worker, so the request rate to the provider is unchanged. The stage now prints `摘要完成 N/M 篇，耗时 Xs（6 并发；串行约需 Ys）`, the shape the classification stage already used.
