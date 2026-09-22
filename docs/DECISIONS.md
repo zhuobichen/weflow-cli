@@ -732,6 +732,30 @@ the wrong tool, the model receives a result that does not answer the question an
 **Until then** the loop stays as it is. One extra LLM round-trip is not worth an unverifiable
 change to the path that mediates the user's messages.
 
+**A reference implementation exists, and one of its tricks is directly transferable.** The
+`browser-use` × TypeSafe demo repo (`jev_ultrafast`, MIT, ~1950 lines) ships this pattern in the
+browser domain and publishes its measurements. Its key design point is that a **speculative
+second question cannot see the first answer** - model calls inside one request are mutually
+blind - so the target-selection question has to **state the operation it is assuming** in its own
+instructions ("assuming the operation is TYPE_TEXT, which element is the target"). Each operation's
+target is computed anyway and only the matching one is consumed, which is how "two decisions, one
+round trip" works. That is the same move as writing the judging rule into the criteria text, one
+level up: not just multiple questions, but questions with a **dependency** spelled out.
+
+Its numbers are worth having as a shape rather than a baseline: 17 model requests for one flight
+search, 90,558 input / 6,325 output tokens, 178 ms median latency, and the browser-protocol call
+count dropping 1092 → 101 when one full snapshot replaced hundreds of round trips. It also states
+the boundary this decision already assumed: **DONE is not evidence of success** - their version
+keeps an independent post-check, and a failed development attempt (8.697 s) is recorded rather
+than dropped.
+
+**Its browser path is not portable to this repo's scenarios**, and the design doc says why:
+shadow roots, iframes, canvas, file uploads, new tabs and nested scrolling are unsupported - which
+is most of what the official-account console, n8n and conference-site work consists of. It also
+drives its own stack (browser-harness + CDP + a reused Chrome profile), separate from whatever
+browser automation this repo has. The transferable parts are the **question organisation** above
+and the discipline of publishing measurement boundaries with the numbers, not the transport.
+
 ## D-036: Search your own conversations with the decision model selecting query terms, not ranking sessions
 
 **Status:** Active
