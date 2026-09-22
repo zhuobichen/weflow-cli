@@ -272,5 +272,125 @@ class ResolveKeyTests(unittest.TestCase):
             self.assertIsInstance(jev.create_client(), jev.JevClient)
 
 
+class ChoiceContractTests(unittest.TestCase):
+    """`choice` 的四条硬断言：契约漂了就**当场抛**，不放行。
+
+    这四条是从 browser-use × TypeSafe 的官方示范仓库（`validate_choice`）抄来的，
+    并按实测响应校准过（`jev-1.13.0` 的真实返回四条全过）。
+
+    为什么值一个专门的测试类：契约漂移的失效方式不是报错，而是**选错了但看起来
+    正常**。本仓库已经踩过一次同型的坑——把 `noul`（概率浮点）当布尔读，于是每个
+    问题都读成"否"，而输出把责任推给了模型。
+    """
+
+    def _q(self):
+        return {'type': 'choice', 'criteria': {'甲': '选这个', '乙': '或这个'}}
+
+    def test_a_well_formed_answer_passes(self):
+        jev._check_choice('k', self._q(),
+                          {'choice': '甲', 'probabilities': {'甲': 1.0, '乙': 0.0}})
+        jev._check_choice('k', self._q(),
+                          {'choice': '甲', 'probabilities': {'甲': 0.6, '乙': 0.4}})
+
+    def test_missing_probabilities_raises(self):
+        with self.assertRaises(jev.JevError):
+            jev._check_choice('k', self._q(), {'choice': '甲'})
+
+    def test_a_key_set_that_differs_from_criteria_raises(self):
+        # 多出来的键意味着 criteria 已经漂了：那个选项根本不是我们给的。
+        with self.assertRaises(jev.JevError):
+            jev._check_choice('k', self._q(),
+                              {'choice': '甲', 'probabilities': {'甲': 0.5, '丙': 0.5}})
+        with self.assertRaises(jev.JevError):
+            jev._check_choice('k', self._q(),
+                              {'choice': '甲', 'probabilities': {'甲': 1.0}})
+
+    def test_probabilities_outside_zero_to_one_raise(self):
+        with self.assertRaises(jev.JevError):
+            jev._check_choice('k', self._q(),
+                              {'choice': '甲', 'probabilities': {'甲': 1.4, '乙': -0.4}})
+
+    def test_probabilities_that_do_not_sum_to_one_raise(self):
+        # `answer(topic='财经')` 那种"主题不在词表里"的构造会走到这里：全 0。
+        with self.assertRaises(jev.JevError):
+            jev._check_choice('k', self._q(),
+                              {'choice': '甲', 'probabilities': {'甲': 0.0, '乙': 0.0}})
+
+    def test_a_choice_that_is_not_the_argmax_raises(self):
+        """**最要紧的一条**：它不是错答案，它是"看起来完全正常"的错答案。"""
+        with self.assertRaises(jev.JevError) as ctx:
+            jev._check_choice('k', self._q(),
+                              {'choice': '乙', 'probabilities': {'甲': 0.9, '乙': 0.1}})
+        self.assertIn('argmax', str(ctx.exception))
+
+    def test_a_choice_outside_the_criteria_raises(self):
+        with self.assertRaises(jev.JevError):
+            jev._check_choice('k', self._q(),
+                              {'choice': '丙', 'probabilities': {'甲': 1.0, '乙': 0.0}})
+
+    def test_other_question_types_are_left_alone(self):
+        # noul / score 没有 criteria 与 probabilities 的对应关系，不该被这套检查误伤。
+        jev._check_choice('k', {'type': 'noul'}, {'noul': 0.9})
+        jev._check_choice('k', {'type': 'score'}, {'score': 1.7})
+
+    def test_the_validation_is_what_decide_actually_runs(self):
+        """别把校验写成没人调用的函数——这里走一遍 `decide` 的完整路径。"""
+        bad = answer()
+        bad['answers']['topic'] = {'type': 'choice', 'choice': 'AI',
+                                   'probabilities': {t: 0.0 for t in TOPICS}}
+        with patch.object(jev.urllib.request, 'urlopen',
+                          return_value=FakeResponse(bad)):
+            with self.assertRaises(jev.JevError):
+                jev.JevClient('k').decide('s', jev.build_questions(TOPICS))
+
+
+class StructuredInstructionTests(unittest.TestCase):
+    """`instructions` 可以是**结构化对象**，不只是字符串，而且要原样送出去。
+
+    （实测：`{"goal": ..., "rules": [...]}` 被服务端接受。）本仓库的提示词仍是字符串
+    ——把日报的判据改成对象形式会改变模型行为，而那套切点是按字符串版校准过的，
+    所以这里只钉"能力在、且不会被拍平"，不用它。
+    """
+
+    def test_a_dict_instruction_survives_to_the_wire(self):
+        questions = {'q': {'type': 'noul',
+                           'instructions': {'goal': '判断某事', 'rules': ['规则一', '规则二']}}}
+        captured = {}
+
+        def fake_urlopen(request, timeout=None):
+            captured['body'] = json.loads(request.data.decode('utf-8'))
+            return FakeResponse({'answers': {'q': {'type': 'noul', 'noul': 0.9}},
+                                 'usage': {}})
+
+        with patch.object(jev.urllib.request, 'urlopen', fake_urlopen):
+            jev.JevClient('k').decide('s', questions)
+        sent = captured['body']['questions']['q']['instructions']
+        self.assertEqual(sent, {'goal': '判断某事', 'rules': ['规则一', '规则二']})
+
+
+class ServedModelTests(unittest.TestCase):
+    """请求的是**别名**，响应说的是**实际服务的版本**。落盘后者。"""
+
+    def test_the_served_model_lands_in_usage_and_on_the_client(self):
+        client = jev.JevClient('k')
+        with patch.object(jev.urllib.request, 'urlopen',
+                          return_value=FakeResponse(answer())):
+            _, usage = client.decide('s', jev.build_questions(TOPICS))
+        self.assertEqual(usage['model'], 'jev-1.13.0')
+        self.assertEqual(client.last_model, 'jev-1.13.0')
+        # 别名与实际版本**不该**相等——相等就说明这个字段没在报真话。
+        self.assertNotEqual(usage['model'], client.model)
+
+    def test_a_response_without_a_model_field_leaves_it_unset(self):
+        payload = answer()
+        payload.pop('model')
+        client = jev.JevClient('k')
+        with patch.object(jev.urllib.request, 'urlopen',
+                          return_value=FakeResponse(payload)):
+            _, usage = client.decide('s', jev.build_questions(TOPICS))
+        self.assertNotIn('model', usage)
+        self.assertIsNone(client.last_model)
+
+
 if __name__ == '__main__':
     unittest.main()

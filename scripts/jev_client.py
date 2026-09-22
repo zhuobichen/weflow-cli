@@ -56,6 +56,52 @@ class JevError(RuntimeError):
     """调用或契约出问题。消息面向人，**不含 API key**。"""
 
 
+def _check_choice(key, question, answer):
+    """对 `choice` 答案做硬校验：不合法就抛 `JevError`，**不放行**。
+
+    四条断言（概率的键集 == criteria 的键集、取值都在 [0,1]、和 ≈ 1、`choice`
+    就是 argmax）来自 browser-use × TypeSafe 官方示范仓库的 `validate_choice`；
+    我按它挑的这四条原样实现，并把**实测**过的真实响应作为基准（`jev-1.13.0`：
+    `{"看电影":0.0,"散步":1.0,"睡觉":0.0}` + `choice="散步"`，四条全过）。
+
+    为什么值得在客户端做：契约漂移的失效方式不是报错，而是**选错了但看起来正常**。
+    `argmax` 那条尤其关键——我们此前踩过一个同型的坑：把 `noul`（概率浮点）当布尔
+    读，每个问题都读成"否"，而输出还把责任推给了模型。
+    """
+    if question.get('type') != 'choice':
+        # noul / score 没有"criteria ↔ probabilities"这层对应关系，不该被这套检查误伤。
+        # `decide` 已经按类型过滤，这里再挡一次是为了让这个函数单独调用也安全。
+        return
+    criteria = question.get('criteria') or {}
+    probs = answer.get('probabilities')
+    if not isinstance(probs, dict):
+        raise JevError('%s：choice 答案里没有 probabilities：%s'
+                       % (key, json.dumps(answer, ensure_ascii=False)[:200]))
+    if criteria:
+        missing = sorted(set(criteria) - set(probs))
+        extra = sorted(set(probs) - set(criteria))
+        if missing or extra:
+            raise JevError('%s：probabilities 的键与 criteria 不一致（缺 %s，多 %s）'
+                           % (key, missing, extra))
+    out_of_range = {k: v for k, v in probs.items()
+                    if not isinstance(v, (int, float)) or isinstance(v, bool)
+                    or not 0.0 <= float(v) <= 1.0}
+    if out_of_range:
+        raise JevError('%s：概率不在 [0,1]：%s' % (key, out_of_range))
+    total = sum(float(v) for v in probs.values())
+    if probs and abs(total - 1.0) > 0.02:
+        raise JevError('%s：概率和是 %.3f，不是 1（差得太多说明契约变了）' % (key, total))
+    picked = answer.get('choice')
+    if criteria and picked not in criteria:
+        raise JevError('%s：choice=%r 不在 criteria 里' % (key, picked))
+    if probs:
+        top = max(probs, key=lambda k: probs[k])
+        if picked != top:
+            raise JevError('%s：choice=%r 不是概率的 argmax（%r 才是）——'
+                           '这种情况最危险，它看起来是个正常答案'
+                           % (key, picked, top))
+
+
 def resolve_key(explicit='', config=None):
     """key 的取值顺序：显式传入 → `TYPESAFE_API_KEY` → 配置里（自动解密）。
 
@@ -130,6 +176,8 @@ class JevClient:
         self.api_key = api_key
         self.model = model
         self.timeout = timeout
+        # 最近一次响应里**实际服务的模型**（如 `jev-1.13.0`），不是请求的别名。
+        self.last_model = None
 
     def _post(self, url, payload=None, attempts=3, backoff=0.8):
         """带重试的请求。
@@ -182,13 +230,30 @@ class JevClient:
         return self._post(MODELS_ENDPOINT).get('models', [])
 
     def decide(self, state, questions):
-        """返回 (answers, usage)。state 可以是字符串、JSON 对象或数组。"""
+        """返回 (answers, usage)。state 可以是字符串、JSON 对象或数组。
+
+        `usage` 里除了 token 数还带 `model`——那是**实际服务的模型**（实测
+        `jev-1.13.0`），不是你请求的别名（`jev-latest`）。落盘它，是为了让
+        "线上跑的和我测过的不是同一个东西"这件事**可见**，而不是等到结果不对
+        才去猜。
+
+        **每个 choice 答案都过一遍 `_check_choice`**：键集、取值域、概率和、
+        argmax 全对不上就抛 `JevError`。契约漂移应当当场炸——漂移的失效方式是
+        "看起来正常但选错了"，那正是最难发现的。
+        """
         body = self._post(ENDPOINT, {'model': self.model,
                                      'state': state, 'questions': questions})
         answers = body.get('answers')
         if not isinstance(answers, dict):
             raise JevError(f'响应里没有 answers：{json.dumps(body, ensure_ascii=False)[:300]}')
-        return answers, body.get('usage', {}) or {}
+        for key, question in (questions or {}).items():
+            if isinstance(question, dict) and question.get('type') == 'choice':
+                _check_choice(key, question, answers.get(key) or {})
+        usage = dict(body.get('usage') or {})
+        if body.get('model'):
+            usage['model'] = body['model']
+            self.last_model = body['model']
+        return answers, usage
 
     def decide_article(self, title, body, topics, criteria=None, max_chars=4000):
         """给一篇文章定主题与相关度。**问不出来就抛 `JevError`。**

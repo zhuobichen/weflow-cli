@@ -488,6 +488,20 @@ standard - which is exactly why the switch is reversible and why the raw score i
   used. Two consequences worth keeping: real tags appear only for sources *without* a configured
   category, and the earlier "tags never persist" reading was wrong - it described the
   configured-category path, not a defect.
+- **Contract hardening, added later and verified against the live API** rather than
+  against a source reading. Two capabilities this client was not using: `instructions`
+  accepts a **structured object** (`{"goal": …, "rules": […]}`) as well as a string, and
+  every response carries a **`model` field naming the served version** (`jev-1.13.0`) as
+  against the requested alias (`jev-latest`). The served name is now recorded
+  (`usage['model']`, `JevClient.last_model`, and a `decisionModel` key in the daily's
+  `.articles.json`) because an alias can drift while every result still looks correct -
+  the same shape as the bug this decision's own history keeps producing: a plausible
+  value that is silently not the one you think. Every `choice` answer is now validated
+  before use (probabilities present, key set equal to the criteria, values in `[0,1]`,
+  sum ≈ 1, `choice` == argmax); the argmax rule is the load-bearing one, since a
+  non-argmax choice looks exactly like a normal answer. The daily's prompts stay as
+  strings: switching them to the object form would change model behaviour, and the
+  existing cut points were calibrated against the string form.
 
 ## D-032: Use the decision model as a reranker - one request per pass
 

@@ -800,6 +800,10 @@ def main():
             print(f'  无URL, 使用本地缓存')
 
     # ====== Phase 2: AI summary + topic classification ======
+    # **实际服务我们的判断模型**（如 `jev-1.13.0`），不是请求的别名（`jev-latest`）。
+    # 别名会漂：今天跑的和测过的可能不是同一个东西，而结果看起来一切正常。落盘它，
+    # 是为了让这件事**可见**。（没走 Jev 时保持 None，如实表示"没用判断模型"。）
+    decision_model = None
     if not args.no_ai and (api_key or engine != 'deepseek'):
         print(f'\n=== Phase 2: AI 摘要 + 主题分类 (engine={engine}) ===\n')
         from _utils import call_ai
@@ -813,6 +817,8 @@ def main():
         # 先把分类并发跑完，再进串行的摘要循环。分类对摘要没有任何依赖，
         # 串行做就是把 N 次网络等待排在 N 次 LLM 调用后面。
         decisions = _classify_articles_parallel(articles, jev_client, TOPICS)
+        if jev_client is not None:
+            decision_model = jev_client.last_model
         for i, a in enumerate(articles):
             t, n, ti = a['time'], a['account_name'], a['title']
             content = a.get('fetched_md') or a.get('local_text', '')
@@ -967,6 +973,8 @@ def main():
             json.dump({
                 'generated_at': datetime.now(timezone(timedelta(hours=8))).strftime('%Y-%m-%d %H:%M:%S'),
                 'date': date_str,
+                # 只增字段：老读者不认识它会忽略；但"这次是谁判的"从此有据可查。
+                'decisionModel': decision_model,
                 'articles': serializable,
             }, f, ensure_ascii=False, indent=2)
         print(f'  ✓ 结构化数据: {json_path} ({len(serializable)} 篇)')
