@@ -163,6 +163,18 @@ All notable user-facing changes are recorded here. This project follows [Semanti
   variance is the likeliest). The changes stay, because stating the current mode as a fact is right on its own
   terms, but they are **not** presented as a proven fix. What actually caught this was the audit line: a
   per-turn `tools=N` count turned "the assistant says it looked" into "the assistant did not look".
+- A **tool-use guard** in the assistant: if the router judged that a message needs local data and the turn
+  then produced **no tool call at all**, the model is pushed back once - "you hold no tool result; call a
+  tool or say which one you called and what it returned" - and the loop runs again. It exists because two
+  live answers said "I did look it up, the content was masked" while the audit showed `tools=0`; 40 probe
+  calls against the real model could not reproduce it, so this is a code-level **contradiction check**
+  rather than a theory about the cause. The trigger is the routing decision, so: it never fires in `off`
+  (no signal), and it **does** fire in `log` - deliberately, because `log` promises that *routing*
+  changes nothing, while this is a safety behaviour, and the observation period is exactly when a
+  fabricated "I looked" is most likely to be noticed. It fires at most once per turn, only on the
+  contradiction, and a failed push-back keeps the reply it already had. `TOOL_GUARD_PUSHBACK` in the
+  audit is the line to grep; the loop is now one shared implementation for both passes.
+
 ### Changed
 - Image downloads during the daily run are concurrent (6-way). They were sequential at 0.37 s and 135 KB each - about 18 minutes per 190-article day - even though they come from `.qpic.cn`, WeChat's CDN, which a browser fetches in parallel anyway. Same three articles: 17.2 s → 2.1 s. The same change fixed the map: a failed download used to be recorded in `.image_map.json` **before** it was attempted, and the reader injects that map as `window._IMG_MAP`, so the page was told to look for a local file that did not exist. Only files that are actually on disk are mapped now, and duplicates in a page are fetched once (31 image links in one article were 17 distinct images).
 - LLM summaries are generated concurrently, so a 190-article day spends about 2 minutes there instead of 9 (measured 2.27/2.92/2.45 s per article). The calls are **prefetched, not the loop rewritten**: responses are filled back by their original index and the existing loop still does the parsing and the field writes in the same order, so every fallback branch behaves exactly as before - a failed call comes back as an error and the loop re-raises it into its own `except`. The per-article 0.3 s pacing moved into the worker, so the request rate to the provider is unchanged. The stage now prints `摘要完成 N/M 篇，耗时 Xs（6 并发；串行约需 Ys）`, the shape the classification stage already used.

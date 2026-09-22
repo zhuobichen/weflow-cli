@@ -225,15 +225,35 @@ test('下发工具与审计行是同一份实现（循环不再自己内联一�
   assert.doesNotMatch(loop, /privacyGate\.audit\(/, '循环里不该再内联一份审计')
 })
 
-test('log 模式：只记「本来会走哪条」，行为一个字不改', async () => {
+test('log 模式：不预派发工具，第一轮与关闭时逐字段相同', async () => {
   const { decide } = deciderPicking(0.95, 'list_sessions', 0.95)
 
   const logged = await ask('最近和谁聊天了', { mode: 'log', decide })
   const baseline = await ask('最近和谁聊天了', { mode: 'off' })
 
-  assert.deepEqual(logged.rounds, baseline.rounds, '只记不改：送去模型的消息必须与关闭时相同')
+  assert.deepEqual(logged.rounds[0], baseline.rounds[0], '第一轮必须与关闭时逐字段相同')
   assert.match(logged.audit(), /FASTROUTE_WOULD/)
-  assert.doesNotMatch(logged.audit(), /TOOL:list_sessions/, '灰度期不派发工具')
+  assert.doesNotMatch(logged.audit(), /TOOL:list_sessions/, '灰度期不预派发工具')
+})
+
+test('log 模式下守卫仍然生效 —— 它是安全行为，不是路由行为', async () => {
+  // 这里有意的取舍：log 的承诺是"**路由**不改变行为"，而守卫是"模型说查了、其实没查"的
+  // 兜底。观测期正是它最该在的时候，所以它不跟着 log 一起关。`off` 才是完全不介入
+  // （那时不问路由，也就没有触发守卫的信号）。
+  const { decide } = deciderPicking(0.95, 'list_sessions', 0.95)
+  const result = await ask('最近和谁聊天了', { mode: 'log', decide })
+
+  assert.equal(result.rounds.length, 2, '模型没调工具而路由说需要查 → 顶回去一次')
+  assert.match(result.audit(), /TOOL_GUARD_PUSHBACK/)
+})
+
+test('off 模式完全不动：不问路由，也就没有守卫', async () => {
+  const { decide, calls } = deciderPicking(0.95, 'list_sessions', 0.95)
+  const result = await ask('最近和谁聊天了', { mode: 'off', decide })
+
+  assert.equal(calls.length, 0, 'off 不问判断层')
+  assert.equal(result.rounds.length, 1, '没有信号就不会补问')
+  assert.doesNotMatch(result.audit(), /TOOL_GUARD_PUSHBACK/)
 })
 
 test('快路径落下的工具调用会算进这轮的 tools 计数', async () => {
@@ -241,4 +261,71 @@ test('快路径落下的工具调用会算进这轮的 tools 计数', async () =
   const result = await ask('最近和谁聊天了', { mode: 'on', decide })
 
   assert.match(result.audit(), /tools=1/, 'TURN_DONE 里的 tools 数要包含快路径那一次')
+})
+
+// ------------------------------------------------- 守卫：路由说需要查，却没调工具
+
+test('守卫：路由说需要查本机数据而模型没调工具时，顶回去一次', async () => {
+  // 实测撞到过两次：它回"我确实调了工具查了"，而审计里 tools=0、没有任何 TOOL: 行。
+  // 不解释原因，只把矛盾顶回去一次。
+  const { decide } = deciderPicking(0.9, 'none', 0.9)   // 需要查本机数据，但没有对应能力
+  const script = [
+    { choices: [{ message: { content: '我确实查了，但内容被挡住了。' } }] },          // 第一轮：没调工具
+    { choices: [{ message: { content: '真正的答复（这轮才去查的）' } }] },              // 补问后
+  ]
+
+  const result = await ask('我今天和咸鱼梦想家聊了什么', { mode: 'log', decide, script })
+
+  assert.equal(result.rounds.length, 2, '应当补问一轮')
+  const nudge = result.rounds[1].find((m: any) => m.role === 'system' && /没有调用任何工具/.test(m.content))
+  assert.ok(nudge, '补问时要把"你手上没有工具结果"这个事实摆给它')
+  assert.equal(result.reply, '真正的答复（这轮才去查的）')
+  assert.match(result.audit(), /TOOL_GUARD_PUSHBACK/)
+})
+
+test('守卫：模型已经调过工具就不顶回去', async () => {
+  const { decide } = deciderPicking(0.9, 'none', 0.9)
+  const script = [
+    { choices: [{ message: { content: '', tool_calls: [{ id: 'c1', type: 'function', function: { name: 'list_sessions', arguments: '{}' } }] } }] },
+    { choices: [{ message: { content: '查完了，这是答复' } }] },
+  ]
+
+  const result = await ask('我今天和咸鱼梦想家聊了什么', { mode: 'log', decide, script })
+
+  assert.equal(result.rounds.length, 2, '正常的两轮（调工具 + 作答），没有额外补问')
+  assert.doesNotMatch(result.audit(), /TOOL_GUARD_PUSHBACK/)
+})
+
+test('守卫：路由说不需要查本机数据时不顶回去（闲聊不该被骚扰）', async () => {
+  const { decide } = deciderPicking(0.1, 'none', 0.9)   // needs_local_data 没过线
+  const result = await ask('你好呀', { mode: 'log', decide })
+
+  assert.equal(result.rounds.length, 1)
+  assert.doesNotMatch(result.audit(), /TOOL_GUARD_PUSHBACK/)
+})
+
+test('守卫只顶一次：补问后仍然没调工具，就接受并如实收尾', async () => {
+  const { decide } = deciderPicking(0.9, 'none', 0.9)
+  const script = [
+    { choices: [{ message: { content: '第一次没查' } }] },
+    { choices: [{ message: { content: '第二次还是没查' } }] },
+  ]
+
+  const result = await ask('我今天和咸鱼梦想家聊了什么', { mode: 'log', decide, script })
+
+  assert.equal(result.rounds.length, 2, '只补问一次，不无限顶')
+  assert.equal(result.reply, '第二次还是没查')
+})
+
+test('守卫：补问那一轮挂了，也要保住第一轮的答复', async () => {
+  const { decide } = deciderPicking(0.9, 'none', 0.9)
+  const script = [
+    { choices: [{ message: { content: '第一轮的答复' } }] },
+    new Error('补问时网络断了'),
+  ]
+
+  const result = await ask('我今天和咸鱼梦想家聊了什么', { mode: 'log', decide, script })
+
+  assert.equal(result.reply, '第一轮的答复', '守卫失败不许把已经拿到的答复弄丢')
+  assert.doesNotMatch(result.reply, /大脑暂时离线/)
 })

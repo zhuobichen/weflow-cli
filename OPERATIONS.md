@@ -584,6 +584,9 @@ weflow-cli config set assistantFastRoute on    # 打开
 weflow-cli config set assistantFastRoute off   # 关（默认）
 ```
 
+还有一个**工具使用守卫**：如果路由判断"这条消息要查本机数据"，而这一轮**一次工具都没调**，它会把矛盾顶回去一次（提示模型"你手上没有工具结果"），让模型重答。审计里对应 `TOOL_GUARD_PUSHBACK`。
+注意它与 `log` 的关系：`log` 的承诺是"**路由**不改变行为"，守卫不跟着一起关——它是安全行为，而观测期正是最该有它的时候（`off` 完全不介入，那时不问路由，也就没有触发的信号）。
+
 灰度期看两个地方：`assistant log` 里的 `[快路径/只记] 路由到 X（...）`，以及
 `~/.weflow-cli/assistant_audit.log` 里的 `FASTROUTE_WOULD` / `FASTROUTE_SKIP`（回退时那行会写
 明原因：不需要查本机数据、置信度不足、能力名不认识…）。只有参数是固定集合的工具会被路由；

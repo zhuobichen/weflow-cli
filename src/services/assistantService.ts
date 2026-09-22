@@ -8,7 +8,7 @@
  *     └─ 隐私关卡: 工具结果脱敏后才出境到云端 LLM (本地引擎则完全不出境)
  */
 import { WechatMessageService } from './wechatMessageService.js'
-import { decideRoute, type FastRouteMode } from './assistantRouter.js'
+import { decideRoute, MIN_NEEDS_TOOL, type FastRouteMode } from './assistantRouter.js'
 import { configService } from './configService.js'
 import { AssistantMemory, type ChatTurn } from './assistantMemory.js'
 import { privacyGate } from './assistantPrivacy.js'
@@ -187,6 +187,8 @@ export class AssistantService {
   /** 单条消息处理: 指令路由 → ReAct 循环 → 记忆更新 */
   /** 白名单为空的首次配置提示是否已经打过了（只打一次，别把日志刷满） */
   private firstRunHintShown = false
+  /** 最近一次路由认为「这条消息需要查本机数据」的概率（0 = 没问过） */
+  private lastNeedsLocalData = 0
 
   /** 白名单为空时，把"该把谁加进去"连同**完整**的发送者 ID 打一行。
    *
@@ -215,6 +217,36 @@ export class AssistantService {
   private fastRouteMode(): FastRouteMode {
     const raw = String(configService.get('assistantFastRoute') || '').trim().toLowerCase()
     return raw === 'on' || raw === 'log' ? raw : 'off'
+  }
+
+  /** ReAct 主循环：一轮一轮问模型，直到它给出不带工具调用的答复。
+   *
+   *  抽成方法是因为守卫（见 handleMessage）要在"顶回去一次"之后**再跑一遍同一条循环**——
+   *  两处各写一份，早晚有一处会漏掉既有的容错（参数解析、工具审计、轮数上限）。
+   */
+  private async runReactLoop(userId: string, messages: ApiMessage[]): Promise<{ reply: string; toolCalls: number }> {
+    let reply = ''
+    let toolCalls = 0
+    for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+      const data = await this.callLLM(messages, TOOL_DEFS)
+      const msg = data.choices?.[0]?.message
+      if (!msg) throw new Error('LLM 返回为空')
+
+      if (msg.tool_calls?.length) {
+        messages.push({ role: 'assistant', content: msg.content || '', tool_calls: msg.tool_calls })
+        for (const tc of msg.tool_calls) {
+          toolCalls++
+          let args: Record<string, any> = {}
+          try { args = JSON.parse(tc.function?.arguments || '{}') } catch { /* 参数容错 */ }
+          await this.runToolCall(userId, messages, tc.id, tc.function?.name || '', args)
+        }
+        continue
+      }
+      reply = (msg.content || '').trim() || '(空回复)'
+      break
+    }
+    if (!reply) reply = '(这轮处理太复杂了, 换个问法试试?)'
+    return { reply, toolCalls }
   }
 
   /** 执行一次工具调用：脱敏、审计、把结果塞回对话。
@@ -247,6 +279,7 @@ export class AssistantService {
       return 0
     }
 
+    this.lastNeedsLocalData = decision.needsTool
     if (!decision.capability) {
       appendLog(`[快路径] 回退: ${decision.reason}`)
       privacyGate.audit('FASTROUTE_SKIP', 0, decision.reason.slice(0, 120))
@@ -343,25 +376,32 @@ export class AssistantService {
     let toolCalls = 0
     try {
       toolCalls += await this.maybeFastRoute(userId, t, messages)
-      for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
-        const data = await this.callLLM(messages, TOOL_DEFS)
-        const msg = data.choices?.[0]?.message
-        if (!msg) throw new Error('LLM 返回为空')
+      const first = await this.runReactLoop(userId, messages)
+      reply = first.reply
+      toolCalls += first.toolCalls
 
-        if (msg.tool_calls?.length) {
-          messages.push({ role: 'assistant', content: msg.content || '', tool_calls: msg.tool_calls })
-          for (const tc of msg.tool_calls) {
-            toolCalls++
-            let args: Record<string, any> = {}
-            try { args = JSON.parse(tc.function?.arguments || '{}') } catch { /* 参数容错 */ }
-            await this.runToolCall(userId, messages, tc.id, tc.function?.name || '', args)
-          }
-          continue
+      // 守卫：路由说「这条消息需要查本机数据」，而这一轮**一次工具都没调** —— 两者自相矛盾。
+      // 实测撞到过两次：它回"我确实调了工具查了"，而审计里 `tools=0`、没有任何 TOOL: 行。
+      // 这里不去解释原因，只把矛盾顶回去**一次**：让模型看见"你手上没有工具结果"再答。
+      // 只在路由判过"需要查本机数据"时触发（那时才有这个信号），且补问失败不许把原答复弄丢。
+      if (toolCalls === 0 && this.lastNeedsLocalData >= MIN_NEEDS_TOOL) {
+        privacyGate.audit('TOOL_GUARD_PUSHBACK', 0,
+          `needs_local_data=${this.lastNeedsLocalData.toFixed(2)}`)
+        appendLog('[守卫] 路由说需要查本机数据，但这一轮没调任何工具；顶回去一次')
+        try {
+          messages.push({
+            role: 'system',
+            content: '注意：你刚才的回答没有调用任何工具，因此你手上并没有本机数据。'
+              + '这个问题需要本机的真实数据。请现在就调用合适的工具；'
+              + '若确实查不到，说明你调用了哪个工具、它返回了什么。',
+          })
+          const second = await this.runReactLoop(userId, messages)
+          reply = second.reply
+          toolCalls += second.toolCalls
+        } catch (e: any) {
+          appendLog(`[守卫] 补问失败，保留原答复: ${e?.message ?? e}`)
         }
-        reply = (msg.content || '').trim() || '(空回复)'
-        break
       }
-      if (!reply) reply = '(这轮处理太复杂了, 换个问法试试?)'
     } catch (e: any) {
       reply = `❌ 大脑暂时离线: ${e.message?.slice(0, 100)}\n(本地指令仍可用: 发「帮助」)`
     }

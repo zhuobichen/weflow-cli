@@ -798,6 +798,21 @@ daemon running against a live channel, which is the user's to start; `log` mode 
 exactly that. Free-text-argument tools remain unroutable until something can select a
 value rather than a label - the same job `route_cards.py` does for conversation search.
 
+### Update 2026-09-22 (later): a contradiction check, because the cause could not be found
+
+Two live answers claimed a lookup had been made and the bodies masked, while the audit read `tools=0`.
+Forty real calls across four prompt variants (current prompt, the conditional-only variant, a window
+seeded with the model's own earlier "blocked" answers, and the complete pre-change prompt) **called the
+tool 40/40 times**, so the first explanation written here - that the prompt's conditional was read as the
+current state - is wrong, and the cause of those two turns is unknown.
+
+What ships instead is a guard that does not depend on knowing the cause: when the router says the message
+needs local data and the turn produced no tool call, the model is told it holds no tool result and the loop
+runs once more. That adds one switch whose semantics differ from `assistantFastRoute`: the guard is armed
+whenever the router ran, **including `log`**, because `log`'s promise is about routing rather than about
+safety, and an observation period is when a fabricated lookup is most likely to be noticed. `off` remains
+bit-identical because the router never runs and there is no signal to check.
+
 ## D-036: Search your own conversations with the decision model selecting query terms, not ranking sessions
 
 **Status:** Active
