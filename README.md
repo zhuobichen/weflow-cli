@@ -183,6 +183,10 @@ weflow-cli config set dailySources "公众号A,公众号B"
 weflow-cli config set dailyAiEnabled false
 weflow-cli config set dailyAiEnabled true
 
+# 不在日报里出现的主题（展示层开关：照常抓取归档，只是不展示；改主意不用重抓）
+# 焦点主题 AI 不能排除，写错的主题名会被忽略并打 WARN
+weflow-cli config set dailyExcludeTopics "新闻,投资,学术"
+
 # 为来源设置固定类别；已分类来源只生成摘要，主题用你配的、标签取该类别（不会有真标签）
 weflow-cli config set dailySourceCategories '<JSON object: source name or gh_ ID -> AI/政治/学术/新闻/文学/投资>'
 

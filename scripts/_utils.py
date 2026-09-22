@@ -406,6 +406,154 @@ def load_config():
         return json.load(f)
 
 
+# 配置里"不想在日报里看到的主题"的键名。值形如 `新闻,投资,学术`。
+EXCLUDED_TOPICS_KEY = 'dailyExcludeTopics'
+
+
+def excluded_topics(config=None, explicit='', protected=()):
+    """用户不想在日报里看到的主题集合。`explicit`（命令行）覆盖配置。
+
+    **这是展示层的开关，不是抓取层的**：正文照常抓取、照常归档，只是不出现在
+    日报里。理由是实测：拉之前只有来源+标题+摘要，按它判类型**不可靠**（与来源级
+    比对一致率仅 60%、误伤 48/217），而**排除是不可逆的**——没抓取就没归档。
+    放在展示层还换来一件事：改主意不用重抓，改个配置重新生成报告即可。
+
+    写错的主题名会被忽略并**打一行 WARN**（静默忽略会让人以为过滤生效了）。
+
+    `protected` 是不许被排除的主题（呼叫方传自己的「焦点主题」）。它比「未知主题名」
+    更值得拦一下：把焦点主题排掉，报告要么没有主体、要么直接报「未找到文章」
+    **指错方向**（那句话说去跑 biz_daily，可文章其实在）。同样 WARN 后忽略。
+    """
+    raw = explicit or (config or {}).get(EXCLUDED_TOPICS_KEY, '') or ''
+    names = [t.strip() for t in str(raw).replace('，', ',').split(',') if t.strip()]
+    out = set()
+    for name in names:
+        if name in TOPICS:
+            if name in protected:
+                print('[WARN] %s 里的「%s」是这份报告的主体，不能排除，已忽略'
+                      % (EXCLUDED_TOPICS_KEY, name))
+                continue
+            out.add(name)
+        else:
+            print('[WARN] %s 里的「%s」不是已知主题，已忽略（可选：%s）'
+                  % (EXCLUDED_TOPICS_KEY, name, '/'.join(TOPICS)))
+    return out
+
+
+# === 来源级先验："哪个号稳定发哪一类"从真实判断里长出来 ===
+#
+# 为什么不写死一张表：拉取之前只有来源+标题+摘要，按它判类型实测只有 60% 一致率、
+# 误伤 48/217（见 excluded_topics 的说明）。但**抓回来之后**每次都有 Jev 按正文判的
+# 主题，日积月累就看得出某个号一贯发什么。这张表因此是长出来的，不是我编的。
+#
+# 它现在只用来**报数**，不用来跳过任何东西：跳过是不可逆的。
+SOURCE_TOPICS_FILE = 'source_topics.json'
+SOURCE_PRIOR_MIN_SAMPLES = 8   # 少于这么多篇不下结论
+SOURCE_PRIOR_SHARE = 0.8       # 某一类占比到这个数才算"稳定地只发这一路"
+
+
+def source_topics_path(path=None):
+    """先验表的落盘位置。默认与 config.json 同目录（家目录）。"""
+    return path or os.path.join(os.path.dirname(CONFIG_PATH), SOURCE_TOPICS_FILE)
+
+
+def load_source_topics(path=None):
+    """读先验表：`{来源: {主题: 次数}}`。
+
+    读不出、坏掉、不是字典——一律返回 `{}`。这是**辅助**数据，坏了不该让日报挂掉。
+    """
+    try:
+        with open(source_topics_path(path), encoding='utf-8') as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    out = {}
+    for source, counts in data.items():
+        if isinstance(source, str) and source.strip() and isinstance(counts, dict):
+            out[source] = counts
+    return out
+
+
+def record_source_topics(pairs, path=None):
+    """把这一批 `(来源, 主题)` 累加进先验表，返回摘要 dict。
+
+    **只增不减**（与 frontmatter 的 only-increase 同一个纪律）：累计次数是你事后判断
+    "这个号到底稳不稳"的唯一依据，抹掉就回不来了。
+    来源为空、主题不在 TOPICS 里的都不计——计了会污染分母，让占比算错。
+    """
+    import tempfile as _tmp   # 模块顶没导入它：本文件里它是函数内导入的
+    store = load_source_topics(path)
+    added = skipped = 0
+    for source, topic in pairs:
+        source = (source or '').strip()
+        topic = (topic or '').strip()
+        if not source or topic not in TOPICS:
+            skipped += 1
+            continue
+        bucket = store.setdefault(source, {})
+        try:
+            bucket[topic] = int(bucket.get(topic, 0)) + 1
+        except (TypeError, ValueError):
+            bucket[topic] = 1      # 值被改坏了，从 1 重新数，别让它把整个文件废掉
+        added += 1
+    target = source_topics_path(path)
+    try:
+        os.makedirs(os.path.dirname(target) or '.', exist_ok=True)
+        fd, tmp_path = _tmp.mkstemp(suffix='.json', dir=os.path.dirname(target) or '.')
+        try:
+            with os.fdopen(fd, 'w', encoding='utf-8') as f:
+                json.dump(store, f, ensure_ascii=False, indent=1, sort_keys=True)
+            os.replace(tmp_path, target)
+        except Exception:
+            if os.path.exists(tmp_path):
+                os.unlink(tmp_path)
+            raise
+    except OSError as exc:
+        # 写不进去（权限、磁盘）不能让日报失败——它只是记个账。
+        return {'sources': len(store), 'added': added, 'skipped': skipped,
+                'error': str(exc)}
+    return {'sources': len(store), 'added': added, 'skipped': skipped, 'error': ''}
+
+
+def stable_source_topic(counts, min_samples=SOURCE_PRIOR_MIN_SAMPLES,
+                        share=SOURCE_PRIOR_SHARE):
+    """某个来源是不是已经**稳定地只发某一类**。
+
+    返回 `(主题, 占比, 样本数)`；还判不了返回 `None`。
+    **`None` 是"还不知道"，不是"没有主题"**——调用方必须把这两种情况分开，
+    别把 `None` 当成某个默认主题用（那正好是"来源判不准"最坏的那种错）。
+    """
+    clean = {}
+    for topic, count in (counts or {}).items():
+        try:
+            value = int(count)
+        except (TypeError, ValueError):
+            continue
+        if value > 0:
+            clean[topic] = value
+    total = sum(clean.values())
+    if total < min_samples:
+        return None
+    topic, top = max(clean.items(), key=lambda kv: kv[1])
+    ratio = top / total
+    if ratio < share:
+        return None
+    return (topic, ratio, total)
+
+
+def source_prior_candidates(store, exclude, **kwargs):
+    """先验里"已经稳到能判"且落在排除集里的来源，按样本数从多到少。
+
+    只报出来给人看，**不据此跳过任何东西**：跳过是不可逆的，而这张表还在长。"""
+    rows = []
+    for source, counts in (store or {}).items():
+        stable = stable_source_topic(counts, **kwargs)
+        if stable and stable[0] in (exclude or ()):
+            rows.append((source, stable[0], stable[1], stable[2]))
+    return sorted(rows, key=lambda row: (-row[3], row[0]))
+
 def decrypt_lock(locked_str: str) -> str:
     if not locked_str or not locked_str.startswith('lock:'):
         return locked_str

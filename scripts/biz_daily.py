@@ -31,7 +31,9 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _utils import (call_deepseek, load_config, decrypt_lock, get_api_key,
                     write_with_frontmatter, format_wikilinks,
                     TOPICS, TOPIC_CRITERIA, DEFAULT_TOPIC,
-                    RELEVANCE_NAMES, DEFAULT_RELEVANCE)
+                    RELEVANCE_NAMES, DEFAULT_RELEVANCE,
+                    excluded_topics, record_source_topics, load_source_topics,
+                    source_prior_candidates, source_topics_path)
 
 try:
     from sqlcipher3 import dbapi2 as sqlcipher
@@ -1506,6 +1508,32 @@ def main():
                     processed[fp] = art.get('title', '')[:50]
     with open(state_file, 'w', encoding='utf-8') as f:
         json.dump(processed, f, ensure_ascii=False, indent=2)
+
+    # === 来源级先验：把今天**真正归档了的**判断累加进本地表 ===
+    #
+    # 记"盘上真有的"（按 written_urls 对回来）而不是"抓过的"：这样这张表和 output/
+    # 里的语料一一对应，哪天想重算也重算得出来。
+    #
+    # 它**只记账，不跳过任何东西**。跳过是不可逆的，而这张表还在长；等某个来源
+    # 攒够了样本（见 _utils.SOURCE_PRIOR_MIN_SAMPLES），再决定要不要拿它做拉取前的筛。
+    pairs = [(a.get('account_name', ''), a.get('topic', '')) for a in articles
+             if a.get('url') and a['url'] in written_urls]
+    if pairs:
+        summary = record_source_topics(pairs)
+        if summary['error']:
+            # 说清楚"没写进去"：静默失败会让人以为表在长，实际一直没动。
+            print(f'  [WARN] 来源先验没写进去（{summary["error"]}）—— 不影响今天的日报')
+        else:
+            print(f'  来源先验: 今天记了 {summary["added"]} 篇，表里共 {summary["sources"]} 个来源'
+                  f'（{source_topics_path()}）')
+        exclude = excluded_topics(config)
+        rows = source_prior_candidates(load_source_topics(), exclude)
+        if rows:
+            print('  来源先验: 这些来源已经稳到能判，且正落在你配的排除主题里'
+                  '（只报数，不跳过）:')
+            for source, topic, ratio, total in rows[:5]:
+                print(f'    {source} → {topic}（{total} 篇里 {round(ratio * total)} 篇'
+                      f' = {ratio:.0%}）')
 
 
 if __name__ == '__main__':

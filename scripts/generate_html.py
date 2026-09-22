@@ -14,6 +14,9 @@ SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(SCRIPTS_DIR)
 SOURCE_ROOT = os.path.join(PROJECT_ROOT, 'output', 'biz-daily')
 
+sys.path.insert(0, SCRIPTS_DIR)
+from _utils import load_config, excluded_topics  # noqa: E402
+
 
 def _inline_marked_js(html_path: str):
     """Replace CDN marked.js with local inline copy to eliminate network dependency."""
@@ -84,10 +87,16 @@ def get_body_preview(text: str, max_chars=200) -> str:
     return preview
 
 
-def collect_articles(date_dir: str) -> dict:
-    """收集所有文章，按主题分组。"""
+def collect_articles(date_dir: str, exclude=()) -> dict:
+    """收集所有文章，按主题分组。
+
+    `exclude` 里的主题**整个目录都不扫**（不是扫完再滤）：读者页和 AI 报告共用同一份
+    排除集，两边才不会一个说排掉了、另一个还在列。展示层开关，md 产物不动。
+    """
     topics = {}
     for topic in TOPIC_ORDER:
+        if topic in exclude:
+            continue
         topic_dir = Path(date_dir) / topic
         if not topic_dir.is_dir():
             continue
@@ -1597,6 +1606,8 @@ def main():
     parser = argparse.ArgumentParser(description='生成公众号日报 HTML 页面')
     parser.add_argument('--date', help='日期 YYYY-MM-DD, 默认今天')
     parser.add_argument('--output', help='输出路径（默认在日报目录下的 index.html）')
+    parser.add_argument('--exclude-topics', default='',
+                        help='不展示的主题，逗号分隔（如 新闻,投资）；只影响这一页，不改产物')
     args = parser.parse_args()
 
     if args.date:
@@ -1612,7 +1623,11 @@ def main():
         print(f'[ERROR] 目录不存在: {date_dir}')
         sys.exit(1)
 
-    topics = collect_articles(date_dir)
+    exclude = excluded_topics(load_config(), args.exclude_topics,
+                              protected=(TOPIC_ORDER[0],))  # 第一项=这份日报的主体
+    if exclude:
+        print('🚫 已排除主题: ' + '/'.join(t for t in TOPIC_ORDER if t in exclude))
+    topics = collect_articles(date_dir, exclude)
     if not topics:
         print(f'[ERROR] 未找到任何文章')
         sys.exit(1)

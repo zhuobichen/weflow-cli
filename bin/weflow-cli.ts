@@ -967,7 +967,8 @@ const configurableKeys = [
   'dashscopeApiKey', 'favPassphrase',
   'wereadApiKey',
   'assistantPrivacy', 'assistantWhitelist', 'assistantGroupWhitelist',
-  'assistantGroupRequireMention', 'dailySources', 'dailySourceCategories', 'dailyAiEnabled',
+  'assistantGroupRequireMention', 'dailySources', 'dailySourceCategories',
+  'dailyExcludeTopics', 'dailyAiEnabled',
   'emoticonSeed',
 ] as const
 
@@ -1056,6 +1057,7 @@ configCmd
     console.log(`微信账号: ${config.wxid || chalk.gray('(未设置)')}`)
     console.log(`公众号日报来源: ${configService.get('dailySources') || chalk.gray('(全部公众号)')}`)
     console.log(`公众号日报 AI: ${configService.get('dailyAiEnabled') === 'false' ? '已关闭' : '已开启'}`)
+    console.log(`公众号日报排除主题: ${configService.get('dailyExcludeTopics') || chalk.gray('(不排除)')}`)
   })
 
 configCmd

@@ -23,7 +23,8 @@ from pathlib import Path
 from collections import Counter
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _utils import create_engine, parse_frontmatter, TOPICS, TOPIC_CRITERIA
+from _utils import (create_engine, parse_frontmatter, TOPICS, TOPIC_CRITERIA,
+                    load_config, excluded_topics)
 
 SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR = os.path.dirname(SCRIPTS_DIR)
@@ -126,7 +127,7 @@ def _score(article):
         return None
 
 
-def build_uncertainty_section(included, everything, include_all=False) -> str:
+def build_uncertainty_section(included, everything, include_all=False, exclude=()) -> str:
     """报告末尾那一段「我拿不准的」。**本地算，不经 LLM** —— 让模型去描述自己的不确定，
     等于又要它生成一段可能被编圆的散文。
 
@@ -150,12 +151,20 @@ def build_uncertainty_section(included, everything, include_all=False) -> str:
         value = _score(article)
         return value is not None and low <= value <= high
 
-    borderline_in = [a for a in included if band(a)]
+    # 这一段三份清单都不提被排除的主题：否则"不想看新闻"的同一份报告，
+    # 会在这一栏把新闻的标题和分数原样列出来。
+    borderline_in = [a for a in included
+                     if band(a) and not is_excluded_topic(a, exclude)]
+    # 注意：这一栏装的是**没收**的文章，被排除的天然满足"没收"——
+    # 把 exclude 交给 admits 反而会让它们更容易被列进来（我第一版就是这么错的）。
+    # 这里要的是"因为分数而没收"，所以按排除集滤掉。
     borderline_out = [] if include_all else [a for a in everything
-                                            if not admits(a, include_all) and band(a)]
+                                            if not admits(a, include_all) and band(a)
+                                            and not is_excluded_topic(a, exclude)]
     low_confidence = [a for a in included
                       if isinstance(a.get('topicConfidence'), (int, float))
-                      and a['topicConfidence'] < TOPIC_CONFIDENT]
+                      and a['topicConfidence'] < TOPIC_CONFIDENT
+                      and not is_excluded_topic(a, exclude)]
 
     lines = [chr(10) + '---' + chr(10), '## 我拿不准的' + chr(10),
              '这两处不是漏掉，是**判断本身不确定**。列出来，免得被当成定论。' + chr(10)]
@@ -202,7 +211,18 @@ def build_uncertainty_section(included, everything, include_all=False) -> str:
     return chr(10).join(lines)
 
 
-def admits(article: dict, include_all: bool = False) -> bool:
+def is_excluded_topic(article: dict, exclude=()) -> bool:
+    """用户是不是明说了不要这个主题。
+
+    单独抽出来是因为它有**两个方向相反**的用处：
+    `admits` 靠它判"不要"，而「我拿不准的」那一栏靠它判"别列出来"——
+    那一栏装的恰好是**没收**的文章，被排除的天然满足"没收"。
+    两处各写一遍早晚会写反，事实上第一版就写反了。
+    """
+    return (article.get('topic') or '') in (exclude or ())
+
+
+def admits(article: dict, include_all: bool = False, exclude=()) -> bool:
     """这篇文章该不该收录。
 
     焦点主题永远收。其余看 `includeScore`——那是**专门为这个问题**问出来的概率，
@@ -215,6 +235,10 @@ def admits(article: dict, include_all: bool = False) -> bool:
     YAML 标量文本（`'0.8'`）。只认 `int/float` 的话，那条路径上这个新字段
     就会被静默忽略——测出来正是如此。
     """
+    # 排除是**正交**的一维，所以放在 include_all 前面：用户明说不要的主题，
+    # 连 --include-all 都不该让它冒出来。
+    if is_excluded_topic(article, exclude):
+        return False
     if include_all or article.get('topic') == FOCUS_TOPIC:
         return True
     score = article.get('includeScore')
@@ -226,7 +250,8 @@ def admits(article: dict, include_all: bool = False) -> bool:
             pass
     return article.get('relevance') == '高'
 
-def load_articles_from_date(date_str: str, include_all: bool = False) -> list[dict]:
+def load_articles_from_date(date_str: str, include_all: bool = False,
+                            exclude=()) -> list[dict]:
     json_path = Path(SOURCE_ROOT) / date_str / '.articles.json'
     if json_path.exists():
         try:
@@ -238,7 +263,7 @@ def load_articles_from_date(date_str: str, include_all: bool = False) -> list[di
             # 这里原先直接 return，不筛。于是「非焦点主题只收相关度高的文章」
             # 这条规则**只在下面的 MD 兜底路径里存在**，而 .articles.json 才是
             # 正常走的那条路 —— 规则因此从未真正生效过。
-            kept = [a for a in arts if admits(a, include_all)]
+            kept = [a for a in arts if admits(a, include_all, exclude)]
             if len(kept) != len(arts):
                 # 说清**实际**用的是哪条规则：有收录分的按概率筛，早于该字段的产物
                 # 退回旧规则。无脑写"阈值 includeScore >= x"，在后一种情况下是撒谎。
@@ -275,7 +300,7 @@ def load_articles_from_date(date_str: str, include_all: bool = False) -> list[di
             if not fm:
                 continue
             relevance = fm.get('relevance', '中')
-            if not admits({**fm, 'topic': topic}, include_all):
+            if not admits({**fm, 'topic': topic}, include_all, exclude):
                 continue
             # AI 主题读取完整正文（最多 5000 字），其他主题读取摘要
             if topic == FOCUS_TOPIC:
@@ -303,11 +328,13 @@ def load_articles_from_date(date_str: str, include_all: bool = False) -> list[di
     return articles
 
 
-def load_articles_range(from_date: date, to_date: date, include_all: bool = False) -> list[dict]:
+def load_articles_range(from_date: date, to_date: date, include_all: bool = False,
+                        exclude=()) -> list[dict]:
     all_articles = []
     cur = from_date
     while cur <= to_date:
-        all_articles.extend(load_articles_from_date(cur.strftime('%Y-%m-%d'), include_all))
+        all_articles.extend(load_articles_from_date(cur.strftime('%Y-%m-%d'), include_all,
+                                                   exclude))
         cur += timedelta(days=1)
     return all_articles
 
@@ -445,6 +472,9 @@ def main():
     parser.add_argument('--to', dest='to_date', help='结束日期 YYYY-MM-DD，默认今天')
     parser.add_argument('--output', help='输出文件路径（默认 output/ai-reports/）')
     parser.add_argument('--dry-run', action='store_true', help='不调用 AI，仅输出统计骨架')
+    parser.add_argument('--exclude-topics', default='',
+                        help='不在报告里出现的主题，逗号分隔（如 新闻,投资）；'
+                             '展示层开关：不重抓、不改产物，只影响这份报告收谁')
     parser.add_argument('--include-all', action='store_true',
                         help='不筛选，收录当天全部文章（回退到引入收录判据之前的行为）')
     args = parser.parse_args()
@@ -471,7 +501,11 @@ def main():
     print(f'🔧 引擎: {args.engine}' + (' (dry-run)' if args.dry_run else ''))
 
     # 加载文章
-    articles = load_articles_range(from_date, to_date, args.include_all)
+    exclude = excluded_topics(load_config(), args.exclude_topics,
+                                  protected=(FOCUS_TOPIC,))
+    if exclude:
+        print('🚫 已排除主题: ' + '/'.join(t for t in TOPICS if t in exclude))
+    articles = load_articles_range(from_date, to_date, args.include_all, exclude)
     if not articles:
         print(f'\n❌ 未找到 {date_label} 的文章。请先运行：')
         print(f'   python scripts/biz_daily.py')
@@ -514,10 +548,12 @@ def main():
     # 另外单独加载一次全集——被收录判据筛掉的边界条目也要能看见，
     # 否则"我拿不准"只报告了收进来的那一半。
     try:
-        everything = load_articles_range(from_date, to_date, include_all=True)
+        everything = load_articles_range(from_date, to_date, include_all=True,
+                                         exclude=exclude)
     except Exception:
         everything = articles
-    section = build_uncertainty_section(articles, everything, include_all=args.include_all)
+    section = build_uncertainty_section(articles, everything, include_all=args.include_all,
+                                        exclude=exclude)
     report += section
     uncertain_count = section.count(chr(10) + '- ')
     if uncertain_count:

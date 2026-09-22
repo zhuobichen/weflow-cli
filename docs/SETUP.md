@@ -88,6 +88,17 @@ weflow-cli config set typesafeApiKey "..."   # 机器绑定加密保存，和 de
 weflow-cli config set typesafeApiKey ""      # 清空即回到 LLM 解析路径
 ```
 
+不想在日报里看到某一类（如新闻/投资/学术）：
+
+```powershell
+weflow-cli config set dailyExcludeTopics "新闻,投资,学术"   # 留空即不排除
+```
+
+**这是展示层开关，不是抓取层的**：正文照常抓取归档，只是不展示，改主意不用重抓。
+为什么不干脆不抓：拉之前可用的信息（来源+标题+摘要）判类型实测只有 60% 一致率，
+而排除不可逆。详见 OPERATIONS.md 的「不想看某一类：排除主题」。
+```
+
 配了它之后，文章标题与正文会同时发给 DeepSeek 和 `api.typesafe.ai` 两处（出网范围见下节）。
 
 日报输出和阅读器均为本地文件/回环服务。阅读器默认地址是 `http://127.0.0.1:8765/`，不要把端口暴露到局域网或公网。

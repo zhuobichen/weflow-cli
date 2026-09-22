@@ -795,6 +795,77 @@ it cannot generate the search terms, only select them.
   blames the model - this happened, and the tool now separates "the answer shape changed"
   from "the score is low" in what it prints.
 
+## D-037: Topic exclusion lives in the display layer, not in front of the fetch
+
+**Status:** Active
+
+`dailyExcludeTopics` / `--exclude-topics` stop a topic from appearing in the daily report and
+the reader page. Articles are still fetched, judged and archived; the topic is not shown. The
+focus topic (AI) cannot be excluded - asking for it prints a warning and ignores that entry.
+
+**Reason:** the feature was asked for as "decide before fetching whether I want this article".
+That was measured and rejected: from a source name, a title and the platform digest - all that
+exists before a fetch - the judgement agreed with the source-level configuration on **60%** of
+217 articles, and where it disagreed it was mostly wrong in the direction that drops articles
+worth keeping. There is no gold standard either way, so "the model said 新闻" cannot justify a
+dropped fetch. The asymmetry decides it: an unwanted article costs a little space and attention,
+while a wrongly skipped one is **gone** - it was never archived, and re-fetching a 公众号 page
+weeks later is not the same article. The display layer also buys a cheaper correction path:
+changing your mind is a regeneration, not a refetch.
+
+**Consequences and boundaries:**
+- Exclusion is **orthogonal**: it is checked before `--include-all` and before the inclusion
+  score, so no flag combination brings an excluded topic back. All three lists in **我拿不准的**
+  (near-threshold admitted, near-threshold not admitted, low topic confidence) are filtered too.
+  This is not cosmetic: the "not admitted" list is populated by exactly the articles being
+  excluded, so passing the exclusion set to `admits()` there does the opposite and makes them
+  *more* likely to be listed. One predicate (`is_excluded_topic`) serves both directions.
+- The focus topic is protected because excluding it does not produce an empty report, it
+  produces a misleading one: with nothing left, the report exits with "未找到文章，请先运行
+  biz_daily.py" and blames the wrong thing. Unknown names and refused names both print a WARN;
+  silently ignoring either would make an ineffective filter look like a working one.
+- Both views take the same set, and `generate_html.collect_articles` skips an excluded topic
+  directory outright rather than filtering after the scan, so the page and the report cannot
+  disagree about what was excluded.
+- The key is registered in all four `configService` literals plus `bin`'s `configurableKeys`;
+  `test/config-keys.test.ts` asserts every key in that list is declared, defaulted, reset and
+  read back.
+
+## D-038: The source-level prior is recorded from real judgements, and acts on nothing
+
+**Status:** Active
+
+Every daily run appends `(source, topic)` counts for the articles it archived to
+`~/.weflow-cli/source_topics.json`. The run reports which sources are now stable and which of
+them publish a topic you exclude. It does **not** skip anything.
+
+**Reason:** the per-article judgement D-037 rejected is unreliable because its input is thin.
+There is a second signal, but only after the fact: every archived article has a topic decided
+from its **body**, so a source's history answers what a title cannot. That table has to be
+measured rather than authored - a hand-written source-to-topic map would be a guess wearing a
+table's clothes, and D-037 exists because that guess was already measured at 60%. Recording is
+therefore a prerequisite for ever making the skip decision, not the decision itself.
+
+**Consequences and boundaries:**
+- Counts are **append-only**: cumulative counts are the only evidence for "this account is
+  stable", and pruning them destroys the basis for a later decision. A failed write reports the
+  OS error and leaves the run alone - the table is auxiliary data and must not fail a day's
+  daily - but it does report, since a silent failure looks exactly like a table that is growing.
+- Only articles that landed on disk are recorded (matched against `written_urls`), so the table
+  and `output/` describe the same corpus and can be reconciled later. This was a real trap:
+  `topic_groups` is rebuilt for the briefing as topic-to-strings before the end of the run, so
+  recording from it produces an empty table.
+- The file holds 公众号 names, so it lives outside the repository; a test asserts the path is
+  under the home directory and not under the repo. It follows `CONFIG_PATH` at call time, so
+  tests - and any future multi-profile setup - can point it at a temporary directory.
+- `stable_source_topic` returns `None` for "not enough history yet" as distinct from "no topic".
+  The distinction is the point: `None` read as a default topic would skip a source precisely
+  because it is unknown, which is the worst failure this feature has.
+- Thresholds (8 samples, 80% share) are **provisional and uncalibrated**, chosen so the first
+  weeks of data cannot produce a confident wrong answer. Whether a stable source is ever skipped
+  before the fetch remains the user's decision; the numbers are printed each run so it can be
+  made on data rather than on a promise.
+
 ## Decision Template
 
 

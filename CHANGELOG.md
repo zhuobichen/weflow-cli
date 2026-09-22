@@ -10,6 +10,38 @@ All notable user-facing changes are recorded here. This project follows [Semanti
 
 - Article bodies are now cached as they are fetched, so a daily run can resume. The run used to be **all-or-nothing**: it fetches every article before writing anything, and the bodies only ever lived in memory, so any interruption discarded the whole day. On a 400-article day that is over an hour of fetching, and on 2026-09-22 it stopped at 105/403 having written nothing. Bodies are now stored under `output/.cache/fetch/<md5(url)>.md`: a re-run fetches only what is missing (a resumed article costs ~0s instead of ~20s, and it does **not** take the 8-12 s throttle sleep, because a cache hit sends no request), and switching between `--no-summary` and normal, or changing the classifier, no longer re-downloads the day. Only successes are cached - a failure would otherwise be remembered forever instead of retried. `--no-fetch-cache` forces a refetch.
 
+- Topic exclusion: `dailyExcludeTopics` (comma-separated, e.g. `新闻,投资,学术`), settable with
+  `weflow-cli config set dailyExcludeTopics "..."`, plus `--exclude-topics` on
+  `generate_ai_report.py` / `generate_html.py` for a one-off override. This is a **display**
+  switch: bodies are fetched and archived as usual, and the topic simply does not appear in the
+  two views. Pre-fetch filtering was measured first and rejected - judging the type from a source
+  name plus a title and digest agreed with the source-level configuration only 60% of the time on
+  217 articles, with 48 false positives and no gold standard - and a skipped fetch is
+  **irreversible**, since nothing gets archived. Excluding at the display layer also means
+  changing your mind costs a regeneration, not a refetch. The exclusion is orthogonal to
+  `--include-all` and to the inclusion score, it is applied identically by the report and the
+  reader page, and all three lists in the report's **我拿不准的** section are filtered, so a
+  report that excludes 新闻 cannot turn around and list 新闻 in its own uncertainty section.
+  Excluding the focus topic is refused with a warning rather than obeyed: an empty subject makes
+  the report either bodyless or exit with "未找到文章", which blames the wrong thing. A misspelled
+  topic name is ignored **with a warning** - a silent no-op would look like the filter working.
+
+- Source-level prior: `~/.weflow-cli/source_topics.json` accumulates how many articles each
+  公众号 has been judged to publish per topic, from what the daily actually archived. A source
+  with enough samples (`SOURCE_PRIOR_MIN_SAMPLES`) dominated by one topic (`SOURCE_PRIOR_SHARE`)
+  is reported at the end of the run, and when that topic is one you exclude the run names it:
+  `来源先验: 甲号 → 新闻（20 篇里 19 篇 = 95%）`. It **only reports - nothing is skipped**,
+  because a pre-fetch skip is irreversible and this table is still growing. The table holds
+  account names, so it lives outside the repository; counts are append-only and only articles
+  that landed on disk are recorded, so the table and `output/` describe the same corpus.
+  `stable_source_topic` returns `None` for "not known yet", and callers must not read that as a
+  default topic. See D-037 and D-038.
+
+- `test/config-keys.test.ts`: every key in `bin`'s `configurableKeys` must also be declared in
+  the `CliConfig` interface, given a default, reset by `clear()` and read back by `load()`.
+  These are the four ways a key can be accepted by `config set` and then quietly not survive a
+  restart.
+
 - `daily --no-summary`: judge without generating. Topic, relevance and the inclusion decision still come from the decision model, but **no LLM call is made at all** - no summaries, no tags, no concepts, no README briefing - so this run needs no DeepSeek key. Articles are still fetched and archived (the body is kept); the md simply carries no `## AI 摘要` section, and `.articles.json` records `summary: ""` rather than quietly substituting the platform's digest, because an empty heading reads as a failed generation and a digest reads as our summary - both claim something that is not there. Verified by running a 4-article day with a **deliberately invalid** DeepSeek key: it completes normally with no 401, i.e. nothing reached the LLM. Wired through `weflow-cli daily --no-summary` and `pipeline.py`; the downstream pipeline steps (action suggestions, wiki compile, AI report) still use an LLM, so a fully LLM-free run adds their `--skip-*` flags, and the pipeline says so when it notices.
 
 - `sync run|status|verify`: a local message-sync checkpoint. `sync run` reads a time window, deduplicates against the previous checkpoint and records what it covered; `sync status` reports coverage without touching the database, so it still works while the database is locked. It does **not** advertise a stable cursor - overlapping windows plus local deduplication is what it offers, per D-027.
