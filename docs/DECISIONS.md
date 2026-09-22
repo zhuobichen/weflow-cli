@@ -866,6 +866,43 @@ therefore a prerequisite for ever making the skip decision, not the decision its
   before the fetch remains the user's decision; the numbers are printed each run so it can be
   made on data rather than on a promise.
 
+## D-039: The daemon confirms at the parent, and reports a child that dies
+
+**Status:** Active
+
+`assistant start` spawns `assistant run` detached. The spawn now passes `--yes`, and
+`startDaemon` observes the child for a short window before reporting success. A dead env marker
+(`WEFLOW_ASSISTANT_DAEMON`) was deleted.
+
+**Reason:** the child was spawned without `--yes`, while `assistant run` confirms through
+`inquirer` - and the daemon gives it `stdin: 'ignore'`, so nobody could ever answer. The child
+died on the prompt (or later, on the missing channel login) while the parent printed
+「✓ 守护进程已启动 (pid …)」 and wrote the pid file. On the machine this was developed against,
+`~/.weflow-cli/` had **no `assistant.log` and no `assistant.pid` at all**: the documented
+`assistant start` flow had never once completed. The env marker that appeared to handle this
+was read by nothing, and was constructed as an env *key* containing `=` (`'…=1'`), so it could
+not have worked even if something read it - a dead mechanism that made the path look guarded.
+
+**Consequences and boundaries:**
+- Confirmation stays **at the parent**: a human typed `assistant start` (or a machine passed
+  `--json --yes`). The child inherits that decision as an explicit argument, not as an ambient
+  env var - an env-var-based bypass would be inherited by every grandchild process, which is
+  exactly the shape the repo's permission rules avoid.
+- The failure is now **observed, not assumed**: the child is watched for `SETTLE_MS` (default
+  700 ms) and a child that has already exited is reported with its exit code and the tail of the
+  daemon log, and **no pid file is written** - writing one would be a claim that it is running.
+- A spawn `'error'` event is now handled; without a listener Node turns it into an uncaught
+  exception in the caller.
+- Verified live: `assistant start` on this machine now says
+  `子进程启动后立即退出 (code 1)；日志尾部: Error: 未登录消息通道, 先运行 weflow-cli login-wechat`.
+  The fix did not break the daemon - it made a broken state visible.
+- The daemon runs `dist/bin/weflow-cli.js` **when it exists**, so source changes need
+  `npm run build` before the daemon reflects them. That precedence is a live operational trap,
+  now written down in OPERATIONS.md.
+- Untested and left untested: the daily quota (`100 条/天`) and the whole `start()` message
+  loop, because both require a logged-in WeChat channel. The per-message logic is covered by a
+  synthetic harness instead (stubbed `callLLM`, local-only tools).
+
 ## Decision Template
 
 

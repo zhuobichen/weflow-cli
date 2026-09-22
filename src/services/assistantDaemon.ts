@@ -12,7 +12,16 @@ import { createPythonProcessEnv } from '../utils/pythonProcessEnv.js'
 const DIR = join(os.homedir(), '.weflow-cli')
 const PID_FILE = join(DIR, 'assistant.pid')
 const LOG_FILE = join(DIR, 'assistant.log')
-const MARKER = 'WEFLOW_ASSISTANT_DAEMON=1'
+
+/** 子进程存活观察窗口(ms)：这么短时间内就退出 = 启动失败 */
+const SETTLE_MS = 700
+
+export interface StartDaemonOptions {
+  /** 注入的 spawn，测试用；默认 child_process.spawn */
+  spawnImpl?: typeof spawn
+  /** 存活观察窗口(ms)，默认 700 */
+  settleMs?: number
+}
 
 export function isDaemonAlive(): { alive: boolean; pid: number | null } {
   if (!existsSync(PID_FILE)) return { alive: false, pid: null }
@@ -56,8 +65,22 @@ export function tailLog(n = 20): string {
   }
 }
 
-/** 后台启动守护进程 (detached, 脱离终端生命周期) */
-export function startDaemon(): { started: boolean; pid?: number; error?: string } {
+/** 后台启动守护进程 (detached, 脱离终端生命周期)
+ *
+ * 子进程带 `--yes`：**确认发生在这一层**——人敲 `assistant start`，或机器用
+ * `--json --yes`——而 `assistant run` 自己那层确认要读 stdin，守护进程给它的 stdin
+ * 是 `ignore`，没人能回答那个提示。少了这个参数，子进程会死在确认提示上，而父进程
+ * 照样报「✓ 已启动」。（那个曾经「负责」这件事的 WEFLOW_ASSISTANT_DAEMON 环境变量
+ * 没有任何代码读它，而且它被当成了变量名里带 `=` 的键——已删。）
+ *
+ * 启动后**观察一小段时间再回报**：子进程立刻退出时（例如消息通道没登录），报出来的
+ * 是退出码与日志尾部，而不是一句假的成功。
+ */
+export async function startDaemon(options: StartDaemonOptions = {}): Promise<{
+  started: boolean; pid?: number; error?: string
+}> {
+  const spawnImpl = options.spawnImpl ?? spawn
+  const settleMs = options.settleMs ?? SETTLE_MS
   const { alive, pid } = isDaemonAlive()
   if (alive) return { started: false, pid: pid!, error: `已在运行 (pid ${pid})` }
 
@@ -71,11 +94,22 @@ export function startDaemon(): { started: boolean; pid?: number; error?: string 
   try {
     appendLog(`--- ${new Date().toLocaleString('zh-CN')} daemon starting ---`)
     const entryArgs = entry === sourceEntry ? ['--import', 'tsx', entry] : [entry]
-    const child: ChildProcess = spawn(process.execPath, [...entryArgs, 'assistant', 'run'], {
+    const child: ChildProcess = spawnImpl(process.execPath,
+      [...entryArgs, 'assistant', 'run', '--yes'], {
       detached: true,
       stdio: ['ignore', 'pipe', 'pipe'],
-      env: createPythonProcessEnv({ [MARKER]: '1' }),
+      env: createPythonProcessEnv(),
       windowsHide: true,
+    })
+
+    // spawn 失败（入口不存在、权限）是**异步**的 'error' 事件：没有监听器时它会让
+    // 进程直接抛未捕获异常。收下来，等观察窗口结束一起报。
+    // 用持有对象而不是裸变量：回调里的赋值 TS 的控制流分析看不见，
+    // 裸变量会被收窄成 null，检查处就变成 never。
+    const state: { spawnError: Error | null } = { spawnError: null }
+    child.on('error', (error: Error) => {
+      state.spawnError = error
+      appendLog('[spawn error] ' + error.message)
     })
 
     // 收集子进程输出写入日志
@@ -86,11 +120,21 @@ export function startDaemon(): { started: boolean; pid?: number; error?: string 
       try { if (existsSync(PID_FILE)) rmSync(PID_FILE, { force: true }) } catch {}
     })
 
-    if (child.pid) {
-      writeFileSync(PID_FILE, String(child.pid), 'utf8')
-      return { started: true, pid: child.pid }
+    await new Promise<void>((resolve) => setTimeout(resolve, settleMs))
+    if (state.spawnError) {
+      return { started: false, error: `子进程无法启动: ${state.spawnError.message}` }
     }
-    return { started: false, error: '无法获取子进程 pid' }
+    if (child.exitCode !== null || child.signalCode) {
+      // 关键：这里**不写** pid 文件。写了就等于对外宣称它在运行，而进程已经没了。
+      return {
+        started: false,
+        error: `子进程启动后立即退出 (code ${child.exitCode ?? child.signalCode})；`
+               + `日志尾部: ${tailLog(6)}`,
+      }
+    }
+    if (!child.pid) return { started: false, error: '无法获取子进程 pid' }
+    writeFileSync(PID_FILE, String(child.pid), 'utf8')
+    return { started: true, pid: child.pid }
   } catch (e: any) {
     return { started: false, error: e.message }
   }

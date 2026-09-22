@@ -60,6 +60,20 @@ All notable user-facing changes are recorded here. This project follows [Semanti
 
 - When the decision model has judged an article, the LLM prompt no longer asks it to classify too. It used to ask for `【主题】`/`【相关度】` whoever was judging, so on the Jev path those answers were written and thrown away - the fields plus the six-category criteria and the three-level definitions came to 446 characters of prompt per article (57% of the prompt skeleton; about 9% of the total input, since the article body dominates), plus 10-15 output tokens. The **summary, tag and concept requirements are byte-identical between the two prompts** (a test asserts it), so what gets generated does not change; `--classifier llm` and any article whose Jev call failed still get the full prompt, keeping the fallback path byte-identical as D-031 requires. The choice is per article, not per batch - a failed judgement needs the LLM's own topic and relevance. Token savings are estimated from prompt size and output fields, not read from a bill: neither this client nor the decision-model client exposes usage amounts.
 
+- The assistant's two untested core files now have coverage, via a synthetic harness rather than a
+  live channel. `assistantMemory` gets 17 tests (working window, compression past the cap, the
+  degraded path when the LLM refuses to compress, fact extraction cadence and noisy-output parsing,
+  the fact cap, persistence across a restart) and `assistantService.handleMessage` gets 14 (built-in
+  commands without any model call, the ReAct loop feeding a real tool result back, tool-result
+  redaction, the unknown-tool and malformed-arguments paths, the 6-round cap, an LLM failure that
+  must say so, audit lines, and memory wiring), plus 8 for the daemon start path. No network, no
+  WeChat channel, no real home directory: `callLLM` is injected, the tools used are the two that
+  only touch memory (`search_memory` / `save_memory`), and `HOME` is pointed at a temporary
+  directory before the modules are imported. Two invariants the harness exists to hold: a tool
+  result is redacted **before** it can leave the machine, and the audit log never contains message
+  text. One sharp edge was found and **documented instead of changed**: fact de-duplication uses
+  mutual containment, so an existing `事实 1` silently blocks a new `事实 10`.
+
 ### Changed
 - Image downloads during the daily run are concurrent (6-way). They were sequential at 0.37 s and 135 KB each - about 18 minutes per 190-article day - even though they come from `.qpic.cn`, WeChat's CDN, which a browser fetches in parallel anyway. Same three articles: 17.2 s → 2.1 s. The same change fixed the map: a failed download used to be recorded in `.image_map.json` **before** it was attempted, and the reader injects that map as `window._IMG_MAP`, so the page was told to look for a local file that did not exist. Only files that are actually on disk are mapped now, and duplicates in a page are fetched once (31 image links in one article were 17 distinct images).
 - LLM summaries are generated concurrently, so a 190-article day spends about 2 minutes there instead of 9 (measured 2.27/2.92/2.45 s per article). The calls are **prefetched, not the loop rewritten**: responses are filled back by their original index and the existing loop still does the parsing and the field writes in the same order, so every fallback branch behaves exactly as before - a failed call comes back as an error and the loop re-raises it into its own `except`. The per-article 0.3 s pacing moved into the worker, so the request rate to the provider is unchanged. The stage now prints `摘要完成 N/M 篇，耗时 Xs（6 并发；串行约需 Ys）`, the shape the classification stage already used.
@@ -73,6 +87,20 @@ All notable user-facing changes are recorded here. This project follows [Semanti
 - Two closed vocabularies that the code compares by literal are now declared once instead of twice. The message **anchor columns** (`create_time`, `local_id`, `server_id`) had three copies - a named one, a second literal in the same file's `ORDER BY`, and a third in the exporter - and moved into `nt_common` alongside the other shared NT plumbing. Their **order is behaviour**: one use is a set membership test (order irrelevant) and the other is the sort key, so listing `local_id` first would silently reorder every conversation read. A test pins `create_time` first, the tuple type (a set would let the order follow the interpreter's hash seed), and the literal's absence from both readers. The relevance levels moved to `_utils` beside `TOPICS`, with `DEFAULT_RELEVANCE` naming what an unclassified article is recorded as - the value every failed classification path lands on, and the reason the corpus once read 中 for 2199 of 2201 articles even though 中 reads as a positive judgement rather than "not judged". `extract_todos.py`'s identical `['高','中','低']` is deliberately left uncoupled: that is the `--urgency` vocabulary, which merely shares three characters.
 
 ### Fixed
+- `assistant start` now actually starts the daemon, and reports success only when it does. The child
+  was spawned without `--yes` while `assistant run` confirms through `inquirer` on a stdin the
+  daemon had set to `ignore` - so the child died on the prompt while the parent printed
+  `✓ 守护进程已启动 (pid …)` and wrote a pid file. `~/.weflow-cli/` contained **no `assistant.log`
+  and no `assistant.pid` at all**, which is how the documented flow turned out never to have
+  completed. The env marker that appeared to guard the path (`WEFLOW_ASSISTANT_DAEMON=1`) was read
+  by nothing and was constructed as an env **key** containing `=`; both are gone. The parent
+  confirms and passes `--yes` explicitly, and success is now observed: the child is watched for
+  700 ms and a dead one is reported with its exit code and the log tail, **without** writing a pid
+  file. A spawn `'error'` event is handled as well - without a listener Node turns it into an
+  uncaught exception in the caller. Verified live: it now reports
+  `子进程启动后立即退出 (code 1)；日志尾部: Error: 未登录消息通道, 先运行 weflow-cli login-wechat`,
+  which is the actual blocker on that machine (no `wechatOcToken`, empty allowlist). See D-039.
+
 
 - A daily run wrote **two different topics for the same article**. `.articles.json` defaulted a missing topic to `''` while the step that names the folder and writes the md frontmatter defaulted it to `学术` - seven lines apart, neither reporting anything. The 2026-09-04 output shows the split directly: 178 articles, every md under `学术/` carrying `topic: 学术` (including "OpenAI 深夜发布 GPT-6 Astra" and an AI-tool launch), and every entry in that day's `.articles.json` carrying `topic: ""`. Downstream reads the JSON, so the admission gate `topic != FOCUS_TOPIC and relevance != '高'` dropped the whole batch without a word. It is reachable without anything unusual: `daily --no-ai`, or a daily run with no API key, skips classification entirely, so no article has a `topic` key at all while the write phase still runs. The fallback is now one constant (`_utils.DEFAULT_TOPIC`) applied by one function that both normalises and groups (`biz_daily._group_by_topic`), so "the topic used for the folder" and "the topic written to the JSON" cannot be different values by construction. It validates **membership** in `TOPICS` rather than mere emptiness, and the run prints how many articles fell back, so a whole-batch fallback cannot pass as a normal classification. `test/default_topic_test.py` pins the grouping key, the md frontmatter and the JSON entry to the same value, and the fallback literal to one place; the checks were mutation-tested. The **same shape seven lines away** sat in `tags`: the md writer defaulted a missing key to `[topic]` and the JSON writer to `[]`, so those same 09-04 articles read `tags: ['学术']` in the md and `tags: []` in the JSON. Both now call `_tags_for_write`, which follows the convention the codebase already had (three classification paths write `[topic]` themselves) while still keeping a *present but empty* list empty - that is a different case, and collapsing it would just be a new default written in two places.
 - A leaked database handle when a shard opened but its key was rejected: the connection was left open, which on Windows keeps the file locked.

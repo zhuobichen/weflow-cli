@@ -5495,7 +5495,7 @@ assistantCmd
       process.exit(1)
     }
     const { startDaemon } = await import('../src/services/assistantDaemon.js')
-    const r = startDaemon()
+    const r = await startDaemon()
     if (opts.json) {
       console.log(JSON.stringify(r.started
         ? { success: true, started: true, pid: r.pid, ...preview }

@@ -529,6 +529,17 @@ weflow-cli assistant status
 
 助手默认拒绝所有发送者，需明确设置 `assistantWhitelist`。群聊还需要群白名单、成员白名单和 @ 门槛；项目不通过客户端自动化或非官方协议拉群。
 
+**启动前先确认两件事**，否则 `assistant start` 会如实地告诉你它起不来：
+
+1. **消息通道要已登录**（`weflow-cli login-wechat`）。没登录时子进程会退出，启动命令会把
+   退出码和日志尾部原样报出来：`子进程启动后立即退出 (code 1)；日志尾部: Error: 未登录消息通道…`。
+   这句话出现在终端里就说明机制是对的，**问题在通道，不在守护进程**。
+2. **改了源码要先 `npm run build`**。守护进程优先运行 `dist/bin/weflow-cli.js`，只要这个文件
+   存在就不会用 `bin/weflow-cli.ts`；不重建，守护进程跑的还是旧的编译产物。
+
+启动失败时**不会**留下 pid 文件 —— 写 pid 就等于对外宣称它在运行。排查用
+`weflow-cli assistant status`（不碰数据库）与 `weflow-cli assistant log`。
+
 ## 7. 常见问题
 
 | 现象 | 处理 |
