@@ -1993,12 +1993,26 @@ program
       process.exit(1)
     }
     if (!opts.yes) {
-      const { confirmed } = await inquirer.prompt([{
-        type: 'confirm',
-        name: 'confirmed',
-        message: token ? '已有登录状态，确认启动重新登录吗？' : '确认启动人工扫码登录吗？',
-        default: false,
-      }])
+      // stdin 不是终端时（管道、计划任务、会话里的 `!` 前缀执行）inquirer 会抛 ExitPromptError——
+      // 屏幕上是一条堆栈而不是一句话。这里把它变成解释：扫码登录必须在真实终端里跑。
+      // 与守护进程那条 `--yes` 是同一类毛病：交互确认被塞进一个没人能回答的 stdin。
+      let confirmed = false
+      try {
+        const answer = await inquirer.prompt([{
+          type: 'confirm',
+          name: 'confirmed',
+          message: token ? '已有登录状态，确认启动重新登录吗？' : '确认启动人工扫码登录吗？',
+          default: false,
+        }])
+        confirmed = !!answer.confirmed
+      } catch (error: any) {
+        if (error?.name === 'ExitPromptError' || /force closed the prompt/.test(String(error?.message))) {
+          console.log(chalk.yellow('当前环境没有可交互的终端。扫码登录必须在真实终端窗口里执行，'))
+          console.log(chalk.yellow('或者加 --yes 跳过这个确认（扫码那一步仍然要人来做）。'))
+          process.exit(1)
+        }
+        throw error
+      }
       if (!confirmed) {
         console.log(chalk.gray(token ? '保持当前登录状态' : '已取消'))
         return
