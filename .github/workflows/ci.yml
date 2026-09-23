@@ -12,13 +12,13 @@ jobs:
   node:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           # 必须 >=22.13.0: src/core/sqlcipherCore.ts 顶层 import 'node:sqlite',
           # 该模块 22.5.0 才有、22.13.0 才不需要 --experimental-sqlite 标志。
           node-version: '22.13'
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.11'
       # The end-to-end acceptance suite builds a synthetic encrypted NT store,
@@ -35,8 +35,8 @@ jobs:
   python:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.11'
       # 只装这两个: 用例在方法内部 import zstandard / Crypto(pycryptodome),
@@ -49,8 +49,8 @@ jobs:
   release-consistency:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: '22.13'
       - name: 版本号与锁文件必须一致
