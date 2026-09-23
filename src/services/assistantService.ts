@@ -30,7 +30,51 @@ const DAILY_LIMIT = 100
 
 const SEP = String.fromCharCode(10)   // 提示词里的换行。写成常量，省得在每种写入路径上各自操心转义
 
-const BASE_PROMPT = `你是"第二大脑", 运行在用户自己的电脑上, 通过微信与用户对话。
+/**
+ * 消息通道。**不是新抽象，是把既有的隐式契约写出来**——`AssistantService` 一直只用
+ * `WechatMessageService` 的这四个方法，测试也是靠替换这四个方法驱动整条循环的
+ * （`test/assistant-loop.test.ts` 的 `installFakeChannel`）。写成接口是为了让"通道可以不是微信"
+ * 这件事在类型上成立，而不是靠"反正 `svc` 可空"。
+ *
+ * `stop` 写成 `Promise<void> | void`：`WechatMessageService.stop()` 返回 Promise，
+ * 而 `AssistantService.stop()` 并不 await 它（`:668`），两边都收。
+ */
+export interface AssistantChannel {
+  onMessage(cb: (msg: WechatInboundMessage) => void): void
+  startPolling(): Promise<void>
+  sendText(conversationId: string, text: string): Promise<boolean>
+  stop(): Promise<void> | void
+}
+
+/** 一轮从哪来。**决定要不要过白名单**，见 `runTurn` */
+export type TurnOrigin = 'wechat' | 'panel'
+
+export interface TurnInput {
+  sessionId: string
+  text: string
+  kind: string
+  origin: TurnOrigin
+  /** 微信来源才有：白名单判定要它的 senderId / conversationType / mentionedBot */
+  message?: WechatInboundMessage
+}
+
+/**
+ * 一轮的结果。**"回什么"与"往哪回"分开**：这里只说回什么，往哪回由调用方的 `deliver` 决定。
+ *
+ * 这么分的直接原因是修一个真 bug：泵里原先是 `this.svc!.sendText(...)`，而 `svc` 在没有
+ * 微信通道时是 `null`——那个 `!` 只是给 TS 看的。于是"配额用尽"那一次会抛 TypeError，
+ * 调用方永远收不到响应（挂到超时）。任何"没有通道的宿主"都会踩到。
+ */
+export type TurnOutcome =
+  | { status: 'replied'; text: string }
+  /** 微信来源且不在白名单里。**故意不回复**（回一句就等于告诉陌生人这号是活的） */
+  | { status: 'denied'; reason: string }
+  | { status: 'ignored'; reason: string }
+  | { status: 'quota-exceeded'; text: string }
+  | { status: 'not-running' }
+  | { status: 'error'; message: string }
+
+const BASE_PROMPT = `你是"第二大脑", 运行在用户自己的电脑上, 通过微信或本机面板与用户对话。
 你可以调用工具查询用户本地微信数据(会话/聊天记录/收藏), 以及读写关于用户的长期记忆。
 
 行为准则:
@@ -99,7 +143,7 @@ export class AssistantService {
     this.routeDecider = options.routeDecider
   }
 
-  private svc: WechatMessageService | null = null
+  private svc: AssistantChannel | null = null
   private memory = new AssistantMemory()
   private running = false
   /** 消息串行队列: 保证 handleMessage 不并发交错 (记忆窗口一致性) */
@@ -109,6 +153,17 @@ export class AssistantService {
   private dailyDate = new Date().toDateString()
   /** 快路径的判断调用。留出注入点：测试用假判断层驱动，不联网、不 spawn Python */
   private routeDecider: ((request: unknown) => Promise<any>) | undefined
+  /**
+   * `handleMessage` 的重入护栏。
+   *
+   * `turnCalls` / `lastReasoning` / `lastNeedsLocalData` 是**实例字段**，它们的正确性只依赖
+   * "handleMessage 被串行调用"这个不变式——而那个不变式今天只写在注释里。第二个入口
+   * （本机面板）一出现，早晚有人想加一条直连的快速路径。重入就直接抛，
+   * 把"记忆窗口悄悄错乱"换成一声巨响。
+   */
+  private inFlight = false
+  /** `start()` 给的日志出口。本机入口不经过那个调用点传参，所以存一份 */
+  private logSink: ((line: string) => void) | undefined
 
   private engineConfig(): { url: string; model: string; key: string | null; local: boolean } {
     const engine = String(configService.get('aiEngine') || 'deepseek')
@@ -462,8 +517,25 @@ export class AssistantService {
     return 1
   }
 
-  /** 单条消息处理: 指令路由 → ReAct 循环 → 记忆更新 */
+  /**
+   * 单条消息处理: 指令路由 → ReAct 循环 → 记忆更新。
+   *
+   * **外部只许经由 `enqueueTurn` 调用**（它保证串行）；直接调会被 `inFlight` 挡下——
+   * 见那个字段的注释。
+   */
   async handleMessage(userId: string, text: string, kind: string): Promise<string> {
+    if (this.inFlight) {
+      throw new Error('handleMessage 重入：它依赖串行调用（记忆窗口、turnCalls 都是实例字段）')
+    }
+    this.inFlight = true
+    try {
+      return await this.handleMessageInner(userId, text, kind)
+    } finally {
+      this.inFlight = false
+    }
+  }
+
+  private async handleMessageInner(userId: string, text: string, kind: string): Promise<string> {
     if (kind !== 'text') return '目前只支持文字消息哦'
 
     const t = text.trim()
@@ -604,13 +676,97 @@ export class AssistantService {
     return reply
   }
 
+  /**
+   * 一轮的处理。**这是唯一一处**——微信通道与本机面板都走这里。
+   *
+   * 抽出来的理由是这个仓库付过学费的老毛病：判定逻辑两处各写一份，早晚有一处漏掉既有的容错
+   * （同样的判词写在本文件 `:319` 与 `:361` 附近的注释里）。配额、忽略非文本、异常兜底
+   * 这些行为**只该有一份**。
+   *
+   * `origin` 决定要不要过白名单：微信来的必须过；**本机入口的门是端点 token，不是白名单**。
+   * 把白名单套到"坐在机器前的人"身上是错的——空名单时会把面板自己拒掉，而且
+   * `maybeAnnounceWhitelistBootstrap` 还会打出一条**教用户把自己的面板 id 加进微信白名单**的错提示。
+   *
+   * 本方法**不负责"往哪回"**：结果交给调用方（微信是 `sendText`，面板是 HTTP 响应）。
+   */
+  private async runTurn(input: TurnInput, onLog?: (line: string) => void): Promise<TurnOutcome> {
+    if (!this.running) return { status: 'not-running' }
+    const { sessionId, text, kind, origin } = input
+
+    if (origin === 'wechat') {
+      const msg = input.message!
+      const access = this.accessDecision(msg)
+      if (!access.allowed) {
+        privacyGate.audit(`DENY_${access.reason.toUpperCase().replace(/-/g, '_')}`, 0, sessionId.slice(0, 12))
+        onLog?.(`  → 拒绝: ${sessionId.slice(0, 12)}… ${access.reason} (未回复, 不耗 LLM)`)
+        this.maybeAnnounceWhitelistBootstrap(access, msg, onLog)
+        return { status: 'denied', reason: access.reason }
+      }
+      if (kind !== 'text') {
+        onLog?.(`  → 忽略非文本消息 (${kind})`)
+        return { status: 'ignored', reason: 'non-text' }
+      }
+      onLog?.(`[${new Date().toLocaleTimeString('zh-CN')}] ${sessionId.slice(0, 12)}…: ${text.slice(0, 40)}`)
+    } else {
+      // 本机入口**不往日志里写内容**，这是有意的不对称：微信那边没有别的界面，
+      // 日志是唯一线索；面板有界面，日志里留长度就够查问题了。别当成不一致"修"回去。
+      onLog?.(`[panel] ${text.length}字`)
+    }
+
+    if (this.dailyQuotaLeft() <= 0) {
+      privacyGate.audit('DENY_DAILY_LIMIT', this.dailyCount)
+      appendLog(`[配额] 今日 ${DAILY_LIMIT} 条上限已用尽, 拒绝 (via=${origin})`)
+      return { status: 'quota-exceeded', text: '今日额度已用完, 明天再来吧' }
+    }
+
+    try {
+      const reply = await this.handleMessage(sessionId, text, kind)
+      this.dailyCount++
+      // **这里不报"已回复"**：回没回得出去是投递方才知道的事（微信的 sendText 会失败）。
+      // 两处都报的话，微信那条路会在日志里出现两遍"已回复"，看着像处理了两条消息。
+      return { status: 'replied', text: reply }
+    } catch (e: any) {
+      onLog?.(`  → 处理异常: ${e.message}`)
+      appendLog(`[${new Date().toLocaleTimeString('zh-CN')}] 异常: ${e.message}`)
+      return { status: 'error', message: String(e?.message ?? e) }
+    }
+  }
+
+  /**
+   * 串行入队 + 投递。**投递在队列里做**，不在队列外——微信那边"先回复完再处理下一条"
+   * 是既有行为，把它挪到队列外会让两条消息的回复有乱序的可能（前一条发出慢一点就反超）。
+   *
+   * 返回的 Promise 在这个请求**处理且投递完**之后 resolve，调用方可以直接 await 它去写响应。
+   */
+  private enqueueTurn(input: TurnInput, deliver: (outcome: TurnOutcome) => Promise<void> | void,
+                      onLog?: (line: string) => void): Promise<void> {
+    // 没给日志出口就用 `start()` 时那个：本机入口不经过 `start()` 的调用点传参，
+    // 漏了这一步会让面板那一侧**一行日志都不留**（第一版就是这样，测试抓到了）。
+    const log = onLog ?? this.logSink
+    this.queue = this.queue.then(async () => {
+      const outcome = await this.runTurn(input, log)
+      await deliver(outcome)
+    }).catch((e: any) => appendLog(`队列异常: ${e.message}`))
+    return this.queue
+  }
+
   /** 启动常驻监听 */
   async start(onLog?: (line: string) => void): Promise<void> {
     const token = configService.get('wechatOcToken')
-    if (!token) throw new Error('未登录消息通道, 先运行 weflow-cli login-wechat')
-
-    this.svc = new WechatMessageService({ token })
+    this.logSink = onLog
     this.running = true
+    if (token) {
+      this.svc = new WechatMessageService({ token })
+    } else {
+      // **降级启动**：没有消息通道也要起得来。
+      //
+      // 从前这里直接抛（"未登录消息通道, 先运行 weflow-cli login-wechat"），于是"没登录微信"
+      // == 助手整个起不来——本机的实地记录就是这样（docs/PROJECT_STATE.md 那条）。
+      // 代价要说清：`assistant start` 从此可能"报成功但通道是空的"，所以 status 必须能把
+      // 这两者分开（`messageChannelLoggedIn` 是"配了 token 吗"，它回答不了这个问题）。
+      appendLog('[通道] 未登录消息通道，以本机入口模式启动')
+      onLog?.('⚠ 消息通道未登录：微信里暂时说不了话；本机面板仍然可用')
+    }
 
     // 记忆加载出过事（版本不认识 / 文件坏了）要说出来：否则用户面对一份空记忆，
     // 只会以为「它忘了我」。原文件此时已经留档，所以这句话里带着文件名。
@@ -620,48 +776,46 @@ export class AssistantService {
       onLog?.(`⚠ 记忆: ${this.memory.problem}`)
     }
     const { local } = this.engineConfig()
-    onLog?.(`助手已启动 (bot: ${configService.get('wechatOcAccountId')}, ` +
+    // bot 那一段只在真有通道时报：没有通道还报一个 bot 账号，是让人以为它在收消息
+    onLog?.('助手已启动 (' + (token ? `bot: ${configService.get('wechatOcAccountId')}, ` : '本机入口模式, ') +
       `引擎: ${local ? '本地' : '云端'}, 记忆用户数: ${this.memory.userCount()})`)
+
+    if (!this.svc) return
 
     this.svc.onMessage((msg) => {
       // 串行入队: 并发到达的消息按顺序处理, 记忆窗口不交错
-      this.queue = this.queue.then(async () => {
-        if (!this.running) return
-        const access = this.accessDecision(msg)
-        const sessionId = msg.conversationId
-
-        if (!access.allowed) {
-          privacyGate.audit(`DENY_${access.reason.toUpperCase().replace(/-/g, '_')}`, 0, sessionId.slice(0, 12))
-          onLog?.(`  → 拒绝: ${sessionId.slice(0, 12)}… ${access.reason} (未回复, 不耗 LLM)`)
-          this.maybeAnnounceWhitelistBootstrap(access, msg, onLog)
-          return
-        }
-        if (msg.messageKind !== 'text') {
-          onLog?.(`  → 忽略非文本消息 (${msg.messageKind})`)
-          return
-        }
-        if (this.dailyQuotaLeft() <= 0) {
-          privacyGate.audit('DENY_DAILY_LIMIT', this.dailyCount)
-          appendLog(`[配额] 今日 ${DAILY_LIMIT} 条上限已用尽, 拒绝: ${msg.messageStr.slice(0, 30)}`)
-          await this.svc!.sendText(sessionId, '今日额度已用完, 明天再来吧').catch(() => {})
-          return
-        }
-
-        onLog?.(`[${new Date().toLocaleTimeString('zh-CN')}] ${sessionId.slice(0, 12)}…: ${msg.messageStr.slice(0, 40)}`)
-        try {
-          const reply = await this.handleMessage(sessionId, msg.messageStr, msg.messageKind)
-          this.dailyCount++
-          const ok = await this.svc!.sendText(sessionId, reply)
-          onLog?.(`  → ${ok ? `已回复 (${reply.length}字, 今日 ${this.dailyCount}/${DAILY_LIMIT})` : '回复失败'}`)
-        } catch (e: any) {
-          onLog?.(`  → 处理异常: ${e.message}`)
-          appendLog(`[${new Date().toLocaleTimeString('zh-CN')}] 异常: ${e.message}`)
-        }
-      }).catch((e: any) => appendLog(`队列异常: ${e.message}`))
+      this.enqueueTurn(
+        { sessionId: msg.conversationId, text: msg.messageStr, kind: msg.messageKind, origin: 'wechat', message: msg },
+        async (outcome) => {
+          if (!('text' in outcome) || !outcome.text) return
+          const ok = await this.svc?.sendText(msg.conversationId, outcome.text)
+          if (outcome.status === 'replied') {
+            onLog?.(`  → ${ok ? `已回复 (${outcome.text.length}字, 今日 ${this.dailyCount}/${DAILY_LIMIT})` : '回复失败'}`)
+          } else {
+            onLog?.(`  → ${ok ? '已回复额度提示' : '回复失败'}`)
+          }
+        },
+        onLog,
+      ).catch(() => { /* enqueueTurn 内部已经把异常落进日志 */ })
     })
 
     await this.svc.startPolling()
   }
+
+  /** 本机入口用：投一条消息进同一条队列，返回这一轮的结果 */
+  ask(sessionId: string, text: string, onLog?: (line: string) => void): Promise<TurnOutcome> {
+    let outcome: TurnOutcome = { status: 'error', message: '未取得结果' }
+    return this.enqueueTurn({ sessionId, text, kind: 'text', origin: 'panel' }, (o) => {
+      outcome = o
+      // 投递结果由这一侧报（`runTurn` 不知道投递成没成）
+      if (o.status === 'replied') {
+        (onLog ?? this.logSink)?.(`  → 已回复 (${o.text.length}字, 今日 ${this.dailyCount}/${DAILY_LIMIT}, via=panel)`)
+      }
+    }, onLog).then(() => outcome)
+  }
+
+  /** 消息通道接上了吗（` --local-only`/未登录时是 false）。status 要靠它区分两种"没通道" */
+  isChannelActive(): boolean { return this.svc !== null }
 
   stop(): void {
     this.running = false

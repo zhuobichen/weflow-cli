@@ -90,16 +90,22 @@ async function boot(overrides: Record<string, string> = {}): Promise<Session> {
 test.beforeEach(installFakeChannel)
 test.after(() => { ;(configService as any).get = realGet })
 
-test('没登录消息通道时立刻报错，而且不开始轮询', async () => {
+test('没登录消息通道时**降级启动**：本机入口可用，但不去轮询', async () => {
+  // 这条**改过行为**（原断言是"抛错 '未登录消息通道'"）。理由是被实测记录打脸的：
+  // 本机的 `assistant start` 从来没成功启动过一次，日志尾部就是那句抛错——也就是
+  // "没登录微信" == "助手整个起不来"。现在没有 token 只是没有微信这个入口，
+  // 本机入口照样能用；`isChannelActive()` 让 status 能区分"配了 token"与"通道真的接上了"。
   setConfig({})
-  try {
-    const svc: any = new AssistantService()
-    await svc.start()
-    assert.fail('应该抛错')
-  } catch (error: any) {
-    assert.match(error.message, /未登录消息通道/)
-  }
-  assert.equal(polling, false)
+  const svc: any = new AssistantService()
+  const logs: string[] = []
+  await svc.start((line: string) => logs.push(line))
+
+  assert.equal(polling, false, '没有通道就不该去轮询')
+  assert.equal(svc.isChannelActive(), false, '通道没接上')
+  assert.equal(svc.isRunning(), true, '降级启动了，running 必须是 true——否则每一轮都静默 no-op')
+  assert.ok(logs.some(l => /消息通道未登录/.test(l)), `要说清它没接通道：${logs.join(' | ')}`)
+  assert.ok(logs.some(l => /本机入口模式/.test(l)), '启动行不该谎报一个 bot 账号')
+  assert.doesNotMatch(logs.join(' '), /bot:/, '没有通道时不许报 bot 账号')
 })
 
 test('白名单为空：谁都拒，不回复、不调模型、留审计行', async () => {
