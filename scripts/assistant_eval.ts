@@ -77,6 +77,7 @@ for (const [index, spec] of cases.entries()) {
   console.log(`${String(index + 1).padStart(2)}. ${spec.id.padEnd(22)} ${verdict}  ` +
               `${(observed.elapsedMs / 1000).toFixed(1)}s  工具 ${observed.tools.length} 次：${usage}`)
   for (const problem of problems) console.log(`      · ${problem}`)
+  for (const warning of result.warnings) console.log(`      ⚠ ${warning}`)
   if (problems.length) {
     // 失败时必须看到答复原文：不看就不知道是助手错了还是**这条用例的期望写窄了**
     // （第一版就踩过：正则只写了"失败/出错"，而模型说的是"我暂时查不到"）。

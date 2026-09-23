@@ -41,8 +41,17 @@ export interface EvalCase {
     mustCall?: string[]
     /** 一个都不许调用（比如"别乱伸手"的场景） */
     mustNotCall?: string[]
-    /** 工具调用总次数上限（实测见过一次问句用了 5 次调用） */
+    /**
+     * 工具调用的**硬**上限：超过就算失败。只用来拦"真的失控"（比如撞上 6 轮上限）。
+     *
+     * 别拿它当效率预算——同一句话的调用次数实测在 2~7 之间波动（模型走的路不固定），
+     * 把 5 当底线会造出三成假失败。效率看下面的 `toolBudget`。
+     */
     maxTools?: number
+    /**
+     * 效率预算（**软**）：超了只报一句提示，不算失败。想盯"它是不是在乱试"时用它。
+     */
+    toolBudget?: number
     /** 答复里必须出现的内容 */
     answerMatches?: RegExp
     /** 答复里不许出现的内容 */
@@ -167,10 +176,21 @@ export const EVAL_CASES: EvalCase[] = [
       { displayName: '小明明', username: 'wxid_eval_c', summary: '文档我看看' },
       { displayName: '小明华', username: 'wxid_eval_d', summary: '好的' },
     ],
-    // 上限放到 5：这条要解析一个歧义名字、撞上"匹配多个"、再试着找文档、还读了两条候选——
-    // 4 次调用是**合理的探查**而不是乱试（原来随手写的 3 把正确答案判成了失败）。
-    // 上限的用意是"别失控"，不是"越少越好"。
-    expect: { maxTools: 5, answerMatches: /(哪个|哪一个|更完整|全名|多个|精确|分不清)/ },
+    // 这条实测波动很大：同一句话，调用次数在 2~7 之间（模型走的路不固定），而**每次都如实
+    // 反问"是哪一个"**。所以硬上限放到 8（只拦真的失控），效率另用软预算盯着。
+    expect: { maxTools: 8, toolBudget: 3,
+              answerMatches: /(哪个|哪一个|更完整|全名|多个|精确|分不清|小明明|小明华)/ },
+  },
+  {
+    id: 'reading-stats',
+    // 公众号推送/处理的统计：合成数据，脚本打桩
+    question: '最近哪些公众号发得最多？',
+    scripts: { 'daily_stats.py': { stdout: JSON.stringify({
+      success: true,
+      period: { start: '2026-09-17', end: '2026-09-23', days: 7 },
+      sources: [{ name: '甲号', pushed: 248, processed: 30 }, { name: '乙号', pushed: 9, processed: 0 }],
+    }) } },
+    expect: { mustCall: ['get_reading_stats'], maxTools: 3, answerMatches: /甲号/ },
   },
   {
     id: 'time-window',
@@ -237,10 +257,22 @@ export function judge(spec: EvalCase, observed: Observation): string[] {
   return problems
 }
 
+/**
+ * 效率预算：**只提示、不算失败**。抽成纯函数是为了能离线测——"超了预算要报一句、但绝不能
+ * 让它变成失败"这件事本身是有分量的（把它当硬上限会造出三成假失败，见 `toolBudget` 注释）。
+ */
+export function budgetWarnings(spec: EvalCase, tools: string[]): string[] {
+  const budget = spec.expect.toolBudget
+  if (budget === undefined || tools.length <= budget) return []
+  return [`工具调用 ${tools.length} 次，超出效率预算 ${budget}（${tools.join('、')}）`]
+}
+
 export interface CaseResult {
   spec: EvalCase
   observed: Observation
   problems: string[]
+  /** 软提示：不影响通过与否（效率之类的信号） */
+  warnings: string[]
   /** 数据不齐（比如没有日报归档）而跳过，不计入通过率 */
   skipped?: string
 }
@@ -393,5 +425,5 @@ export async function runCase(spec: EvalCase, userId: string): Promise<CaseResul
   const observed: Observation = { tools, cloudCalls, answer, facts, error,
                                  traceArgs: readLastTraceArgs(),
                                  elapsedMs: Date.now() - started }
-  return { spec, observed, problems: judge(spec, observed) }
+  return { spec, observed, problems: judge(spec, observed), warnings: budgetWarnings(spec, tools) }
 }

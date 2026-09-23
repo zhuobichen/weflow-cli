@@ -11,12 +11,12 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-const { judge, summarize, EVAL_CASES } =
+const { judge, summarize, budgetWarnings, EVAL_CASES } =
   await import('../src/services/assistantEval.js')
 
 function observed(patch: Record<string, unknown> = {}) {
   return {
-    tools: [], cloudCalls: 1, answer: '', facts: [], elapsedMs: 1, ...patch,
+    tools: [], cloudCalls: 1, answer: '', facts: [], traceArgs: [], elapsedMs: 1, ...patch,
   } as any
 }
 
@@ -75,9 +75,9 @@ test('一条用例可以同时踩多条：全部报出来', () => {
 
 test('summarize 数的是"问题为空的条数"，跳过的不算', () => {
   const report = summarize([
-    { spec: base, observed: observed(), problems: [] },
-    { spec: base, observed: observed(), problems: ['x'] },
-    { spec: base, observed: observed(), problems: ['y'], skipped: '没有日报归档' },
+    { spec: base, observed: observed(), problems: [], warnings: [] },
+    { spec: base, observed: observed(), problems: ['x'], warnings: [] },
+    { spec: base, observed: observed(), problems: ['y'], warnings: [], skipped: '没有日报归档' },
   ] as any)
   assert.equal(report.passed, 1)
   assert.equal(report.failed, 1)
@@ -88,7 +88,7 @@ test('用例表：id 唯一、每条至少有一条断言、正反不许自相�
   const ids = EVAL_CASES.map(c => c.id)
   assert.equal(new Set(ids).size, ids.length, `id 有重复：${ids.join('、')}`)
   for (const spec of EVAL_CASES) {
-    const has = ['mustCall', 'mustNotCall', 'maxTools', 'answerMatches', 'answerForbids', 'memoryContains']
+    const has = ['mustCall', 'mustNotCall', 'maxTools', 'toolBudget', 'answerMatches', 'answerForbids', 'memoryContains']
       .some(key => (spec.expect as any)[key] !== undefined)
     assert.ok(has, `${spec.id} 什么断言都没有——这种用例只会让报告好看`)
     const both = (spec.expect.mustCall ?? []).filter(t => (spec.expect.mustNotCall ?? []).includes(t))
@@ -109,4 +109,18 @@ test('用例表：问句里不许出现真实会话名（合成数据是这套�
   for (const spec of EVAL_CASES) {
     assert.doesNotMatch(spec.question, /丁ding|群|真实/, `${spec.id} 的问句看着像真数据`)
   }
+})
+
+test('效率预算：超了只报提示，绝不变成失败', () => {
+  // 同一句话的调用次数实测在 2~7 之间波动，所以"5 次"不构成底线；当硬上限会造出假失败，
+  // 而假失败会训练人忽略评测。硬的是 maxTools，软的是这个。
+  const spec = { ...base, expect: { toolBudget: 3 } } as any
+  assert.deepEqual(budgetWarnings(spec, ['a', 'b', 'c']), [])
+  const warned = budgetWarnings(spec, ['a', 'b', 'c', 'd'])
+  assert.equal(warned.length, 1)
+  assert.match(warned[0], /超出效率预算 3/)
+  assert.deepEqual(judge(spec, observed({ tools: ['a', 'b', 'c', 'd'] })), [],
+                   '软预算超了不许让它变成判定失败')
+  assert.deepEqual(budgetWarnings({ ...base, expect: {} } as any, ['a', 'b', 'c', 'd', 'e']), [],
+                   '没设预算就不提示')
 })

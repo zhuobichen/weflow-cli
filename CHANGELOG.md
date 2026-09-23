@@ -8,6 +8,22 @@ All notable user-facing changes are recorded here. This project follows [Semanti
 
 ### Added
 
+- **A reading-stats tool, and the eval learned to tell a floor from a budget.** `get_reading_stats`
+  answers "what have I been reading / which accounts post the most" from the local archive (it reuses
+  `daily_stats.py` rather than recomputing the same numbers). Its second purpose is honesty about
+  coverage: when the daily has not run, every account's processed count is zero, and saying "nothing was
+  processed in these 7 days; the last report with content was 2026-09-05 (19 days ago)" is a different
+  statement from letting the user believe those accounts had no content. That is how the staleness was
+  found - a 7-day window showed all zeros while a 30-day window did not, and the difference was not the
+  accounts.
+
+  The eval now separates two things it had conflated: **floors are hard, budgets are soft.** The
+  ambiguous-contact case was failing intermittently on a tool-call cap of 5 while every single run
+  correctly asked which person was meant - the same question produced anywhere from 2 to 7 calls, so
+  the cap was measuring the model's route rather than a defect. `maxTools` is now only a runaway guard
+  (raised to 8) and `toolBudget` reports exceeding the budget as a warning that never fails the run.
+  A flaky case is worse than no case: it teaches people to ignore the report.
+
 - **`contacts -k` only searched the first N rows, and the assistant's name lookup had a blind spot.**
   Two defects found by trying to resolve a person by name on real data. First, the keyword filter ran
   **after** `LIMIT`: `get_contacts` fetched the first `limit` rows of `Name2Id` and only then filtered

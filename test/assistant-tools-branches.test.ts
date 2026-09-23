@@ -906,3 +906,46 @@ test('通讯录里匹配到多个：不猜，照旧说没找到', async () => {
   const out = await run('get_messages', { contact: '小王' })
   assert.match(out, /没找到/, '有歧义就不许挑一个——宁可让它说不出话，也不能读错人的聊天')
 })
+
+// ------------------------------------------------- 阅读统计（公众号推送 vs 日报处理）
+
+test('get_reading_stats 列出推送最多的号，并把参数传给脚本', async () => {
+  const calls = stubScript(JSON.stringify({
+    success: true,
+    period: { start: '2026-09-17', end: '2026-09-23', days: 7 },
+    sources: [
+      { name: '甲号', pushed: 248, processed: 12 },
+      { name: '乙号', pushed: 156, processed: 30 },
+      { name: '丙号', pushed: 9, processed: 0 },
+    ],
+  }))
+  const out = await run('get_reading_stats', { days: 7 })
+
+  assert.match(out, /3 个公众号有推送/)
+  assert.match(out, /发得最多：甲号\(248\)、乙号\(156\)、丙号\(9\)/)
+  assert.match(out, /日报处理得最多：乙号\(30\)、甲号\(12\)/, '按处理数排序，0 的不列')
+  assert.deepEqual(calls[0].args, ['--days', '7', '--json'])
+  assert.match(calls[0].script, /daily_stats\.py$/)
+})
+
+test('日报没在跑时直说"没在跑"，而不是让用户以为那些号没内容', async () => {
+  // 实测就是这么发现的：最近 7 天 processed 全是 0，而 30 天窗口里全是非零——
+  // 差别不在号上，在**日报从 09-05 起就没再跑过**。
+  stubScript(JSON.stringify({
+    success: true, period: { start: '2026-09-17', end: '2026-09-23' },
+    sources: [{ name: '甲号', pushed: 248, processed: 0 }],
+  }))
+  const out = await run('get_reading_stats', { days: 7 })
+  assert.match(out, /日报没有任何处理记录/)
+  assert.match(out, /最近一次有内容的日报是 \d{4}-\d{2}-\d{2}/, '要说清最近一次是哪天')
+  assert.doesNotMatch(out, /日报处理得最多/, '全是 0 就别列"处理得最多"')
+})
+
+test('脚本失败时如实说失败', async () => {
+  stubScript('', 2, '需要 sqlcipher3')
+  assert.match(await run('get_reading_stats', {}), /读取公众号统计失败/)
+})
+
+test('days 越界变成可读的参数错误', async () => {
+  assert.equal(await run('get_reading_stats', { days: 999 }), '(参数错误: days 必须是 1-90 的整数)')
+})

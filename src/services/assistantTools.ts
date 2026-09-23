@@ -164,6 +164,24 @@ async function ensureDb(): Promise<void> {
   await chatService.connect()
 }
 
+/** 最近一份**有内容**的日报是哪天，以及那是几天前。算不出来就回空串——不猜。 */
+function lastDailyNote(): string {
+  try {
+    const days = readdirSync(BIZ_DAILY_DIR)
+      .filter(name => /^\d{4}-\d{2}-\d{2}$/.test(name)).sort().reverse().slice(0, 30)
+    for (const day of days) {
+      const file = join(BIZ_DAILY_DIR, day, '.articles.json')
+      if (!existsSync(file)) continue
+      const payload = JSON.parse(readFileSync(file, 'utf8'))
+      if ((payload?.articles ?? []).length) {
+        const ago = Math.round((Date.now() - new Date(`${day}T00:00:00`).getTime()) / 86_400_000)
+        return `；最近一次有内容的日报是 ${day}（${ago} 天前）`
+      }
+    }
+  } catch { /* 扫不出来就什么都不说，而不是猜一个日期 */ }
+  return ''
+}
+
 interface TalkerCandidate {
   username: string
   displayName?: string | null
@@ -465,6 +483,21 @@ export const TOOL_DEFS: ToolDef[] = [
       name: 'get_stats',
       description: '获取用户本地微信数据统计(会话数/收藏总数等)。',
       parameters: { type: 'object', properties: {} },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'get_reading_stats',
+      description: '公众号推送与日报处理的统计：哪些号发得多、哪些被日报处理得多。'
+        + '回答"我最近都在读什么/哪个号发得最多"这类问题时用它。'
+        + '**日报没在跑的时候它会直说**（那不是"没内容"）。',
+      parameters: {
+        type: 'object',
+        properties: {
+          days: { type: 'number', description: '统计最近多少天，默认 7，上限 90' },
+        },
+      },
     },
   },
   {
@@ -919,6 +952,28 @@ export async function executeTool(name: string, args: Record<string, any>, ctx: 
         const sessions = await chatService.listSessions(undefined, 1000)
         const fav = await chatService.getFavorites({ limit: 1 })
         return `会话数: ${sessions.length}\n收藏总数: ${fav.success ? fav.total : '未知'}`
+      }
+      case 'get_reading_stats': {
+        const days = boundedToolInteger(args.days, 7, 90, 'days')
+        const r = await runPythonJson<any>('daily_stats.py',
+          ['--days', String(days), '--json'], { timeoutMs: 60_000 })
+        if (!r.ok) return fail('读取公众号统计失败', r)
+        const rows: any[] = r.data?.sources ?? []
+        if (!rows.length) return `(最近 ${days} 天没有公众号推送记录)`
+        const period = r.data?.period ?? {}
+        const byPushed = [...rows].sort((a, b) => (b.pushed ?? 0) - (a.pushed ?? 0)).slice(0, 5)
+        const lines = [`最近 ${days} 天（${period.start} 至 ${period.end}）：${rows.length} 个公众号有推送`]
+        lines.push('发得最多：' + byPushed.map(x => `${x.name}(${x.pushed})`).join('、'))
+        const processed = rows.filter(x => (x.processed ?? 0) > 0)
+          .sort((a, b) => (b.processed ?? 0) - (a.processed ?? 0)).slice(0, 5)
+        if (processed.length) {
+          lines.push('日报处理得最多：' + processed.map(x => `${x.name}(${x.processed})`).join('、'))
+        } else {
+          // **直说日报没在跑**：这时"处理数 0"不是"这些号没内容"，而是日报压根没运行。
+          // 把它混成"没读到东西"，用户会去查号，而该查的是日报任务。
+          lines.push(`这 ${days} 天日报没有任何处理记录` + lastDailyNote())
+        }
+        return lines.join('\n')
       }
       case 'search_memory': {
         const hits = ctx.memory.searchFacts(ctx.userId, String(args.keyword || ''))
