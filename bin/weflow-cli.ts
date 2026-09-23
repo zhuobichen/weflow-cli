@@ -967,7 +967,7 @@ const configurableKeys = [
   'dashscopeApiKey', 'favPassphrase',
   'wereadApiKey',
   'assistantPrivacy', 'assistantWhitelist', 'assistantGroupWhitelist',
-  'assistantGroupRequireMention', 'assistantFastRoute',
+  'assistantGroupRequireMention', 'assistantFastRoute', 'assistantPanelUser',
   'dailySources', 'dailySourceCategories',
   'dailyExcludeTopics', 'dailyAiEnabled',
   'emoticonSeed',
@@ -5579,13 +5579,23 @@ assistantCmd
     const token = configService.get('wechatOcToken')
     const aiKey = configService.get('deepseekApiKey')
     const { privacyGate } = await import('../src/services/assistantPrivacy.js')
+    const { readEndpoint } = await import('../src/panel/endpoint.js')
     const wl = String(configService.get('assistantWhitelist') || '').trim()
     const groups = String(configService.get('assistantGroupWhitelist') || '').trim()
+    // 端点是**运行态**的权威来源：它由守护进程原子写出，而且读取端会探活（进程没了就当没有）。
+    // 它能回答一个配置回答不了的问题：**通道到底接上了没有**。
+    // `messageChannelLoggedIn` 说的只是"配了 token 吗"——token 配了而进程以本机模式跑着，
+    // 这两个字段会一个 true 一个 false，今天完全没有别的办法区分。
+    const endpoint = alive ? readEndpoint() : null
     if (opts.json) {
       console.log(JSON.stringify({
         success: true,
         daemonRunning: alive,
         messageChannelLoggedIn: !!token,
+        channelActive: !!endpoint && endpoint.channel === 'wechat',
+        mode: endpoint ? endpoint.channel : null,
+        panelPort: endpoint ? endpoint.port : null,
+        memoryBucket: endpoint ? endpoint.memoryBucket : null,
         aiConfigured: privacyGate.isLocalInference() || !!aiKey,
         localInference: privacyGate.isLocalInference(),
         privacyMode: privacyGate.mode(),
@@ -5597,6 +5607,12 @@ assistantCmd
     }
     console.log(`守护进程: ${alive ? chalk.green(`运行中 (pid ${pid})`) : chalk.gray('未运行')}`)
     console.log(`消息通道: ${token ? chalk.green('已登录') : chalk.red('未登录 (先 login-wechat)')}`)
+    if (endpoint) {
+      console.log(`  └ 实际接入: ${endpoint.channel === 'wechat' ? chalk.green('微信') : chalk.yellow('仅本机入口')}`
+        + `｜本机入口 http://127.0.0.1:${endpoint.port}｜记忆桶 ${endpoint.memoryBucket}`)
+    } else if (alive) {
+      console.log(chalk.gray('  └ 本机入口未启动（看 assistant log 里的“本机入口启动失败”）'))
+    }
     console.log(`LLM 大脑: ${aiKey ? chalk.green('DeepSeek 已配置') : chalk.gray('未配置 (config set deepseekApiKey)')}`)
     console.log(`隐私模式: ${chalk.cyan(privacyGate.mode())}${privacyGate.isLocalInference() ? chalk.green(' (本地推理, 数据不出境)') : chalk.gray(' (工具结果脱敏后出境)')}`)
     console.log(`白名单: ${wl ? chalk.green(`${wl.split(/[,;\s]+/).filter(Boolean).length} 人`) : chalk.red('未设置 (默认拒绝所有人; config set assistantWhitelist "<@im.wechat ID>")')}`)

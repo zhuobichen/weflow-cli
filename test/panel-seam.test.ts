@@ -25,6 +25,12 @@ import { join } from 'node:path'
 const HOME = mkdtempSync(join(tmpdir(), 'weflow-panel-seam-'))
 process.env.HOME = HOME
 process.env.USERPROFILE = HOME
+// 这些用例会真的把助手的本机端点起起来（`start()` 里就会起）。
+// 端口给 0 让内核分配：否则每个用例都去抢生产端口 8766，用例之间也互相抢。
+process.env.WEFLOW_PANEL_PORT = '0'
+
+/** 收尾用：所有 `start()` 过的实例都要 stop，否则文件进程退不出去 */
+const boots: any[] = []
 
 const { AssistantService } = await import('../src/services/assistantService.js')
 const { WechatMessageService } = await import('../src/services/wechatMessageService.js')
@@ -63,6 +69,7 @@ async function boot(overrides: Record<string, string> = {}, opts: { hold?: boole
   installFakeChannel()
   setConfig({ wechatOcToken: 'fake-token', wechatOcAccountId: 'bot-1', ...overrides })
   const svc: any = new AssistantService()
+  boots.push(svc)
 
   let release!: () => void
   const gate = new Promise<void>((r) => { release = r })
@@ -92,8 +99,15 @@ async function boot(overrides: Record<string, string> = {}, opts: { hold?: boole
   }
 }
 
+/** 每个 boot 出来的实例都要收尾：`start()` 会把本机端点真的起起来，
+ *  不 stop 就留下一个活着的监听，这个**文件进程**因此退不出去——
+ *  node:test 会把整个文件报成 failed，而里面每条用例都是绿的。 */
 test.beforeEach(installFakeChannel)
-test.after(() => { ;(configService as any).get = realGet })
+test.after(async () => {
+  for (const s of boots) s.stop()
+  await new Promise(r => setTimeout(r, 100))
+  ;(configService as any).get = realGet
+})
 
 // ------------------------------------------------------ 白名单只管微信，不管本机
 

@@ -72,6 +72,8 @@ interface CliConfig {
   assistantGroupRequireMention: string
   /** 助手单轮快路径（D-035）：off(默认，与今天逐字段一致) | log(只记「本来会走哪条」) | on */
   assistantFastRoute: string
+  /** 本机面板用哪个记忆桶（空 = 自动：白名单恰好一条就用它）。见 src/panel/userId.ts */
+  assistantPanelUser: string
   dailySources: string
   /** 公众号类别映射，JSON 对象：公众号名称或 gh_ ID -> 类别 */
   dailySourceCategories: string
@@ -98,7 +100,7 @@ const CONFIG_DIR = join(homedir(), '.weflow-cli')
 const CONFIG_FILE = join(CONFIG_DIR, 'config.json')
 
 export class ConfigService {
-  private config: CliConfig = { dbPath: '', wxid: '', decryptKey: '', decryptKey3x: '', dataVersion: '', dbPath3x: '', ntDbPath: '', ntKey: '', ntSalt: '', contactDbPath: '', contactKey: '', contactSalt: '', wechatOcToken: '', wechatOcAccountId: '', wechatOcBaseUrl: '', wechatOcSyncBuf: '', wechatOcContextTokens: '', whitelist: [], blacklist: [], whitelistEntries: [], blacklistEntries: [], vaultRepo: '', aiEngine: 'deepseek', wereadApiKey: '', deepseekApiKey: '', typesafeApiKey: '', dashscopeApiKey: '', snsDbPath: '', snsKey: '', snsSalt: '', favDbPath: '', favKey: '', favPassphrase: '', emoticonSeed: '', assistantPrivacy: 'strict', localModel: '', aiBaseUrl: '', aiModel: '', assistantWhitelist: '', assistantGroupWhitelist: '', assistantGroupRequireMention: 'true', assistantFastRoute: 'off', dailySources: '', dailySourceCategories: '', dailyExcludeTopics: '', dailyAiEnabled: 'true' }
+  private config: CliConfig = { dbPath: '', wxid: '', decryptKey: '', decryptKey3x: '', dataVersion: '', dbPath3x: '', ntDbPath: '', ntKey: '', ntSalt: '', contactDbPath: '', contactKey: '', contactSalt: '', wechatOcToken: '', wechatOcAccountId: '', wechatOcBaseUrl: '', wechatOcSyncBuf: '', wechatOcContextTokens: '', whitelist: [], blacklist: [], whitelistEntries: [], blacklistEntries: [], vaultRepo: '', aiEngine: 'deepseek', wereadApiKey: '', deepseekApiKey: '', typesafeApiKey: '', dashscopeApiKey: '', snsDbPath: '', snsKey: '', snsSalt: '', favDbPath: '', favKey: '', favPassphrase: '', emoticonSeed: '', assistantPrivacy: 'strict', localModel: '', aiBaseUrl: '', aiModel: '', assistantWhitelist: '', assistantGroupWhitelist: '', assistantGroupRequireMention: 'true', assistantFastRoute: 'off', assistantPanelUser: '', dailySources: '', dailySourceCategories: '', dailyExcludeTopics: '', dailyAiEnabled: 'true' }
 
   /** 本进程修改过、待回写的字段 (多进程并发写保护) */
   private dirty = new Set<keyof CliConfig>()
@@ -163,6 +165,7 @@ export class ConfigService {
           assistantGroupWhitelist: data.assistantGroupWhitelist || '',
           assistantGroupRequireMention: data.assistantGroupRequireMention === 'false' ? 'false' : 'true',
           assistantFastRoute: data.assistantFastRoute || 'off',
+          assistantPanelUser: data.assistantPanelUser || '',
           dailySources: data.dailySources || '',
           dailySourceCategories: data.dailySourceCategories || '',
           dailyExcludeTopics: data.dailyExcludeTopics || '',
@@ -351,7 +354,7 @@ export class ConfigService {
   }
 
   clear(): void {
-    this.config = { dbPath: '', wxid: '', decryptKey: '', decryptKey3x: '', dataVersion: '', dbPath3x: '', ntDbPath: '', ntKey: '', ntSalt: '', contactDbPath: '', contactKey: '', contactSalt: '', wechatOcToken: '', wechatOcAccountId: '', wechatOcBaseUrl: '', wechatOcSyncBuf: '', wechatOcContextTokens: '', whitelist: [], blacklist: [], whitelistEntries: [], blacklistEntries: [], vaultRepo: '', aiEngine: 'deepseek', wereadApiKey: '', deepseekApiKey: '', typesafeApiKey: '', dashscopeApiKey: '', snsDbPath: '', snsKey: '', snsSalt: '', favDbPath: '', favKey: '', favPassphrase: '', emoticonSeed: '', assistantPrivacy: 'strict', localModel: '', aiBaseUrl: '', aiModel: '', assistantWhitelist: '', assistantGroupWhitelist: '', assistantGroupRequireMention: 'true', assistantFastRoute: 'off', dailySources: '', dailySourceCategories: '', dailyExcludeTopics: '', dailyAiEnabled: 'true' }
+    this.config = { dbPath: '', wxid: '', decryptKey: '', decryptKey3x: '', dataVersion: '', dbPath3x: '', ntDbPath: '', ntKey: '', ntSalt: '', contactDbPath: '', contactKey: '', contactSalt: '', wechatOcToken: '', wechatOcAccountId: '', wechatOcBaseUrl: '', wechatOcSyncBuf: '', wechatOcContextTokens: '', whitelist: [], blacklist: [], whitelistEntries: [], blacklistEntries: [], vaultRepo: '', aiEngine: 'deepseek', wereadApiKey: '', deepseekApiKey: '', typesafeApiKey: '', dashscopeApiKey: '', snsDbPath: '', snsKey: '', snsSalt: '', favDbPath: '', favKey: '', favPassphrase: '', emoticonSeed: '', assistantPrivacy: 'strict', localModel: '', aiBaseUrl: '', aiModel: '', assistantWhitelist: '', assistantGroupWhitelist: '', assistantGroupRequireMention: 'true', assistantFastRoute: 'off', assistantPanelUser: '', dailySources: '', dailySourceCategories: '', dailyExcludeTopics: '', dailyAiEnabled: 'true' }
     // clear 意图是全量重置: 所有字段标记为脏, 覆盖磁盘上的全部旧值
     this.dirty = new Set(Object.keys(this.config) as (keyof CliConfig)[])
     this.save()

@@ -23,6 +23,9 @@ import type { Message, WechatInboundMessage } from '../types.js'
 import { buildEvidenceReviewInput } from './evidenceService.js'
 import { evaluateAssistantAccess } from './assistantRouting.js'
 import { nowLine } from '../utils/dateRange.js'
+import { resolvePanelUserId, PANEL_FALLBACK_BUCKET } from '../panel/userId.js'
+import { startPanelServer, type PanelServer } from '../panel/server.js'
+import { clearEndpoint } from '../panel/endpoint.js'
 
 const MAX_TOOL_ROUNDS = 6
 /** 每日 LLM 处理上限 (护栏: 防 bug 死循环/异常流量烧钱; 0 = 不限制) */
@@ -164,6 +167,10 @@ export class AssistantService {
   private inFlight = false
   /** `start()` 给的日志出口。本机入口不经过那个调用点传参，所以存一份 */
   private logSink: ((line: string) => void) | undefined
+  /** 本机入口的回环端点（见 src/panel/server.ts 的信任边界） */
+  private panelServer: PanelServer | null = null
+  /** 本机入口用哪个记忆桶。与微信直聊同一个 id 时才是"共用一个大脑" */
+  private memoryBucket: string = PANEL_FALLBACK_BUCKET
 
   private engineConfig(): { url: string; model: string; key: string | null; local: boolean } {
     const engine = String(configService.get('aiEngine') || 'deepseek')
@@ -780,6 +787,28 @@ export class AssistantService {
     onLog?.('助手已启动 (' + (token ? `bot: ${configService.get('wechatOcAccountId')}, ` : '本机入口模式, ') +
       `引擎: ${local ? '本地' : '云端'}, 记忆用户数: ${this.memory.userCount()})`)
 
+    // 本机入口：**只绑回环** + 每次启动随机口令。悬浮窗与 `weflow-cli panel` 都走它，
+    // 于是两个入口落在**同一个进程**里（配额、串行队列、记忆都只有一份）。
+    this.memoryBucket = resolvePanelUserId({
+      whitelist: configService.get('assistantWhitelist'),
+      configured: configService.get('assistantPanelUser'),
+    }).userId
+    try {
+      this.panelServer = await startPanelServer({
+        service: this,
+        memoryBucket: this.memoryBucket,
+        channel: token ? 'wechat' : 'local',
+        onLog,
+      })
+      appendLog(`[本机入口] 监听 127.0.0.1:${this.panelServer.port}`
+        + ` channel=${token ? 'wechat' : 'local'} bucket=${this.memoryBucket}`)
+      onLog?.(`本机入口: http://127.0.0.1:${this.panelServer.port}（记忆桶 ${this.memoryBucket}）`)
+    } catch (e: any) {
+      // 端点起不来不该把助手一起弄死：微信那边还能用（端口被占是唯一常见的失败）
+      appendLog(`[本机入口] 启动失败: ${e.message}`)
+      onLog?.(`⚠ 本机入口启动失败: ${e.message}`)
+    }
+
     if (!this.svc) return
 
     this.svc.onMessage((msg) => {
@@ -814,13 +843,31 @@ export class AssistantService {
     }, onLog).then(() => outcome)
   }
 
-  /** 消息通道接上了吗（` --local-only`/未登录时是 false）。status 要靠它区分两种"没通道" */
+  /** 消息通道接上了吗（未登录时是 false）。status 要靠它区分两种"没通道" */
   isChannelActive(): boolean { return this.svc !== null }
+
+  /** 配额用量。**内存态**（重启归零），所以它不是"今天一共花了多少"的账本，是护栏的余量 */
+  quotaState(): { used: number; limit: number } {
+    this.dailyQuotaLeft()   // 先让它处理日期翻转，否则跨零点后会报昨天的数
+    return { used: this.dailyCount, limit: DAILY_LIMIT }
+  }
 
   stop(): void {
     this.running = false
     this.svc?.stop()
+    // 关掉本机入口，并**主动删掉端点文件**——这一条与"崩溃时不删"是两回事：
+    // 走 `stop()` 的是有序关闭，删掉能让面板立刻知道；崩溃/SIGTERM 残留的那种，
+    // 由读取端探活（`readEndpoint()` 会检查 pid）兜住。
+    const closing = this.panelServer
+    this.panelServer = null
+    if (closing) {
+      clearEndpoint()
+      void closing.close()
+    }
   }
+
+  /** 本机入口的实际监听端口；没起来就是 null */
+  panelPort(): number | null { return this.panelServer ? this.panelServer.port : null }
 
   isRunning(): boolean { return this.running }
   memoryUserCount(): number { return this.memory.userCount() }

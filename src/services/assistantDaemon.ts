@@ -8,6 +8,7 @@ import os from 'os'
 import { spawn, type ChildProcess } from 'child_process'
 import { resolvePackageRoot } from '../utils/packageRoot.js'
 import { createPythonProcessEnv } from '../utils/pythonProcessEnv.js'
+import { clearEndpoint } from '../panel/endpoint.js'
 
 const DIR = join(os.homedir(), '.weflow-cli')
 const PID_FILE = join(DIR, 'assistant.pid')
@@ -147,6 +148,9 @@ export function stopDaemon(): { stopped: boolean; message: string } {
     // Windows 下 SIGTERM/SIGKILL 等价 terminate
     process.kill(pid!, 'SIGTERM')
     rmSync(PID_FILE, { force: true })
+    // 端点文件也删掉：子进程收的是 SIGTERM，**不会**跑到 `AssistantService.stop()` 里去清理，
+    // 所以这里替它删。删得掉最好，删不掉也不影响正确性——读取端会探活（见 panel/endpoint.ts）。
+    clearEndpoint()
     appendLog(`--- ${new Date().toLocaleString('zh-CN')} daemon stopped manually ---`)
     return { stopped: true, message: `已停止 (pid ${pid})` }
   } catch (e: any) {
