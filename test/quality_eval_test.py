@@ -312,3 +312,83 @@ class ConsistencyTests(unittest.TestCase):
         self.assertEqual(report['total'], 0)
         self.assertEqual(report['conflicts'], 0)
         self.assertIsNone(report['conflictRate'])
+
+
+class ExcerptTests(unittest.TestCase):
+    """给标注者看的那 400 字：跳过样板，否则改判标题。"""
+
+    def test_the_source_block_is_skipped(self):
+        body = ('# 某标题\n'
+                '> 来源：某号\n> 时间：2026-09-01 10:00\n'
+                '> 原文：[阅读原文](http://mp.weixin.qq.com/s?__biz=x)\n'
+                '---\n## AI 摘要\n正文的第一句话在这里，这才是要判的东西。')
+        self.assertTrue(qe.excerpt_of(body).startswith('正文的第一句话'))
+        self.assertNotIn('阅读原文', qe.excerpt_of(body))
+
+    def test_the_excerpt_is_bounded(self):
+        body = '正文。' * 500
+        self.assertLessEqual(len(qe.excerpt_of(body, 100)), 100)
+
+    def test_newlines_are_flattened(self):
+        # 清单是一行一条打印的，换行会把编号错开
+        excerpt = qe.excerpt_of('第一行\n第二行\n第三行')
+        self.assertNotIn('\n', excerpt)
+        self.assertIn('第一行 第二行', excerpt)
+
+    def test_a_body_that_is_all_boilerplate_does_not_crash(self):
+        self.assertEqual(qe.excerpt_of('# 标题\n> 来源：x'), '')
+        self.assertEqual(qe.excerpt_of(''), '')
+        self.assertEqual(qe.excerpt_of(None), '')
+
+
+class ExcerptSectionTests(unittest.TestCase):
+    """摘要段优先——正文里还有一份标题、一份样板和清洗残留。"""
+
+    FULL = ('# 某标题\n'
+            '> 来源：某号\n> 时间：2026-09-01 10:00\n'
+            '> 原文：[阅读原文](http://mp.weixin.qq.com/s?__biz=x)\n'
+            '---\n## AI 摘要\n摘要的第一句话，这才是要判的东西。\n'
+            '---\n## 正文\n# 某标题\n某号 某号 某号\n'
+            '在小说阅读器读本章\n正文里那句又长又啰嗦的原话在这儿。')
+
+    def test_the_summary_is_preferred_over_the_scraped_body(self):
+        excerpt = qe.excerpt_of(self.FULL)
+        self.assertTrue(excerpt.startswith('摘要的第一句话'))
+        self.assertNotIn('某号 某号', excerpt, '样板不该进来')
+        self.assertNotIn('在小说阅读器', excerpt, '清洗残留不该进来')
+
+    def test_without_a_summary_it_falls_back_to_the_body(self):
+        body = '# 某标题\n> 来源：某号\n---\n## 正文\n正文第一句。\n## 一、小节\n后面的话'
+        self.assertTrue(qe.excerpt_of(body).startswith('正文第一句'))
+
+    def test_with_neither_it_takes_the_first_real_paragraph(self):
+        body = '# 某标题\n> 来源：某号\n---\n没有小标题的正文第一句。'
+        self.assertTrue(qe.excerpt_of(body).startswith('没有小标题的正文第一句'))
+
+    def test_a_summary_heading_with_nothing_under_it_falls_through(self):
+        # 空摘要（`--no-summary` 的产物）不能把整条摘录变成空串
+        body = '# 某标题\n## AI 摘要\n## 正文\n正文在这儿。'
+        self.assertTrue(qe.excerpt_of(body).startswith('正文在这儿'))
+
+
+class BandSamplingDeterminismTests(unittest.TestCase):
+    """同一个 seed 必须抽出同一批——否则"固定种子"是句空话。"""
+
+    @staticmethod
+    def item(n, score):
+        return {'day': '2026-09-%02d' % (n % 28 + 1), 'url': 'http://x/%d' % n,
+                'title': '第 %d 篇' % n, 'jev': {'includeScore': score}}
+
+    def test_the_same_items_in_a_different_order_give_the_same_draw(self):
+        # 这正是线上发生的事：`scored` 按并发完成顺序追加，两次运行的顺序不同，
+        # 于是同一个 seed 抽出的却是两批不同的文章。
+        items = [self.item(n, (n % 10) / 10.0) for n in range(60)]
+        first = qe.draw_by_band(list(items), 20, 20260921)
+        second = qe.draw_by_band(list(reversed(items)), 20, 20260921)
+        self.assertEqual([i['title'] for i in first], [i['title'] for i in second])
+
+    def test_a_different_seed_still_gives_a_different_draw(self):
+        items = [self.item(n, (n % 10) / 10.0) for n in range(60)]
+        a = qe.draw_by_band(list(items), 20, 1)
+        b = qe.draw_by_band(list(items), 20, 2)
+        self.assertNotEqual([i['title'] for i in a], [i['title'] for i in b])

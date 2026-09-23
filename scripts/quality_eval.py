@@ -10,8 +10,9 @@
     python scripts/quality_eval.py sample --n 50
 
     # 2. 打开 ~/.weflow-cli/labels/<时间戳>.json，把每条的 label 填上：
-    #    {"topic": "学术", "include": true}    —— 两栏，一分钟能填十几条
+    #    {"topic": "学术", "relevance": "中", "include": true}   —— 三栏，一分钟能填十几条
     #    没把握的留 null，它会被算作"未标注"而不是"标错"
+    #    （打印出来的那张清单是**盲的**：不显示模型的答案，否则一致率会被锚高）
 
     # 3. 算账：准确率、**校准曲线**、以及阈值应该定在哪
     python scripts/quality_eval.py score ~/.weflow-cli/labels/<时间戳>.json
@@ -19,6 +20,10 @@
 **为什么现场打分而不是用存档标签**：磁盘上的文章绝大多数生成于概率字段引入之前，
 没有 includeScore 可对；而且存档的 topic 本身就是要被检验的那个东西（实测过它一天之内
 把 364 篇全判成"学术"）。所以样本必须现场用生产路径打分，才有 (概率, 人工标签) 配对。
+
+**分数会按文章路径缓存**（`~/.weflow-cli/labels/.jev-scores.json`）：模型每次给的分数会有
+微小差异，跨过一个档位边界就换掉整批样本（实测同一条命令连跑两次，50 条里 7 个位置不同）。
+缓存之后 `--seed` 才真的定住样本，顺带重跑不再花额度；模型换了或判据改了用 `--refresh`。
 
 **它不写进仓库**：标签文件落在 `~/.weflow-cli/labels/`，因为里面是文章标题与你的判断。
 """
@@ -43,6 +48,8 @@ TZ = timezone(timedelta(hours=8))
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DAILY_ROOT = os.path.join(ROOT, 'output', 'biz-daily')
 LABEL_DIR = os.path.join(os.path.expanduser('~'), '.weflow-cli', 'labels')
+# 按文章路径（`id`）缓存的判断结果。见 `load_score_cache`：没有它，`--seed` 定不住样本。
+SCORE_CACHE = os.path.join(LABEL_DIR, '.jev-scores.json')
 
 WORKERS = 6
 EXCERPT = 400
@@ -67,6 +74,33 @@ CONTRADICTION_LOW_USEFUL = (0.5, 0.8)     # 相关度落到「低」而收录分
 LOW_TOPIC_CONFIDENCE = 0.5
 
 
+def load_score_cache():
+    """<-> 文章路径 → 那份判断。**为什么要缓存**：`--seed` 只能定住"抽哪几篇"，定不住分数——
+    分数由模型现场给出，同一篇两次可能 0.49 / 0.52 地跨过一个档位边界，于是**分档抽样
+    抽出来的样本又变了**（实测：同一条命令连跑两次，50 条里有 7 个位置不一样）。把分数
+    按文章路径缓存住，样本才真的可复现；顺带重跑不再花额度。
+
+    代价是分数会旧：模型换了、判据改了都要 `--refresh`。
+    """
+    try:
+        with open(SCORE_CACHE, encoding='utf-8') as handle:
+            data = json.load(handle)
+        return data if isinstance(data, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def save_score_cache(cache):
+    try:
+        os.makedirs(LABEL_DIR, exist_ok=True)
+        tmp = SCORE_CACHE + '.tmp'
+        with open(tmp, 'w', encoding='utf-8') as handle:
+            json.dump(cache, handle, ensure_ascii=False)
+        os.replace(tmp, SCORE_CACHE)
+    except OSError:
+        pass          # 缓存写不进去不该让抽样失败
+
+
 def read_article(path):
     """-> (frontmatter, body) 或 None（不是一篇真文章）。"""
     try:
@@ -87,6 +121,62 @@ def read_article(path):
     if not meta.get('url'):
         return None
     return meta, parts[2].strip()
+
+
+# 正文里残留的清洗痕迹。抓回来的原文在标题下有这几句固定的话，且**变体不止一种**
+# （实测见过「在小说阅读器读本章」「在小说阅读器中沉浸阅读」「在公众号小说中沉浸阅读」），
+# 所以按不变量匹配，别按整句。
+AD_NOISE = ('在小说阅读器', '沉浸阅读')
+
+
+def _after_boilerplate(lines):
+    """跳过开头的 `# 标题` / `> 来源…` / `---` / 空行。"""
+    index = 0
+    while index < len(lines):
+        line = lines[index].strip()
+        if not line or line.startswith('#') or line.startswith('>') or line.startswith('---'):
+            index += 1
+            continue
+        break
+    return lines[index:]
+
+
+def _section(lines, heading):
+    """某个 `## 标题` 之下、下一个 `## ` 之前的那几行；没有这一段回 None。"""
+    start = None
+    for index, line in enumerate(lines):
+        if line.strip() == heading:
+            start = index + 1
+            break
+    if start is None:
+        return None
+    body = []
+    for line in lines[start:]:
+        if line.strip().startswith('## '):
+            break
+        body.append(line)
+    return _after_boilerplate(body) or None
+
+
+def excerpt_of(body, limit=EXCERPT):
+    """取标注时唯一看得到的那 400 字。
+
+    日报正文的固定形状是：`# 标题` + `> 来源 / > 时间 / > 原文：[阅读原文](…)` 样板 +
+    `## AI 摘要` + 那两三句摘要 + `## 正文` + 抓回来的原文（原文里**又**带一份标题和样板，
+    还夹着"在小说阅读器读本章"这类残留）。直接取前 400 字的话，实测 50 条里多数只露出
+    标题加来源，标注者（我自己试过一遍）只能靠标题猜。
+
+    所以取**摘要段**：那两三句是判断主题与相关度最密集的信号。没有摘要（`--no-summary`
+    的产物）就退回 `## 正文` 之后，再没有就退回跳过样板的第一段。
+    """
+    lines = (body or '').splitlines()
+    picked = (_section(lines, '## AI 摘要')
+              or _section(lines, '## 正文')
+              or _after_boilerplate(lines))
+    text = ' '.join(' '.join(picked).split())
+    for noise in AD_NOISE:
+        text = text.replace(noise, ' ')
+    return ' '.join(text.split())[:limit]
 
 
 def collect_pool(days):
@@ -137,8 +227,18 @@ def draw_by_band(items, n, seed):
     多少篇文章"。
     """
     rng = random.Random(seed)
+    # **先按稳定键排序**。`items` 是按并发**完成**顺序追加的（`as_completed`），完成顺序每次
+    # 网络抖动都不一样，而不排序的话 `rng.shuffle` 吃到的就是那个顺序——同一个 seed 抽出来的
+    # 50 篇每次都不是同一批，而 CLI 上写着"两次抽样结果一致"。实测就是这么发现的：两次生成，
+    # 第 20 条一次是这篇、一次是那篇。排序之后 seed 才真的定住样本。
+    # 三级键：`id`（文章路径）唯一，正常情况下它就定了序；缺 `id` 的对象退到 day+title，
+    # 仍然是确定的——只按 `id` 排的话，没有这个字段的输入会让排序退化成空操作、确定性
+    # 又悄悄丢了（写这条时被自己的测试抓到过一次）。
+    ordered = sorted(items, key=lambda item: (str(item.get('id') or ''),
+                                              str(item.get('day') or ''),
+                                              str(item.get('title') or '')))
     groups = defaultdict(list)
-    for item in items:
+    for item in ordered:
         groups[band_of(_num((item.get('jev') or {}).get('includeScore')))].append(item)
     for group in groups.values():
         rng.shuffle(group)
@@ -199,13 +299,21 @@ def cmd_sample(args):
     # 先给一个**比最终样本大得多**的候选池打分：分档取样需要每个档位都有候选，
     # 而低分档占绝大多数，只打 n 篇的话边界档位往往只有个位数。
     picked = draw_sample(buckets, args.pool, args.seed)
-    print('候选池 %d 篇（seed=%d），用生产路径逐篇打分…' % (len(picked), args.seed))
+    cache = {} if args.refresh else load_score_cache()
+    cached_hits = sum(1 for item in picked if item.get('id') in cache)
+    print('候选池 %d 篇（seed=%d），用生产路径逐篇打分…（%d 篇命中分数缓存）'
+          % (len(picked), args.seed, cached_hits))
 
     started = time.time()
     scored, failed = [], 0
     with ThreadPoolExecutor(max_workers=WORKERS) as pool:
-        futures = {pool.submit(client.decide_article, item['title'], item['body'], TOPICS): item
-                   for item in picked}
+        futures = {}
+        for item in picked:
+            hit = cache.get(item.get('id') or '')
+            if hit:
+                futures[pool.submit(lambda verdict=hit: verdict)] = item
+            else:
+                futures[pool.submit(client.decide_article, item['title'], item['body'], TOPICS)] = item
         for future in as_completed(futures):
             item = futures[future]
             try:
@@ -217,11 +325,14 @@ def cmd_sample(args):
             item['jev'] = {key: verdict.get(key) for key in
                            ('topic', 'topicConfidence', 'relevance',
                             'relevanceScore', 'includeScore')}
-            item['excerpt'] = item.pop('body')[:EXCERPT]
+            if item.get('id'):
+                cache[item['id']] = item['jev']
+            item['excerpt'] = excerpt_of(item.pop('body'))
             # 三栏。`relevance` 之前没在标注范围内，于是"相关度阈值 0.5/1.5 对不对"这个
             # 问题一直没有数据可答——而它现在会决定一篇文章进不进日报。
             item['label'] = {'topic': None, 'relevance': None, 'include': None}
             scored.append(item)
+    save_score_cache(cache)
     print('打分完成 %d/%d，耗时 %.1fs' % (len(scored), len(picked), time.time() - started))
 
     # 全池的档位占比：这是**另一个问题**的答案——"阈值一动，每天会多收或少收多少篇"。
@@ -570,6 +681,8 @@ def main():
                         help='先给多大的候选池打分，再按概率档位取 n 篇（默认 150）')
     sample.add_argument('--days', type=int, default=90, help='只从最近多少天的文章里抽')
     sample.add_argument('--seed', type=int, default=20260921, help='固定种子：两次抽样结果一致')
+    sample.add_argument('--refresh', action='store_true',
+                        help='忽略分数缓存重新打分（模型换了或判据改了才需要）')
     sample.add_argument('--json', action='store_true')
     sample.set_defaults(func=cmd_sample)
 

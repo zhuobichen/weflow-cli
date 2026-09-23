@@ -6,6 +6,28 @@ All notable user-facing changes are recorded here. This project follows [Semanti
 
 ## Unreleased
 
+### Fixed
+
+- **The labelling sheet could not actually be labelled.** `sample` printed the first 400 characters of
+  the article body, and that region is boilerplate: `# title`, `> source / > time / > 阅读原文`, then the
+  scraped copy of the article, which repeats the title and carries the cleanup leftovers. On the sample
+  that produced it, most rows showed a title and a source name and nothing else - found by actually
+  labelling a batch, where the only thing left to judge from was the title. The excerpt now takes the
+  **`## AI 摘要` section**, the two or three sentences the judgement is really about; without a summary it
+  falls back to the body after `## 正文`, then to the first non-boilerplate paragraph. Cleanup leftovers
+  are matched by their invariant fragments (`在小说阅读器`, `沉浸阅读`) rather than by whole sentences,
+  because the wording varies between articles.
+
+- **`--seed` did not actually reproduce a sample**, despite the help text promising "两次抽样结果一致".
+  Two causes, found one after the other: the pool was drawn in **concurrent completion order**
+  (`as_completed`), and `rng.shuffle` consumes that order, so the same seed produced a different 50 (7 of
+  50 rows differed between two consecutive runs); and even with the order fixed, **the scores come from a
+  live model**, so an article scoring 0.49 in one run and 0.52 in the next changes band and therefore
+  changes the draw. The pool is now sorted before grouping and scores are **cached by article path**
+  (`~/.weflow-cli/labels/.jev-scores.json`), so two runs of the same command produce the same 50 in the
+  same order - verified, and pinned by a test that feeds the same items in reverse order. The cache also
+  means a re-run costs no quota; `--refresh` bypasses it when the model or the criteria change.
+
 ### Added
 
 - **The calibration harness now covers what the report actually decides, and gained a half that needs
