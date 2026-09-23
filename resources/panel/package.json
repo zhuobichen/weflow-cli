@@ -1,0 +1,7 @@
+{
+  "name": "weflow-panel",
+  "version": "1.0.0",
+  "private": true,
+  "description": "WeFlow 本机面板的 Electron 外壳（窗口与托盘）。界面本身由守护进程从回环端点递过来。",
+  "main": "main.cjs"
+}

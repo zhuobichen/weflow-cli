@@ -789,14 +789,16 @@ export class AssistantService {
 
     // 本机入口：**只绑回环** + 每次启动随机口令。悬浮窗与 `weflow-cli panel` 都走它，
     // 于是两个入口落在**同一个进程**里（配额、串行队列、记忆都只有一份）。
-    this.memoryBucket = resolvePanelUserId({
+    const bucket = resolvePanelUserId({
       whitelist: configService.get('assistantWhitelist'),
       configured: configService.get('assistantPanelUser'),
-    }).userId
+    })
+    this.memoryBucket = bucket.userId
     try {
       this.panelServer = await startPanelServer({
         service: this,
         memoryBucket: this.memoryBucket,
+        memoryNote: bucket.note,
         channel: token ? 'wechat' : 'local',
         onLog,
       })

@@ -26,6 +26,9 @@
  * 回答的是另一个问题（那边**拒绝**回环地址）。别把两者"统一"起来。
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
+import { readFileSync, existsSync } from 'node:fs'
+import { join } from 'node:path'
+import { randomBytes } from 'node:crypto'
 import {
   DEFAULT_PANEL_PORT, PANEL_ENDPOINT_VERSION, PANEL_SERVICE_ID, generateToken, tokenMatches,
   writeEndpoint, type PanelChannelMode, type PanelEndpoint,
@@ -33,15 +36,38 @@ import {
 import type { AssistantService, TurnOutcome } from '../services/assistantService.js'
 import { privacyGate } from '../services/assistantPrivacy.js'
 import { configService } from '../services/configService.js'
+import { resolvePackageRoot } from '../utils/packageRoot.js'
 
 /** 8KB 够一句问题用；超了就是有人在灌东西 */
 const MAX_BODY_BYTES = 8 * 1024
 /** 一轮最坏分钟级（见上），给足余量；客户端那边也有自己的超时 */
 const TURN_TIMEOUT_MS = 180_000
+/** 浏览器那条路的会话 cookie 名。值是 token 本身，但 `HttpOnly` —— 页面脚本拿不到它 */
+const COOKIE_NAME = 'weflow_panel'
+/** 一次性口令的有效期。只用来"换 cookie"这一次，换个页面就该过期了 */
+const PAIR_TTL_MS = 60_000
+/**
+ * 静态文件**白名单**。不是"把目录挂出去"：只认这三个名字，其余一律 404。
+ * 挂目录就得处理路径穿越，而这里根本不需要那个能力。
+ */
+const STATIC_FILES: Record<string, string> = {
+  '/panel': 'index.html',
+  '/panel/': 'index.html',
+  '/panel/index.html': 'index.html',
+  '/panel/renderer.js': 'renderer.js',
+  '/panel/panel.css': 'panel.css',
+}
+const CONTENT_TYPES: Record<string, string> = {
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+}
 
 export interface PanelServerOptions {
   service: AssistantService
   memoryBucket: string
+  /** 给人看的一句话：这个桶是不是与微信共用的，以及为什么。界面要显示它 */
+  memoryNote?: string
   channel: PanelChannelMode
   port?: number
   onLog?: (line: string) => void
@@ -74,6 +100,27 @@ function bearer(req: IncomingMessage): string | undefined {
   if (typeof header !== 'string') return undefined
   const match = /^Bearer\s+(.+)$/i.exec(header.trim())
   return match ? match[1] : undefined
+}
+
+function cookieToken(req: IncomingMessage): string | undefined {
+  const raw = req.headers['cookie']
+  if (typeof raw !== 'string') return undefined
+  for (const part of raw.split(';')) {
+    const [name, ...rest] = part.trim().split('=')
+    if (name === COOKIE_NAME) return rest.join('=')
+  }
+  return undefined
+}
+
+/**
+ * 这一份请求是拿什么来证明自己的：CLI/Python 走 `Authorization`，**浏览器走 cookie**。
+ *
+ * 浏览器为什么不能也用 header：页面脚本一旦拿得到 token，就等于把 token 交给了渲染进程，
+ * 而渲染进程要显示的是**助手回复**——那里面有用户的聊天内容。用 `HttpOnly` cookie，
+ * 脚本就永远读不到它（防的是 XSS 拿 token 去干别的事），同时页面照常能发请求。
+ */
+function presentedToken(req: IncomingMessage): string | undefined {
+  return bearer(req) ?? cookieToken(req)
 }
 
 /**
@@ -123,7 +170,7 @@ function portFromEnv(): number | undefined {
  * 起端点。返回**实际**监听的端口——调用方要把它写进端点文件，不要用请求的那个值。
  */
 export async function startPanelServer(options: PanelServerOptions): Promise<PanelServer> {
-  const { service, memoryBucket, channel, onLog } = options
+  const { service, memoryBucket, memoryNote = '', channel, onLog } = options
   const wantedPort = options.port ?? portFromEnv() ?? DEFAULT_PANEL_PORT
   const token = generateToken()
   const startedAt = new Date().toISOString()
@@ -136,6 +183,48 @@ export async function startPanelServer(options: PanelServerOptions): Promise<Pan
     })
   })
 
+  /**
+   * 一次性口令 → cookie。**为什么要有这一步**：浏览器那条路（Edge `--app`）得先拿到凭据，
+   * 而**不能把 token 放进 URL**——命令行对同机任何进程可见（`wmic process get commandline`），
+   * 而且 URL 会进浏览器历史。所以给的是一个**一次性、60 秒、用完即废**的口令。
+   */
+  const pairCodes = new Map<string, number>()
+
+  function issuePairCode(): string {
+    const code = randomBytes(18).toString('base64url')
+    pairCodes.set(code, Date.now() + PAIR_TTL_MS)
+    // 顺手清掉过期的，别让这张表无限长
+    for (const [k, exp] of pairCodes) if (exp < Date.now()) pairCodes.delete(k)
+    return code
+  }
+
+  function consumePairCode(code: string): boolean {
+    const exp = pairCodes.get(code)
+    if (!exp) return false
+    pairCodes.delete(code)          // **单次使用**：即使它被日志/历史记下来，也已经废了
+    return exp >= Date.now()
+  }
+
+  function serveStatic(res: ServerResponse, fileName: string): void {
+    try {
+      const full = join(resolvePackageRoot(import.meta.url), 'resources', 'panel', fileName)
+      if (!existsSync(full)) { json(res, 503, { ok: false, code: 'PANEL_ASSET_MISSING', file: fileName }); return }
+      const ext = fileName.slice(fileName.lastIndexOf('.'))
+      res.writeHead(200, {
+        'Content-Type': CONTENT_TYPES[ext] ?? 'application/octet-stream',
+        'Cache-Control': 'no-store',
+        // CSP 走响应头而不是 <meta>：头不能被页面内容绕过
+        'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'self'; "
+          + "connect-src 'self'; img-src 'self' data:; form-action 'none'; base-uri 'none'",
+        'X-Content-Type-Options': 'nosniff',
+        'Referrer-Policy': 'no-referrer',
+      })
+      res.end(readFileSync(full))
+    } catch {
+      json(res, 500, { ok: false, code: 'INTERNAL' })
+    }
+  }
+
   async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const port = (server.address() as { port: number } | null)?.port ?? wantedPort
     const url = new URL(req.url ?? '/', `http://127.0.0.1:${port}`)
@@ -144,9 +233,39 @@ export async function startPanelServer(options: PanelServerOptions): Promise<Pan
       json(res, 403, { ok: false, code: 'ORIGIN_DENIED' })
       return
     }
-    if (!tokenMatches(token, bearer(req))) {
+
+    // ---------------------------------------------------------- 页面（浏览器那条路）
+    const asset = STATIC_FILES[url.pathname]
+    if (asset) {
+      if (req.method !== 'GET') { json(res, 405, { ok: false, code: 'METHOD_NOT_ALLOWED' }); return }
+      const code = url.searchParams.get('c')
+      const authed = tokenMatches(token, presentedToken(req))
+      if (!authed) {
+        // 没带凭据：只接受一次性口令，并把 cookie 种上（token **不进 URL**，见 issuePairCode）
+        if (!code || !consumePairCode(code)) {
+          json(res, 401, { ok: false, code: 'UNAUTHORIZED', hint: '用 weflow-cli panel 打开' })
+          return
+        }
+        res.setHeader('Set-Cookie', `${COOKIE_NAME}=${token}; HttpOnly; SameSite=Strict; Path=/`)
+      }
+      serveStatic(res, asset)
+      return
+    }
+
+    if (!tokenMatches(token, presentedToken(req))) {
       // 不回显任何东西：错的 token 与缺的 token 得到完全一样的响应
       json(res, 401, { ok: false, code: 'UNAUTHORIZED' })
+      return
+    }
+
+    if (url.pathname === '/api/pair') {
+      if (req.method !== 'POST') { json(res, 405, { ok: false, code: 'METHOD_NOT_ALLOWED' }); return }
+      // 换口令这一步**必须带真实 token**（上面的检查已经过了），所以本机别的东西换不到
+      const code = issuePairCode()
+      json(res, 200, {
+        ok: true, code, expiresInMs: PAIR_TTL_MS,
+        url: `http://127.0.0.1:${port}/panel?c=${code}`,
+      })
       return
     }
 
@@ -159,6 +278,7 @@ export async function startPanelServer(options: PanelServerOptions): Promise<Pan
         channel,
         channelActive: service.isChannelActive(),
         memoryBucket,
+        memoryNote,
         quota: service.quotaState(),
         aiConfigured: privacyGate.isLocalInference() || !!configService.get('deepseekApiKey'),
       })

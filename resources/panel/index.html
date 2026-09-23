@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>第二大脑</title>
+<link rel="stylesheet" href="/panel/panel.css">
+</head>
+<body>
+  <!-- 悬浮球。只在有外壳（Electron）时才显示；浏览器那条路没有它，
+       因为浏览器窗口给不了无边框置顶的小球。 -->
+  <button id="ball" type="button" title="第二大脑（点击展开）" hidden>🧠</button>
+
+  <header>
+    <span class="brand">第二大脑</span>
+    <span id="status" class="status">连接中…</span>
+    <button id="collapse" type="button" class="ghost" hidden>收起</button>
+  </header>
+
+  <main id="log" aria-live="polite"></main>
+
+  <form id="composer" autocomplete="off">
+    <textarea id="input" rows="2" placeholder="问点什么…（Enter 发送，Shift+Enter 换行）"></textarea>
+    <button id="send" type="submit">发送</button>
+  </form>
+
+  <footer id="foot"></footer>
+
+  <script src="/panel/renderer.js"></script>
+</body>
+</html>

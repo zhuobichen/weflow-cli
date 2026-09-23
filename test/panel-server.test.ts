@@ -279,3 +279,115 @@ test('端点只绑回环：绑的是 127.0.0.1，不是 0.0.0.0', async () => {
     assert.equal(res.status, 200)
   } finally { await server.close() }
 })
+
+// ------------------------------------------------------------------ 浏览器那条路
+
+/** 从 set-cookie 里抠出 cookie 串（Node 的 fetch 走 getSetCookie） */
+function setCookieOf(res: Response): string {
+  const list = (res.headers as any).getSetCookie?.() ?? []
+  const raw = list[0] ?? res.headers.get('set-cookie') ?? ''
+  return raw.split(';')[0]
+}
+
+test('换一次性口令要带 token；换回来的是一个**短时效、单次使用**的口令', async () => {
+  const { server, base, token } = await boot()
+  try {
+    const denied = await fetch(`${base}/api/pair`, { method: 'POST' })
+    assert.equal(denied.status, 401, '没 token 换不到口令')
+
+    const res = await fetch(`${base}/api/pair`, { method: 'POST', headers: { Authorization: `Bearer ${token}` } })
+    assert.equal(res.status, 200)
+    const body: any = await res.json()
+    assert.ok(body.code && body.url.includes(`c=${body.code}`), 'URL 里的是一次性口令，不是 token')
+    assert.equal(body.url.includes(token), false, '**token 绝不能进 URL**')
+  } finally { await server.close() }
+})
+
+test('拿口令换 cookie：Set-Cookie 必须是 HttpOnly + SameSite=Strict', async () => {
+  const { server, base, token } = await boot()
+  try {
+    const pair = await fetch(`${base}/api/pair`, { method: 'POST', headers: { Authorization: `Bearer ${token}` } })
+    const { code } = await pair.json() as any
+
+    const page = await fetch(`${base}/panel?c=${code}`)
+    assert.equal(page.status, 200)
+    const cookie = setCookieOf(page)
+    assert.match(cookie, /^weflow_panel=/, 'Cookie 名要对得上')
+    const raw = page.headers.get('set-cookie') ?? ''
+    assert.match(raw, /HttpOnly/i, '页面脚本必须读不到它')
+    assert.match(raw, /SameSite=Strict/i)
+    assert.match(page.headers.get('content-type') ?? '', /text\/html/)
+    assert.match(page.headers.get('content-security-policy') ?? '', /default-src 'none'/)
+  } finally { await server.close() }
+})
+
+test('口令**单次使用**：第二次拿同一个口令就进不来了', async () => {
+  const { server, base, token } = await boot()
+  try {
+    const pair = await fetch(`${base}/api/pair`, { method: 'POST', headers: { Authorization: `Bearer ${token}` } })
+    const { code } = await pair.json() as any
+    assert.equal((await fetch(`${base}/panel?c=${code}`)).status, 200)
+    assert.equal((await fetch(`${base}/panel?c=${code}`)).status, 401, '用过的口令必须作废')
+  } finally { await server.close() }
+})
+
+test('没有口令也没有 cookie → 页面不给', async () => {
+  const { server, base } = await boot()
+  try {
+    const res = await fetch(`${base}/panel`)
+    assert.equal(res.status, 401)
+    assert.doesNotMatch(await res.text(), /<html/i, '连页面壳都不该给')
+  } finally { await server.close() }
+})
+
+test('带上 cookie 之后，不用 Bearer 也能读状态、能问 —— 页面就是这么工作的', async () => {
+  const { server, base, token } = await boot()
+  try {
+    const pair = await fetch(`${base}/api/pair`, { method: 'POST', headers: { Authorization: `Bearer ${token}` } })
+    const { code } = await pair.json() as any
+    const cookie = setCookieOf(await fetch(`${base}/panel?c=${code}`))
+
+    const status = await fetch(`${base}/api/status`, { headers: { Cookie: cookie } })
+    assert.equal(status.status, 200)
+    assert.equal((await status.json() as any).service, 'weflow-assistant')
+
+    const asked = await ask(base, null, { text: '你好' }, { Cookie: cookie })
+    assert.equal(asked.status, 200)
+    assert.equal((await asked.json() as any).reply, '收到')
+  } finally { await server.close() }
+})
+
+test('静态资源：白名单里的能取，别的一律 404（不是把目录挂出去）', async () => {
+  const { server, base, token } = await boot()
+  try {
+    const headers = { Authorization: `Bearer ${token}` }
+    const js = await fetch(`${base}/panel/renderer.js`, { headers })
+    assert.equal(js.status, 200)
+    assert.match(js.headers.get('content-type') ?? '', /javascript/)
+
+    const css = await fetch(`${base}/panel/panel.css`, { headers })
+    assert.equal(css.status, 200)
+    assert.match(css.headers.get('content-type') ?? '', /text\/css/)
+
+    // `/panel/` 是 index.html 的别名（**故意映射的**，不是目录列举）
+    const alias = await fetch(`${base}/panel/`, { headers })
+    assert.equal(alias.status, 200)
+    assert.match(alias.headers.get('content-type') ?? '', /text\/html/)
+
+    // 其余的路径穿越与别的目录都该 404 —— 白名单里没有这些名字
+    for (const path of ['/panel/../package.json', '/panel/secret.txt', '/resources/panel/index.html',
+                        '/panel/../src/panel/server.ts']) {
+      const res = await fetch(`${base}${path}`, { headers })
+      assert.equal(res.status, 404, `${path} 不该被服务`)
+    }
+  } finally { await server.close() }
+})
+
+test('页面里没有内联脚本（CSP 也会挡，但别写）', async () => {
+  const { server, base, token } = await boot()
+  try {
+    const html = await (await fetch(`${base}/panel`, { headers: { Authorization: `Bearer ${token}` } })).text()
+    assert.doesNotMatch(html, /<script(?![^>]*\ssrc=)/)
+    assert.match(html, /src="\/panel\/renderer\.js"/)
+  } finally { await server.close() }
+})
