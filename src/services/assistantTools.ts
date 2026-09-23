@@ -11,9 +11,12 @@ import { existsSync, readFileSync, readdirSync } from 'fs'
 import { join } from 'path'
 // 直接调进程的写法已收敛进 pythonBridge：这里不再 import child_process
 import { resolvePackageRoot } from '../utils/packageRoot.js'
+import { clipWithMarker } from '../utils/text.js'
 
 const PKG_ROOT = resolvePackageRoot(import.meta.url)
 const BIZ_DAILY_DIR = join(PKG_ROOT, 'output', 'biz-daily')
+/** 单条聊天消息进上下文的字数上限（见 get_messages：引用消息要放得下正文+被引原文） */
+const MSG_BODY_CHARS = 160
 const VAULT_WIKI_DIR = join(PKG_ROOT, 'output', 'wechat-vault', 'Wiki', 'Concepts')
 
 export interface ToolDef {
@@ -455,7 +458,12 @@ export async function executeTool(name: string, args: Record<string, any>, ctx: 
           const raw = m.localType === 1
             ? (m.content || m.parsedContent || '')
             : (m.parsedContent || m.content || '')
-          const body = privacyGate.maskMessageBody(raw.replace(/\n/g, ' ').slice(0, 80))
+          // 每条 160 字。此前是 80，引用消息（`[引用] 回复 ｜ 引：原文`）在 80 字里
+          // 引文只剩七八个字，等于白带；长文本消息也被从中间切掉。上限仍是有界的：
+          // limit 最多 50 条 × 约 180 字 ≈ 9k 字符。截断留省略号——切了却看起来像
+          // 说完了，模型会把半句当整句。
+          const flat = raw.replace(/\n/g, ' ')
+          const body = privacyGate.maskMessageBody(clipWithMarker(flat, MSG_BODY_CHARS))
           return `[${fmtTime(m.createTime)}] ${m.isSend ? '用户' : (m.senderUsername || '对方')}: ${body}`
         }).join('\n')
       }

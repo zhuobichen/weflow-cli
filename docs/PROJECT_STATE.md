@@ -112,9 +112,22 @@ Documentation was synchronized with the current source baseline on 2026-09-19. C
   empty" discarded them. A 44-message conversation reported three "empty" messages which were a revoke
   notice and two stickers, and the assistant said truthfully that it could not read them - the first
   diagnosis ("the model did not recognise the sticker") was wrong about the layer. Types are now derived
-  (`apptype * 2**32 + 49`), zstd is decompressed, and file names, quoted text, revoke notices and transfer
-  notes are carried into `parsedContent`; anything unrecognised still says what it is. The lesson repeats
+  (`apptype * 2**32 + 49`), zstd is decompressed, and file names, revoke notices and transfer notes are
+  carried into `parsedContent`; anything unrecognised still says what it is. The lesson repeats
   one already in this file: when an answer looks like a model failure, check whether the data reached it.
+  **This bullet used to claim "quoted text" was carried too, and that was wrong** - the appmsg payload puts
+  the reply in `title` and the quoted original in `refermsg/content`, and only the former was ever read.
+  See the quote fix below; it is the same mistake one layer down (a field read, a field assumed read).
+- **What 30 days of real traffic actually contains** (measured on one archive: 1564 messages across 122
+  conversations). Text 69.4%, **images 15.5%**, revoke notices 3.1%, **quote messages 2.4%**, stickers
+  2.1%, files 1.5%, everything else (links, video, official-account cards, mini-programs) 2.7%,
+  **voice 0.8%**. Two consequences: the plan to give the assistant a voice tool was dropped - 12 voice
+  messages a month does not pay for a transcriber on the read path - and **images are the one real
+  remaining gap**, because `[图片]` is all the model gets for one message in six. Doing better needs a
+  vision model; on this deployment that means sending images to a third party, so it is a decision for
+  the maintainer, not a default to switch on. Voice transcription (`scripts/wechat_voice.py`, local
+  `faster-whisper`, no network) exists but is wired to the **export** path, not the reader, and stays
+  there.
 - **The audit line, not the prompt, is what makes a fabricated tool claim visible.** The assistant told a
   user it had looked up a conversation and found the bodies masked by strict mode, while `TURN_DONE 264B
   tools=0` showed it never called the tool. The prompt was then changed (privacy state stated as a fact

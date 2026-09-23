@@ -6,6 +6,7 @@ Uses sqlcipher3 to decrypt and query NT-format databases.
 import sys
 import os
 import json
+import html
 import re
 import hmac
 import struct
@@ -894,6 +895,14 @@ APPMSG_LABELS = {
 # 不认识的 apptype 回 `[应用消息]` 而不是猜成"链接"：标签是给下游读的，不能支撑不起也写。
 APPMSG_UNKNOWN_LABEL = '应用消息'
 
+# 引用消息（apptype 57）的正文与被引原文之间的分隔。用词而不是符号，因为下游会把它读成
+# 一句话；`|` 在别处会被当表格分隔。
+QUOTE_SEP = ' ｜ 引：'
+# 被引原文的截断长度。实测 37 条真实引用消息：中位 36 字、17 条超过 60 字、最长的
+# 12733 字（引用了一整篇公众号文章）。60 会切掉近一半，120 能留住大多数完整句子，
+# 又把那个极端值压住。
+QUOTE_CLIP = 120
+
 
 ZSTD_MAGIC = bytes([0x28, 0xB5, 0x2F, 0xFD])
 def _decode_content(raw):
@@ -928,10 +937,25 @@ def _xml_text(xml, tag):
 
     起始标签里**不许出现 `/`**：否则 `<title />` 会被当成开标签，一路吃到后面某个
     `</title>`，把中间整段 XML 当成文本返回（自验时真的吐出来过）。
+
+    实体在这**解掉**：显示形态是给人（和模型）读的，`a&amp;b` 该显示成 `a&b`。
+    TS 侧的 `appMsgFormat.tagText` 同样解，两边一致——否则同一条消息 3.x 与 4.x 读起来
+    不一样。
     """
     match = re.search(
         r'<%s(?:\s[^>/]*)?>(?:<!\[CDATA\[)?(.*?)(?:\]\]>)?</%s>' % (tag, tag), xml or '', re.S)
-    return match.group(1).strip() if match else ''
+    return html.unescape(match.group(1).strip()) if match else ''
+
+
+def _clip(text, limit):
+    """超长截断并**留下省略号**。
+
+    不标记的截断读起来像一句说完的话——`title[:60]` 此前就是这样，被引原文最长的
+    12733 字，切完看着像"这就是全部"。
+    """
+    if len(text) <= limit:
+        return text
+    return text[:limit] + '…'
 
 
 def non_text_display(local_type, raw):
@@ -953,7 +977,18 @@ def non_text_display(local_type, raw):
         if title.lower() in ('null', 'undefined', '0'):
             title = ''
         # 截断：解析万一走偏，也不许把一段 XML 当成标题交给下游。
-        title = title[:60]
+        title = _clip(title, 60)
+        # 引用消息（apptype 57）：`title` 是**回复正文**，被引用的原文在 `refermsg/content`。
+        # 实测 37 条真实引用消息，被引原文中位 36 字。此前只留回复，模型看到的是一句
+        # "是呀，够得意个"却不知道在回什么——引用不带原文等于没引用。
+        if apptype == 57:
+            quoted = _xml_text(_xml_block(text, 'refermsg'), 'content')
+            if quoted.lower() in ('null', 'undefined', '0'):
+                quoted = ''
+            quoted = _clip(quoted, QUOTE_CLIP)
+            if quoted:
+                body = (title + QUOTE_SEP + quoted) if title else quoted
+                return '[%s] %s' % (label, body)
         return '[%s] %s' % (label, title) if title else '[%s]' % label
 
     label = NON_TEXT_LABELS.get(lt)

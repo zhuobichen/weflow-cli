@@ -113,6 +113,32 @@ test('严格模式下第三方聊天正文不出境：正文被替换成字节�
   assert.match(out, /\[内容4字已按严格模式屏蔽\]/)
 })
 
+test('get_messages 放得下引用消息的正文+被引原文，且截断留省略号', async () => {
+  // 这个文件默认跑在 strict 下（正文会被遮罩成字数），而这条测的是渲染本身
+  const realGet = configService.get.bind(configService)
+  ;(configService as any).get = (k: string) => (k === 'assistantPrivacy' ? 'balanced' : realGet(k))
+  try {
+    // 两条线：① 160 字（此前 80，引用消息在 80 字里引文只剩七八个字，等于白带）；
+    // ② 截断必须留省略号——切了却看起来像说完了，模型会把半句当整句。
+    svc.listSessions = async () => ([{ displayName: '甲', username: 'wxid_a' }])
+    svc.getMessages = async () => ([
+      { createTime: 1758000000, isSend: false, senderUsername: '甲',
+        content: '[引用] 好的 ｜ 引：' + '引'.repeat(200) },
+      { createTime: 1758000060, isSend: false, senderUsername: '甲', content: '短消息' },
+    ])
+    const out = await run('get_messages', { contact: '甲' })
+
+    assert.match(out, /短消息/, '短消息不该被长消息挤掉')
+    const longLine = out.split('\n').find(l => l.includes('引：'))!
+    const body = longLine.slice(longLine.indexOf(': ') + 2)
+    assert.match(body, /…$/, '被截断的那条要以省略号结尾')
+    assert.equal(body.length, 160 + 1, '正文截到 160 字，再加一个省略号')
+    assert.match(body, /引：引{40}/, '引文不只是七八个字')
+  } finally {
+    ;(configService as any).get = realGet
+  }
+})
+
 test('联系人名匹配多个会话时要求更精确，而不是随便挑一个', async () => {
   // 两个"包含"但都不等于查询的名字。若其中一个恰好叫「小明」，解析器会直接定它——
   // 那是刻意的：完全同名优先于模糊匹配（下一条钉住这个优先级）。

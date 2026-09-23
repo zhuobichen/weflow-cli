@@ -4,6 +4,34 @@ The npm package is published separately from GitHub. It may lag behind the `mast
 
 All notable user-facing changes are recorded here. This project follows [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+### Fixed
+
+- **Quoted messages no longer lose what they were quoting.** In the appmsg payload the *reply* sits in
+  `title` and the *quoted original* in `refermsg/content`, and only the first was read. Measured on 37
+  real quote messages in one archive: the quoted original is a median of 36 characters (longest 12733 -
+  a whole article was pasted in), so the model was routinely shown a line like "是呀，够得意个" with no
+  way to know what it was replying to. Both parts are carried now, separated by ` ｜ 引：`. Each is
+  clipped with a trailing `…` (reply 60, quoted text 120) because an unmarked cut reads as a complete
+  sentence - the longest quoted text would otherwise have looked like it simply ended. Entities are
+  decoded for display (`a&amp;b` reads as `a&b`), which the WeChat 3.x reader already did and the 4.x
+  one did not.
+
+- **The same fix reached the WeChat 3.x reader, which had no test at all.** `sqlcipherCore`'s AppMsg
+  formatting was the second implementation of this display form; it is now `core/appMsgFormat.ts` as
+  pure functions with 13 tests. Extracting it immediately paid for itself: reading `<type>` from the
+  whole document could pick up a quoted message's `<type>` instead of the outer message's, and the
+  entity-decoding the original did was very nearly dropped in the move (the tests caught both). The two
+  implementations now share one set of clip lengths and one separator, so the same message reads the
+  same on either WeChat version - they are still two implementations, and the tests pin the values they
+  must agree on.
+
+- **One assistant message body was cut at 80 characters.** A quote (`[引用] reply ｜ 引：quoted`) had
+  its quoted text reduced to seven or eight characters - carried, but useless - and any long message
+  was cut mid-sentence with nothing to show it had been cut. The limit is now 160, with a trailing `…`.
+  Worst case stays bounded: 50 messages × ~180 characters ≈ 9k.
+
 ## 1.7.0
 
 ### Added

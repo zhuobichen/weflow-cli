@@ -14,6 +14,9 @@
  */
 import crypto from 'crypto'
 import { existsSync, readFileSync, readdirSync, unlinkSync, mkdirSync, writeFileSync } from 'fs'
+// AppMsg 的显示形态提到了 `appMsgFormat`：那是纯函数，能直接测（此前是这里的私有方法，
+// 一行测试都没有）。4.x 走的是 Python 侧 `nt_decrypt.py` 的同名逻辑，两边要保持一致。
+import { formatAppMsg, parseAppMsgXml } from './appMsgFormat.js'
 import { join, basename, dirname } from 'path'
 import os from 'os'
 import { DatabaseSync } from 'node:sqlite'
@@ -503,11 +506,11 @@ export class SqlcipherCore {
       case 49: { // AppMsg (链接/文件/引用)
         const xml = this.decompressCompressContent(compressContent)
         if (xml) {
-          const appInfo = this.parseAppMsgXml(xml)
+          const appInfo = parseAppMsgXml(xml)
           appTitle = appInfo.title
           appDescription = appInfo.description
           appUrl = appInfo.url
-          parsedContent = this.formatAppMsg(appInfo)
+          parsedContent = formatAppMsg(appInfo)
         } else {
           // 部分 Type=49 消息内容在 StrContent 中
           parsedContent = strContent || '[链接/文件]'
@@ -634,65 +637,6 @@ export class SqlcipherCore {
     }
   }
 
-  /**
-   * 解析 Type=49 AppMsg XML
-   */
-  private parseAppMsgXml(xml: string): { title?: string; description?: string; url?: string; type?: string } {
-    try {
-      const titleMatch = xml.match(/<title>([^<]*)<\/title>/)
-      const desMatch = xml.match(/<des>([^<]*)<\/des>/)
-      const urlMatch = xml.match(/<url>([^<]*)<\/url>/)
-      const typeMatch = xml.match(/<type>(\d+)<\/type>/)
-
-      return {
-        title: titleMatch ? this.decodeXmlEntities(titleMatch[1]) : undefined,
-        description: desMatch ? this.decodeXmlEntities(desMatch[1]) : undefined,
-        url: urlMatch ? this.decodeXmlEntities(urlMatch[1]) : undefined,
-        type: typeMatch ? typeMatch[1] : undefined,
-      }
-    } catch {
-      return {}
-    }
-  }
-
-  /**
-   * 解码 XML 实体字符
-   */
-  private decodeXmlEntities(str: string): string {
-    return str
-      .replace(/&amp;/g, '&')
-      .replace(/&lt;/g, '<')
-      .replace(/&gt;/g, '>')
-      .replace(/&quot;/g, '"')
-      .replace(/&apos;/g, "'")
-  }
-
-  /**
-   * 格式化 AppMsg 为可读文本
-   */
-  private formatAppMsg(info: { title?: string; description?: string; url?: string; type?: string }): string {
-    const parts: string[] = []
-
-    switch (info.type) {
-      case '5': // 链接分享
-        if (info.title) parts.push(`[分享] ${info.title}`)
-        if (info.description) parts.push(info.description)
-        if (info.url) parts.push(info.url)
-        break
-      case '6': // 文件分享
-        if (info.title) parts.push(`[文件] ${info.title}`)
-        break
-      case '57': // 引用回复
-        if (info.title) parts.push(`[引用] ${info.title}`)
-        break
-      default:
-        if (info.title) parts.push(`[AppMsg] ${info.title}`)
-        if (info.description) parts.push(info.description)
-        break
-    }
-
-    return parts.join('\n') || '[链接/文件]'
-  }
 
   /**
    * 获取联系人列表

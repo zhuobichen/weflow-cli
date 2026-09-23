@@ -67,10 +67,42 @@ class NonTextDisplayTests(unittest.TestCase):
         payload = '<msg><appmsg><title>Base.csv</title></appmsg></msg>'
         self.assertEqual(nt.non_text_display(6 * 2 ** 32 + 49, payload), '[文件] Base.csv')
 
-    def test_a_quote_carries_the_quoted_text(self):
+    def test_a_quote_carries_the_reply_and_what_it_quotes(self):
+        # 实测的真实形状：`appmsg/title` 是**回复正文**，被引原文在 `refermsg/content`。
+        # 这两段此前只留了前一段——37 条真实引用消息里，被引原文中位 36 字全被丢掉，
+        # 于是模型看到"是呀，够得意个"这样一句不知道在回什么的话。
+        payload = ('<msg><appmsg><title>是呀，够得意个[呲牙]</title>'
+                   '<refermsg><type>1</type><content>难怪见退群了</content></refermsg>'
+                   '</appmsg></msg>')
+        self.assertEqual(nt.non_text_display(57 * 2 ** 32 + 49, payload),
+                         '[引用] 是呀，够得意个[呲牙] ｜ 引：难怪见退群了')
+
+    def test_a_quote_without_a_refermsg_is_just_the_reply(self):
+        # 老格式（3.x 的 Type=49）与任何取不到 refermsg 的载荷：只给回复，不留下一个
+        # 空落落的"引："。
         payload = '<msg><appmsg><title>师兄这个课比较好嘛还是？</title></appmsg></msg>'
         self.assertEqual(nt.non_text_display(57 * 2 ** 32 + 49, payload),
                          '[引用] 师兄这个课比较好嘛还是？')
+
+    def test_a_quote_with_an_empty_refermsg_does_not_dangle(self):
+        payload = ('<msg><appmsg><title>好的</title>'
+                   '<refermsg><type>3</type><content></content></refermsg></appmsg></msg>')
+        self.assertEqual(nt.non_text_display(57 * 2 ** 32 + 49, payload), '[引用] 好的')
+
+    def test_a_long_quoted_text_is_clipped_and_marked(self):
+        # 被引原文最长的 12733 字（引用了一整篇公众号文章）。截断必须留省略号：
+        # 不标记的截断读起来像说完的话，模型会把半句当整句。
+        quoted = '引' * 300
+        payload = ('<msg><appmsg><title>看这个</title>'
+                   '<refermsg><type>1</type><content>%s</content></refermsg></appmsg></msg>' % quoted)
+        out = nt.non_text_display(57 * 2 ** 32 + 49, payload)
+        self.assertEqual(out, '[引用] 看这个 ｜ 引：' + '引' * 120 + '…')
+
+    def test_a_quote_with_no_reply_text_that_quotes_anything_but_a_placeholder(self):
+        # `<content>null</content>` 是占位值，不是原文——按"没有原文"处理，不许当成引文。
+        payload = ('<msg><appmsg><title>嗯</title>'
+                   '<refermsg><type>1</type><content>null</content></refermsg></appmsg></msg>')
+        self.assertEqual(nt.non_text_display(57 * 2 ** 32 + 49, payload), '[引用] 嗯')
 
     def test_a_link_falls_back_to_des_when_there_is_no_title(self):
         payload = '<msg><appmsg><title></title><des>一段描述</des></appmsg></msg>'
@@ -104,6 +136,17 @@ class NonTextDisplayTests(unittest.TestCase):
 
     def test_a_tag_with_attributes_is_still_read(self):
         self.assertEqual(nt._xml_text('<title lang="zh">带属性的</title>', 'title'), '带属性的')
+
+    def test_xml_entities_are_decoded_for_display(self):
+        # 显示形态是给人（和模型）读的：`a&amp;b` 该读成 `a&b`。TS 侧的 `appMsgFormat.tagText`
+        # 同样解实体——两边不一致的话，同一条消息在 3.x 与 4.x 下读起来会不一样。
+        payload = '<msg><appmsg><title>a&amp;b</title></appmsg></msg>'
+        self.assertEqual(nt.non_text_display(6 * 2 ** 32 + 49, payload), '[文件] a&b')
+
+    def test_an_escaped_revoke_notice_reads_as_a_sentence(self):
+        payload = ('<sysmsg type="revokemsg"><revokemsg>'
+                   '<content>&quot;某人&quot; 撤回了一条消息</content></revokemsg></sysmsg>')
+        self.assertEqual(nt.non_text_display(10000, payload), '"某人" 撤回了一条消息')
 
     def test_an_unknown_type_still_says_something(self):
         self.assertEqual(nt.non_text_display(987654321, ''), '[未识别的消息类型 987654321]')
