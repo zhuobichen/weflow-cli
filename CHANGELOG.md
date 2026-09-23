@@ -8,6 +8,60 @@ All notable user-facing changes are recorded here. This project follows [Semanti
 
 ### Fixed
 
+- **A failed memory save was silent.** `AssistantMemory.save()` ended in `catch { /* persistence failure
+  must not break the conversation */ }` - the right *behaviour* (a disk hiccup should not drop the
+  reply) with the wrong *silence*: the user says "remember this", the write fails, the memory is gone,
+  and nothing anywhere records it. Found by accident: one flaky full-suite run failed two "memory
+  survives a restart" tests and no line anywhere pointed at why. A failed save now records the error
+  code in the audit (`MEMORY_SAVE_FAILED code=…`, never the message, which can hold a path), exposes
+  the reason as `memory.lastSaveError`, and the in-chat `记忆` command prints it. That last one matters
+  most: a user asking what the assistant remembers must not be shown an account of a memory that never
+  reached the disk. The in-memory state was never at risk - a failed save leaves the dirty set intact,
+  so the next save retries.
+
+- The test for it needed its own file, and its first two versions were wrong in ways worth recording.
+  The failure has to be manufactured **before** `assistantMemory` is imported (module-level paths are
+  computed at import), so it cannot live beside the other memory tests. And the first fixture put a
+  directory where the memory file goes, which does not work: `load()` reads a directory, throws
+  `EISDIR` and takes its **quarantine** path, renaming the directory away - so by the time `save()` runs
+  the name is free and the save succeeds. The failure being tested for did not exist, and the test
+  reported "the reason was not recorded". The working fixture occupies the `.tmp` name instead, which
+  fails the write while leaving the audit file writable.
+
+### Added
+
+- **The assistant has a behaviour eval now** (`npm run eval:assistant`). Until this, there was no way
+  to know whether the assistant was any good: the unit tests all inject a fake model (they prove the
+  code paths still work, not what a model does with 16 tools), and the only other feedback was talking
+  to it in WeChat and noticing problems by luck. The eval runs eight synthetic cases against the real
+  model and asserts **floor conditions**, not quality: did it call the tool that could answer the
+  question, and did it not reach for tools when none was needed; did tool usage stay bounded (one
+  question in the archive used five calls); does a **failing** tool get reported as failing - the case
+  that earns its keep, since a script returning exit code 2 produces a reply that quotes the error,
+  names the likely cause and offers an alternative, instead of "no one is waiting on you"; is an
+  unknown contact ever given invented content; and is memory judged by **the outcome** (the fact
+  landing in long-term memory) rather than by whether `save_memory` was called.
+
+  Data is synthetic and the whole run happens in a temporary home directory, so the real audit log and
+  memory file are untouched - writing the memory file from a second process would otherwise clobber
+  whatever the daemon had just written. Only the model call leaves the process; any other request
+  throws. The key is read from the real config (a `lock:` ciphertext that only decrypts on this
+  machine) and the temporary config holds that one field and nothing else.
+
+  Three limits are documented with it, because they are the difference between a useful instrument and
+  a reassuring one: the expectations are the author's, not human labels, so this measures floors rather
+  than quality; a first run that comes back green proves little, since cases and behaviour share an
+  author - the value is in re-running it after a change; and **false failures are a real hazard**: this
+  suite's own first version asserted the model would say "查不到" and failed twice on "查不了", so
+  assertions now key off the tool's own diagnostics (error text, exit code) rather than the model's
+  wording. The run history, kept as it happened rather than tidied: **6/8** (one fixture bug - the
+  `getMessages` stub ignored the talker, so a non-existent contact was served another conversation's
+  messages and the assistant reported them as theirs - and one false failure) → **8/8** → **8/8** →
+  **7/8** (the same false failure again) → **8/8, 8/8, 8/8** after the assertion was rewritten. Both
+  failures were the assertion's fault, not the assistant's.
+
+### Fixed
+
 - **The labelling sheet could not actually be labelled.** `sample` printed the first 400 characters of
   the article body, and that region is boilerplate: `# title`, `> source / > time / > 阅读原文`, then the
   scraped copy of the article, which repeats the title and carries the cleanup leftovers. On the sample

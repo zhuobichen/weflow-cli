@@ -27,6 +27,7 @@
 import { join } from 'path'
 import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync } from 'fs'
 import os from 'os'
+import { privacyGate } from './assistantPrivacy.js'
 
 const MEMORY_FILE = join(os.homedir(), '.weflow-cli', 'assistant_memory.json')
 
@@ -95,11 +96,16 @@ export class AssistantMemory {
   private dirtyUsers = new Set<string>()
   /** 加载时出了什么值得说出来的事（版本不认识 → 已留档；文件坏了 → 已留档）。空串＝没事 */
   private loadIssue = ''
+  /** 上一次落盘失败的原因；成功一次就清空。见 `save()` 里那段注释 */
+  private saveIssue: string | null = null
 
   constructor() { this.load() }
 
   /** 加载期的问题。调用方（服务启动时）应当把它**打出来**，而不是让用户面对一份空记忆 */
   get problem(): string { return this.loadIssue }
+
+  /** 上一次落盘失败的原因（成功过就是 null）。存在不等于"这次没存上"——错误是累积前的最后一次 */
+  get lastSaveError(): string | null { return this.saveIssue }
 
   private normalizeUser(s: any): UserMemory {
     const facts: Fact[] = Array.isArray(s?.facts)
@@ -209,7 +215,17 @@ export class AssistantMemory {
       renameSync(tmp, MEMORY_FILE)
       this.states = merged
       this.dirtyUsers.clear()
-    } catch { /* 持久化失败不阻断对话 */ }
+      this.saveIssue = null
+    } catch (error: any) {
+      // **不抛**是对的：磁盘打嗝不该毁掉这次对话（内存态还在，dirty 没清，下一次还会试）。
+      // 但**不吭声是错的**：用户说"记住"，写失败，这条记忆就是没了——而没有任何地方留下痕迹。
+      // 这里此前整个是一个空 catch，连审计都没有。实测撞到过：一次临时目录上的写失败让两条
+      // "记忆能跨重启"的测试失败，系统里却没有任何记录指向它。
+      //
+      // 审计只记错误码，不记消息本身（消息里可能带路径）；要给人看的在 `lastSaveError`。
+      this.saveIssue = String(error?.message ?? error).slice(0, 120)
+      privacyGate.audit('MEMORY_SAVE_FAILED', 0, `code=${error?.code ?? error?.name ?? 'unknown'}`)
+    }
   }
 
   private state(userId: string): UserMemory {

@@ -449,6 +449,11 @@ export class AssistantService {
       lines.push(`长期事实: ${facts.length} 条`)
       if (facts.length) lines.push(facts.slice(-5).map(f => `· ${f.content}`).join('\n'))
       lines.push(`隐私模式: ${privacyGate.mode()}${privacyGate.isLocalInference() ? ' (本地推理, 不出境)' : ''}`)
+      // 落盘失败要说出来：用户在这里问"你记住了什么"，如果上一次根本没存上，
+      // 那份答案就是假的。`save()` 不抛异常是刻意的，代价是必须有地方把它讲出来。
+      if (this.memory.lastSaveError) {
+        lines.push(`⚠ 上次保存失败: ${this.memory.lastSaveError}`)
+      }
       lines.push(`今日用量: ${this.dailyCount}/${DAILY_LIMIT}`)
       return lines.join('\n')
     }

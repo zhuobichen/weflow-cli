@@ -463,3 +463,17 @@ test('本地引擎收图片不算出境，不记 IMAGE_SENT（它没离开本机
   assert.doesNotMatch(audit, /IMAGE_SENT/)
   assert.doesNotMatch(audit, /IMAGE_HELD/)
 })
+
+test('「记忆」在保存失败时如实说出来，而不是报一份存不上的账', () => {
+  // `save()` 不抛异常是刻意的（磁盘打嗝不该毁掉对话），代价是必须有地方把它讲出来——
+  // 用户问"你记住了什么"时，那份答案若来自一份根本没落盘的记忆，就是假的。
+  const h = harness([answer('好')])
+  const user = newUser()
+  h.svc.memory.addFact(user, '一条事实')
+  ;(h.svc.memory as any).saveIssue = 'EISDIR: illegal operation on a directory'
+
+  return h.svc.handleMessage(user, '记忆', 'text').then((report: string) => {
+    assert.match(report, /上次保存失败/)
+    assert.match(report, /EISDIR/)
+  })
+})
