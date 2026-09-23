@@ -113,6 +113,44 @@ test('严格模式下第三方聊天正文不出境：正文被替换成字节�
   assert.match(out, /\[内容4字已按严格模式屏蔽\]/)
 })
 
+test('图片消息带可点开的句柄，strict 模式下不带（不摆出工具必定拒绝的东西）', async () => {
+  const realGet = configService.get.bind(configService)
+  const image = { createTime: 1758000000, isSend: false, senderUsername: '甲',
+                  localType: 3, localId: 1234, content: '', parsedContent: '[图片]' }
+  svc.listSessions = async () => ([{ displayName: '甲', username: 'wxid_a' }])
+  svc.getMessages = async () => ([image])
+
+  try {
+    ;(configService as any).get = (k: string) => (k === 'assistantPrivacy' ? 'balanced' : realGet(k))
+    assert.match(await run('get_messages', { contact: '甲' }), /\[图片 #1234\]/,
+      'balanced 下要给句柄，否则 look_at_image 没有入参可用')
+
+    ;(configService as any).get = (k: string) => (k === 'assistantPrivacy' ? 'strict' : realGet(k))
+    const strictOut = await run('get_messages', { contact: '甲' })
+    assert.doesNotMatch(strictOut, /#1234/, 'strict 下图片不许出境，就别给句柄')
+    assert.match(strictOut, /\[图片\]/, '类型要留着——契约是"仅保留时间/方向/类型"')
+  } finally {
+    ;(configService as any).get = realGet
+  }
+})
+
+test('用户自己打的「[图片] 开头」的正文，strict 下按正文遮，不能当标签放行', async () => {
+  // 标签保留只适用于读取器认定的非文本消息。用户敲的 `[图片] 这是我拍的` 是正文，
+  // 把它当标签放行，就是拿用户自己的话开了个口子。
+  const realGet = configService.get.bind(configService)
+  ;(configService as any).get = (k: string) => (k === 'assistantPrivacy' ? 'strict' : realGet(k))
+  try {
+    svc.listSessions = async () => ([{ displayName: '甲', username: 'wxid_a' }])
+    svc.getMessages = async () => ([{ createTime: 1758000000, isSend: false, senderUsername: '甲',
+                                      localType: 1, content: '[图片] 这是我拍的' }])
+    const out = await run('get_messages', { contact: '甲' })
+    assert.doesNotMatch(out, /这是我拍的/)
+    assert.match(out, /\[内容10字已按严格模式屏蔽\]/)
+  } finally {
+    ;(configService as any).get = realGet
+  }
+})
+
 test('get_messages 放得下引用消息的正文+被引原文，且截断留省略号', async () => {
   // 这个文件默认跑在 strict 下（正文会被遮罩成字数），而这条测的是渲染本身
   const realGet = configService.get.bind(configService)
@@ -679,3 +717,110 @@ test('search_favorites：收藏为空与搜不到是两句不同的话', async (
   assert.match(await run('search_favorites', { keyword: '不存在' }), /收藏中未搜到「不存在」/)
 })
 
+
+// ---------------------------------------------------------------- look_at_image
+
+/** 一个能解析出联系人的会话表 */
+function stubOneSession(): void {
+  svc.listSessions = async () => ([{ displayName: '甲', username: 'wxid_a' }])
+}
+
+const IMAGE_OK = JSON.stringify({ success: true, b64: 'AAAA', mime: 'image/jpeg', width: 240, height: 120 })
+
+/** 这个文件默认跑在 strict 下（图片不许出境），这几条要测的是取图那一段 */
+async function withBalanced<T>(body: () => Promise<T>): Promise<T> {
+  const realGet = configService.get.bind(configService)
+  ;(configService as any).get = (k: string) => (k === 'assistantPrivacy' ? 'balanced' : realGet(k))
+  try { return await body() } finally { ;(configService as any).get = realGet }
+}
+
+test('look_at_image：取到图时把它挂进 ctx，并在正文里说明尺寸', async () => {
+  stubOneSession()
+  const realGet = configService.get.bind(configService)
+  ;(configService as any).get = (k: string) => (k === 'assistantPrivacy' ? 'balanced' : realGet(k))
+  try {
+    const calls = stubScript(IMAGE_OK)
+    const c = ctx()
+    const out = await run('look_at_image', { contact: '甲', image: '1234' }, c)
+
+    assert.match(out, /已附上图片 #1234/)
+    assert.match(out, /240×120/)
+    assert.equal(c.pendingImages!.length, 1)
+    assert.equal(c.pendingImages![0].b64, 'AAAA')
+    assert.equal(c.pendingImages![0].localId, 1234)
+    // talker 要解析成 username，local_id 要原样传下去
+    assert.deepEqual(calls[0].args, ['--talker', 'wxid_a', '--local-id', '1234', '--json'])
+    assert.match(calls[0].script, /read_image\.py$/)
+  } finally {
+    ;(configService as any).get = realGet
+  }
+})
+
+test('look_at_image：strict 模式下拒绝，而且一个脚本都不调', async () => {
+  // 关键不是"拒绝"，是**根本不去取**：取了就有一份解密后的图片落在磁盘上，
+  // 而 strict 的承诺是这些内容不出本机。
+  stubOneSession()
+  const realGet = configService.get.bind(configService)
+  ;(configService as any).get = (k: string) => (k === 'assistantPrivacy' ? 'strict' : realGet(k))
+  try {
+    const calls = stubScript(IMAGE_OK)
+    const c = ctx()
+    const out = await run('look_at_image', { contact: '甲', image: '1234' }, c)
+
+    assert.match(out, /strict/)
+    assert.match(out, /balanced/, '要告诉用户怎么才能用')
+    assert.equal(calls.length, 0, 'strict 下不该调用取图脚本')
+    assert.equal(c.pendingImages, undefined)
+  } finally {
+    ;(configService as any).get = realGet
+  }
+})
+
+test('look_at_image：编号不是数字时给可读的说法，也不调脚本', async () => {
+  stubOneSession()
+  const calls = stubScript(IMAGE_OK)
+  const out = await run('look_at_image', { contact: '甲', image: '第三张' })
+  assert.match(out, /\[图片 #N\] 的编号/)
+  assert.equal(calls.length, 0)
+})
+
+test('look_at_image：缺参数直接说不缺哪一半', async () => {
+  assert.equal(await run('look_at_image', { contact: '甲' }), '(缺少 contact 或 image 参数)')
+  assert.equal(await run('look_at_image', { image: '1' }), '(缺少 contact 或 image 参数)')
+})
+
+test('look_at_image：本机没有这张图的副本时说明白，不当成"看过了"', async () => {
+  stubOneSession()
+  const c = ctx()
+  stubScript(JSON.stringify({ success: true, reason: '本机没有这张图的副本' }))
+  const out = await withBalanced(() => run('look_at_image', { contact: '甲', image: '99' }, c))
+
+  assert.match(out, /没取到 #99/)
+  assert.match(out, /本机没有这张图的副本/)
+  assert.equal(c.pendingImages, undefined)
+})
+
+test('look_at_image：一轮里看两张封顶（图片按体积算钱，也按体积算隐私）', async () => {
+  stubOneSession()
+  const c = ctx()
+  stubScript(IMAGE_OK)
+  await withBalanced(async () => {
+    assert.match(await run('look_at_image', { contact: '甲', image: '1' }, c), /已附上/)
+    assert.match(await run('look_at_image', { contact: '甲', image: '2' }, c), /已附上/)
+    const third = await run('look_at_image', { contact: '甲', image: '3' }, c)
+    assert.match(third, /已经看过 2 张图/)
+  })
+
+  assert.equal(c.pendingImages!.length, 2, '第三张不该进上下文')
+})
+
+test('look_at_image：脚本失败时带上原因，不假装看到了', async () => {
+  stubOneSession()
+  const c = ctx()
+  stubScript('', 2, '缺少 PyCryptodome')
+  const out = await withBalanced(() => run('look_at_image', { contact: '甲', image: '5' }, c))
+
+  assert.match(out, /取图失败/)
+  assert.match(out, /退出码 2/)
+  assert.equal(c.pendingImages, undefined)
+})

@@ -6,6 +6,33 @@ All notable user-facing changes are recorded here. This project follows [Semanti
 
 ## Unreleased
 
+### Added
+
+- **The assistant can look at a picture.** 15.5% of the messages in one measured 30-day archive are
+  images (242 of 1564), and the model used to see `[图片]` and nothing else - the largest remaining gap,
+  and one no amount of prompt work closes. `get_messages` now renders an image as `[图片 #1234]`, and a
+  new `look_at_image` tool takes that number, decrypts that one image **locally**, and attaches it to the
+  next request as a real image. Looking is on demand: one image per call, at most two per turn.
+
+  **An image is data leaving the machine, and it is treated as such.** `strict` mode (`assistantPrivacy`)
+  holds images back at two layers - the tool refuses to fetch, and the request builder drops anything that
+  got through anyway - and a drop is stated in the message body rather than happening silently. The
+  `#N` handle is not even shown in `strict` mode: advertising something the tool will certainly refuse is
+  worse than not mentioning it. The audit gained `IMAGE_SENT` and `IMAGE_HELD` lines (byte counts and
+  message ids, never content).
+
+  Reading is 0.9 s for a direct chat and up to ~19 s for a group with 30k messages, because the media
+  index is rebuilt per read; a resolved image is cached under `output/.cache/read-image/`, so a second
+  look at the same picture is cheap. Images never enter memory. See D-042 for the boundaries, and note
+  that this makes a third-party vision model part of the loop - the same content already went to
+  DeepSeek as text, but images are a new class of it.
+
+- `strict` mode now keeps the **type** of a non-text message. Its own rule says "time, direction and type
+  only", and masking `[图片]` / `[文件] Base.csv` into `[内容4字已按严格模式屏蔽]` was throwing the type
+  away too - the model could not tell an image from a text message, and learned nothing that was not
+  already allowed. The payload is still withheld. A message the user *typed* that happens to start with
+  `[图片]` is still masked as text: only the reader's own non-text labels count as labels.
+
 ### Fixed
 
 - **Quoted messages no longer lose what they were quoting.** In the appmsg payload the *reply* sits in

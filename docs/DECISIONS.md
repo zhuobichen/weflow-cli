@@ -1026,6 +1026,61 @@ out later" debt.
   what fits 16% of the budget and lets the character bound win over the turn floor, because six 6,000
   character turns are 36,000 characters and no turn floor justifies exceeding the input budget.
 
+## D-042: The assistant looks at one image per request, and the picture is what must not leak
+
+**Status:** Active
+
+The assistant gained a `look_at_image` tool. `get_messages` renders an image message as
+`[图片 #<local_id>]`, the model calls `look_at_image {contact, image}`, the reader decrypts that one
+image **locally** and the service attaches it to the next request as an OpenAI `image_url` content part.
+
+Images ride a side channel (`ToolContext.pendingImages`) and are turned into multimodal content in
+**exactly one place** (`toApiMessages`). Memory, redaction, quota and the audit keep operating on text
+`content`; nothing else in the codebase has to know that content can be an array.
+
+**Reason:** 15.5% of the messages in one measured 30-day archive are images (242 of 1564), and the model
+saw `[图片]` and nothing else - the largest remaining capability gap, and one no amount of prompt work
+closes. The alternative that was measured first got rejected on the same evidence: voice is 0.8% (12
+messages a month), so a transcriber on the read path would never pay for itself.
+
+**Consequences and boundaries:**
+- **An image is egress, and it is treated as egress.** `strict` mode ("third-party chat text does not
+  leave the machine") holds images back at **two** layers: the tool refuses to fetch *and* refuses to
+  hand anything back, and `toApiMessages` drops whatever got through anyway. The tool layer is the cheap
+  one; the request layer is the one that has to be right, because "the tool was willing" and "the gate
+  let it out" are different statements. A drop is **stated in the body it attaches to**, never silent: a
+  request that quietly lost an image looks to the model exactly like one that never had it.
+- `get_messages` shows the `#N` handle **only when the mode allows images out**. Advertising a handle
+  that the tool will certainly refuse is worse than not mentioning it.
+- Looking is **on demand, one image per call, at most two per turn**. That is not a technical limit: both
+  cost and exposure scale with pixels, and "the model chose to look at this picture" is a decision that
+  belongs in the audit. Local engines (`ollama`, `lmstudio`) are exempt from the hold, and no
+  `IMAGE_SENT` line is written for them - that line records **egress**, and writing it for a call that
+  never left the machine would make the log lie about where data went.
+- Audit gained `IMAGE_SENT <bytes> n=<count> ids=<local_ids>` and `IMAGE_HELD <count> strict`. Byte
+  counts and ids only, **never content**, like every other audit line.
+- Images never enter memory. Turns are stored as text, so a later turn sees the sentence the model wrote
+  about the picture, not the picture. That is both the honest behaviour and the cheap one.
+- **Where the time goes, and the one cache.** Building the media index is the entire cost of a read, and
+  it scales with the conversation: measured 0.9 s for a direct chat and **18.9 s for a group with 30,315
+  messages** (that group's local media is thumbnails only, 290×435). The resolved, downscaled bytes are
+  therefore cached at `output/.cache/read-image/<md5(talker)>/<local_id>.json`, which makes a second look
+  at the same picture cheap. **Only hits are cached** - a miss may be "WeChat is not running" (see below),
+  which is a state that changes, and caching it would make it permanent. The timeout is 90 s (≈4× the
+  worst measured) and a timeout is reported as a failure rather than silently retried: the assistant
+  handles messages serially, so one stuck read blocks every later message.
+- **"This picture is not here" and "I cannot see it right now" are different answers.** The V2 thumbnail
+  key is derived from a file WeChat maintains while running; with WeChat closed the derivation returns
+  nothing and most `.dat` thumbnails drop out of the index **silently**. A miss therefore carries a hint
+  saying which of the two it is, instead of reporting a state that may be false.
+- What this does **not** do: no describe-once-and-cache, so looking at the same picture twice still costs
+  two vision calls (only the local bytes are cached); no vision on stickers (type 47) or video (43), only
+  type 3 images; no OCR fallback when the model cannot read something.
+- Known limit: an image whose local copy is genuinely gone returns a stated reason rather than a picture.
+  The tool says so; it does not pretend to have looked. Note the honest scope of that claim: across 380
+  sampled messages every image resolved, so the miss path was exercised by removing index entries, not by
+  observing a real eviction.
+
 ## Decision Template
 
 

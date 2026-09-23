@@ -122,12 +122,19 @@ Documentation was synchronized with the current source baseline on 2026-09-19. C
   conversations). Text 69.4%, **images 15.5%**, revoke notices 3.1%, **quote messages 2.4%**, stickers
   2.1%, files 1.5%, everything else (links, video, official-account cards, mini-programs) 2.7%,
   **voice 0.8%**. Two consequences: the plan to give the assistant a voice tool was dropped - 12 voice
-  messages a month does not pay for a transcriber on the read path - and **images are the one real
-  remaining gap**, because `[图片]` is all the model gets for one message in six. Doing better needs a
-  vision model; on this deployment that means sending images to a third party, so it is a decision for
-  the maintainer, not a default to switch on. Voice transcription (`scripts/wechat_voice.py`, local
+  messages a month does not pay for a transcriber on the read path - and the **images** were the one real
+  remaining gap, because `[图片]` was all the model got for one message in six. That one is now closed
+  (`look_at_image`, D-042): measured on this deployment, a direct chat resolves in 0.9 s and a 30,315
+  message group in 18.9 s, and the membership was verified rather than assumed - 380/380 sampled image
+  messages resolved to real bytes. Voice transcription (`scripts/wechat_voice.py`, local
   `faster-whisper`, no network) exists but is wired to the **export** path, not the reader, and stays
   there.
+- **The assistant reads pictures now, and that is a new class of egress.** Images go to the same
+  third-party model the text already went to, but "a sentence about the chat" and "the photograph in the
+  chat" are not the same disclosure, so the hold is explicit: `strict` mode blocks it at two layers, the
+  `#N` handle is not shown when it cannot be used, and `IMAGE_SENT`/`IMAGE_HELD` are audit lines. The two
+  layers are deliberate - the tool declining and the request builder dropping are different statements,
+  and only the second one is about what actually left the machine.
 - **The audit line, not the prompt, is what makes a fabricated tool claim visible.** The assistant told a
   user it had looked up a conversation and found the bodies masked by strict mode, while `TURN_DONE 264B
   tools=0` showed it never called the tool. The prompt was then changed (privacy state stated as a fact

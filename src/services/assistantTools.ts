@@ -31,7 +31,26 @@ export interface ToolDef {
 export interface ToolContext {
   userId: string
   memory: AssistantMemory
+  /**
+   * 工具这一轮取到的图片，由 `look_at_image` 填。
+   *
+   * 图片走**侧信道**而不是工具返回值：工具返回值是字符串，要往里塞 base64 就得约定一个
+   * 魔法前缀再解析——那是这个仓库反复吃亏的"用文本承载结构"。服务层拿这个字段去把图片
+   * 附到对话里（见 `assistantService.toApiMessages`）。
+   */
+  pendingImages?: AttachedImage[]
 }
+
+/** 随某条消息一起发出去的图片。只在构造请求那一刻存在，不进记忆、不进审计内容。 */
+export interface AttachedImage {
+  b64: string
+  mime: string
+  /** 来源消息的 local_id，只为了审计里能对上"发了哪条" */
+  localId?: number
+}
+
+/** 一轮对话里最多看几张图。每次调用一张，这是上限——图片按体积算钱，也按体积算隐私。 */
+const MAX_IMAGES_PER_TURN = 2
 
 function fmtTime(ts: number): string {
   const n = Number(ts)
@@ -213,6 +232,23 @@ export const TOOL_DEFS: ToolDef[] = [
           limit: { type: 'number', description: '消息条数, 默认20' },
         },
         required: ['contact'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'look_at_image',
+      description: '看聊天里的一张图片（把图片本身交给模型看，不只是"这里有一张图"）。'
+        + '`image` 填 get_messages 输出里 `[图片 #1234]` 的编号。'
+        + '一轮最多看两张；隐私模式为 strict 时不可用（聊天图片不出发本机）。',
+      parameters: {
+        type: 'object',
+        properties: {
+          contact: { type: 'string', description: '这张图所在会话的联系人显示名' },
+          image: { type: 'string', description: 'get_messages 里 [图片 #N] 的编号 N' },
+        },
+        required: ['contact', 'image'],
       },
     },
   },
@@ -451,6 +487,9 @@ export async function executeTool(name: string, args: Record<string, any>, ctx: 
         const talker = await resolveTalker(contact)
         const msgs = await chatService.getMessages(talker, limit)
         if (!msgs.length) return `(没找到「${contact}」的消息)`
+        // 图片消息带一个句柄：`[图片 #1234]` 里的 1234 就是 `look_at_image` 的 `image` 参数。
+        // strict 模式下图片不允许出境，那时不带句柄——不摆出一个工具必定会拒绝的东西。
+        const canLook = privacyGate.mode() !== 'strict'
         return msgs.map(m => {
           // 非文本消息优先用 `parsedContent`：它是读取器给的**显示形态**（`[图片]`、
           // `[文件] Base.csv`、`某人 撤回了一条消息`…），而 `content` 对这类消息可能是
@@ -463,9 +502,50 @@ export async function executeTool(name: string, args: Record<string, any>, ctx: 
           // limit 最多 50 条 × 约 180 字 ≈ 9k 字符。截断留省略号——切了却看起来像
           // 说完了，模型会把半句当整句。
           const flat = raw.replace(/\n/g, ' ')
-          const body = privacyGate.maskMessageBody(clipWithMarker(flat, MSG_BODY_CHARS))
+          const body = canLook && m.localType === 3
+            ? `[图片 #${m.localId}]`
+            : privacyGate.maskMessageBody(clipWithMarker(flat, MSG_BODY_CHARS),
+                                          { isText: m.localType === 1 })
           return `[${fmtTime(m.createTime)}] ${m.isSend ? '用户' : (m.senderUsername || '对方')}: ${body}`
         }).join('\n')
+      }
+      case 'look_at_image': {
+        const contact = String(args.contact || '')
+        // 句柄在 get_messages 里长这样：`[图片 #1234]`。允许带不带 `#` 都接受——模型从
+        // 上下文里抄一个编号过来，"抄得像不像"不该决定它能不能看图。
+        const image = String(args.image ?? '').replace(/^#/, '').trim()
+        if (!contact || !image) return '(缺少 contact 或 image 参数)'
+        if (!/^\d+$/.test(image)) {
+          return `(image 要填 get_messages 里 [图片 #N] 的编号，收到的是「${image.slice(0, 20)}」)`
+        }
+        // 第一层门：strict 模式（第三方聊天正文不出境）下图片也不出去。第二层在
+        // `toApiMessages` 里——"工具肯给"与"这道门肯放"是两件事。
+        if (privacyGate.mode() === 'strict' && !privacyGate.isLocalInference()) {
+          return '(当前隐私模式是 strict：聊天图片不发出本机，用不了这个工具。'
+            + '要让我看图，得把 assistantPrivacy 改成 balanced)'
+        }
+        const budget = ctx.pendingImages ?? []
+        if (budget.length >= MAX_IMAGES_PER_TURN) {
+          return `(这一轮已经看过 ${MAX_IMAGES_PER_TURN} 张图了，先把已经看到的说完，别再取)`
+        }
+        const talker = await resolveTalker(contact)
+        // 90 秒。建媒体索引是这条路唯一的成本，且随会话大小走：实测单聊 ~1 秒、
+        // 一个 3 万条消息的大群 18.9 秒（而那个群本机只有缩略图）。取到的图会落在
+        // `output/.cache/read-image/`，同一张再看是 0.1 秒。超时是必要的兜底——助手是
+        // **串行**处理消息的，一次卡住会挡住后面所有人的话，所以宁可说"取图失败"。
+        const r = await runPythonJson<any>('read_image.py',
+          ['--talker', talker, '--local-id', image, '--json'], { timeoutMs: 90_000 })
+        if (!r.ok) return fail('取图失败', r)
+        if (!r.data?.b64) {
+          // 文字说明而不是空：本机没有这张图的副本（缓存清过、或只有缩略图）是常态
+          return `(没取到 #${image} 的图片：${r.data?.reason || '本机没有这张图的副本'})`
+        }
+        // 拿到图才建数组：`pendingImages` 为 undefined 与"空数组"在下游是同一个意思，
+        // 但只有前者能一眼看出"这一轮没图"。
+        ;(ctx.pendingImages ??= []).push({
+          b64: r.data.b64, mime: r.data.mime || 'image/jpeg', localId: Number(image) })
+        const size = r.data.width && r.data.height ? `${r.data.width}×${r.data.height}` : '尺寸未知'
+        return `(已附上图片 #${image}（${size}）。你能看到它了，直接据此回答。)`
       }
       case 'search_favorites': {
         await ensureDb()

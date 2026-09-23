@@ -42,9 +42,23 @@ export function redactText(text: string, mode: PrivacyMode, localInference: bool
   return { safe, redactions: count }
 }
 
-export function maskMessageBodyText(body: string, mode: PrivacyMode, localInference: boolean): string {
+/**
+ * strict 模式：**保留类型标签、丢掉载荷**。
+ *
+ * 契约是"仅保留时间/方向/类型"，而类型标签正是那个"类型"：非文本消息的正文本来就是
+ * `[图片]` / `[文件] Base.csv` / `[引用] 回复 ｜ 引：原文` 这种形态，整条遮掉会把
+ * "这是一张图片"一起抹掉——模型从此分不出图片和文本消息，而它**一个字都没有多知道**。
+ * 载荷（文件名、被引原文、撤回提示里的名字）照旧不出境。
+ *
+ * `isText` 由调用方给：只有读取器说的"非文本消息"才配当作标签。用户自己敲的
+ * `[图片] 这是我拍的` 是正文，按正文遮——否则就是一个把用户的话放出去的口子。
+ */
+export function maskMessageBodyText(body: string, mode: PrivacyMode,
+                                    localInference: boolean, isText = true): string {
   if (mode !== 'strict' || localInference) return body
-  return `[内容${body.length}字已按严格模式屏蔽]`
+  if (isText) return `[内容${body.length}字已按严格模式屏蔽]`
+  const label = body.match(/^\[[^\]]{1,20}\]/)?.[0]
+  return label ? `${label}（内容已按严格模式屏蔽）` : `[内容${body.length}字已按严格模式屏蔽]`
 }
 
 export class PrivacyGate {
@@ -68,8 +82,8 @@ export class PrivacyGate {
   }
 
   /** strict 模式: 第三方聊天正文不出境, 只保留元数据形态 */
-  maskMessageBody(body: string): string {
-    return maskMessageBodyText(body, this.mode(), this.isLocalInference())
+  maskMessageBody(body: string, opts: { isText?: boolean } = {}): string {
+    return maskMessageBodyText(body, this.mode(), this.isLocalInference(), opts.isText !== false)
   }
 
   /** 审计日志 — 只记事件与字节量, 绝不记内容 */

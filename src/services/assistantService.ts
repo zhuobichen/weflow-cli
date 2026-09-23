@@ -14,6 +14,7 @@ import { configService } from './configService.js'
 import { AssistantMemory, type ChatTurn } from './assistantMemory.js'
 import { privacyGate } from './assistantPrivacy.js'
 import { TOOL_DEFS, executeTool } from './assistantTools.js'
+import type { AttachedImage, ToolContext } from './assistantTools.js'
 import { appendLog } from './assistantDaemon.js'
 import type { Message, WechatInboundMessage } from '../types.js'
 import { buildEvidenceReviewInput } from './evidenceService.js'
@@ -42,6 +43,51 @@ interface ApiMessage {
   content: string
   tool_calls?: any[]
   tool_call_id?: string
+  /** 多模态附件：只会由 `look_at_image` 产生，展开见 `toApiMessages` */
+  images?: AttachedImage[]
+}
+
+/**
+ * 把内部消息展开成请求要的形状——**图片只在这一处**变成多模态数组。
+ *
+ * 其余所有环节（记忆、脱敏、审计、配额）继续按文本 `content` 工作，所以加图片没有把
+ * `ApiMessage.content` 变成一个到处都要判类型的联合体。
+ *
+ * `allowImages` 为假时图片**不发**，并在正文里留下一句说明：静默少发一张图，和"模型
+ * 看不见"在下游无法区分——这是这个仓库反复踩过的那类坑。
+ *
+ * 纯函数，不读配置。是否允许由调用方（`callLLM`）按隐私模式判定。
+ */
+export function toApiMessages(messages: ApiMessage[], allowImages: boolean):
+  { messages: ApiMessage[]; imagesSent: number; imagesDropped: number } {
+  let imagesSent = 0
+  let imagesDropped = 0
+
+  const expanded = messages.map(m => {
+    const images = m.images ?? []
+    if (!images.length) return m
+
+    if (!allowImages) {
+      imagesDropped += images.length
+      return { ...m, images: undefined,
+        content: `${m.content}\n（另有 ${images.length} 张图片未随本轮发出：当前隐私模式不允许图片出境）` }
+    }
+
+    imagesSent += images.length
+    return {
+      ...m,
+      images: undefined,
+      content: [
+        { type: 'text', text: m.content },
+        ...images.map(img => ({
+          type: 'image_url',
+          image_url: { url: `data:${img.mime};base64,${img.b64}` },
+        })),
+      ] as unknown as string,
+    }
+  })
+
+  return { messages: expanded, imagesSent, imagesDropped }
 }
 
 export class AssistantService {
@@ -101,7 +147,15 @@ export class AssistantService {
     if (!key && !local) {
       throw new Error('未配置 LLM (config set deepseekApiKey 或切换 ollama)')
     }
-    const body: Record<string, unknown> = { model, messages, max_tokens: maxTokens, temperature: 0.4 }
+    // 图片出境与正文出境不是一回事：strict 模式（第三方聊天正文不出境）下图片一律不发。
+    // `look_at_image` 自己也会拒绝取图，但"工具肯给"与"这道门肯放"是两件事——漏一层就是
+    // 聊天图片出境。本地引擎不出机器，不受这条限制。
+    const allowImages = privacyGate.mode() !== 'strict' || privacyGate.isLocalInference()
+    const { messages: expanded, imagesSent, imagesDropped } = toApiMessages(messages, allowImages)
+    // `images` 不是 API 的字段，展平后要去掉；其余字段原样透传。
+    const payload = expanded.map(({ images, ...rest }) => rest)
+
+    const body: Record<string, unknown> = { model, messages: payload, max_tokens: maxTokens, temperature: 0.4 }
     if (tools?.length) { body.tools = tools; body.tool_choice = 'auto' }
 
     const res = await fetch(`${url}/chat/completions`, {
@@ -115,6 +169,13 @@ export class AssistantService {
     })
     privacyGate.audit('CLOUD_CALL', JSON.stringify(body).length,
       local ? 'local' : `${url.split('//')[1].split('/')[0]}`)
+    // 只记"真的出机器"的那种。本地引擎收图片时没有东西离开本机，记成 SENT 是错的说法。
+    if (!local && imagesSent) {
+      const bytes = messages.reduce((n, m) => n + (m.images ?? []).reduce((b, i) => b + i.b64.length, 0), 0)
+      const ids = messages.flatMap(m => (m.images ?? []).map(i => i.localId)).filter(Boolean).join(',')
+      privacyGate.audit('IMAGE_SENT', bytes, `n=${imagesSent}` + (ids ? ` ids=${ids}` : ''))
+    }
+    if (imagesDropped) privacyGate.audit('IMAGE_HELD', imagesDropped, 'strict')
     if (!res.ok) {
       const t = await res.text().catch(() => '')
       throw new Error(`LLM ${res.status}: ${t.slice(0, 120)}`)
@@ -269,10 +330,23 @@ export class AssistantService {
    */
   private async runToolCall(userId: string, messages: ApiMessage[], callId: string,
                             name: string, args: Record<string, any>): Promise<void> {
-    const raw = await executeTool(name, args, { userId, memory: this.memory })
+    const ctx: ToolContext = { userId, memory: this.memory }
+    const raw = await executeTool(name, args, ctx)
     const { safe, redactions } = privacyGate.redact(raw)
     privacyGate.audit(`TOOL:${name}`, raw.length, redactions ? `redacted=${redactions}` : '')
     messages.push({ role: 'tool', tool_call_id: callId, content: safe })
+
+    // 工具取来的图片作为**紧随其后的一条 user 消息**附上：`tool` 消息的 content 只能是
+    // 字符串（OpenAI 的形状），塞不进多模态数组。图片本身不过 redact（它不是文本），
+    // 出不出境由 `toApiMessages` 按隐私模式判定——那是唯一一道门。
+    if (ctx.pendingImages?.length) {
+      const n = ctx.pendingImages.length
+      messages.push({
+        role: 'user',
+        content: `（这是你刚取来的图片${n > 1 ? `，共 ${n} 张` : ''}）`,
+        images: ctx.pendingImages,
+      })
+    }
   }
 
   /** 快路径：先问一次「该查哪个能力」，把这一个工具执行掉，于是循环第一轮就看得到结果。

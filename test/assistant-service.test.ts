@@ -324,3 +324,142 @@ test('the prompt reports how many facts were left out', async () => {
   assert.match(prompt, /另有 \d+ 条与这次问题关系较远/, '少给了几条要如实说，不能谎报"以下是全部"')
 })
 
+
+// ------------------------------------------------- 工具取到的图片怎么进请求
+
+/** 让图片那两条用例跑在指定档位下 */
+async function withPrivacyAsync(mode: string, run: () => Promise<void>): Promise<void> {
+  ;(configService as any).get = (key: string) => (key === 'assistantPrivacy' ? mode : realGet(key))
+  try { await run() } finally { ;(configService as any).get = realGet }
+}
+
+test('工具取到图后，图片挂进下一轮请求，而不是只回一句"我看到了"', async () => {
+  // 工具的返回值是字符串，图片走的是 ctx 侧信道。这条钉的就是那段接线：如果它断了，
+  // 模型会收到"已附上图片"却什么也没看到——然后照着这句话答，看起来还挺像。
+  const { chatService } = await import('../src/services/chatService.js')
+  const bridge = await import('../src/services/pythonBridge.js')
+  ;(chatService as any).listSessions = async () => ([{ displayName: '甲', username: 'wxid_a' }])
+  bridge.setScriptRunner(async () => ({
+    stdout: JSON.stringify({ success: true, b64: 'AAAA', mime: 'image/jpeg', width: 8, height: 8 }),
+    stderr: '', code: 0,
+  }))
+
+  try {
+    await withPrivacyAsync('balanced', async () => {
+      const h = harness([
+        toolCall('look_at_image', { contact: '甲', image: '7' }),
+        answer('图里是一只猫。'),
+      ])
+      const reply = await h.svc.handleMessage(newUser(), '看看第 7 张图', 'text')
+
+      assert.match(reply, /猫/)
+      assert.ok(h.rounds.length >= 2, '应该问了两轮')
+      const attached = h.rounds[1].filter((m: any) => m.images?.length)
+      assert.equal(attached.length, 1, '第二轮请求里要挂着那张图')
+      assert.equal(attached[0].images[0].b64, 'AAAA')
+      assert.equal(attached[0].images[0].localId, 7)
+    })
+  } finally {
+    bridge.setScriptRunner(null)
+    ;(chatService as any).listSessions = async () => []
+  }
+})
+
+test('strict 档下工具就拒绝取图，于是请求里一张图都没有', async () => {
+  const { chatService } = await import('../src/services/chatService.js')
+  const bridge = await import('../src/services/pythonBridge.js')
+  let scriptCalls = 0
+  ;(chatService as any).listSessions = async () => ([{ displayName: '甲', username: 'wxid_a' }])
+  bridge.setScriptRunner(async () => {
+    scriptCalls++
+    return { stdout: JSON.stringify({ success: true, b64: 'AAAA', mime: 'image/jpeg' }), stderr: '', code: 0 }
+  })
+
+  try {
+    await withPrivacyAsync('strict', async () => {
+      const h = harness([
+        toolCall('look_at_image', { contact: '甲', image: '7' }),
+        answer('我看不了图片。'),
+      ])
+      await h.svc.handleMessage(newUser(), '看看第 7 张图', 'text')
+
+      assert.equal(scriptCalls, 0, 'strict 下连取图脚本都不该跑')
+      for (const round of h.rounds) {
+        assert.equal(round.some((m: any) => m.images?.length), false, '请求里不该有任何图片')
+      }
+      assert.doesNotMatch(h.audit(), /IMAGE_SENT/)
+    })
+  } finally {
+    bridge.setScriptRunner(null)
+    ;(chatService as any).listSessions = async () => []
+  }
+})
+
+
+// --------------------------------------------- 真正出境的请求体长什么样
+
+/**
+ * 直接建一个**没被 harness 换掉 callLLM** 的实例，让真 `callLLM` 跑完（fetch 换掉）。
+ * 只看审计文件**新增的那一段**：同一个临时家目录里，前面的用例已经写过别的行了。
+ */
+async function realCallLLM(config: Record<string, string>, messages: any[]):
+  Promise<{ body: any; newAudit: () => string }> {
+  const realFetch = globalThis.fetch
+  let body: any = null
+  globalThis.fetch = (async (_url: string, init: any) => {
+    body = JSON.parse(init.body)
+    return { ok: true, json: async () => ({ choices: [{ message: { content: 'ok' } }] }) }
+  }) as any
+  ;(configService as any).get = (key: string) => (key in config ? config[key] : realGet(key))
+  const before = existsSync(AUDIT_FILE) ? readFileSync(AUDIT_FILE, 'utf8').length : 0
+  try {
+    const svc: any = new AssistantService()
+    await svc.callLLM(messages, undefined, 16)
+    return {
+      body,
+      newAudit: () => (existsSync(AUDIT_FILE) ? readFileSync(AUDIT_FILE, 'utf8').slice(before) : ''),
+    }
+  } finally {
+    globalThis.fetch = realFetch
+    ;(configService as any).get = realGet
+  }
+}
+
+test('图片出境时请求体是多模态数组，并留下 IMAGE_SENT 审计行', async () => {
+  const r = await realCallLLM({ assistantPrivacy: 'balanced', deepseekApiKey: 'sk-test' }, [
+    { role: 'user', content: '看看这张', images: [{ b64: 'AAAA', mime: 'image/jpeg', localId: 7 }] },
+  ])
+
+  const content = r.body.messages[0].content
+  assert.ok(Array.isArray(content), 'content 要展开成数组')
+  assert.deepEqual(content[0], { type: 'text', text: '看看这张' })
+  assert.deepEqual(content[1], { type: 'image_url', image_url: { url: 'data:image/jpeg;base64,AAAA' } })
+  assert.equal(JSON.stringify(r.body).includes('"images"'), false, 'images 不是 API 字段，不能上去')
+  assert.match(r.newAudit(), /IMAGE_SENT \d+B n=1 ids=7/)
+})
+
+test('strict 档：请求体里一个字节的图片都没有，正文说明被拦下了，并记 IMAGE_HELD', async () => {
+  const r = await realCallLLM({ assistantPrivacy: 'strict', deepseekApiKey: 'sk-test' }, [
+    { role: 'user', content: '看看这张', images: [{ b64: 'AAAA', mime: 'image/jpeg', localId: 7 }] },
+  ])
+
+  const content = r.body.messages[0].content
+  assert.equal(typeof content, 'string', 'strict 下 content 仍是字符串')
+  assert.match(content, /1 张图片未随本轮发出/)
+  assert.equal(JSON.stringify(r.body).includes('AAAA'), false, '图片数据不该出现在请求体里')
+  const audit = r.newAudit()
+  assert.match(audit, /IMAGE_HELD 1B strict/)
+  assert.doesNotMatch(audit, /IMAGE_SENT/)
+})
+
+test('本地引擎收图片不算出境，不记 IMAGE_SENT（它没离开本机）', async () => {
+  // strict 也不该拦本地引擎：图片根本没出机器，而 strict 拦的是"出境"
+  const r = await realCallLLM({ aiEngine: 'ollama', assistantPrivacy: 'strict' }, [
+    { role: 'user', content: 'x', images: [{ b64: 'AAAA', mime: 'image/jpeg', localId: 1 }] },
+  ])
+
+  assert.ok(Array.isArray(r.body.messages[0].content), '本地引擎应当照常收到图片')
+  const audit = r.newAudit()
+  assert.doesNotMatch(audit, /IMAGE_SENT/)
+  assert.doesNotMatch(audit, /IMAGE_HELD/)
+})
