@@ -209,6 +209,21 @@ All notable user-facing changes are recorded here. This project follows [Semanti
 
 ### Fixed
 
+- **The chat export tool reported a directory it may not have written to.** `export_chat` builds the
+  destination as `output/exports/<name>-<timestamp>`, and on a name collision appends `-2`. The reply
+  to the user was assembled from the *pre-collision* name, so the second export in the same second told
+  them to look in `<name>-<timestamp>` while the files were in `...-2`. A write tool that names the wrong
+  location is worse than one that names none: the user goes looking and finds nothing. The message is now
+  built from the directory that was actually written; with the default root it stays a repository-relative
+  path (`output/exports/...`, so it is followable), and with an overridden root it is the bare directory
+  name - an absolute local path has no reason to enter the conversation.
+
+  Found by pointing the tool at a real database with the export root redirected to a temporary directory.
+  The test that should have caught it had pinned the bug: it redirected the root *and* asserted the
+  message contained `output/exports/`, so it was written to match the code rather than the intent. It is
+  now two cases - overridden root reports the bare name, default root reports the relative path - and
+  both assert no drive letter appears.
+
 - **A failed memory save was silent.** `AssistantMemory.save()` ended in `catch { /* persistence failure
   must not break the conversation */ }` - the right *behaviour* (a disk hiccup should not drop the
   reply) with the wrong *silence*: the user says "remember this", the write fails, the memory is gone,
