@@ -259,6 +259,32 @@ export const EVAL_CASES: EvalCase[] = [
     question: '前天甲跟我说了什么？',
     expect: { mustCall: ['get_messages'], maxTools: 6, toolBudget: 3, argsMatch: /since=/ },
   },
+  {
+    id: 'todos-never-extracted',
+    // 待办清单是**提取**出来的，而提取要用户显式跑 `todos extract --yes`——没人给它排期。
+    // 所以清单为空有两种原因：确实没有待办，或者这件事从没被问过。把它们说成一句
+    // （"你没有待办"）就是在报一个没查证过的状态；本机的真实情况正是后者
+    // （`~/.weflow-cli/todos.json` 不存在，见 D-044）。脚本按真库的形状回 `extracted: false`。
+    //
+    // **底线只有"调了 get_todos"**；"答复里带上'还没提取过'"放软通道，这是量出来的，不是保守：
+    // 最初把它写成硬底线（`answerMatches: /提取|extract/`），干净行为下三次全过；
+    // 然后把工具改回旧行为做变异检验——第一次仍**绿**（模型那一次恰好自己说了"提取"），
+    // 第二次才红，红的那次答复是"你目前没有待办任务，清单是空的。"。
+    // 也就是说这条断言挂在模型的措辞上：**跟着措辞飘的期待是预算，不是底线**。
+    //
+    // 也没用 `answerForbids` 去禁"没有待办"：老实交代的句子可以是
+    // "系统里没有待办任务记录，因为还没提取过"，禁令会打到真话上。
+    // 这条区分的**确定性**守卫在 `test/assistant-tools-branches.test.ts` 里（工具回话本身），
+    // 这里只负责盯着"这条路真的被走过、而且答复没把它说反"。
+    question: '我最近有什么待办？',
+    scripts: { 'extract_todos.py': { stdout: JSON.stringify({ items: [], extracted: false, count: 0 }) } },
+    expect: {
+      mustCall: ['get_todos'],
+      maxTools: 6,
+      toolBudget: 3,
+      answerShouldMatch: /提取|extract/,
+    },
+  },
 ]
 
 export interface Observation {
