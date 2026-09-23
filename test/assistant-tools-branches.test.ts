@@ -46,6 +46,7 @@ function resetStubs(): void {
   svc.connect = async () => {}
   svc.listSessions = async () => []
   svc.getMessages = async () => []
+  svc.listContacts = async () => []
   svc.getFavorites = async () => ({ success: true, favorites: [], total: 0 })
   svc.getSnsTimeline = async () => ({ success: true, timeline: [] })
   svc.getSnsExportStats = async () => ({ success: true, data: { totalPosts: 0, totalFriends: 0 } })
@@ -859,4 +860,49 @@ test('get_messages 看不懂的时间写成一句可读的参数错误，而不�
   const out = await run('get_messages', { contact: '甲', since: '上周三' })
   assert.match(out, /时间看不懂/)
   assert.match(out, /3d \/ 2w \/ 12h/, '要告诉它该怎么写')
+})
+
+// ------------------------------------------------- 名字不在最近会话里时查通讯录
+
+test('名字不在会话列表里，但通讯录里有：照样读得到（旧行为是当成一个不存在的 talker）', async () => {
+  // 会话列表只取最近 300 个，通讯录是完整的。名字落在 300 之外的人（很久没聊、或对话很多
+  // 的人）旧行为会被原样当成 talker → 下游读到空 → 助手说"没找到消息"，而他其实在通讯录里。
+  const asked: string[] = []
+  svc.listSessions = async () => ([{ displayName: '甲', username: 'wxid_a' }])
+  svc.listContacts = async (keyword: string) => {
+    asked.push(keyword)
+    return [{ username: 'wxid_old', displayName: '老同学', remark: '老王', nickname: '小虎', alias: 'huzi' }]
+  }
+  svc.getMessages = async (talker: string) => {
+    asked.push(`read:${talker}`)
+    return talker === 'wxid_old'
+      ? [{ createTime: 1758000000, isSend: false, senderUsername: '老同学', content: '好久不见' }]
+      : []
+  }
+  const realGet = configService.get.bind(configService)
+  ;(configService as any).get = (k: string) => (k === 'assistantPrivacy' ? 'balanced' : realGet(k))
+  try {
+    assert.match(await run('get_messages', { contact: '老王' }), /好久不见/, '备注名应当能找到人')
+    assert.match(await run('get_messages', { contact: '小虎' }), /好久不见/, '昵称也认')
+    assert.match(await run('get_messages', { contact: 'huzi' }), /好久不见/, '别名也认')
+    assert.ok(asked.includes('read:wxid_old'), '要拿通讯录里的 username 去读，而不是原样用查询词')
+  } finally {
+    ;(configService as any).get = realGet
+  }
+})
+
+test('通讯录里匹配到多个：不猜，照旧说没找到', async () => {
+  svc.listSessions = async () => ([])
+  svc.listContacts = async () => ([
+    { username: 'wxid_1', displayName: '小王', remark: '王工' },
+    { username: 'wxid_2', displayName: '小王', remark: '王老师' },
+  ])
+  // 桩要**按 talker 区分**：对谁都说"有消息"的话，这条测的就不是"有没有猜"了
+  // （评测那边踩过一模一样的坑）。
+  svc.getMessages = async (talker: string) => (
+    talker === 'wxid_1' || talker === 'wxid_2'
+      ? [{ createTime: 1758000000, isSend: false, content: '内容' }]
+      : [])
+  const out = await run('get_messages', { contact: '小王' })
+  assert.match(out, /没找到/, '有歧义就不许挑一个——宁可让它说不出话，也不能读错人的聊天')
 })

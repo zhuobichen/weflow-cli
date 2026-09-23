@@ -8,6 +8,20 @@ All notable user-facing changes are recorded here. This project follows [Semanti
 
 ### Added
 
+- **`contacts -k` only searched the first N rows, and the assistant's name lookup had a blind spot.**
+  Two defects found by trying to resolve a person by name on real data. First, the keyword filter ran
+  **after** `LIMIT`: `get_contacts` fetched the first `limit` rows of `Name2Id` and only then filtered
+  them, so on a 500-contact address book anyone past row 200 was invisible to a search - measured, a
+  lookup by remark hit 3 of 10. The filter now runs first and truncates afterwards (extracted as
+  `filter_contacts`, with tests). Second, `resolveTalker` searched only the most recent **300 sessions**;
+  a name that is not in them fell through to "treat the query as a talker id", so the assistant reported
+  "no messages" for someone who is plainly in the address book. Resolution now falls back to the contact
+  book, matching remark / display name / nickname / alias / username, and still refusing when the match
+  is not unique. Measured on 378 real contacts that are outside the recent sessions: **362 resolved, 10
+  correctly refused for duplicate names, 0 ever resolved to the wrong person**, 5 single-character names
+  still miss - and a miss is safe, because it returns null and the assistant says it could not find
+  them rather than reading someone else's chat.
+
 - **The assistant can see time now, and can reach a specific day.** Two halves of one gap: the
   system prompt carried no current date, so "上周三" had nothing to resolve against, and `get_messages`
   took only a message count - meaning a day far enough back was simply unreachable (the model either

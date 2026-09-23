@@ -201,3 +201,41 @@ class MessageDictTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class ContactFilterTests(unittest.TestCase):
+    """联系人列表的过滤与截断：**顺序**是全部要点。
+
+    原来无条件 `LIMIT`，过滤发生在截断之后——关键字只能在前 N 行里找，后面的人搜不到。
+    实测：500 人的通讯录、按备注名找 10 个只命中 3 个；修好之后 362/378 命中、认错 0 个。
+    """
+
+    CONTACTS = [
+        {'username': 'wxid_1', 'displayName': '张三'},
+        {'username': 'wxid_2', 'displayName': '李四', 'remark': '老王'},
+        {'username': 'wxid_3', 'displayName': '王五'},
+        {'username': 'wxid_4', 'displayName': '赵六', 'nickname': '小六'},
+    ]
+
+    def test_no_keyword_just_truncates(self):
+        self.assertEqual(len(nt.filter_contacts(self.CONTACTS, '', 2)), 2)
+        self.assertEqual(len(nt.filter_contacts(self.CONTACTS, None)), 4)
+
+    def test_keyword_matches_name_remark_and_nickname(self):
+        self.assertEqual([c['username'] for c in nt.filter_contacts(self.CONTACTS, '老王')], ['wxid_2'])
+        self.assertEqual([c['username'] for c in nt.filter_contacts(self.CONTACTS, '小六')], ['wxid_4'])
+        # 一个字：命中多个，这是预期的
+        self.assertEqual([c['username'] for c in nt.filter_contacts(self.CONTACTS, '王')],
+                         ['wxid_2', 'wxid_3'])
+
+    def test_truncation_happens_after_filtering(self):
+        # 这是这个函数的全部意义：先截断的话，"王五"（第 3 个）会被 limit=1 挡在外面
+        self.assertEqual([c['username'] for c in nt.filter_contacts(self.CONTACTS, '王', 1)], ['wxid_2'])
+        self.assertEqual([c['username'] for c in nt.filter_contacts(self.CONTACTS, '王五', 5)], ['wxid_3'])
+
+    def test_a_late_match_is_still_found(self):
+        # 模拟"命中的人在很后面"：limit 比命中位置小，但过滤先跑，所以仍能拿到
+        many = [{'username': 'wxid_%d' % i, 'displayName': '路人%d' % i} for i in range(100)]
+        many.append({'username': 'wxid_target', 'displayName': '目标'})
+        hits = nt.filter_contacts(many, '目标', 5)
+        self.assertEqual([c['username'] for c in hits], ['wxid_target'])

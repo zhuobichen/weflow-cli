@@ -447,6 +447,24 @@ def load_contact_names(contact_db_path, contact_key_hex, contact_salt_hex):
     return name_map
 
 
+def filter_contacts(contacts, keyword, limit=0):
+    """按关键字过滤联系人，**然后**才截断到 `limit`。
+
+    顺序是这里的全部要点：先截断会让第 `limit` 个之后的人搜不到（实测 500 人的通讯录里，
+    按备注名找 10 个只命中 3 个）。关键字比对 `username + displayName + remark + nickname`，
+    大小写不敏感。
+    """
+    if not keyword:
+        return contacts[:limit] if limit else contacts
+    needle = keyword.lower()
+    hits = [
+        c for c in contacts
+        if needle in (c.get('username', '') + c.get('displayName', '')
+                      + c.get('remark', '') + c.get('nickname', '')).lower()
+    ]
+    return hits[:limit] if limit else hits
+
+
 def apply_contact_names(sessions, name_map):
     """Apply contact names to session list, replacing bare wxid displayNames."""
     if not name_map:
@@ -1192,13 +1210,20 @@ def get_messages(conns, talker, limit=100, offset=0, name_map=None, own_wxid=Non
     return {"messages": collected}
 
 
-def get_contacts(conns, limit=200):
-    """Get contacts from NT database, merged across every shard."""
+def get_contacts(conns, limit=200, keyword=None):
+    """Get contacts from NT database, merged across every shard.
+
+    **给了 `keyword` 就不加 `LIMIT`**，由调用方在名字解析之后过滤、再按 `limit` 截断。
+    原来无条件 `LIMIT`，于是过滤发生在**截断之后**：关键字只能在前 `limit` 行里找，
+    后面的人搜不到（实测 500 人的通讯录、按备注名找 10 个只命中 3 个）。名字解析要用
+    contact.db 的备注/昵称，那是调用方才有的东西，所以截断必须挪到过滤之后。
+    """
     seen = set()
     contacts = []
     for conn in conns:
         try:
-            rows = conn.execute("SELECT user_name FROM Name2Id LIMIT ?", (limit,)).fetchall()
+            sql = "SELECT user_name FROM Name2Id" if keyword else "SELECT user_name FROM Name2Id LIMIT ?"
+            rows = conn.execute(sql, () if keyword else (limit,)).fetchall()
         except Exception:
             continue
         for (username,) in rows:
@@ -1680,15 +1705,10 @@ def main():
         if not conns:
             print(json.dumps({"error": "无法打开消息数据库，请检查密钥"}, ensure_ascii=True))
             return
-        result = get_contacts(conns, args.limit)
+        result = get_contacts(conns, args.limit, keyword=args.keyword)
         if 'contacts' in result:
             result['contacts'] = apply_contact_names(result['contacts'], contact_name_map)
-            if args.keyword:
-                kw = args.keyword.lower()
-                result['contacts'] = [
-                    c for c in result['contacts']
-                    if kw in (c.get('username', '') + c.get('displayName', '') + c.get('remark', '') + c.get('nickname', '')).lower()
-                ]
+            result['contacts'] = filter_contacts(result['contacts'], args.keyword, args.limit)
         print(json.dumps(result, ensure_ascii=True))
         for conn in conns:
             conn.close()

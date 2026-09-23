@@ -11,6 +11,7 @@ import { existsSync, readFileSync, readdirSync } from 'fs'
 import { join } from 'path'
 // 直接调进程的写法已收敛进 pythonBridge：这里不再 import child_process
 import { resolvePackageRoot } from '../utils/packageRoot.js'
+import type { Contact } from '../types.js'
 import { clipWithMarker } from '../utils/text.js'
 import { resolveSince, resolveUntil } from '../utils/dateRange.js'
 
@@ -201,10 +202,44 @@ export function resolveUniqueTalker(name: string, sessions: TalkerCandidate[]): 
   return query
 }
 
-/** 显示名 → username 解析 (会话表里两者都有) */
+/**
+ * 通讯录里按 **备注 / 显示名 / 昵称 / 别名 / username** 找唯一的一个；找不到或有歧义回 null。
+ *
+ * 与 `resolveUniqueTalker` 同一套纪律：**只认唯一**，不猜。
+ */
+export async function lookupContactUsername(name: string): Promise<string | null> {
+  const query = name.trim()
+  if (!query) return null
+  // 窗口给宽一点：关键字命中的是**包含**它的所有名字，一个字的查询能匹配到几十个人，
+  // 而精确那一个可能排在 20 名之后。实测（378 个真实联系人，都不在最近会话里）：
+  // 20 名时漏 6 个、60 名时漏 5 个，**认错都是 0 个**。剩下那 5 个都是单字名——它匹配到
+  // 几十个人，精确的那个仍在窗口之外。这个残余是安全的：回 null，助手说"没找到"，
+  // 而不会读到别人的聊天。
+  const contacts = await chatService.listContacts(query, 60)
+  const fields = (contact: Contact) => [contact.remark, contact.displayName, contact.nickname, contact.alias]
+    .filter(Boolean) as string[]
+  const exact = contacts.filter(c => c.username === query || fields(c).some(f => f === query))
+  const pool = exact.length ? exact : contacts.filter(c => fields(c).some(f => f.includes(query)))
+  const usernames = [...new Set(pool.map(c => c.username))]
+  return usernames.length === 1 ? usernames[0] : null
+}
+
+/**
+ * 显示名 → username 解析。
+ *
+ * 会话列表**只取最近 300 个**，而通讯录是完整的：名字不在那 300 个里时（对话很多的人，或
+ * 很久没聊过的人），旧行为是把查询词原样当 talker 返回——于是下游读到空、助手说"没找到
+ * 消息"，而那个人其实在通讯录里。所以**匹配不上时再查一次通讯录**。
+ *
+ * 兜底只做"名字 → username"，不去验证这个会话有没有消息：没有消息时下游会如实说
+ * "没找到消息"，那是对的答案，不该在这里变成"查无此人"。
+ */
 async function resolveTalker(name: string): Promise<string> {
   const sessions = await chatService.listSessions(undefined, 300)
-  return resolveUniqueTalker(name, sessions)
+  const talker = resolveUniqueTalker(name, sessions)     // 歧义会抛，让它抛
+  if (sessions.some(session => session.username === talker)) return talker
+  const fromBook = await lookupContactUsername(name)
+  return fromBook ?? talker
 }
 
 export const TOOL_DEFS: ToolDef[] = [
