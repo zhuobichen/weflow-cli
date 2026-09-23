@@ -8,6 +8,34 @@ All notable user-facing changes are recorded here. This project follows [Semanti
 
 ### Added
 
+- **The calibration harness now covers what the report actually decides, and gained a half that needs
+  no labels at all.** `quality_eval.py` sampled articles and asked you to label `topic` + `include`;
+  `relevance` was not in that list even though **it** is what the admission rule reads. The label file
+  now has three fields, `score` reports relevance agreement **and the mean error in levels** (two
+  articles both labelled 中, one 0.4 too high and one 0.4 too low, score 100% accuracy while the score
+  is visibly misaligned - accuracy cannot see that), and there is now a second threshold sweep: the
+  relevance cuts `0.5`/`1.5` were written with the comment "暂定" because there was nothing to calibrate
+  them against, and this is the thing that calibrates them. The printed sheet is **blind** - it no
+  longer shows Jev's answer next to each title, because seeing it first is an unmeasurable inflation of
+  the agreement being measured.
+
+- `quality_eval.py consistency <file>` is the **label-free** half: it reports how often the two
+  questions answer the same article two ways (high relevance with nothing usable, or low relevance with
+  something usable). This came from `jev-chat-jarvis` (the vendored reference implementation of this
+  exact pattern), whose task spec makes "questions must not contradict each other" a hard requirement
+  and then needs a labelled set to enforce it - but a contradiction is self-evident, so this number is
+  available today, without a single human label. Items missing either score are counted as undecidable
+  rather than as agreement, which is the same discipline the rest of this repo applies to missing
+  values.
+
+- `jev_probe.py --criteria-ab` asks the same articles twice, current criteria (Chinese, score bins that
+  name an abstraction level) against an English variant whose score bins describe concrete scenes, both
+  rules taken from `jev-chat-jarvis`'s hard constraints. Measured here on 24 and 12 real articles: topic
+  agreement 79% and 67%, relevance raw-score mean absolute difference 0.17 and 0.24, disagreements
+  concentrated on the AI↔学术 boundary (a paper about a method) and 文学↔新闻. **These numbers say what
+  a wording change moves, not whether it improves anything** - that still needs the labelled set, which
+  is why the variant stays a candidate and the production criteria are unchanged.
+
 - **The assistant can look at a picture.** 15.5% of the messages in one measured 30-day archive are
   images (242 of 1564), and the model used to see `[图片]` and nothing else - the largest remaining gap,
   and one no amount of prompt work closes. `get_messages` now renders an image as `[图片 #1234]`, and a

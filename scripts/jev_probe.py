@@ -266,12 +266,123 @@ def cmd_against_daily(samples, client):
     return rows
 
 
+# ---- 判据变体：英文 + 具体情景 --------------------------------------------------
+#
+# 来自 `jev-chat-jarvis`（TypeSafe 官方那个聊天副驾）的两条口径，我们现在的版本两条都
+# 反着来：
+#   1. **instructions 与 criteria 用英文**（Jev 主训练语言是英文；state 里的正文保持中文
+#      原文不动）—— 他们的 `tools/jev/TASK.md` 把这写成了硬约束；
+#   2. **score 的每一档写具体情景，不写抽象程度**（官方明确要求）—— 我们写的是
+#      `低：信息性阅读` 这种抽象标签。
+#
+# 键保持中文不动：`choice` 的键就是我们回填的值，下游按字面量比对。
+#
+# **这是候选判据，不是生产判据。** 换不换由 `--criteria-ab` 的数字决定，而不是由
+# "官方这么做"决定——本机实测（24 篇真实文章）：主题 5/24 会变，相关度原始分平均只差
+# 0.17。改了什么能量出来，改好没有需要一个标注集，那是另一件事。
+EN_TOPIC_CRITERIA = {
+    'AI': 'AI, large language models, agents, programming, open-source software, developer '
+          'tooling, and hands-on tutorials for them. Not for a research paper whose main '
+          'content is a method or a result rather than a tool.',
+    '投资': 'Stocks, funds, fundraising, macro-economics, business and market analysis, '
+            'company financials. Not for an economic-policy announcement by a government '
+            'body - that is 政治, or 新闻 if it is merely reported.',
+    '新闻': 'Current affairs, social hot topics, entertainment, job postings, promotions and '
+            'event notices. Informative but not actionable. Not for an official policy '
+            'interpretation (政治) or an investment analysis (投资).',
+    '文学': 'Essays, fiction, food and travel writing, everyday-life reflection, history and '
+            'culture. The tone is literary or personal rather than informational.',
+    '学术': 'Peer-reviewed papers, journal articles, lab results, academic conferences, '
+            'university research and scientific methodology. Not for a popular write-up of a '
+            'product or a tool (AI).',
+    '政治': 'Party theory, policy interpretation, speeches by officials, and official '
+            'commentary published by a government or party organ. Not for general social '
+            'news that merely mentions a policy.',
+}
+
+# 每一档写**具体情景**。抽象程度（"低/中/高"）在这里不算判据：模型没法把"低"对到一篇文章上。
+EN_RELEVANCE_LEVELS = [
+    'Nothing usable: pure news, entertainment, literary or lifestyle writing, or an event '
+    'notice. A reader who acts on it learns nothing they could apply.',
+    'Background value: explains a trend, an idea or a cross-domain connection worth knowing, '
+    'but hands the reader nothing to run, try or cite today.',
+    'Directly usable: names a new tool, method, dataset, code repository, or a reproducible '
+    'result that this reader could pick up and use in their own work.',
+]
+
+
+def build_variant_questions(topics):
+    """与 `jev_client.build_questions` 同一形状，只换判据语言与写法。"""
+    return {
+        'topic': {'type': 'choice',
+                  'instructions': 'Which single topic does this article belong to? '
+                                  'Choose by what the article is mainly about, not by a '
+                                  'keyword it happens to mention.',
+                  'criteria': {topic: EN_TOPIC_CRITERIA.get(topic, topic) for topic in topics}},
+        'relevance': {'type': 'score',
+                      'instructions': 'How useful is this article to a reader who is a graduate '
+                                      'student in environmental science working at the '
+                                      'intersection of computing and the environment? Judge what '
+                                      'they could do with it, not how pleasant it is to read.',
+                      'criteria': list(EN_RELEVANCE_LEVELS)},
+    }
+
+
+def cmd_criteria_ab(samples, client, max_chars):
+    """同一批文章问两遍：现行判据（中文抽象） vs 变体（英文具体情景）。
+
+    **只回答"改了什么"，不回答"改好没有"**：两个版本两个都可能错，而"更准"需要标注集。
+    能诚实给出的是：主题变了多少篇、相关度原始分差多少、分歧落在哪几篇——那几篇就是要
+    人工去看的那几篇。
+    """
+    rows = []
+    for sample in samples:
+        state = strate(sample['title'], sample['body'])
+        try:
+            current, _ = client.decide(state, build_questions(TOPICS))
+            variant, _ = client.decide(state, build_variant_questions(TOPICS))
+        except JevError as error:
+            print('  [WARN] %s 失败：%s' % (sample['title'][:20], error))
+            continue
+        rows.append({
+            'title': sample['title'],
+            'storedTopic': sample['labelTopic'],
+            'currentTopic': (current.get('topic') or {}).get('choice'),
+            'variantTopic': (variant.get('topic') or {}).get('choice'),
+            'currentScore': (current.get('relevance') or {}).get('score'),
+            'variantScore': (variant.get('relevance') or {}).get('score'),
+            'currentConfidence': (current.get('topic') or {}).get('confidence'),
+            'variantConfidence': (variant.get('topic') or {}).get('confidence'),
+        })
+
+    same = sum(1 for r in rows if r['currentTopic'] == r['variantTopic'])
+    print()
+    print('=== 主题：两版一致 %d/%d（%.0f%%）==='
+          % (same, len(rows), 100.0 * same / max(len(rows), 1)))
+    for row in rows:
+        if row['currentTopic'] != row['variantTopic']:
+            print('  存档=%-4s 现行=%-4s 变体=%-4s  %s'
+                  % (row['storedTopic'], row['currentTopic'], row['variantTopic'],
+                     row['title'][:36]))
+    diffs = [abs((r['currentScore'] or 0) - (r['variantScore'] or 0)) for r in rows]
+    if diffs:
+        print()
+        print('=== 相关度原始分（0~2）===')
+        print('  平均绝对差 %.2f · 差 >=0.5 的 %d/%d'
+              % (sum(diffs) / len(diffs), sum(1 for d in diffs if d >= 0.5), len(diffs)))
+    print()
+    print('这两个数说的是"改动会改变什么"。要判断哪个更对，得先有人工标注。')
+    return rows
+
+
 def main():
     parser = argparse.ArgumentParser(description='Jev 中文对照探针（不接线）')
     parser.add_argument('--api-key', default='', help='不传则读 TYPESAFE_API_KEY')
     parser.add_argument('--model', default=DEFAULT_MODEL)
     parser.add_argument('--smoke', action='store_true', help='3 个小样本验证通路')
     parser.add_argument('--against-daily', action='store_true', help='用日报文章做对照')
+    parser.add_argument('--criteria-ab', action='store_true',
+                        help='同一批文章问两遍：现行判据 vs 英文具体情景变体（只报"改了什么"）')
     parser.add_argument('--dry-run', action='store_true', help='只打印要发什么，不联网')
     parser.add_argument('--limit', type=int, default=40, help='对照取多少篇')
     parser.add_argument('--max-chars', type=int, default=2000, help='每篇正文截断长度')
@@ -281,7 +392,7 @@ def main():
 
     try:
         samples = collect_samples(args.limit, args.max_chars) if (
-            args.dry_run or args.against_daily) else []
+            args.dry_run or args.against_daily or args.criteria_ab) else []
 
         if args.dry_run:
             if not samples:
@@ -290,7 +401,7 @@ def main():
             cmd_dry_run(samples, args.max_chars)
             return 0
 
-        if not (args.smoke or args.against_daily):
+        if not (args.smoke or args.against_daily or args.criteria_ab):
             parser.print_help()
             return 1
         if not args.yes:
@@ -305,6 +416,13 @@ def main():
                 '或 weflow-cli config set typesafeApiKey')
         if args.smoke:
             cmd_smoke(client)
+        elif args.criteria_ab:
+            if not samples:
+                print('没有取到样本')
+                return 1
+            rows = cmd_criteria_ab(samples, client, args.max_chars)
+            if args.json:
+                print(json.dumps(rows, ensure_ascii=False, indent=2))
         else:
             if not samples:
                 print('没有取到样本')

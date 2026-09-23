@@ -19,13 +19,19 @@ qe = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(qe)
 
 
-def item(score, include, jev_topic='AI', human_topic=None, stored_topic='AI'):
-    return {
-        'jev': {'includeScore': score, 'topic': jev_topic},
-        'storedTopic': stored_topic,
-        'label': {'topic': human_topic if human_topic is not None else jev_topic,
-                  'include': include},
-    }
+def item(score, include, jev_topic='AI', human_topic=None, stored_topic='AI',
+         relevance_score=None, human_relevance=None, topic_confidence=None):
+    jev = {'includeScore': score, 'topic': jev_topic}
+    if relevance_score is not None:
+        jev['relevanceScore'] = relevance_score
+        jev['relevance'] = qe._level_for(relevance_score, *qe.CURRENT_RELEVANCE_CUTS)
+    if topic_confidence is not None:
+        jev['topicConfidence'] = topic_confidence
+    label = {'topic': human_topic if human_topic is not None else jev_topic,
+             'include': include}
+    if human_relevance is not None:
+        label['relevance'] = human_relevance
+    return {'jev': jev, 'storedTopic': stored_topic, 'label': label}
 
 
 class CalibrationTests(unittest.TestCase):
@@ -202,3 +208,107 @@ class BandStratifiedSamplingTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class RelevanceLevelTests(unittest.TestCase):
+    """原始分 → 三个字。切点是可扫的变量，所以这个映射必须与生产那份一致。"""
+
+    def test_the_cut_points_are_the_production_ones(self):
+        # `jev_client.score_to_relevance` 用 int(score+0.5) 取最近档，
+        # 等价于这两条线。不一致的话，扫描出来的最优切点会对不上生产。
+        low, high = qe.CURRENT_RELEVANCE_CUTS
+        self.assertEqual((low, high), (0.5, 1.5))
+        for score, expected in [(0.0, '低'), (0.49, '低'), (0.5, '中'), (1.49, '中'),
+                                (1.5, '高'), (2.0, '高')]:
+            self.assertEqual(qe._level_for(score, low, high), expected, 'score=%s' % score)
+
+    def test_a_moved_cut_moves_the_level(self):
+        self.assertEqual(qe._level_for(0.9, 0.5, 1.5), '中')
+        self.assertEqual(qe._level_for(0.9, 1.0, 1.75), '低')
+
+
+class RelevanceScoringTests(unittest.TestCase):
+    def test_agreement_counts_only_items_the_human_graded(self):
+        items = [item(0.1, True, relevance_score=0.2, human_relevance='低'),
+                 item(0.1, True, relevance_score=1.9, human_relevance='低'),   # 这一条错
+                 item(0.1, True, relevance_score=0.2)]                          # 没标，不算
+        report = qe.score_labels(items)
+        self.assertEqual(report['relevanceLabelled'], 2)
+        self.assertEqual(report['relevanceAgreement'], 0.5)
+
+    def test_the_mae_carries_the_direction_the_accuracy_hides(self):
+        # 两篇都判成「中」，一篇偏高 0.4 档、一篇偏低 0.4 档：准确率是 100%，
+        # 而平均差 0.4 说明分数整体没对齐——准确率看不见这件事。
+        items = [item(0.1, True, relevance_score=1.4, human_relevance='中'),
+                 item(0.1, True, relevance_score=0.6, human_relevance='中')]
+        report = qe.score_labels(items)
+        self.assertEqual(report['relevanceAgreement'], 1.0)
+        self.assertAlmostEqual(report['relevanceMae'], 0.4, places=2)
+
+    def test_the_sweep_prefers_the_cuts_that_reproduce_the_human(self):
+        # 人工的分档其实在 1.0 / 1.75 上：现行 0.5/1.5 会把 0.7 判成「中」（人标「低」），
+        # 扫描应该找出更贴的那一组。
+        items = [item(0.1, True, relevance_score=0.3, human_relevance='低'),
+                 item(0.1, True, relevance_score=0.7, human_relevance='低'),
+                 item(0.1, True, relevance_score=1.2, human_relevance='中'),
+                 item(0.1, True, relevance_score=1.6, human_relevance='中'),
+                 item(0.1, True, relevance_score=1.9, human_relevance='高')]
+        report = qe.score_labels(items)
+        best = report['bestRelevanceCuts']
+        self.assertEqual(best['agreement'], 1.0)
+        self.assertLessEqual(best['low'], 1.0)
+        self.assertLessEqual(best['high'], 1.75)
+        self.assertLess(report['relevanceCuts']['agreement'], 1.0,
+                        '现行切点在这份数据上应当不是满分——否则这条测试没在测东西')
+
+    def test_a_handful_of_items_is_not_enough_to_sweep(self):
+        items = [item(0.1, True, relevance_score=1.0, human_relevance='中')] * 3
+        report = qe.score_labels(items)
+        self.assertIsNone(report['bestRelevanceCuts'], '样本太少就不该给出"最优切点"')
+
+
+class ConsistencyTests(unittest.TestCase):
+    """题目之间打不打架——这一项不需要人工标签。"""
+
+    def test_high_relevance_but_nothing_to_use_is_flagged(self):
+        report = qe.consistency([item(0.2, True, relevance_score=1.8)])
+        self.assertEqual(report['conflicts'], 1)
+        self.assertEqual(report['highButUseless'], 1)
+        self.assertEqual(report['examples'][0]['kind'], '高相关却无内容')
+
+    def test_low_relevance_but_usable_is_flagged(self):
+        report = qe.consistency([item(0.9, True, relevance_score=0.1)])
+        self.assertEqual(report['lowButUseful'], 1)
+
+    def test_agreement_is_not_a_conflict(self):
+        report = qe.consistency([item(0.9, True, relevance_score=1.8),
+                                 item(0.1, True, relevance_score=0.2)])
+        self.assertEqual(report['conflicts'], 0)
+        self.assertEqual(report['conflictRate'], 0.0)
+
+    def test_the_borderline_bands_are_left_alone(self):
+        # 相关度「中」（0.5~1.5）与收录分 0.5~0.8 之间都不判矛盾：那一段本来就是灰的，
+        # 在那儿报警会把真正打架的那些淹掉。
+        report = qe.consistency([item(0.6, True, relevance_score=0.9),
+                                 item(0.79, True, relevance_score=1.49)])
+        self.assertEqual(report['usable'], 2)
+        self.assertEqual(report['conflicts'], 0)
+
+    def test_a_missing_score_is_not_counted_as_agreement(self):
+        # 把"有一题没答"当成"没矛盾"，是这个仓库反复踩过的坑（缺值装成默认值）。
+        report = qe.consistency([{'jev': {'relevanceScore': 1.8}, 'title': 'x'},
+                                 {'jev': {'includeScore': 0.1}, 'title': 'y'}])
+        self.assertEqual(report['usable'], 0)
+        self.assertEqual(report['unscored'], 2)
+        self.assertIsNone(report['conflictRate'], '没有可判定的数据时不许给 0%')
+
+    def test_low_topic_confidence_is_counted_separately(self):
+        report = qe.consistency([item(0.2, True, relevance_score=1.8, topic_confidence=0.3)])
+        self.assertEqual(report['lowTopicConfidence'], 1)
+        self.assertEqual(report['conflicts'], 1, '两件事分别计数，不混在一起')
+
+    def test_no_items_at_all(self):
+        report = qe.consistency([])
+        self.assertEqual(report['total'], 0)
+        self.assertEqual(report['conflicts'], 0)
+        self.assertIsNone(report['conflictRate'])
