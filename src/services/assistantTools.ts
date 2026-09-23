@@ -401,7 +401,8 @@ export const TOOL_DEFS: ToolDef[] = [
     type: 'function',
     function: {
       name: 'search_chats',
-      description: '在自己所有聊天记录里检索「在哪聊过某件事」。适合「上次说的那个部署方案是在哪聊的」'
+      description: '在**聊天记录**里检索「在哪聊过某件事」，按字面词匹配。适合「上次说的那个部署方案是在哪聊的」。'
+        + '（知识库用 search_knowledge；助手记得的关于你的事用 search_memory）'
         + '「谁提过这个客户」这类问题。它只匹配字面词（同义改写要靠别的路子），所以问题描述得具体些。'
         + '代价：会把你的问题与候选词发给判断模型（不发聊天正文），约 1-2 秒。',
       parameters: {
@@ -432,7 +433,8 @@ export const TOOL_DEFS: ToolDef[] = [
     type: 'function',
     function: {
       name: 'search_semantic',
-      description: '按**意思**找（语义/同义检索），而 search_chats 只匹配字面词。'
+      description: '按**意思**找聊天记录（语义/同义检索），而 search_chats 只匹配字面词——'
+        + '想不起原话、只记得大意时用它。'
         + '「上次说的那个部署方案是在哪聊的」用 search_chats；「和钱有关的讨论」这种同义改写用这条。'
         + '代价：查询词会发给阿里云百炼做嵌入、候选片段会发给判断模型重排（都是仓库既有的云端路径），'
         + '需要先建过索引（weflow-cli search-index）。',
@@ -468,7 +470,8 @@ export const TOOL_DEFS: ToolDef[] = [
     type: 'function',
     function: {
       name: 'search_knowledge',
-      description: '搜索用户的本地知识库(从公众号文章沉淀的 Wiki 概念页与学习日报)。适合查概念解释、找之前整理过的知识。',
+      description: '搜索**本地知识库**（从公众号文章沉淀的 Wiki 概念页与学习日报），适合查概念解释、找之前整理过的知识。'
+        + '（聊天里说过什么用 search_chats；助手记得的关于你的事用 search_memory）',
       parameters: {
         type: 'object',
         properties: {
@@ -505,7 +508,8 @@ export const TOOL_DEFS: ToolDef[] = [
     type: 'function',
     function: {
       name: 'search_memory',
-      description: '搜索助手关于用户的长期记忆(此前对话中提取的持久事实)。',
+      description: '搜索**助手记得的关于你的事**（此前对话里提取的长期事实：偏好、项目、关系）。'
+        + '（聊天正文用 search_chats，整理过的知识用 search_knowledge）',
       parameters: {
         type: 'object',
         properties: {

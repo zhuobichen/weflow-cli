@@ -208,6 +208,32 @@ export const EVAL_CASES: EvalCase[] = [
               answerMatches: /(哪个|哪一个|更完整|全名|多个|精确|分不清|小明明|小明华)/ },
   },
   {
+    id: 'which-store-chats',
+    // 四个"搜"的工具各管一类库，而**边界此前没写清**：模型只能猜。这条钉"聊天正文该用哪个"，
+    // 并且**不许**去调知识库那个（那样它会拿一套不相关的库回答聊天问题）。
+    question: '我上次在哪个会话里提到过扩散模型？',
+    // 桩要给**一个真实命中**：空结果会让模型换着关键词反复重试（实测 7 次，每次参数都不同，
+    // 所以去重也拦不住）——那不是缺陷，是夹具在招它重试。命中一条，它就答完收手。
+    scripts: { 'route_cards.py': { stdout: JSON.stringify({
+      success: true, terms: ['扩散模型'],
+      ranked: [{ id: 1, kind: '单聊', label: '甲', messages: 12, lastDaysAgo: 3, hits: { 扩散模型: 2 } }],
+      messages: { '1': [{ time: 1758000000, text: '扩散模型那个思路我看过了' }] },
+    }) } },
+    expect: { mustCall: ['search_chats'], mustNotCall: ['search_knowledge'], maxTools: 6, toolBudget: 3 },
+  },
+  {
+    id: 'which-store-knowledge',
+    // 另一类库：整理过的概念页，不是聊天
+    question: '关于扩散模型，我整理过哪些概念页？',
+    expect: { mustCall: ['search_knowledge'], maxTools: 6, toolBudget: 3 },
+  },
+  {
+    id: 'which-store-memory',
+    // 第三类：助手自己记得的事，不是聊天记录
+    question: '你都记得我什么？',
+    expect: { mustCall: ['search_memory'], maxTools: 6, toolBudget: 3 },
+  },
+  {
     id: 'memory-recall',
     // 记忆的**后半句**：存下来不等于用得上。这条先让它记一件事，再问一个那件事会影响的问题。
     turns: ['记住：我对花生过敏', '晚上想点个外卖，有什么建议？'],

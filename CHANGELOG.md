@@ -8,6 +8,19 @@ All notable user-facing changes are recorded here. This project follows [Semanti
 
 ### Added
 
+- **The four "search" tools now name each other.** They search four different stores - chat logs,
+  the knowledge base, assistant memory, and a semantic index over chats - and each description used to
+  explain only what it searched, not how it differed from its siblings. `search_knowledge` did not say
+  it is *not* chat history; `search_memory` did not say what "memory" means here. Each now names the
+  store it covers and points at the others. Three eval cases pin the choice ("where did I mention X" must
+  use the chat search and must **not** reach for the knowledge base), which is the part that was never
+  measured.
+
+  Found while writing those cases: **an empty fixture invites retries.** With a stubbed search that
+  returns nothing, the model re-queries with different keywords - seven calls in one run, each with
+  different arguments, so the identical-call guard cannot help. That is the fixture's doing, not a
+  defect, so the fixture now returns a hit (and where it cannot, the count sits in the soft budget).
+
 - **Tools this machine cannot run are no longer offered to the model.** `search_semantic` needs a
   `dashscopeApiKey` and `get_weread` needs `wereadApiKey`; with neither configured the tools were still
   in the tool list, so the model tried them and got errors back - the eval's ambiguous-contact case
