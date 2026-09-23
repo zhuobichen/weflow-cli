@@ -1127,6 +1127,68 @@ log at all.
   creates `~/.weflow-cli` if it is missing, or a fresh machine would silently record nothing. That was
   caught by the feature's own tests.
 
+## D-045: The local panel is a token-gated loopback endpoint on the existing daemon, and the panel is only a client
+
+**Status:** Active
+
+The assistant gained a second entrance: a small always-on-top panel window on the same machine, so
+talking to it does not require logging into the WeChat channel. It is implemented as a
+**loopback-only HTTP endpoint inside the assistant daemon** (`src/panel/server.ts`), plus a client
+(`weflow-cli panel`, the page under `resources/panel/`, and an Electron shell). The panel holds no
+assistant of its own: every turn goes through the daemon's existing `runTurn` — the same allowlist
+path for WeChat, the same daily quota counter, the same serial queue, the same memory file.
+
+**Reason:** the quota counter, the serial queue and the instance fields it protects (`turnCalls`,
+`lastReasoning`) are **in-process state**. A panel that built its own `AssistantService` would get a
+second quota (each entrance 100/day, total unbounded), a second queue protecting nothing, and two
+processes writing the same user's memory window (the file's read-merge-write protects *other* users,
+but for the same `userId` it is still last-writer-wins). The cheapest correct shape was therefore one
+host process with two entrances.
+
+**Consequences and boundaries:**
+- **Loopback only, not configurable** (continuing D-004), plus two gates the reader does not have.
+  `scripts/fav_server.py` has **no token at all** and its origin check **allows a request with no
+  Origin header**; copying that here would hand an endpoint that reads chat data to any local program.
+  So: **every request carries a token** (`/api/status` included), Origin is a second gate (present but
+  not allowlisted → 403 even with a correct token; **absent → allowed**, because `file://` renderers
+  and `curl` look like that), and POSTs must be `application/json`.
+- **The token is per-run and lives in a file next to the pid file** (`assistant_endpoint.json`, atomic
+  write, read-merge not needed). It is **not** claimed to be protected by file permissions: on Windows
+  `fs.chmod` / `mode: 0600` do essentially nothing, and what actually helps is the default ACL on
+  `%USERPROFILE%\.weflow-cli\`. The token's real job is to stop **other local programs and any web
+  page**, not a same-user process willing to read that directory — such a process can already read the
+  database. **Cleanup is not relied on**: `stopDaemon` sends SIGTERM and Node does not run handlers for
+  it, so the file is expected to be left behind; readers probe `kill(pid, 0)` and then verify the
+  `service` + `startedAt` fields before trusting a port.
+- **The panel's identity is a memory bucket, and the bucket decides whether it is "one brain".**
+  Memory facts are stored per `userId`, so sharing means using the same string as the WeChat DM. The
+  bucket resolves to the **single** entry of `assistantWhitelist` when there is exactly one; with zero
+  or several it does **not guess** — it falls back to a `panel` bucket and the interface says so, and
+  `assistantPanelUser` pins the choice. Note what is inference and what is observed: the chain
+  (DM `conversationId` == `senderId` == the allowlist value) is sound in the code, but it has **never
+  been observed on a real inbound WeChat message** — the channel on this machine has never completed a
+  login. The panel displays its resolved bucket so the first real message can be compared by eye.
+- **Credentials never enter a command line.** Windows exposes any process's argv to any local user
+  (`wmic process get commandline`), so the Electron path passes **no** arguments and reads the
+  endpoint file itself, then installs the token as an `HttpOnly` cookie before loading the page. The
+  browser fallback cannot do that, so it uses a **one-time, 60-second, single-use code** from
+  `/api/pair` — a code in argv or in browser history is spent, a token there would not be.
+- **`AssistantService.start()` no longer refuses to start without a channel.** It used to throw
+  `未登录消息通道` before doing anything, so "not logged into WeChat" meant "no assistant at all"
+  (recorded in PROJECT_STATE as a field observation). Now the channel is optional and the local
+  entrance still comes up. The cost is that `assistant start` can now report success with an empty
+  channel, so `assistant status` gained `channelActive` / `mode` / `panelPort` / `memoryBucket` —
+  `messageChannelLoggedIn` only ever meant "is a token configured".
+- **The panel authenticates by token, not by the WeChat allowlist.** Reusing `evaluateAssistantAccess`
+  would deny the panel when the allowlist is empty (i.e. by default) and, worse, print the
+  "run `config set assistantWhitelist <id>`" bootstrap hint telling the user to add **their own panel
+  identity** to the WeChat allowlist. The allowlist answers "who may talk to me in WeChat"; it is not
+  the right gate for the person sitting at the machine.
+- **Not verified:** the floating ball's frameless/always-on-top/transparent behaviour on Windows 11
+  with Electron 42. The Electron binary is not installed on this machine, so only the browser
+  fallback (Edge `--app`) has been exercised end to end. Until someone runs it, treat the ball as
+  unproven and the browser window as the delivered form.
+
 ## D-044: "You have no todos" and "todos were never extracted" are different answers
 
 **Status:** Active

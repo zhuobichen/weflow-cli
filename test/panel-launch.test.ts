@@ -10,6 +10,7 @@
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { join } from 'node:path'
 
 const { resolveElectronBinary, resolveBrowserBinary, electronLaunchArgs,
         browserLaunchArgs, browserProfileDir } = await import('../src/panel/launch.js')
@@ -20,25 +21,22 @@ const only = (target: string) => (p: string) => p === target
 // ---------------------------------------------------------------- Electron
 
 test('找 Electron：包内优先，找不到全局再找一层', () => {
-  const packageRoot = 'C:/proj'
-  const localAppData = 'C:/Users/u/AppData/Local'
+  const packageRoot = join('C:', 'proj')
+  const localAppData = join('C:', 'Users', 'u', 'AppData', 'Local')
   const r = resolveElectronBinary({ packageRoot, localAppData, exists: none })
   assert.equal(r.found, null)
   assert.ok(r.candidates.length >= 2, '至少有包内与全局两个候选')
   assert.match(r.candidates[0], /node_modules[\\/]electron[\\/]dist[\\/]electron\.exe$/)
-  // `join` 用当前平台的分隔符，所以两边都归一化再比
-  assert.ok(r.candidates[0].split('\\').join('/').startsWith(packageRoot), '第一个候选是包内')
+  assert.ok(r.candidates[0].startsWith(packageRoot), '第一个候选是包内')
 })
 
 test('包内没有、全局有 → 用全局那个', () => {
-  const globalElectron = 'C:/Users/u/AppData/Local/npm/node_modules/electron/dist/electron.exe'
-  const r = resolveElectronBinary({
-    packageRoot: 'C:/proj', localAppData: 'C:/Users/u/AppData/Local',
-    exists: only(globalElectron.replace(/\//g, '\\')),
-  })
-  // 注入的 existsFn 收到的路径用当前平台的分隔符，所以这里按分隔符归一化再比
-  const normalized = r.found?.split('\\').join('/')
-  assert.equal(normalized, globalElectron, `实际拿到 ${r.found}`)
+  // 期望值必须**用 join 派生**，不能手写分隔符：第一版写的是
+  // `'C:/Users/…/electron.exe'.replace(/\//g, '\\')`，在 Linux 上永远匹配不上（CI 抓到了）。
+  const localAppData = join('C:', 'Users', 'u', 'AppData', 'Local')
+  const globalElectron = join(localAppData, 'npm', 'node_modules', 'electron', 'dist', 'electron.exe')
+  const r = resolveElectronBinary({ packageRoot: join('C:', 'proj'), localAppData, exists: only(globalElectron) })
+  assert.equal(r.found, globalElectron, `实际拿到 ${r.found}`)
 })
 
 test('Electron 的 argv **只有一个参数**：应用目录', () => {

@@ -560,6 +560,68 @@ weflow-cli assistant start
 weflow-cli assistant status
 ```
 
+### 本机面板：不扫码也能跟助手说话
+
+```powershell
+weflow-cli panel                # 打开面板窗口（没在跑就先起守护进程）
+weflow-cli panel --status       # 只看状态，不开窗口
+weflow-cli panel --ask "我最近在关注什么" --yes   # 在命令行里问一句
+```
+
+面板与微信里问的是**同一个大脑**：同一份记忆、同一条每日配额、同一条串行队列。窗口只是客户端，
+消息走守护进程开在 `127.0.0.1:8766` 上的入口。**没有登录微信也能用**——消息通道是可选的
+（`assistant start` 在没有 token 时会以"本机入口模式"启动，日志里会写明）。
+
+判据看 `assistant status`：它把"配了 token 吗"（`messageChannelLoggedIn`）和"通道真的接上了吗"
+（`channelActive` / `mode`）分开报，另外给出本机入口端口与**记忆桶**。
+
+**记忆桶决定是不是"共用一个大脑"**：事实是按会话 id 分存的，所以面板用的是哪个 id 就等于
+它跟谁共享记忆。白名单里恰好一个人时自动用那个 id；零个或两个以上**不会猜**——它会用独立的
+`panel` 桶并在界面上写明"与微信那边是分开的"。要指定就用：
+
+```powershell
+weflow-cli config set assistantPanelUser "o9cq80...@im.wechat"   # 改完重启助手
+```
+
+**悬浮球 vs 浏览器小窗**：真·悬浮球（无边框、置顶、托盘、`Ctrl+Shift+W`）需要 Electron：
+
+```powershell
+npm i -g electron
+```
+
+没装 Electron 时会降级用 Edge/Chrome 的 `--app` 打开同一个界面——那是一个没有地址栏的小窗，
+**但给不了悬浮球**，命令输出里会这么说。它用的是独立 profile 目录
+`~/.weflow-cli/panel-browser-profile`（不蹭你日常那个浏览器），删掉它即可清掉那个窗口的状态。
+
+**关掉窗口 ≠ 停止助手**：窗口没了，守护进程还在跑（微信那边可能还在用）。要停：
+
+```powershell
+weflow-cli assistant stop
+```
+
+托盘的"退出并停止助手"是同一个动作。
+
+排障：
+
+| 现象 | 原因与处理 |
+| --- | --- |
+| `panel --status` 报 `PANEL_NOT_RUNNING` | 助手没在跑，或端点文件是崩溃残留（读取端会探活，进程没了就当没有）：先 `assistant start` |
+| 日志里 `本机入口启动失败: 端口 8766 已被占用` | 别的程序占了 8766。找出它并停掉，或先停掉重复启动的助手 |
+| 面板显示"连不上本机入口" | 守护进程刚被停掉，或那个端口上的不是助手（端点带 `service` 字段做身份校验） |
+| 面板里"凭据失效了" | 助手重启过，token 每轮都换（这是设计）。重新 `weflow-cli panel` 打开 |
+
+手工验证端点（想确认它真的只绑回环、真的认 token 时）：
+
+```powershell
+# 端口与 token 在 ~/.weflow-cli/assistant_endpoint.json 里；token 不要贴到别处
+curl.exe -i http://127.0.0.1:8766/api/status                       # 401（没 token）
+curl.exe -i -H "Authorization: Bearer <token>" http://127.0.0.1:8766/api/status   # 200
+```
+
+**中文别用 Git Bash 的 `curl -d '中文'`**：那条路径会把正文按控制台代码页编出去，
+助手收到的是乱码（实测过）。要手工发就写成文件用 `--data-binary @文件`，
+或者直接用 `panel --ask`。
+
 ### 助手能读到多少：隐私三档，以及本地引擎这个例外
 
 | `assistantPrivacy` | 工具拿到的聊天正文 | 出境 |

@@ -8,6 +8,35 @@ All notable user-facing changes are recorded here. This project follows [Semanti
 
 ### Added
 
+- **A local panel: talk to the assistant without logging into the WeChat channel.** Until now the only
+  way in was the WeChat Bot channel, which requires scanning a QR code - so asking one question cost a
+  login. `weflow-cli panel` opens a small always-on-top window that talks to the same brain: the same
+  memory, the same daily quota, the same serial queue. It works with the channel logged out. Memory is
+  shared rather than duplicated because facts are stored per conversation id and the panel resolves to
+  the **single** allowlisted id when there is exactly one; with none or several it does not guess - it
+  uses its own bucket and **says so on screen**, because "separate memory that you think is shared" is
+  the exact failure this arrangement invites. `assistantPanelUser` pins the choice.
+
+  The window is a client, never a second assistant (D-045). `weflow-cli panel --status --json` reports
+  it, `panel --ask "…"` asks a question from the terminal, and both go through the same loopback
+  endpoint the window uses. The endpoint binds `127.0.0.1` and cannot be configured otherwise
+  (continuing D-004), but it is deliberately stricter than the daily reader: **every** request needs a
+  per-run token, Origin is a second gate, and POSTs must be JSON. The token never reaches a command
+  line - the Electron shell reads the endpoint file itself and installs the token as an `HttpOnly`
+  cookie, while the browser fallback uses a one-time 60-second code.
+
+  Also in this change, because the panel made them visible: `assistant start` **no longer refuses to
+  start when the WeChat channel is not logged in** (it used to throw before doing anything, so
+  "not logged in" meant "no assistant at all" - a field observation recorded in PROJECT_STATE), and
+  `assistant status` gained `channelActive` / `mode` / `panelPort` / `memoryBucket`, because
+  `messageChannelLoggedIn` only ever answered "is a token configured".
+
+  **Not verified:** the floating ball itself. Electron's binary is not installed on this machine, so
+  what was exercised end to end is the browser fallback - `panel` opens the same interface in Edge's
+  `--app` mode, which is a small window without an address bar but **not** a floating ball: no
+  frameless, no always-on-top, no tray, no global hotkey. `npm i -g electron` is what turns it into the
+  ball, and until someone tries it on Windows 11 the ball's behaviour there is unproven.
+
 - **The four "search" tools now name each other.** They search four different stores - chat logs,
   the knowledge base, assistant memory, and a semantic index over chats - and each description used to
   explain only what it searched, not how it differed from its siblings. `search_knowledge` did not say

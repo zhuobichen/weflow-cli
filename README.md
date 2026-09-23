@@ -212,7 +212,14 @@ weflow-cli mcp-config > .mcp.json
 weflow-cli config set deepseekApiKey "sk-..."   # 或任意 OpenAI 兼容端点: aiBaseUrl + aiModel
 weflow-cli login-wechat        # 扫码绑定消息通道 (微信里会出现 ClawBot 联系人)
 weflow-cli assistant start     # 后台守护进程常驻
+weflow-cli panel               # 打开本机面板窗口 (不扫码也能用)
 ```
+
+`weflow-cli panel` 打开的是一个常驻小窗，它跟微信里问的**是同一个大脑**（同一份记忆、
+同一条每日配额）。**不登录微信也能用**——消息通道是可选的。窗口只是客户端：消息走守护进程
+开在 `127.0.0.1` 上的入口，所以两个入口不会各写一份记忆。悬浮球形态需要 Electron
+（`npm i -g electron`）；没装的话会降级成 Edge/Chrome 的 `--app` 小窗，界面一样，
+但没有无边框置顶、没有托盘与快捷键。
 
 之后在手机微信的 ClawBot 对话里直接说话，助手会自动查询本地聊天记录和收藏作答，并具备跨会话记忆：
 
@@ -264,6 +271,7 @@ weflow-cli config set assistantGroupRequireMention true
 | 知识库 | `weflow-cli vault` · `weflow-cli wiki` · `weflow-cli search <query>` · `weflow-cli chat`（语义检索需先 `config set dashscopeApiKey`）|
 | 总结与任务 | `weflow-cli report` · `annual-report` · `todos` |
 | 第二大脑助手 | `weflow-cli assistant start` · `status` · `log` · `stop` |
+| 本机面板 | `weflow-cli panel`（悬浮窗；`--status` 只看状态，`--ask "…"` 在命令行里问）|
 | AI 编辑器集成 | `weflow-cli mcp-config` |
 
 运行 `weflow-cli <命令> --help` 可以查看某个命令的完整参数。例如：

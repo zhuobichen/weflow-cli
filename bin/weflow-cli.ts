@@ -414,6 +414,17 @@ program
           execute: 'assistant <start|stop> --yes --json',
           confirmationRequired: true,
         },
+        localPanel: {
+          status: 'panel --status --json',
+          ask: 'panel --ask "<text>" --yes --json',
+          preview: 'panel --dry-run --json',
+          execute: 'panel --yes --json',
+          confirmationRequired: true,
+          opensLocalWindow: true,
+          loopbackOnly: true,
+          // 关掉窗口**不会**停掉助手——这件事必须能被机器读到，别让调用方以为退出即结束
+          keepsAssistantRunningAfterClose: true,
+        },
         messageChannelAuthentication: {
           loginPreview: 'login-wechat --dry-run --json',
           loginExecute: 'login-wechat --yes',
