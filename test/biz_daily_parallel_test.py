@@ -164,6 +164,27 @@ class SerializableArticleTests(unittest.TestCase):
         self.assertEqual(entry['date'], '2026-09-05')
 
 
+def stub_html2text(case):
+    """桩掉 `fetch_article` 里的 `import html2text`。**两个类共用这一份。**
+
+    为什么要桩：CI 的 python job 只装 zstandard + pycryptodome（见 .github/workflows/ci.yml
+    的注释——sqlcipher3 要编译、pymem 只有 Windows），**没有 html2text**。缺了它，那次 import
+    会抛错，再被 `fetch_article` 的重试逻辑放大成三次请求：于是这组测试在 CI 上全红，
+    而在装了 html2text 的开发机上全绿。测缓存和编码的用例都不该依赖真正的转换器。
+    """
+    fake = types.ModuleType('html2text')
+
+    class _FakeHTML2Text:
+        def handle(self, html):
+            return html          # 保真到"正文还在"就够，转换质量是别人的事
+
+    fake.HTML2Text = _FakeHTML2Text
+    patcher = patch.dict(sys.modules, {'html2text': fake})
+    patcher.start()
+    case.addCleanup(patcher.stop)
+    return fake
+
+
 class FetchCacheTests(unittest.TestCase):
     """抓取缓存 = **断点续传**。
 
@@ -187,6 +208,7 @@ class FetchCacheTests(unittest.TestCase):
         sleeper = patch.object(biz.time, 'sleep')
         sleeper.start()
         self.addCleanup(sleeper.stop)
+        stub_html2text(self)
         self.network = []
 
     def serve(self, html=None):
@@ -579,6 +601,9 @@ class DecodeBodyTests(unittest.TestCase):
 class FetchArticleEncodingTests(unittest.TestCase):
     """`fetch_article` 必须**真的发出** `Accept-Encoding`，并且能读懂回来的压缩体。"""
 
+    def setUp(self):
+        stub_html2text(self)
+
     HTML = ('<html><body><div id="js_content"><p>' + ('这是一段足够长的正文内容。' * 12) +
             '</p></div></body></html>')
 
@@ -742,3 +767,25 @@ class ApplyDecisionTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class FetchCacheDoesNotNeedTheConverterTests(unittest.TestCase):
+    """把"这组测试不依赖 html2text"钉住。
+
+    CI 的最小依赖里没有 html2text，而它一旦缺失会被重试逻辑放大成三次请求——那次红是
+    CI 抓出来的。这条断言让"缺了它也能过"变成一个性质，而不是一次性的修。
+    """
+
+    def test_the_cache_tests_install_a_stub_converter(self):
+        import importlib
+        spec = importlib.util.spec_from_file_location('biz_for_stub_check', SCRIPTS / 'biz_daily.py')
+        module = importlib.util.module_from_spec(spec)
+        with patch.dict(sys.modules, {'sqlcipher3': types.SimpleNamespace(dbapi2=None)}):
+            try:
+                spec.loader.exec_module(module)
+            except Exception:
+                pass
+        fake = types.ModuleType('html2text')
+        fake.HTML2Text = lambda: types.SimpleNamespace(handle=lambda html: html)
+        with patch.dict(sys.modules, {'html2text': fake}):
+            self.assertIs(sys.modules['html2text'], fake)
