@@ -11,7 +11,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-const { judge, summarize, budgetWarnings, EVAL_CASES } =
+const { judge, summarize, budgetWarnings, softWarnings, EVAL_CASES } =
   await import('../src/services/assistantEval.js')
 
 function observed(patch: Record<string, unknown> = {}) {
@@ -88,7 +88,8 @@ test('用例表：id 唯一、每条至少有一条断言、正反不许自相�
   const ids = EVAL_CASES.map(c => c.id)
   assert.equal(new Set(ids).size, ids.length, `id 有重复：${ids.join('、')}`)
   for (const spec of EVAL_CASES) {
-    const has = ['mustCall', 'mustNotCall', 'maxTools', 'toolBudget', 'answerMatches', 'answerForbids', 'memoryContains']
+    const has = ['mustCall', 'mustNotCall', 'maxTools', 'toolBudget', 'answerMatches', 'answerForbids',
+                 'memoryContains', 'toolEmpty', 'argsMatch', 'answerShouldMatch']
       .some(key => (spec.expect as any)[key] !== undefined)
     assert.ok(has, `${spec.id} 什么断言都没有——这种用例只会让报告好看`)
     const both = (spec.expect.mustCall ?? []).filter(t => (spec.expect.mustNotCall ?? []).includes(t))
@@ -107,7 +108,11 @@ test('用例表：回放只按脚本文件名给，且都得是 .py', () => {
 test('用例表：问句里不许出现真实会话名（合成数据是这套评测的前提）', () => {
   // 期望值里不写死名字，问句里也不该带——不然"合成数据"这个前提就漏了
   for (const spec of EVAL_CASES) {
-    assert.doesNotMatch(spec.question, /丁ding|群|真实/, `${spec.id} 的问句看着像真数据`)
+    // 多轮用例只有 `turns`、没有 `question`：这条原来直接传 `spec.question`，
+    // 于是 undefined 被当成断言失败（这条不变量测试自己先栽了一次）。
+    const text = String(spec.question ?? spec.turns?.join(' ') ?? '')
+    assert.ok(text, `${spec.id} 既没有 question 也没有 turns`)
+    assert.doesNotMatch(text, /丁ding|群|真实/, `${spec.id} 的问句看着像真数据`)
   }
 })
 
@@ -123,4 +128,21 @@ test('效率预算：超了只报提示，绝不变成失败', () => {
                    '软预算超了不许让它变成判定失败')
   assert.deepEqual(budgetWarnings({ ...base, expect: {} } as any, ['a', 'b', 'c', 'd', 'e']), [],
                    '没设预算就不提示')
+})
+
+test('toolEmpty：靠"那次调用没产出"判，而不是猜模型的措辞', () => {
+  const spec = { ...base, expect: { toolEmpty: true } } as any
+  assert.deepEqual(judge(spec, observed({ traceProduced: [false] })), [])
+  assert.match(judge(spec, observed({ traceProduced: [true] }))[0], /没有任何一次工具调用/)
+  assert.match(judge(spec, observed({ traceProduced: [] }))[0], /没有工具调用/)
+})
+
+test('软通道：质量类期待超了只提示，绝不判失败', () => {
+  // 判据只有一条：这个期待跟着模型走法或措辞浮动吗？浮动的一律进软通道。
+  const spec = { ...base, expect: { answerShouldMatch: /花生|过敏/ } } as any
+  assert.deepEqual(softWarnings(spec, observed({ answer: '你对花生过敏，避开就好' })), [])
+  const warned = softWarnings(spec, observed({ answer: '随便点吧' }))
+  assert.equal(warned.length, 1)
+  assert.match(warned[0], /质量类期待，不算失败/)
+  assert.deepEqual(judge(spec, observed({ answer: '随便点吧' })), [], '软期待不许变成判定失败')
 })

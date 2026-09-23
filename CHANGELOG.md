@@ -8,6 +8,19 @@ All notable user-facing changes are recorded here. This project follows [Semanti
 
 ### Added
 
+- **The eval can now run a conversation, and it separates floors from expectations.** Multi-turn
+  cases let it check the half of memory that was never verified: storing a fact was covered, **using** it
+  was not. `memory-recall` says "remember I'm allergic to peanuts", then asks what to order for dinner;
+  the hard floor is that the fact is in long-term memory, and whether the reply brings it up is reported
+  as a soft expectation - it failed in one run out of three, and an intermittent red trains people to
+  ignore the report. Same principle applied across the board: every `maxTools: 3` became a runaway guard
+  (6) plus an efficiency budget (3), because the same question produced anything from 2 to 7 calls. The
+  criterion is one line: **if the number or expectation moves with the model's route or wording, it is a
+  budget, not a floor.** The only hard cap left is `no-tool`'s 0 - calling a tool when none is needed is
+  a real defect. And `unknown-contact` stopped asserting on wording: the model's way of saying "not
+  found" is unbounded (没找到 / 查不到 / 不存在 / …), so that case now asserts the **observable fact**
+  that the tool call returned nothing.
+
 - **A reading-stats tool, and the eval learned to tell a floor from a budget.** `get_reading_stats`
   answers "what have I been reading / which accounts post the most" from the local archive (it reuses
   `daily_stats.py` rather than recomputing the same numbers). Its second purpose is honesty about
