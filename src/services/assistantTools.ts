@@ -9,7 +9,7 @@ import { exportService } from './exportService.js'
 import type { AssistantMemory } from './assistantMemory.js'
 import { privacyGate } from './assistantPrivacy.js'
 import { existsSync, readFileSync, readdirSync } from 'fs'
-import { join } from 'path'
+import { basename, join } from 'path'
 // 直接调进程的写法已收敛进 pythonBridge：这里不再 import child_process
 import { resolvePackageRoot } from '../utils/packageRoot.js'
 import type { Contact } from '../types.js'
@@ -962,7 +962,14 @@ export async function executeTool(name: string, args: Record<string, any>, ctx: 
               : await exportService.exportHtml(talker, outDir, limit, '', undefined, undefined, true)
         if (!result.success) return `(导出失败: ${String(result.error || '未知').slice(0, 100)})`
         const suffix = format === 'html' ? '，含图片' : ''
-        return `已导出 ${result.count ?? 0} 条消息到 output/exports/${safeName}-${stamp}/（${format}${suffix}）`
+        // 报**真的写到了哪**：`outDir` 才是（撞名之后会带 `-2`），而事前拼的 `safeName-stamp`
+        // 两次导出会报成同一个名字——实测第二次明明是 `…-2`，消息里却是基础名（2026-09-23 验收）。
+        // 根目录是默认值时按仓库相对路径报（用户照着找得到）；自定义根时只报目录名——
+        // **不把绝对路径发进聊天**，那是本机路径，没必要出境。
+        const shown = exportRoot === join(PKG_ROOT, 'output', 'exports')
+          ? `output/exports/${basename(outDir)}`
+          : basename(outDir)
+        return `已导出 ${result.count ?? 0} 条消息到 ${shown}/（${format}${suffix}）`
       }
       case 'search_knowledge': {
         const kw = String(args.keyword || '')
