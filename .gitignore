@@ -48,5 +48,6 @@ scripts/regen_wsl_keys.mjs
 !docs/FUNCTIONAL-IMPROVEMENT-SPEC.md
 !docs/SYNC_CONTRACT.md
 !docs/DEEPSEEK_V4_FLASH施工文档.md
+!docs/JEV应用施工文档.md
 .DS_Store
 Thumbs.db
