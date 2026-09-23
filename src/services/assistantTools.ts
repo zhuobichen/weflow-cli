@@ -858,11 +858,22 @@ export async function executeTool(name: string, args: Record<string, any>, ctx: 
       }
       case 'get_todos': {
         const status = String(args.status || 'pending')
-        // 走 pythonBridge（唯一的脚本调用入口）：失败原因分三类报出来，不解析人类可读文本
-        const result = await runPythonJson<any[]>('extract_todos.py', ['list', '--status', status, '--json'])
+        // 走 pythonBridge（唯一的脚本调用入口）：失败原因分三类报出来，不解析人类可读文本。
+        // `--meta` 是为了分清"没有待办"与"从没提取过"——两者在 `--json` 下都是空数组，
+        // 而把后者说成前者，用户会以为自己真的没事要做。MCP 侧一直分得开（见 mcp_bridge.py），
+        // 这条工具此前没分。`--meta` 是新增开关，老形状（裸数组）原样保留给别的调用方。
+        const result = await runPythonJson<any>('extract_todos.py', ['list', '--status', status, '--json', '--meta'])
         if (!result.ok) return fail('待办查询失败', result)
-        const todos = Array.isArray(result.data) ? result.data : []
-        if (!todos.length) return `(没有${status === 'done' ? '已完成' : '待办'}任务)`
+        // 兼容老形状：万一是没有 --meta 的实现，拿到的是数组，就退回原来的说法。
+        const meta = result.data && !Array.isArray(result.data) ? result.data : null
+        const todos: any[] = meta ? (Array.isArray(meta.items) ? meta.items : []) : (Array.isArray(result.data) ? result.data : [])
+        if (!todos.length) {
+          if (meta && meta.extracted === false) {
+            return '(还没提取过待办——待办是从聊天记录里提取的，要用 `weflow-cli todos extract --days 7 --yes` 先跑一次；'
+              + '在那之前这份清单一直是空的，不代表你没有事要做)'
+          }
+          return `(没有${status === 'done' ? '已完成' : '待办'}任务)`
+        }
         return `${status === 'done' ? '已完成' : '待办'} ${todos.length} 项:\n` +
           todos.slice(0, 15).map((t: any) =>
             `· [${t.urgency || '中'}] ${t.task || t.content || t.text || t.title}${t.deadline && t.deadline !== '未提及' ? ` (截止 ${t.deadline})` : ''}`).join('\n')

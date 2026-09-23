@@ -209,6 +209,22 @@ All notable user-facing changes are recorded here. This project follows [Semanti
 
 ### Fixed
 
+- **"No pending todos" and "todos were never extracted" were the same sentence.** Todo extraction reads
+  chat logs, so it runs only when the user invokes `weflow-cli todos extract --days N --yes` - it is a
+  confirmed action, and nothing schedules it. On a machine where that has never been run, the todo file
+  does not exist, `list` returns an empty array, and both the assistant tool and the terminal printed
+  "nothing to do". Those are different claims: one is about the user's workload, the other about whether
+  the question was ever asked. This was not hypothetical - on this machine `~/.weflow-cli/todos.json`
+  does not exist, so `get_todos` was answering `(没有待办任务)` to every question about pending work.
+  The script now reports whether the file exists (`list --json --meta` gives `{items, extracted,
+  count}`), the assistant names the missing step and the command that fixes it, and `todos list` /
+  `todos remind` say it too instead of congratulating an empty list.
+
+  The bare-array shape of `list --json` is deliberately unchanged - it is a published capability - so
+  the new signal rides on a flag rather than a changed contract; the tool also falls back to the old
+  wording if it gets an array. `mcp_bridge.py` had always made this distinction; the assistant tool was
+  the one reader that dropped it.
+
 - **The chat export tool reported a directory it may not have written to.** `export_chat` builds the
   destination as `output/exports/<name>-<timestamp>`, and on a name collision appends `-2`. The reply
   to the user was assembled from the *pre-collision* name, so the second export in the same second told

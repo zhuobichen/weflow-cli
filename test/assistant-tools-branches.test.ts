@@ -1045,23 +1045,50 @@ test('export_chat 用默认导出根时，报的是相对路径（照得着，�
  * 所以下面这几条是**唯一**盯过它的地方。
  */
 
+/** `extract_todos.py list --json --meta` 的真实形状 */
+function todosMeta(items: any[], extracted = true): string {
+  return JSON.stringify({ items, extracted, count: items.length })
+}
+
 test('get_todos 空清单时说"没有"，而不是回一个空串', async () => {
-  const first = stubScript('[]')
+  const first = stubScript(todosMeta([]))
   try {
     assert.equal(await run('get_todos', {}), '(没有待办任务)')
-    assert.deepEqual(first[0].args, ['list', '--status', 'pending', '--json'], '默认查待办')
+    assert.deepEqual(first[0].args, ['list', '--status', 'pending', '--json', '--meta'], '默认查待办')
   } finally { bridge.setScriptRunner(null) }
 
-  const second = stubScript('[]')
+  const second = stubScript(todosMeta([]))
   try {
     assert.equal(await run('get_todos', { status: 'done' }), '(没有已完成任务)')
     // status 必须真的拼进 argv，否则两个分支只有文案不同、查的东西一样
-    assert.deepEqual(second[0].args, ['list', '--status', 'done', '--json'], 'status 要传下去')
+    assert.deepEqual(second[0].args, ['list', '--status', 'done', '--json', '--meta'], 'status 要传下去')
+  } finally { bridge.setScriptRunner(null) }
+})
+
+test('get_todos "从没提取过"不能说成"没有待办"——这是两件事', async () => {
+  // 真库上就是这么一回事：`~/.weflow-cli/todos.json` 根本不存在，
+  // 而提取是**要用户显式跑** `weflow-cli todos extract --yes` 的（照例有确认门）。
+  // 把它说成"你没有待办"，用户会以为自己真的没事要做。
+  stubScript(todosMeta([], false))
+  try {
+    const out = await run('get_todos', {})
+    assert.doesNotMatch(out, /没有待办任务/, '没提取过 ≠ 没有待办')
+    assert.match(out, /还没提取过待办/)
+    assert.match(out, /todos extract/, '要告诉用户怎么让它有内容')
+  } finally { bridge.setScriptRunner(null) }
+})
+
+test('get_todos 兼容老形状：拿到裸数组时退回原来的说法，而不是崩或错报', async () => {
+  // `--meta` 是新增开关。万一调用的是没有它的实现（拿到的是裸数组），
+  // 不能把 `undefined.items` 当成"没提取过"，也不能抛在 `.items` 上。
+  stubScript('[]')
+  try {
+    assert.equal(await run('get_todos', {}), '(没有待办任务)')
   } finally { bridge.setScriptRunner(null) }
 })
 
 test('get_todos 列出条目：带紧急度与截止；"未提及"的截止不摆出来', async () => {
-  stubScript(JSON.stringify([
+  stubScript(todosMeta([
     { id: 1, task: '交季度报表', urgency: '高', deadline: '本周五', status: 'pending' },
     { id: 2, task: '回老王的邮件', urgency: '中', deadline: '未提及', status: 'pending' },
   ]))
@@ -1077,7 +1104,7 @@ test('get_todos 列出条目：带紧急度与截止；"未提及"的截止不�
 test('get_todos 最多报 15 条，不把整个清单倒出来', async () => {
   const many = Array.from({ length: 20 }, (_, i) =>
     ({ id: i + 1, task: `事项${i + 1}`, urgency: '低', deadline: '未提及', status: 'pending' }))
-  stubScript(JSON.stringify(many))
+  stubScript(todosMeta(many))
   try {
     const out = await run('get_todos', {})
     assert.match(out, /^待办 20 项:/, '条数要说全量')

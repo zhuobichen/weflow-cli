@@ -10,6 +10,10 @@
   python scripts/extract_todos.py rm <id>
   python scripts/extract_todos.py remind
 
+`list --json` 输出裸数组（老契约，有其他调用方）；加 `--meta` 改成
+`{items, extracted, count}`——`extracted=False` 表示**从没跑过 extract**，
+与"跑过了但没有待办"是两件事，别把后者说成前者。
+
 数据: ~/.weflow-cli/todos.json
 """
 
@@ -309,6 +313,10 @@ def main():
     p.add_argument('--status', choices=['pending', 'done'], help='按状态筛选')
     p.add_argument('--urgency', choices=['高', '中', '低'], help='按紧急度筛选')
     p.add_argument('--json', action='store_true', help='JSON 输出')
+    # `--json` 保持"裸数组"这个老形状（有调用方按数组消费），所以区分"没提取过"的
+    # 那条信息走一个新开关，而不是改老形状。见下面的输出分支。
+    p.add_argument('--meta', action='store_true',
+                   help='与 --json 连用：输出 {items, extracted, count}，extracted=False 表示从没跑过 extract')
 
     # done
     p = subparsers.add_parser('done', help='标记待办为已完成')
@@ -352,10 +360,23 @@ def main():
 
     elif args.command == 'list':
         result = list_todos(args.status, args.urgency)
-        if getattr(args, 'json', False):
+        if getattr(args, 'meta', False):
+            # "没有待办"与"从没提取过"必须分得开：文件不存在时 `list` 也给空数组，
+            # 调用方拿到空数组会说"你没有待办"——而真相是这件事从没跑过。
+            # MCP 侧（mcp_bridge.py 的 get_todos）早就在分这两件事，助手工具没分。
+            print(json.dumps({
+                'items': result,
+                'extracted': os.path.exists(TODOS_FILE),
+                'count': len(result),
+            }, ensure_ascii=False, indent=2))
+        elif getattr(args, 'json', False):
             print(json.dumps(result, ensure_ascii=False, indent=2))
         elif not result:
-            print('✅ 暂无待办')
+            # 文件不存在时 `list` 也给空——直接说"暂无待办"，用户会以为自己真的没事要做。
+            if not os.path.exists(TODOS_FILE):
+                print('还没提取过待办（先运行：weflow-cli todos extract --days 7）')
+            else:
+                print('✅ 暂无待办')
         else:
             status_labels = {'pending': '⬜', 'done': '✅'}
             urg_labels = {'高': '🔴', '中': '🟡', '低': '🟢'}
@@ -439,7 +460,11 @@ def main():
                 print(f'   - {t["task"]}')
             print()
         if result['total_pending'] == 0:
-            print('✅ 暂无待办，干得好！')
+            # 同上：空清单与"从没提取过"是两件事，别把后者夸成前者。
+            if not os.path.exists(TODOS_FILE):
+                print('还没提取过待办（先运行：weflow-cli todos extract --days 7）')
+            else:
+                print('✅ 暂无待办，干得好！')
 
 
 if __name__ == '__main__':

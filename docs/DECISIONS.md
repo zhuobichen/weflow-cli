@@ -1127,6 +1127,36 @@ log at all.
   creates `~/.weflow-cli` if it is missing, or a fresh machine would silently record nothing. That was
   caught by the feature's own tests.
 
+## D-044: "You have no todos" and "todos were never extracted" are different answers
+
+**Status:** Active
+
+`extract_todos.py list` now reports whether the todo file exists, and every reader keeps the two cases
+apart. The bare-array shape of `list --json` is unchanged; the distinction rides on a new `--meta` flag
+(`{items, extracted, count}`). The assistant tool calls `list --json --meta` and, when `extracted` is
+false, answers "these have never been extracted - run `weflow-cli todos extract --days 7 --yes` first;
+until then this list is empty, which does not mean you have nothing to do" instead of "no pending
+todos". The terminal output of `list` and `remind` says the same thing.
+
+**Reason:** Extraction is a deliberate, confirmed action (`todos extract` carries its own `--yes` gate),
+so on a machine where it has never been run the list is empty for a reason that has nothing to do with
+the user's workload. Reporting that emptiness as "nothing to do" asserts a state that was never
+established - the same failure the `(未查到会话, 数据库可能未连接)` wording avoids. It was not
+hypothetical: on this machine `~/.weflow-cli/todos.json` does not exist at all, and the assistant's
+`get_todos` was answering `(没有待办任务)`.
+
+**Consequences and boundaries:**
+- The `--json` array shape stays because it is a published capability (`bin/weflow-cli.ts` maps
+  `todos: { cli: 'todos list --json' }`), so a marker inside that array would have been a compatibility
+  break dressed up as a fix. The tool also tolerates the old shape: if it receives an array rather than
+  the meta object, it falls back to the previous wording rather than reading `undefined.items` as
+  "never extracted".
+- The MCP side (`mcp_bridge.py`) has always separated these two cases - it already said "no todo file
+  yet, run extract_todos.py first". The assistant tool was the one implementation that dropped the
+  information, which is what made this look like a tool defect rather than a missing feature.
+- Not fixed: nothing here makes extraction happen. The pipeline that would run it on a schedule is the
+  same open question as the daily report's (no scheduled task is registered on this machine).
+
 ## Decision Template
 
 
