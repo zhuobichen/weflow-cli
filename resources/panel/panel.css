@@ -53,7 +53,10 @@ header {
 }
 #ball:active { transform: scale(.94); }
 
-/* 球形态：把对话那一套全藏掉，页面背景透明（窗口本身也是透明的） */
+/* 球形态：把对话那一套全藏掉，页面背景透明（窗口本身也是透明的）。
+   **`html` 也要一起清掉**——只清 `body` 的话根元素那层不透明底色会把整个窗口填满，
+   透明窗口里就会看到一个方块而不是一个圆球。 */
+html:has(body.mode-ball),
 body.mode-ball { background: transparent; }
 body.mode-ball header,
 body.mode-ball main,

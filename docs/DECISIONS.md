@@ -1184,10 +1184,14 @@ host process with two entrances.
   "run `config set assistantWhitelist <id>`" bootstrap hint telling the user to add **their own panel
   identity** to the WeChat allowlist. The allowlist answers "who may talk to me in WeChat"; it is not
   the right gate for the person sitting at the machine.
-- **Not verified:** the floating ball's frameless/always-on-top/transparent behaviour on Windows 11
-  with Electron 42. The Electron binary is not installed on this machine, so only the browser
-  fallback (Edge `--app`) has been exercised end to end. Until someone runs it, treat the ball as
-  unproven and the browser window as the delivered form.
+- **Verified on Windows 11 with Electron 42** (the binary had to be downloaded first - it was
+  declared but not installed, so the browser fallback was the only path for a while): the ball window
+  measures 76x76 with no caption (frameless) and `WS_EX_TOPMOST` set, the renderer loads the page and
+  authenticates **through the cookie** (visible in the daemon log as `[panel] 界面已加载（cookie）`),
+  and the ball is visible on screen - confirmed by eye, because **GDI screen capture does not capture a
+  transparent layered window**, so a screenshot showing nothing at that spot is a false negative.
+  Still unverified: the ball-to-chat resize, the tray menu, and the global hotkey, all of which need a
+  click.
 
 ## D-044: "You have no todos" and "todos were never extracted" are different answers
 

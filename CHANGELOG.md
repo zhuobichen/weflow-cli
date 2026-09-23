@@ -31,11 +31,13 @@ All notable user-facing changes are recorded here. This project follows [Semanti
   `assistant status` gained `channelActive` / `mode` / `panelPort` / `memoryBucket`, because
   `messageChannelLoggedIn` only ever answered "is a token configured".
 
-  **Not verified:** the floating ball itself. Electron's binary is not installed on this machine, so
-  what was exercised end to end is the browser fallback - `panel` opens the same interface in Edge's
-  `--app` mode, which is a small window without an address bar but **not** a floating ball: no
-  frameless, no always-on-top, no tray, no global hotkey. `npm i -g electron` is what turns it into the
-  ball, and until someone tries it on Windows 11 the ball's behaviour there is unproven.
+  **The ball needs Electron, and Electron is not a dependency**: with none installed, `panel` falls
+  back to Edge/Chrome `--app` - a small window without an address bar, but **not** a floating ball (no
+  frameless, no always-on-top, no tray, no global hotkey), and the command says so. Install Electron
+  (`npm i -g electron`, or `npm install` in a checkout - the binary is downloaded by its own install
+  script) and the same command opens the ball. Verified on Windows 11 with Electron 42: 76x76, no
+  caption, always-on-top, the renderer authenticates through the cookie, and the ball is visible on
+  screen. Not yet exercised: the ball-to-chat resize, the tray menu and the global hotkey.
 
 - **The four "search" tools now name each other.** They search four different stores - chat logs,
   the knowledge base, assistant memory, and a semantic index over chats - and each description used to

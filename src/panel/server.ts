@@ -248,6 +248,11 @@ export async function startPanelServer(options: PanelServerOptions): Promise<Pan
         }
         res.setHeader('Set-Cookie', `${COOKIE_NAME}=${token}; HttpOnly; SameSite=Strict; Path=/`)
       }
+      // 只在**页面本身**加载时记一行。不记 `/api/status`：面板每 30 秒轮询一次状态，
+      // 记它会把日志灌满，而它想回答的问题（"界面开着吗、按哪条路进来的"）这一行就答了。
+      if (asset === 'index.html') {
+        onLog?.(`[panel] 界面已加载（${code && !authed ? '一次性口令' : 'cookie'}）`)
+      }
       serveStatic(res, asset)
       return
     }
