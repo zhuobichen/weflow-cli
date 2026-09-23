@@ -265,6 +265,25 @@ All notable user-facing changes are recorded here. This project follows [Semanti
   tool branches can be tested without spawning a process - which is what finally makes `get_todos`
   testable, the one tool that had been left uncovered for that reason.
 
+- Two more assistant tools, taking the set to 16.
+- `search_semantic`: meaning-based search for when literal words miss (`search_chats` matches literal strings
+  only). The query travels in `WEFLOW_SEARCH_QUERY` rather than argv, following the rule this repo already
+  tests for other readers - user text must not show up in a process list. Being explicit about the egress:
+  the query is embedded by Aliyun (百炼 text-embedding-v4) and the candidate snippets are reranked by the
+  decision model, both existing cloud paths in this repo, and it needs an index built first
+  (`weflow-cli search-index`).
+- `export_chat`: write a conversation out as HTML with images. It is the first **write** tool the assistant
+  has, so its boundary is fixed in code rather than left to the prompt: it only ever creates a **new**
+  directory under `output/exports/` (the model cannot supply a path), the name carries a timestamp, and if
+  that name is taken a numeric suffix is appended - "never overwrite" is a property, not an intention.
+  The root is overridable with `WEFLOW_ASSISTANT_EXPORT_ROOT` (tests use a temp directory; a test run must
+  not write into the repository).
+- Deliberately **not** tool-ified, with reasons recorded rather than left implicit: `evidence-review` and
+  `vault promote` have their own preview-and-confirm gates for a human at a terminal, and routing a chat
+  message around those gates would defeat the reason they exist; sending messages is outward-facing and
+  irreversible, and the repository does not implement remote silent control; changing privacy settings, the
+  allowlist or the sources stays on the machine.
+
 ### Changed
 - Image downloads during the daily run are concurrent (6-way). They were sequential at 0.37 s and 135 KB each - about 18 minutes per 190-article day - even though they come from `.qpic.cn`, WeChat's CDN, which a browser fetches in parallel anyway. Same three articles: 17.2 s → 2.1 s. The same change fixed the map: a failed download used to be recorded in `.image_map.json` **before** it was attempted, and the reader injects that map as `window._IMG_MAP`, so the page was told to look for a local file that did not exist. Only files that are actually on disk are mapped now, and duplicates in a page are fetched once (31 image links in one article were 17 distinct images).
 - LLM summaries are generated concurrently, so a 190-article day spends about 2 minutes there instead of 9 (measured 2.27/2.92/2.45 s per article). The calls are **prefetched, not the loop rewritten**: responses are filled back by their original index and the existing loop still does the parsing and the field writes in the same order, so every fallback branch behaves exactly as before - a failed call comes back as an error and the loop re-raises it into its own `except`. The per-article 0.3 s pacing moved into the worker, so the request rate to the provider is unchanged. The stage now prints `摘要完成 N/M 篇，耗时 Xs（6 并发；串行约需 Ys）`, the shape the classification stage already used.

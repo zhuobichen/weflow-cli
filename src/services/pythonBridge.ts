@@ -27,7 +27,8 @@ export interface ScriptRun {
 }
 
 /** 注入点：测试用假 runner 驱动，不 spawn 真进程 */
-export type ScriptRunner = (scriptPath: string, args: string[], options: { timeoutMs: number; stdin?: string }) => Promise<ScriptRun>
+export type ScriptRunner = (scriptPath: string, args: string[],
+                            options: { timeoutMs: number; stdin?: string; env?: Record<string, string> }) => Promise<ScriptRun>
 
 export interface JsonResult<T> {
   ok: boolean
@@ -40,10 +41,12 @@ export interface JsonResult<T> {
 
 const DEFAULT_TIMEOUT_MS = 30_000
 
-function realRunner(scriptPath: string, args: string[], options: { timeoutMs: number; stdin?: string }): Promise<ScriptRun> {
+function realRunner(scriptPath: string, args: string[],
+                    options: { timeoutMs: number; stdin?: string; env?: Record<string, string> }): Promise<ScriptRun> {
   return new Promise((resolve, reject) => {
     const child = spawn(getPythonCommand(), [scriptPath, ...args], {
-      env: createPythonProcessEnv(),
+      // 用户输入走**环境变量**而不是 argv：这是仓库写进测试的隐私纪律（进程列表里看不到正文）
+      env: createPythonProcessEnv(options.env ?? {}),
       stdio: ['pipe', 'pipe', 'pipe'],
     })
     let stdout = ''
@@ -108,12 +111,13 @@ export function parseJsonFrom(stdout: string): { ok: boolean; data?: any } {
  * 失败的三种情形分开报——超时、退出码非 0、退出码 0 但没有 JSON。
  */
 export async function runPythonJson<T = any>(
-  script: string, args: string[], options: { timeoutMs?: number; stdin?: string } = {},
+  script: string, args: string[],
+  options: { timeoutMs?: number; stdin?: string; env?: Record<string, string> } = {},
 ): Promise<JsonResult<T>> {
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS
   let run: ScriptRun
   try {
-    run = await runner(scriptPath(script), args, { timeoutMs, stdin: options.stdin })
+    run = await runner(scriptPath(script), args, { timeoutMs, stdin: options.stdin, env: options.env })
   } catch (error: any) {
     return { ok: false, error: String(error?.message ?? error).slice(0, 200) }
   }
