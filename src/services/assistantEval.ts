@@ -33,6 +33,7 @@ export interface EvalCase {
   /** 数据侧：会话与消息（不写就用默认那套） */
   sessions?: Array<Record<string, unknown>>
   messages?: Array<Record<string, unknown>>
+  favorites?: Array<Record<string, unknown>>
   expect: {
     /** 至少要调用这些工具 */
     mustCall?: string[]
@@ -97,12 +98,12 @@ export const EVAL_CASES: EvalCase[] = [
     // 脚本挂了：不许说成拿到了数据
     question: '谁在等我回话？',
     scripts: { 'reply_debt.py': { stdout: '', stderr: '数据库加密密钥不可用', code: 2 } },
-    // 断言要落在**工具自己给的诊断**上（错误原文、退出码），别去枚举模型的措辞——
+    // 断言落在**工具自己给的诊断**上（错误原文、退出码），别去枚举模型的措辞——
     // 这条第一版写了「查不到」，模型说的是「查不了」，于是一条答得很好的用例连着两次报失败。
-    // 真正要拦的是"把失败说成正常结果"：不许声称"没人在等"。
+    // 也**不写禁用词**：模型说的是"这是本地环境的问题，**不是**没人在等你"——否定句里带着
+    // 禁用词，正则分不出"断言"与"否认"，于是把最正确的一句话判成失败。正面断言已经够了。
     expect: { maxTools: 3,
-              answerMatches: /(密钥|退出码|报错|挂了|查不了|失败|取不到|出错|没法|不能|异常)/,
-              answerForbids: /(没人在等|没有人等|无人等|没有欠账|都回过)/ },
+              answerMatches: /(密钥|退出码|报错|挂了|查不了|失败|取不到|出错|没法|不能|异常)/ },
   },
   {
     id: 'memory-is-an-outcome',
@@ -115,6 +116,47 @@ export const EVAL_CASES: EvalCase[] = [
     question: '帮我看看会话里最新的那张图片',
     scripts: { 'read_image.py': { stdout: JSON.stringify({ success: true, b64: 'AAAA', mime: 'image/jpeg' }) } },
     expect: { mustNotCall: ['look_at_image'], maxTools: 3 },
+  },
+  {
+    id: 'favorites-search',
+    question: '我收藏里有没有讲扩散模型的文章？',
+    favorites: [{ title: '扩散模型综述', link: 'https://mp.weixin.qq.com/s/AAA', source_name: '某号' }],
+    expect: { mustCall: ['search_favorites'], maxTools: 3 },
+  },
+  {
+    id: 'unsafe-link-refused',
+    // 收藏里那条是内网地址：工具必须**拒绝抓取**，而助手不许把它说成读过了。
+    // 这里只断言正面（有没有说出"不安全/拒绝"），不写"不许提内容"的反面——
+    // 反面正则很容易误伤（"我没法告诉你它讲了什么"里也含"讲了"）。
+    question: '收藏里那篇《内部工具》讲了什么？',
+    favorites: [{ title: '内部工具', link: 'http://127.0.0.1:8080/admin', source_name: '某号' }],
+    // **匹配词干，不匹配整词**：这条连着栽过两次——我写「抓不了」，模型说的是「抓不下来」。
+    // 词表再长也追不上模型的措辞，所以只留词干（拦/抓不/取不），把"说清楚没读到"这件事卡住。
+    expect: { mustCall: ['read_favorite'], maxTools: 3,
+              answerMatches: /(拦|安全|拒|抓不|取不|失败|不能|没法)/ },
+  },
+  {
+    id: 'two-questions-one-message',
+    // 一句话两件事：两边的工具都该被调到，不能只顾一件
+    question: '甲最近跟我说了什么？另外谁在等我回话？',
+    scripts: { 'reply_debt.py': { stdout: JSON.stringify({
+      success: true,
+      debts: [{ label: '乙', days: 1, reason: '问了一句没回' }],
+    }) } },
+    expect: { mustCall: ['get_messages', 'who_owes_reply'], maxTools: 4 },
+  },
+  {
+    id: 'ambiguous-contact',
+    // 名字匹配到多个会话：工具会要求更精确，助手**不许随便挑一个**
+    question: '小明的文档发我看看',
+    sessions: [
+      { displayName: '小明明', username: 'wxid_eval_c', summary: '文档我看看' },
+      { displayName: '小明华', username: 'wxid_eval_d', summary: '好的' },
+    ],
+    // 上限放到 5：这条要解析一个歧义名字、撞上"匹配多个"、再试着找文档、还读了两条候选——
+    // 4 次调用是**合理的探查**而不是乱试（原来随手写的 3 把正确答案判成了失败）。
+    // 上限的用意是"别失控"，不是"越少越好"。
+    expect: { maxTools: 5, answerMatches: /(哪个|哪一个|更完整|全名|多个|精确|分不清)/ },
   },
 ]
 
@@ -234,7 +276,10 @@ export async function installStubs(spec: EvalCase): Promise<() => void> {
   // 消息说成别人的"——那是夹具的错，不是助手的。
   svc.getMessages = async (talker: string) =>
     (talker === 'wxid_eval_a' ? (spec.messages ?? MESSAGES) : [])
-  svc.getFavorites = async () => ({ success: true, total: 0, favorites: [] })
+  svc.getFavorites = async () => {
+    const favorites = spec.favorites ?? []
+    return { success: true, total: favorites.length, favorites }
+  }
   svc.getSnsTimeline = async () => ({ success: true, timeline: [] })
   svc.getSnsExportStats = async () => ({ success: true, data: { totalPosts: 0, totalFriends: 0 } })
   weread.shelf = async () => ({ ok: true, data: { books: [] } })

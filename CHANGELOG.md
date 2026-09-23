@@ -6,34 +6,12 @@ All notable user-facing changes are recorded here. This project follows [Semanti
 
 ## Unreleased
 
-### Fixed
-
-- **A failed memory save was silent.** `AssistantMemory.save()` ended in `catch { /* persistence failure
-  must not break the conversation */ }` - the right *behaviour* (a disk hiccup should not drop the
-  reply) with the wrong *silence*: the user says "remember this", the write fails, the memory is gone,
-  and nothing anywhere records it. Found by accident: one flaky full-suite run failed two "memory
-  survives a restart" tests and no line anywhere pointed at why. A failed save now records the error
-  code in the audit (`MEMORY_SAVE_FAILED code=…`, never the message, which can hold a path), exposes
-  the reason as `memory.lastSaveError`, and the in-chat `记忆` command prints it. That last one matters
-  most: a user asking what the assistant remembers must not be shown an account of a memory that never
-  reached the disk. The in-memory state was never at risk - a failed save leaves the dirty set intact,
-  so the next save retries.
-
-- The test for it needed its own file, and its first two versions were wrong in ways worth recording.
-  The failure has to be manufactured **before** `assistantMemory` is imported (module-level paths are
-  computed at import), so it cannot live beside the other memory tests. And the first fixture put a
-  directory where the memory file goes, which does not work: `load()` reads a directory, throws
-  `EISDIR` and takes its **quarantine** path, renaming the directory away - so by the time `save()` runs
-  the name is free and the save succeeds. The failure being tested for did not exist, and the test
-  reported "the reason was not recorded". The working fixture occupies the `.tmp` name instead, which
-  fails the write while leaving the audit file writable.
-
 ### Added
 
 - **The assistant has a behaviour eval now** (`npm run eval:assistant`). Until this, there was no way
   to know whether the assistant was any good: the unit tests all inject a fake model (they prove the
   code paths still work, not what a model does with 16 tools), and the only other feedback was talking
-  to it in WeChat and noticing problems by luck. The eval runs eight synthetic cases against the real
+  to it in WeChat and noticing problems by luck. The eval runs twelve synthetic cases against the real
   model and asserts **floor conditions**, not quality: did it call the tool that could answer the
   question, and did it not reach for tools when none was needed; did tool usage stay bounded (one
   question in the archive used five calls); does a **failing** tool get reported as failing - the case
@@ -60,29 +38,16 @@ All notable user-facing changes are recorded here. This project follows [Semanti
   **7/8** (the same false failure again) → **8/8, 8/8, 8/8** after the assertion was rewritten. Both
   failures were the assertion's fault, not the assistant's.
 
-### Fixed
+  Four more cases followed (favourites search, a refused fetch of an internal address, two asks in one
+  message, an ambiguous contact name - the last two guard "ask which one instead of guessing" and "serve
+  both halves"), and their first runs produced **11/12 twice**, again entirely the assertions' fault:
+  one case demanded a refused fetch be described with words the model did not use ("抓不了" versus its
+  "抓不下来"), and another was capped at three tool calls when four was reasonable exploration. The
+  rewrite settled on rules now written into OPERATIONS: **match stems rather than whole words**, **never
+  assert on a forbidden word** (the model said "this is a local problem, **not** that nobody is waiting
+  on you" and the regex read it as the opposite), and ask before tightening a cap. Three consecutive
+  12/12 runs after that.
 
-- **The labelling sheet could not actually be labelled.** `sample` printed the first 400 characters of
-  the article body, and that region is boilerplate: `# title`, `> source / > time / > 阅读原文`, then the
-  scraped copy of the article, which repeats the title and carries the cleanup leftovers. On the sample
-  that produced it, most rows showed a title and a source name and nothing else - found by actually
-  labelling a batch, where the only thing left to judge from was the title. The excerpt now takes the
-  **`## AI 摘要` section**, the two or three sentences the judgement is really about; without a summary it
-  falls back to the body after `## 正文`, then to the first non-boilerplate paragraph. Cleanup leftovers
-  are matched by their invariant fragments (`在小说阅读器`, `沉浸阅读`) rather than by whole sentences,
-  because the wording varies between articles.
-
-- **`--seed` did not actually reproduce a sample**, despite the help text promising "两次抽样结果一致".
-  Two causes, found one after the other: the pool was drawn in **concurrent completion order**
-  (`as_completed`), and `rng.shuffle` consumes that order, so the same seed produced a different 50 (7 of
-  50 rows differed between two consecutive runs); and even with the order fixed, **the scores come from a
-  live model**, so an article scoring 0.49 in one run and 0.52 in the next changes band and therefore
-  changes the draw. The pool is now sorted before grouping and scores are **cached by article path**
-  (`~/.weflow-cli/labels/.jev-scores.json`), so two runs of the same command produce the same 50 in the
-  same order - verified, and pinned by a test that feeds the same items in reverse order. The cache also
-  means a re-run costs no quota; `--refresh` bypasses it when the model or the criteria change.
-
-### Added
 
 - **The calibration harness now covers what the report actually decides, and gained a half that needs
   no labels at all.** `quality_eval.py` sampled articles and asked you to label `topic` + `include`;
@@ -138,6 +103,48 @@ All notable user-facing changes are recorded here. This project follows [Semanti
   `[图片]` is still masked as text: only the reader's own non-text labels count as labels.
 
 ### Fixed
+
+- **A failed memory save was silent.** `AssistantMemory.save()` ended in `catch { /* persistence failure
+  must not break the conversation */ }` - the right *behaviour* (a disk hiccup should not drop the
+  reply) with the wrong *silence*: the user says "remember this", the write fails, the memory is gone,
+  and nothing anywhere records it. Found by accident: one flaky full-suite run failed two "memory
+  survives a restart" tests and no line anywhere pointed at why. A failed save now records the error
+  code in the audit (`MEMORY_SAVE_FAILED code=…`, never the message, which can hold a path), exposes
+  the reason as `memory.lastSaveError`, and the in-chat `记忆` command prints it. That last one matters
+  most: a user asking what the assistant remembers must not be shown an account of a memory that never
+  reached the disk. The in-memory state was never at risk - a failed save leaves the dirty set intact,
+  so the next save retries.
+
+- The test for it needed its own file, and its first two versions were wrong in ways worth recording.
+  The failure has to be manufactured **before** `assistantMemory` is imported (module-level paths are
+  computed at import), so it cannot live beside the other memory tests. And the first fixture put a
+  directory where the memory file goes, which does not work: `load()` reads a directory, throws
+  `EISDIR` and takes its **quarantine** path, renaming the directory away - so by the time `save()` runs
+  the name is free and the save succeeds. The failure being tested for did not exist, and the test
+  reported "the reason was not recorded". The working fixture occupies the `.tmp` name instead, which
+  fails the write while leaving the audit file writable.
+
+
+- **The labelling sheet could not actually be labelled.** `sample` printed the first 400 characters of
+  the article body, and that region is boilerplate: `# title`, `> source / > time / > 阅读原文`, then the
+  scraped copy of the article, which repeats the title and carries the cleanup leftovers. On the sample
+  that produced it, most rows showed a title and a source name and nothing else - found by actually
+  labelling a batch, where the only thing left to judge from was the title. The excerpt now takes the
+  **`## AI 摘要` section**, the two or three sentences the judgement is really about; without a summary it
+  falls back to the body after `## 正文`, then to the first non-boilerplate paragraph. Cleanup leftovers
+  are matched by their invariant fragments (`在小说阅读器`, `沉浸阅读`) rather than by whole sentences,
+  because the wording varies between articles.
+
+- **`--seed` did not actually reproduce a sample**, despite the help text promising "两次抽样结果一致".
+  Two causes, found one after the other: the pool was drawn in **concurrent completion order**
+  (`as_completed`), and `rng.shuffle` consumes that order, so the same seed produced a different 50 (7 of
+  50 rows differed between two consecutive runs); and even with the order fixed, **the scores come from a
+  live model**, so an article scoring 0.49 in one run and 0.52 in the next changes band and therefore
+  changes the draw. The pool is now sorted before grouping and scores are **cached by article path**
+  (`~/.weflow-cli/labels/.jev-scores.json`), so two runs of the same command produce the same 50 in the
+  same order - verified, and pinned by a test that feeds the same items in reverse order. The cache also
+  means a re-run costs no quota; `--refresh` bypasses it when the model or the criteria change.
+
 
 - **Quoted messages no longer lose what they were quoting.** In the appmsg payload the *reply* sits in
   `title` and the *quoted original* in `refermsg/content`, and only the first was read. Measured on 37
