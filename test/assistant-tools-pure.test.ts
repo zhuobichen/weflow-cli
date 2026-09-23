@@ -13,7 +13,8 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-const { isSafeUrl, stripTags, extractText, extractFromChallengePage } =
+const { isSafeUrl, stripTags, extractText, extractFromChallengePage,
+        availableToolDefs, unavailableToolReason } =
   await import('../src/services/assistantTools.js')
 
 test('公网 http(s) 链接放行', () => {
@@ -124,4 +125,30 @@ test('WAF 挑战页：解出 content_noencode 里的转义字符串', () => {
 test('WAF 挑战页：没有该字段或内容太短时返回 null', () => {
   assert.equal(extractFromChallengePage('<html><body>普通页面</body></html>'), null)
   assert.equal(extractFromChallengePage("content_noencode: '太短'"), null, '短于 100 字视为没解出来')
+})
+
+// --------------------------------------------- 工具表按配置过滤
+
+test('没配 key 的工具不出现在工具表里（摆了跑不了的，模型会去试、拿一个错）', () => {
+  // 实测（评测的 ambiguous-contact 那次）：模型连试两个检索工具、两个都报错，答复里带着
+  // "两个检索工具都跑不通"。那不是助手的问题，是我们**摆了一个跑不了的工具**。
+  const empty = () => ''
+  const names = (config: any) => availableToolDefs(config).map(d => d.function.name)
+
+  const withoutKeys = names(empty)
+  assert.equal(withoutKeys.includes('search_semantic'), false, '没 dashscope key 就不该摆语义检索')
+  assert.equal(withoutKeys.includes('get_weread'), false, '没 weread key 就不该摆微信读书')
+  assert.equal(withoutKeys.includes('get_messages'), true, '本地工具照旧')
+
+  const full = names((key: string) => (key === 'dashscopeApiKey' || key === 'wereadApiKey' ? 'x' : ''))
+  assert.equal(full.includes('search_semantic'), true)
+  assert.equal(full.includes('get_weread'), true)
+  assert.equal(full.length, withoutKeys.length + 2)
+})
+
+test('过滤的理由要说得出是哪一样缺了', () => {
+  assert.match(unavailableToolReason('search_semantic', () => '')!, /dashscopeApiKey/)
+  assert.match(unavailableToolReason('get_weread', () => '')!, /wereadApiKey/)
+  assert.equal(unavailableToolReason('get_messages', () => ''), null)
+  assert.equal(unavailableToolReason('search_semantic', () => 'k'), null)
 })

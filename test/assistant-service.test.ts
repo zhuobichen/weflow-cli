@@ -34,6 +34,8 @@ interface Harness {
   svc: any
   /** 每次 ReAct 调用的 messages（不含记忆压缩/事实提取那两次） */
   rounds: any[][]
+  /** 每次 ReAct 调用时**实际摆给模型的工具名**（按配置过滤之后的那份） */
+  toolNames: string[][]
   memoryCalls: number
   audit: () => string
 }
@@ -47,11 +49,13 @@ function harness(replies: any[]): Harness {
   const rounds: any[][] = []
   let memoryCalls = 0
   let i = 0
+  const toolNames: string[][] = []
   svc.callLLM = async (messages: any[], tools?: any) => {
     if (!tools) { // 记忆压缩 / 事实提取
       memoryCalls++
       return { choices: [{ message: { content: '[]' } }] }
     }
+    toolNames.push((tools as any[]).map(t => t.function?.name))
     rounds.push(messages)
     const reply = replies[i++]
     if (reply instanceof Error) throw reply
@@ -61,6 +65,7 @@ function harness(replies: any[]): Harness {
   return {
     svc,
     rounds,
+    toolNames,
     get memoryCalls() { return memoryCalls },
     audit: () => (existsSync(AUDIT_FILE) ? readFileSync(AUDIT_FILE, 'utf8') : ''),
   } as Harness
@@ -548,4 +553,17 @@ test('参数不同就不算重复', async () => {
 
   const fresh = h.audit().slice(before).split('\n').filter(l => l.includes('TOOL:search_memory'))
   assert.equal(fresh.length, 2, '换了关键词就是新的一次调用')
+})
+
+test('摆给模型的是过滤后的工具表：没配 key 的那两个不在里面', async () => {
+  // 临时家目录里没有 dashscopeApiKey / wereadApiKey，所以那两个跑不了的工具不该出现——
+  // 摆了它们，模型会去试、拿一个错回来（评测里真出现过"两个检索工具都跑不通"）。
+  const h = harness([answer('好')])
+  await h.svc.handleMessage(newUser(), '在吗', 'text')
+
+  const names = h.toolNames[0]
+  assert.ok(names.length > 0, '应当摆出工具')
+  assert.equal(names.includes('search_semantic'), false)
+  assert.equal(names.includes('get_weread'), false)
+  assert.equal(names.includes('get_messages'), true)
 })

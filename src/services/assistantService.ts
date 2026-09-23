@@ -13,7 +13,7 @@ import { selectFactsForInjection, frameLocalData } from './assistantMemory.js'
 import { configService } from './configService.js'
 import { AssistantMemory, type ChatTurn } from './assistantMemory.js'
 import { privacyGate } from './assistantPrivacy.js'
-import { TOOL_DEFS, executeTool } from './assistantTools.js'
+import { TOOL_DEFS, availableToolDefs, unavailableToolReason, executeTool } from './assistantTools.js'
 import type { AttachedImage, ToolContext } from './assistantTools.js'
 import { producedContent } from './assistantTools.js'
 import { recordTurn, describeForChat, summarizeArgs, clipReasoning } from './assistantTrace.js'
@@ -324,7 +324,8 @@ export class AssistantService {
     let reply = ''
     let toolCalls = 0
     for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
-      const data = await this.callLLM(messages, TOOL_DEFS)
+      // 只摆这台机器**跑得了**的工具：摆了跑不了的，模型会去试、拿一个错回来
+      const data = await this.callLLM(messages, availableToolDefs())
       const msg = data.choices?.[0]?.message
       if (!msg) throw new Error('LLM 返回为空')
       trace.rounds += 1
@@ -434,6 +435,12 @@ export class AssistantService {
       return 0
     }
     trace.steps.push({ kind: 'route', detail: `判断层: ${decision.reason}` })
+    // 快路径是**直接派发**的（不经工具表），所以这里要自己过同一道判据
+    const blocked = unavailableToolReason(decision.capability.tool)
+    if (blocked) {
+      trace.steps.push({ kind: 'route', detail: `快路径想派发 ${decision.capability.tool}，但${blocked}；回退成循环` })
+      return 0
+    }
 
     const callId = `fastroute-${Date.now()}`
     appendLog(`[快路径] ${decision.reason}`)

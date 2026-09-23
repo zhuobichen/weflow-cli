@@ -8,6 +8,16 @@ All notable user-facing changes are recorded here. This project follows [Semanti
 
 ### Added
 
+- **Tools this machine cannot run are no longer offered to the model.** `search_semantic` needs a
+  `dashscopeApiKey` and `get_weread` needs `wereadApiKey`; with neither configured the tools were still
+  in the tool list, so the model tried them and got errors back - the eval's ambiguous-contact case
+  ended with a reply that reported "both search tools failed", which is not the assistant's fault but
+  ours for offering a tool that cannot run. The list is now built by `availableToolDefs()`, which drops
+  a tool when its prerequisite is missing, and the fast path - which dispatches **directly**, bypassing
+  the list - goes through the same predicate before dispatching. The filter is deliberately narrow: it
+  only drops tools that *cannot* run, never tools that merely have no data yet, because "run
+  `weflow-cli wiki compile` first" is a useful answer while an authentication error is not.
+
 - **The eval can now run a conversation, and it separates floors from expectations.** Multi-turn
   cases let it check the half of memory that was never verified: storing a fact was covered, **using** it
   was not. `memory-recall` says "remember I'm allergic to peanuts", then asks what to order for dinner;

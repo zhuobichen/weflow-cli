@@ -629,6 +629,10 @@ weflow-cli config set assistantFastRoute off   # 关（默认）
 启动失败时**不会**留下 pid 文件 —— 写 pid 就等于对外宣称它在运行。排查用
 `weflow-cli assistant status`（不碰数据库）与 `weflow-cli assistant log`。
 
+**没配 key 的工具不会摆给模型**：语义检索要 `dashscopeApiKey`、微信读书要 `wereadApiKey`，
+缺了就不出现在工具表里——摆一个跑不了的工具，模型会去试、拿一个错回来（实测出现过答复里带着
+"两个检索工具都跑不通"）。这只挡"跑不了"，不挡"暂时没数据"：后者工具自己会说该运行什么。
+
 ### 看助手"刚才怎么想的"（决策轨迹）
 
 助手对外只吐一句答复，中间的判断过程默认看不见。要看得两条路：

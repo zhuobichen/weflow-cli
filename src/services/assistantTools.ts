@@ -3,6 +3,7 @@
  * 所有工具在本机执行; 结果经 PrivacyGate 脱敏后才进入 LLM 上下文。
  */
 import { chatService } from './chatService.js'
+import { configService } from './configService.js'
 import { runPythonJson } from './pythonBridge.js'
 import { exportService } from './exportService.js'
 import type { AssistantMemory } from './assistantMemory.js'
@@ -562,6 +563,32 @@ export function producedContent(text: string): boolean {
   const head = (text ?? '').trimStart()
   if (!head.startsWith('(')) return true
   return PAREN_SUCCESS_PREFIXES.some(prefix => head.startsWith(prefix))
+}
+
+/**
+ * 这台机器上**跑不了**的工具，不该出现在工具表里。
+ *
+ * 为什么按配置过滤：模型看见工具就会去试。这台机器没配 `dashscopeApiKey` 时 `search_semantic`
+ * 必然失败——实测（评测的 `ambiguous-contact` 那次）模型连试两个检索工具、两个都报错，最后答复
+ * 里带着"两个检索工具都跑不通"。那不是助手的问题，是**我们摆了一个跑不了的工具**。工具越少，
+ * 选择也越准。
+ *
+ * 只按"缺了就跑不了"过滤，不按"暂时没数据"过滤——没数据时工具自己会说该运行什么
+ * （`先运行 weflow-cli wiki compile`），那是有用的回答。
+ */
+export function unavailableToolReason(name: string, config: (key: any) => any = configService.get.bind(configService)): string | null {
+  if (name === 'search_semantic' && !String(config('dashscopeApiKey') || '').trim()) {
+    return '语义检索需要 dashscopeApiKey'
+  }
+  if (name === 'get_weread' && !String(config('wereadApiKey') || '').trim()) {
+    return '微信读书需要 wereadApiKey'
+  }
+  return null
+}
+
+/** 这台机器上真正可用的工具表。快路径派发也要过同一道判据（见 `unavailableToolReason`）。 */
+export function availableToolDefs(config?: (key: any) => any): ToolDef[] {
+  return TOOL_DEFS.filter(def => !unavailableToolReason(def.function.name, config))
 }
 
 export async function executeTool(name: string, args: Record<string, any>, ctx: ToolContext): Promise<string> {
