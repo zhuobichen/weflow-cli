@@ -284,6 +284,16 @@ All notable user-facing changes are recorded here. This project follows [Semanti
   irreversible, and the repository does not implement remote silent control; changing privacy settings, the
   allowlist or the sources stays on the machine.
 
+- Three gaps in existing tools closed rather than three new tools added - each was a case where the CLI could
+  already do it and the tool was just narrower than the question:
+- `get_sns` gained mode `users` ("who posts the most"), aggregated locally from the timeline it already
+  fetches, so it adds no new egress; the CLI had this as a subcommand and the tool only had timeline/stats.
+- `export_chat` gained a `format` argument (`html` default, plus `txt`/`json`/`excel`). An unrecognised format
+  is a parameter error, not a guess, and the reply names the format it wrote.
+- `search_favorites` no longer requires a keyword: with none it lists the most recent favourites, which is a
+  question people actually ask. "The collection is empty" and "nothing matched that word" are now different
+  sentences, as they were for the search case.
+
 ### Changed
 - Image downloads during the daily run are concurrent (6-way). They were sequential at 0.37 s and 135 KB each - about 18 minutes per 190-article day - even though they come from `.qpic.cn`, WeChat's CDN, which a browser fetches in parallel anyway. Same three articles: 17.2 s → 2.1 s. The same change fixed the map: a failed download used to be recorded in `.image_map.json` **before** it was attempted, and the reader injects that map as `window._IMG_MAP`, so the page was told to look for a local file that did not exist. Only files that are actually on disk are mapped now, and duplicates in a page are fetched once (31 image links in one article were 17 distinct images).
 - LLM summaries are generated concurrently, so a 190-article day spends about 2 minutes there instead of 9 (measured 2.27/2.92/2.45 s per article). The calls are **prefetched, not the loop rewritten**: responses are filled back by their original index and the existing loop still does the parsing and the field writes in the same order, so every fallback branch behaves exactly as before - a failed call comes back as an error and the loop re-raises it into its own `except`. The per-article 0.3 s pacing moved into the worker, so the request rate to the provider is unchanged. The stage now prints `摘要完成 N/M 篇，耗时 Xs（6 并发；串行约需 Ys）`, the shape the classification stage already used.

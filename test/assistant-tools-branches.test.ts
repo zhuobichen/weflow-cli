@@ -584,3 +584,72 @@ test('export_chat：缺联系人时不写任何文件', async () => {
   assert.equal(await run('export_chat', {}), '(缺少 contact 参数)')
 })
 
+// ------------------------------------------------- 给已有工具补的参数
+
+test('get_sns users：谁常发朋友圈（本地聚合，不加新出境）', async () => {
+  svc.getSnsTimeline = async () => ({
+    success: true,
+    timeline: [
+      { create_time: 1758000000, nickname: '甲', content: 'a' },
+      { create_time: 1758000060, nickname: '甲', content: 'b' },
+      { create_time: 1758000120, nickname: '乙', content: 'c' },
+    ],
+  })
+  const out = await run('get_sns', { mode: 'users' })
+  assert.match(out, /甲：2 条/)
+  assert.match(out, /乙：1 条/)
+  assert.ok(out.indexOf('甲') < out.indexOf('乙'), '发得多的排前面')
+})
+
+test('export_chat：格式白名单，认不出来就报参数错误（不猜）', async () => {
+  svc.listSessions = async () => ([{ displayName: '甲', username: 'wxid_a' }])
+  const out = await run('export_chat', { contact: '甲', format: 'pdf' })
+  assert.match(out, /参数错误: format 只能是 html\/txt\/json\/excel/)
+})
+
+test('export_chat：txt 走 txt 那条导出，并在回话里说明格式', async () => {
+  const used: string[] = []
+  const realTxt = exportService.exportTxt.bind(exportService)
+  const realHtml = exportService.exportHtml.bind(exportService)
+  ;(exportService as any).exportTxt = async (_t: string, outDir: string) => {
+    used.push('txt')
+    mkdirSync(outDir, { recursive: true })
+    return { success: true, path: outDir, count: 7 }
+  }
+  ;(exportService as any).exportHtml = async (_t: string, outDir: string) => {
+    used.push('html')
+    return { success: true, path: outDir, count: 7 }
+  }
+  const exportRoot = join(HOME, 'exports-tmp2')
+  mkdirSync(exportRoot, { recursive: true })
+  process.env.WEFLOW_ASSISTANT_EXPORT_ROOT = exportRoot
+  svc.listSessions = async () => ([{ displayName: '甲', username: 'wxid_a' }])
+  try {
+    const out = await run('export_chat', { contact: '甲', format: 'txt' })
+    assert.deepEqual(used, ['txt'], '选了 txt 就不该走 html')
+    assert.match(out, /已导出 7 条/)
+    assert.match(out, /（txt）/, '回话里要说清导的是什么格式')
+  } finally {
+    ;(exportService as any).exportTxt = realTxt
+    ;(exportService as any).exportHtml = realHtml
+  }
+})
+
+test('search_favorites：不给关键词就列最近的收藏', async () => {
+  const asked: any[] = []
+  svc.getFavorites = async (opts: any) => {
+    asked.push(opts)
+    return { success: true, total: 12, favorites: [{ title: '最近的收藏', source_name: '某号' }] }
+  }
+  const out = await run('search_favorites', {})
+  assert.match(out, /最近的收藏/)
+  assert.equal(asked[0].keyword, undefined, '空关键词不该往下传')
+  assert.ok(asked[0].limit >= 15, '列最近时给的条数比搜索时多')
+})
+
+test('search_favorites：收藏为空与搜不到是两句不同的话', async () => {
+  svc.getFavorites = async () => ({ success: true, total: 0, favorites: [] })
+  assert.match(await run('search_favorites', {}), /收藏是空的，或收藏库/)
+  assert.match(await run('search_favorites', { keyword: '不存在' }), /收藏中未搜到「不存在」/)
+})
+

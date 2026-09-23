@@ -217,15 +217,14 @@ export const TOOL_DEFS: ToolDef[] = [
     type: 'function',
     function: {
       name: 'search_favorites',
-      description: '搜索用户的微信收藏(主要是收藏的公众号文章)。',
+      description: '搜索用户的微信收藏(主要是收藏的公众号文章)；**不给关键词就是最近收藏了什么**。',
       parameters: {
         type: 'object',
         properties: {
           keyword: { type: 'string', description: '搜索关键词' },
           limit: { type: 'number', description: '返回条数, 默认8' },
         },
-        required: ['keyword'],
-      },
+              },
     },
   },
   {
@@ -267,7 +266,7 @@ export const TOOL_DEFS: ToolDef[] = [
       parameters: {
         type: 'object',
         properties: {
-          mode: { type: 'string', description: 'timeline (最新动态) 或 stats (统计), 默认 timeline' },
+          mode: { type: 'string', description: 'timeline (最新动态) / stats (统计) / users (谁发得最多), 默认 timeline' },
           limit: { type: 'number', description: 'timeline 模式条数, 默认10' },
         },
       },
@@ -361,6 +360,7 @@ export const TOOL_DEFS: ToolDef[] = [
         properties: {
           contact: { type: 'string', description: '联系人显示名或备注名' },
           limit: { type: 'number', description: '最多导出多少条，默认 500，上限 5000' },
+          format: { type: 'string', description: 'html(默认,含图片) / txt / json / excel' },
         },
         required: ['contact'],
       },
@@ -461,12 +461,14 @@ export async function executeTool(name: string, args: Record<string, any>, ctx: 
       }
       case 'search_favorites': {
         await ensureDb()
+        // 不给关键词就是"最近收藏了什么"——这一问在聊天里很自然，没理由逼调用方编一个词
         const keyword = String(args.keyword || '')
-        if (!keyword) return '(缺少 keyword 参数)'
-        const limit = boundedToolInteger(args.limit, 8, 15)
-        const r = await chatService.getFavorites({ keyword, limit })
+        const limit = boundedToolInteger(args.limit, keyword ? 8 : 15, keyword ? 15 : 30)
+        const r = keyword ? await chatService.getFavorites({ keyword, limit })
+          : await chatService.getFavorites({ limit })
         if (!r.success || !r.favorites?.length) {
-          return r.error ? `(查询失败: ${r.error})` : `(收藏中未搜到「${keyword}」)`
+          if (r.error) return `(查询失败: ${r.error})`
+          return keyword ? `(收藏中未搜到「${keyword}」)` : '(收藏是空的，或收藏库还没连上)'
         }
         return `共${r.total}条, 前${r.favorites.length}条:\n` +
           r.favorites.map(f => {
@@ -553,6 +555,22 @@ export async function executeTool(name: string, args: Record<string, any>, ctx: 
       }
       case 'get_sns': {
         await ensureDb()
+        if (String(args.mode || 'timeline') === 'users') {
+          // 谁常发朋友圈：本地把最近的时间线按发帖人聚合。**不新增出境**——数据本来就在这一条工具里。
+          const r = await chatService.getSnsTimeline({ limit: 200 })
+          if (!r.success || !r.timeline?.length) {
+            return r.error ? `(朋友圈查询失败: ${r.error})` : '(朋友圈暂无缓存数据)'
+          }
+          const byAuthor = new Map<string, number>()
+          for (const post of r.timeline) {
+            const who = String(post.nickname || post.username || '未知')
+            byAuthor.set(who, (byAuthor.get(who) ?? 0) + 1)
+          }
+          const ranked = [...byAuthor.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10)
+          const nl = String.fromCharCode(10)
+          return `最近 ${r.timeline.length} 条朋友圈里，发得最多的：`
+            + ranked.map(([who, n]) => `${nl}· ${who}：${n} 条`).join('')
+        }
         if (String(args.mode || 'timeline') === 'stats') {
           const r = await chatService.getSnsExportStats()
           if (!r.success) return `(朋友圈统计失败: ${r.error})`
@@ -683,6 +701,10 @@ export async function executeTool(name: string, args: Record<string, any>, ctx: 
         const contact = String(args.contact || '').trim()
         if (!contact) return '(缺少 contact 参数)'
         const limit = boundedToolInteger(args.limit, 500, 5000, 'limit')
+        const format = String(args.format || 'html').toLowerCase()
+        if (!['html', 'txt', 'json', 'excel'].includes(format)) {
+          return `(参数错误: format 只能是 html/txt/json/excel，收到 ${format.slice(0, 12)})`
+        }
         const talker = await resolveTalker(contact)
 
         const safeName = contact.replace(/[\/:*?"<>|]/g, '_').slice(0, 20) || 'chat'
@@ -694,9 +716,13 @@ export async function executeTool(name: string, args: Record<string, any>, ctx: 
         for (let n = 2; existsSync(outDir) && n < 100; n++) {
           outDir = join(exportRoot, `${safeName}-${stamp}-${n}`)
         }
-        const result = await exportService.exportHtml(talker, outDir, limit, '', undefined, undefined, true)
+        const result = format === 'txt' ? await exportService.exportTxt(talker, outDir, limit)
+          : format === 'json' ? await exportService.exportJson(talker, outDir, limit)
+            : format === 'excel' ? await exportService.exportExcel(talker, outDir, limit)
+              : await exportService.exportHtml(talker, outDir, limit, '', undefined, undefined, true)
         if (!result.success) return `(导出失败: ${String(result.error || '未知').slice(0, 100)})`
-        return `已导出 ${result.count ?? 0} 条消息到 output/exports/${safeName}-${stamp}/（HTML，含图片）`
+        const suffix = format === 'html' ? '，含图片' : ''
+        return `已导出 ${result.count ?? 0} 条消息到 output/exports/${safeName}-${stamp}/（${format}${suffix}）`
       }
       case 'search_knowledge': {
         const kw = String(args.keyword || '')
