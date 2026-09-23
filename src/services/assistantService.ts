@@ -22,6 +22,7 @@ import { appendLog } from './assistantDaemon.js'
 import type { Message, WechatInboundMessage } from '../types.js'
 import { buildEvidenceReviewInput } from './evidenceService.js'
 import { evaluateAssistantAccess } from './assistantRouting.js'
+import { nowLine } from '../utils/dateRange.js'
 
 const MAX_TOOL_ROUNDS = 6
 /** 每日 LLM 处理上限 (护栏: 防 bug 死循环/异常流量烧钱; 0 = 不限制) */
@@ -252,7 +253,9 @@ export class AssistantService {
    *     `</weflow-local-data>` 再跟一段像系统指令的话，不转义就等于让数据自己把框关上。
    */
   private buildSystemPrompt(userId: string, question = ''): string {
-    const parts = [BASE_PROMPT, this.privacyStateLine()]
+    // 当前时间：**没有它，任何相对时间都是猜**。"上周三""昨天""这周"要变成工具能用的
+    // 日期，模型得先知道今天是几号（`get_messages` 的 since/until 就是这么用的）。
+    const parts = [BASE_PROMPT, `[当前时间] ${nowLine()}（本机时区）`, this.privacyStateLine()]
     const summary = this.memory.summary(userId)
     if (summary) {
       parts.push('[此前对话摘要]' + SEP + frameLocalData('memory.summary', summary))
@@ -275,6 +278,12 @@ export class AssistantService {
   private lastReasoning = ''
   /** 每个用户最近一轮的轨迹：微信里发「轨迹」看的就是它（跨进程的历史在文件里，见 assistantTrace） */
   private traces = new Map<string, TurnTrace>()
+  /**
+   * 本轮已经调过的「工具名 + 参数」。同一条消息里重复调用**同样的参数**不会得到新信息，
+   * 而实测（评测的 ambiguous-contact 用例）模型会连着调三次 list_sessions。
+   * 消息是串行处理的（queue），所以实例字段在这里是安全的。
+   */
+  private turnCalls = new Set<string>()
 
   /** 白名单为空时，把"该把谁加进去"连同**完整**的发送者 ID 打一行。
    *
@@ -355,6 +364,17 @@ export class AssistantService {
   private async runToolCall(userId: string, messages: ApiMessage[], callId: string,
                             name: string, args: Record<string, any>,
                             trace: TurnTrace): Promise<void> {
+    const callKey = `${name}:${JSON.stringify(args ?? {})}`
+    if (this.turnCalls.has(callKey)) {
+      // 同样的参数再来一次不会得到新东西。**顶回去说清楚**，而不是默默重跑一遍——
+      // 实测模型会连着调三次 list_sessions，既慢又把它自己的上下文刷满。
+      trace.steps.push({ kind: 'note', detail: `重复调用 ${name}（参数相同）→ 跳过` })
+      messages.push({ role: 'tool', tool_call_id: callId,
+        content: `(这一步与前面某次调用完全相同，结果不会变。结果已经在上面的对话里，`
+          + `直接用它回答，不要再重复调用同一个工具。)` })
+      return
+    }
+    this.turnCalls.add(callKey)
     const ctx: ToolContext = { userId, memory: this.memory }
     const raw = await executeTool(name, args, ctx)
     trace.toolCalls += 1
@@ -441,6 +461,7 @@ export class AssistantService {
 
     const t = text.trim()
     const startedAt = Date.now()
+    this.turnCalls.clear()
     // 一轮的轨迹：判断了什么、调了什么、几轮、为什么停。**内置指令也要记**——
     // 不然"我发了「轨迹」却看不到刚才那一轮"这种事自己就会发生（它本身也是一轮）。
     const trace: TurnTrace = {

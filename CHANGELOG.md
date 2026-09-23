@@ -8,6 +8,23 @@ All notable user-facing changes are recorded here. This project follows [Semanti
 
 ### Added
 
+- **The assistant can see time now, and can reach a specific day.** Two halves of one gap: the
+  system prompt carried no current date, so "上周三" had nothing to resolve against, and `get_messages`
+  took only a message count - meaning a day far enough back was simply unreachable (the model either
+  said it could not find it or, worse, answered from the most recent messages as if they were that
+  day's). The prompt now opens with `[当前时间] 2026-09-23（星期三）09:05`, and `get_messages` accepts
+  `since`/`until` (`2026-09-16`, or relative `3d` / `2w` / `12h`, resolved by day boundary rather than
+  an exact 24 hours because that is what people mean). With a window it reads through
+  `getMessagesInRange` and says which window it used; without one, behaviour is byte-identical to
+  before. An unparseable time is a readable parameter error - guessing a window would be worse, since
+  the model would then believe it had queried the period the user named.
+
+- **The same call twice in one turn is now skipped.** The eval caught this rather than a person: its
+  `ambiguous-contact` case produced **seven** tool calls, three of them the identical `list_sessions`.
+  Repeating an identical call cannot return anything new, so the loop now returns a note
+  ("this step is identical to an earlier one; use the result already in the conversation") instead of
+  executing, and records the skip in the trace. The case dropped to four calls and passes.
+
 - **The assistant now records what it did on the way to an answer, and you can read it.**
   `weflow-cli assistant trace` prints the last few turns, and sending `轨迹` in WeChat returns the previous
   one. Each record carries the fast-route's decision, every tool call with a **redacted argument summary**

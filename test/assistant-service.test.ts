@@ -504,3 +504,48 @@ test('「轨迹」不把发送者 ID 带进聊天里', async () => {
   const report = await h.svc.handleMessage(user, '轨迹', 'text')
   assert.doesNotMatch(report, new RegExp(user), '账号标识没必要出现在聊天里')
 })
+
+test('系统提示里有当前时间：没有它，任何相对时间都是猜', async () => {
+  const h = harness([answer('好')])
+  const user = newUser()
+  await h.svc.handleMessage(user, '在吗', 'text')
+
+  const prompt: string = h.rounds[0][0].content
+  // 年-月-日（星期X）HH:MM
+  assert.match(prompt, /\[当前时间\] \d{4}-\d{2}-\d{2}（星期[日一二三四五六]）\d{2}:\d{2}/)
+})
+
+test('同一轮里重复调同一个工具（参数相同）被跳过，并把话说明白', async () => {
+  // 实测（评测的 ambiguous-contact 用例）：模型连着调了三次 list_sessions，7 次调用里有 3 次
+  // 是同一个。同样的参数不会得到新结果，重跑只是慢 + 把它自己的上下文刷满。
+  const h = harness([
+    toolCall('search_memory', { keyword: '喝茶' }, 'call-1'),
+    toolCall('search_memory', { keyword: '喝茶' }, 'call-2'),
+    answer('好'),
+  ])
+  const user = newUser()
+  h.svc.memory.addFact(user, '喜欢喝茶')
+  // 只数**本次**新增的行：审计文件在同一个临时家目录里是所有用例共享的，前面的用例已经写过它
+  const before = h.audit().length
+  await h.svc.handleMessage(user, '我喜欢喝什么来着', 'text')
+
+  const fresh = h.audit().slice(before).split('\n').filter(l => l.includes('TOOL:search_memory'))
+  assert.equal(fresh.length, 1, '第二次同样的调用不该真的执行')
+  const second = toolMessages(h.rounds[2]).pop()
+  assert.match(String(second.content), /完全相同|不要再重复/, '要告诉它为什么没重跑')
+})
+
+test('参数不同就不算重复', async () => {
+  const h = harness([
+    toolCall('search_memory', { keyword: '喝茶' }, 'call-1'),
+    toolCall('search_memory', { keyword: '咖啡' }, 'call-2'),
+    answer('好'),
+  ])
+  const user = newUser()
+  h.svc.memory.addFact(user, '喜欢喝茶，也喝咖啡')
+  const before = h.audit().length
+  await h.svc.handleMessage(user, '我喜欢喝什么来着', 'text')
+
+  const fresh = h.audit().slice(before).split('\n').filter(l => l.includes('TOOL:search_memory'))
+  assert.equal(fresh.length, 2, '换了关键词就是新的一次调用')
+})

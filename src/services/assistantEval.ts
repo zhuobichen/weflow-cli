@@ -22,6 +22,8 @@ import { existsSync, readFileSync } from 'node:fs'
 
 /** 与 `assistantPrivacy.ts` 里的表达式相同——审计文件是这份评测的观测口。 */
 const AUDIT_FILE = join(homedir(), '.weflow-cli', 'assistant_audit.log')
+/** 轨迹：参数（工具名之外的"怎么调的"）从这里读。与 `assistantTrace.ts` 同一个路径。 */
+const TRACE_FILE = join(homedir(), '.weflow-cli', 'assistant_trace.jsonl')
 
 export interface EvalCase {
   id: string
@@ -47,6 +49,14 @@ export interface EvalCase {
     answerForbids?: RegExp
     /** 这一轮结束后，长期记忆里必须出现的关键词（测**结果**而不是测工具） */
     memoryContains?: string
+    /**
+     * 工具**参数**里必须出现的写法（匹配任意一次调用即可）。
+     *
+     * 参数从本轮的**轨迹**里读（`assistantTrace` 已经把它们记下来了）——只看工具名的话，
+     * "它调了 get_messages" 与"它带着 since 调了 get_messages"是两件事（2026-09-23 加时间窗
+     * 时就是为了能区分这两者）。
+     */
+    argsMatch?: RegExp
   }
 }
 
@@ -88,10 +98,14 @@ export const EVAL_CASES: EvalCase[] = [
   },
   {
     id: 'unknown-contact',
-    // 不存在的人：不许编内容，要如实说查不到
+    // 不存在的人：不许编内容，要如实说查不到。
+    //
+    // **只留正面断言**。原来还写了 `answerForbids: /(文档|收到)/`（那是桩里那个会话的正文），
+    // 结果打在了一句真话上：模型会顺带说"你最近的会话里只有甲乙（甲说项目文档改好了）"——
+    // 它是在如实说明**确实有谁**，不是编造。禁用词分不清这两者，这已经是第二次栽在同一处
+    // （另一处是 tool-failure-honesty 的"不是没人在等你"）。
     question: '我和「查无此人」上周聊了什么？',
-    expect: { maxTools: 3, answerMatches: /(没找到|找不到|没有|查不到|未找到)/,
-              answerForbids: /(文档|收到)/ },
+    expect: { maxTools: 3, answerMatches: /(没找到|找不到|没有|查不到|未找到|一条)/ },
   },
   {
     id: 'tool-failure-honesty',
@@ -158,6 +172,13 @@ export const EVAL_CASES: EvalCase[] = [
     // 上限的用意是"别失控"，不是"越少越好"。
     expect: { maxTools: 5, answerMatches: /(哪个|哪一个|更完整|全名|多个|精确|分不清)/ },
   },
+  {
+    id: 'time-window',
+    // 问**某一天**：不给时间窗就够不着（按条数只能取最近的），而"调了 get_messages"与
+    // "带着 since 调了 get_messages"是两件事——argsMatch 就是从轨迹里盯这一点的。
+    question: '前天甲跟我说了什么？',
+    expect: { mustCall: ['get_messages'], maxTools: 3, argsMatch: /since=/ },
+  },
 ]
 
 export interface Observation {
@@ -169,6 +190,8 @@ export interface Observation {
   answer: string
   /** 这一轮之后该用户的长期事实 */
   facts: string[]
+  /** 本轮每次工具调用的参数摘要（来自轨迹文件）。空数组 = 没调工具 */
+  traceArgs: string[]
   /** 顶层异常（有的话，工具与答复都不作数） */
   error?: string
   elapsedMs: number
@@ -198,6 +221,12 @@ export function judge(spec: EvalCase, observed: Observation): string[] {
   }
   if (spec.expect.answerForbids && spec.expect.answerForbids.test(observed.answer)) {
     problems.push(`答复里出现了不该有的东西：${spec.expect.answerForbids}`)
+  }
+  if (spec.expect.argsMatch) {
+    const wanted = spec.expect.argsMatch
+    if (!observed.traceArgs.some(args => wanted.test(args))) {
+      problems.push(`没有任何一次工具调用的参数匹配 ${wanted}（实际：${observed.traceArgs.join(' | ') || '没有工具调用'}）`)
+    }
   }
   if (spec.expect.memoryContains) {
     const wanted = spec.expect.memoryContains
@@ -244,6 +273,20 @@ export function readAuditSince(offset: number): { tools: string[]; cloudCalls: n
     if (line.includes(' CLOUD_CALL ')) cloudCalls += 1
   }
   return { tools, cloudCalls }
+}
+
+/**
+ * 读临时家目录里**最后一条**轨迹记的工具参数。评测一条用例只跑一轮，所以最后一条就是它。
+ * 轨迹读不出来就回空——那会让 argsMatch 失败，而不是静默通过。
+ */
+export function readLastTraceArgs(): string[] {
+  try {
+    const lines = readFileSync(TRACE_FILE, 'utf8').split('\n').filter(Boolean)
+    const last = JSON.parse(lines[lines.length - 1])
+    return (last.steps ?? []).filter((s: any) => s.kind === 'tool').map((s: any) => String(s.args ?? ''))
+  } catch {
+    return []
+  }
 }
 
 export function auditSize(): number {
@@ -348,6 +391,7 @@ export async function runCase(spec: EvalCase, userId: string): Promise<CaseResul
 
   const { tools, cloudCalls } = readAuditSince(before)
   const observed: Observation = { tools, cloudCalls, answer, facts, error,
+                                 traceArgs: readLastTraceArgs(),
                                  elapsedMs: Date.now() - started }
   return { spec, observed, problems: judge(spec, observed) }
 }

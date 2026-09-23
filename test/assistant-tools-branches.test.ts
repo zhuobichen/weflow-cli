@@ -824,3 +824,39 @@ test('look_at_image：脚本失败时带上原因，不假装看到了', async (
   assert.match(out, /退出码 2/)
   assert.equal(c.pendingImages, undefined)
 })
+
+test('get_messages 有时间窗时走范围读，并把窗口说清楚', async () => {
+  // 这条盯的是"上周三他说了什么"以前够不着的那件事：只按条数取，久远的日子取不到。
+  const calls: any[] = []
+  svc.listSessions = async () => ([{ displayName: '甲', username: 'wxid_a' }])
+  svc.getMessages = async () => { calls.push({ kind: 'recent' }); return [] }
+  svc.getMessagesInRange = async (talker: string, limit: number, from?: number, to?: number) => {
+    calls.push({ kind: 'range', talker, limit, from, to })
+    return [{ createTime: 1758000000, isSend: false, senderUsername: '甲', content: '那天的消息' }]
+  }
+  const realGet = configService.get.bind(configService)
+  ;(configService as any).get = (k: string) => (k === 'assistantPrivacy' ? 'balanced' : realGet(k))
+  try {
+    const out = await run('get_messages', { contact: '甲', since: '2026-09-16', limit: 20 })
+    assert.equal(calls.length, 1)
+    assert.equal(calls[0].kind, 'range', '给了时间窗就该走范围读，不是取最近 N 条')
+    assert.ok(calls[0].from > 0 && calls[0].to === undefined)
+    assert.match(out, /共 1 条/, '要把窗口和条数说清楚')
+    assert.match(out, /那天的消息/)
+
+    // 不给时间窗：一个字节都不变，仍走原来的最近 N 条
+    calls.length = 0
+    await run('get_messages', { contact: '甲' })
+    assert.deepEqual(calls, [{ kind: 'recent' }])
+  } finally {
+    ;(configService as any).get = realGet
+    delete (svc as any).getMessagesInRange
+  }
+})
+
+test('get_messages 看不懂的时间写成一句可读的参数错误，而不是猜一个窗口', async () => {
+  svc.listSessions = async () => ([{ displayName: '甲', username: 'wxid_a' }])
+  const out = await run('get_messages', { contact: '甲', since: '上周三' })
+  assert.match(out, /时间看不懂/)
+  assert.match(out, /3d \/ 2w \/ 12h/, '要告诉它该怎么写')
+})

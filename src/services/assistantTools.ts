@@ -12,6 +12,7 @@ import { join } from 'path'
 // 直接调进程的写法已收敛进 pythonBridge：这里不再 import child_process
 import { resolvePackageRoot } from '../utils/packageRoot.js'
 import { clipWithMarker } from '../utils/text.js'
+import { resolveSince, resolveUntil } from '../utils/dateRange.js'
 
 const PKG_ROOT = resolvePackageRoot(import.meta.url)
 const BIZ_DAILY_DIR = join(PKG_ROOT, 'output', 'biz-daily')
@@ -224,12 +225,16 @@ export const TOOL_DEFS: ToolDef[] = [
     type: 'function',
     function: {
       name: 'get_messages',
-      description: '读取用户与某位联系人的最近聊天记录。联系人名用会话里出现的显示名。',
+      description: '读取用户与某位联系人的聊天记录。默认给最近若干条；'
+        + '问**某一天或某段时间**时给 since/until —— 不给的话久远的日子按条数是取不到的。'
+        + '联系人名用会话里出现的显示名。',
       parameters: {
         type: 'object',
         properties: {
           contact: { type: 'string', description: '联系人显示名或备注名' },
-          limit: { type: 'number', description: '消息条数, 默认20' },
+          limit: { type: 'number', description: '消息条数, 默认20, 上限50' },
+          since: { type: 'string', description: '起点：2026-09-16 或相对写法 3d / 2w / 12h' },
+          until: { type: 'string', description: '终点（含当天）：2026-09-16' },
         },
         required: ['contact'],
       },
@@ -506,13 +511,36 @@ export async function executeTool(name: string, args: Record<string, any>, ctx: 
         const contact = String(args.contact || '')
         if (!contact) return '(缺少 contact 参数)'
         const limit = boundedToolInteger(args.limit, 20, 50)
+        // 时间窗：不给就是"最近 N 条"（老行为一个字没改）。给了就用范围读——
+        // **这正是"上周三他说了什么"以前够不着的原因**：只按条数取，越久远的日子越取不到，
+        // 模型要么说查不到，要么把最近的消息当成那天的。
+        let from: number | undefined
+        let to: number | undefined
+        try {
+          from = resolveSince(args.since)
+          to = resolveUntil(args.until)
+        } catch {
+          return '(时间看不懂：since/until 可以写 2026-09-16 或 3d / 2w / 12h；收到的是'
+            + ` since=${JSON.stringify(args.since)} until=${JSON.stringify(args.until)})`
+        }
+        const windowed = from !== undefined || to !== undefined
+        const windowLabel = windowed
+          ? `${from ? new Date(from * 1000).toLocaleDateString('zh-CN') : '最早'}`
+            + ` 至 ${to ? new Date(to * 1000).toLocaleDateString('zh-CN') : '现在'}`
+          : ''
         const talker = await resolveTalker(contact)
-        const msgs = await chatService.getMessages(talker, limit)
-        if (!msgs.length) return `(没找到「${contact}」的消息)`
+        const msgs = windowed
+          ? await chatService.getMessagesInRange(talker, limit, from, to)
+          : await chatService.getMessages(talker, limit)
+        if (!msgs.length) {
+          return windowed
+            ? `(${windowLabel} 这段时间里没有「${contact}」的消息)`
+            : `(没找到「${contact}」的消息)`
+        }
         // 图片消息带一个句柄：`[图片 #1234]` 里的 1234 就是 `look_at_image` 的 `image` 参数。
         // strict 模式下图片不允许出境，那时不带句柄——不摆出一个工具必定会拒绝的东西。
         const canLook = privacyGate.mode() !== 'strict'
-        return msgs.map(m => {
+        const rendered = msgs.map(m => {
           // 非文本消息优先用 `parsedContent`：它是读取器给的**显示形态**（`[图片]`、
           // `[文件] Base.csv`、`某人 撤回了一条消息`…），而 `content` 对这类消息可能是
           // 原始 XML（含 md5 与 cdn 链接）——那是给机器看的，不该塞进模型上下文。
@@ -530,6 +558,9 @@ export async function executeTool(name: string, args: Record<string, any>, ctx: 
                                           { isText: m.localType === 1 })
           return `[${fmtTime(m.createTime)}] ${m.isSend ? '用户' : (m.senderUsername || '对方')}: ${body}`
         }).join('\n')
+        // 有时间窗时先说清窗口：模型据此判断"这些是不是那天的"，也免得它把窗口内的最后
+        // 一条当成"最新的"。
+        return windowed ? `（${windowLabel}，共 ${msgs.length} 条）\n${rendered}` : rendered
       }
       case 'look_at_image': {
         const contact = String(args.contact || '')
