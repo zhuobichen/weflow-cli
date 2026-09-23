@@ -49,6 +49,8 @@ const { EVAL_CASES, runCase, summarize } = await import('../src/services/assista
 
 const only = process.argv.find(a => a.startsWith('--only='))?.slice('--only='.length)
 const asJson = process.argv.includes('--json')
+/** 留着临时家目录不删：想看这一轮的**轨迹**（`assistant_trace.jsonl`）或审计时用 */
+const keepHome = process.argv.includes('--keep-home')
 
 if (!realKey) {
   console.error('配置里没有 deepseekApiKey，评测跑不了（它要真的调模型）。')
@@ -89,6 +91,11 @@ console.log('期望值是我写的底线（该调的工具调了吗、不该编�
 console.log('所以这份报告回答的是"有没有越过底线"，不是"答得多好"。')
 if (asJson) console.log('\n' + JSON.stringify(report, null, 1))
 
-rmSync(HOME, { recursive: true, force: true })
+if (keepHome) {
+  console.log(`
+临时家目录保留在：${HOME}（轨迹：${join(HOME, '.weflow-cli', 'assistant_trace.jsonl')}）`)
+} else {
+  rmSync(HOME, { recursive: true, force: true })
+}
 // 有失败就以非零码退出，好让它可以挂进脚本；但**不要**据此让 CI 红——它要联网、要花钱。
 process.exit(report.failed ? 1 : 0)

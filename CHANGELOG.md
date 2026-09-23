@@ -8,6 +8,28 @@ All notable user-facing changes are recorded here. This project follows [Semanti
 
 ### Added
 
+- **The assistant now records what it did on the way to an answer, and you can read it.**
+  `weflow-cli assistant trace` prints the last few turns, and sending `轨迹` in WeChat returns the previous
+  one. Each record carries the fast-route's decision, every tool call with a **redacted argument summary**
+  and the size of what came back, how many model round trips it took, and why it stopped
+  (`answered` / `rounds-exhausted` / `llm-error` / `builtin`). Until now the only output was the reply:
+  `TURN_DONE tools=5` said five tools were called and nothing about which five or with what arguments -
+  which is exactly the question that could not be answered the one time it mattered (a turn that called
+  `search_favorites` twice and `read_favorite` twice).
+
+  Two things are deliberately separate. The **audit** is unchanged: events and byte counts, never
+  content, because it is the egress record. The **trace** is a local debugging artifact and does contain
+  argument summaries, redacted and truncated at 40 characters per value; the in-chat rendering leaves the
+  machine (as the reply already does) and omits `userId`.
+
+  On chain of thought: the trace carries whatever reasoning the provider returns in
+  `reasoning_content`, clipped at 800 characters. The default `deepseek-chat` does not return any, so the
+  field is empty and the trace says "无" rather than implying it thought something. Switch to a model that
+  returns it (`config set aiModel deepseek-reasoner`) and the text shows up in the CLI view; it is never
+  fed back into the conversation, since it is the model's monologue rather than an answer. See D-043 for
+  the boundaries - including why "did this step produce anything" is a documented convention with a
+  test-guarded whitelist rather than a real outcome field.
+
 - **The assistant has a behaviour eval now** (`npm run eval:assistant`). Until this, there was no way
   to know whether the assistant was any good: the unit tests all inject a fake model (they prove the
   code paths still work, not what a model does with 16 tools), and the only other feedback was talking

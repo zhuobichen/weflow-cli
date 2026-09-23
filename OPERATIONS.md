@@ -629,6 +629,43 @@ weflow-cli config set assistantFastRoute off   # 关（默认）
 启动失败时**不会**留下 pid 文件 —— 写 pid 就等于对外宣称它在运行。排查用
 `weflow-cli assistant status`（不碰数据库）与 `weflow-cli assistant log`。
 
+### 看助手"刚才怎么想的"（决策轨迹）
+
+助手对外只吐一句答复，中间的判断过程默认看不见。要看得两条路：
+
+```powershell
+weflow-cli assistant trace -n 3        # 本机看最近三轮
+weflow-cli assistant trace --json      # 结构化的，给脚本用
+```
+
+微信里发 **`轨迹`** 则显示**上一轮**的步骤（一条消息能装下的那种短版本）。
+
+一轮长这样：
+
+```
+2026-09-23 12:23:49  1775ms  往返 2 次 · 工具 1 次 · 结束于「answered」
+  · 判断层: 判断层认为不需要工具 (none)
+  · 工具 who_owes_reply(days=14) → 93 字节
+  · 模型往返: 第 2 轮往返后给出答复
+  · 推理: 无（当前模型不返回 reasoning_content）
+```
+
+逐项含义：
+
+- **判断层**：快路径那一问的结论（只在 `assistantFastRoute` 开着时才有；`log` 模式会标"只记，未派发"）
+- **工具(name=args) → N 字节**：调了哪个、**带了什么参数**、结果多大。后面标「（无内容）」表示这次没给出东西（"没找到"与"失败了"都算——判据是返回值以 `(` 起头，见 D-043）
+- **往返 N 次**：模型来回几次。一次问句用掉 5 次以上值得看一眼
+- **结束于**：`answered` / `rounds-exhausted`（撞上 6 轮上限）/ `llm-error` / `builtin`（内置指令）
+- **推理**：模型**真返回**的思维链。默认的 `deepseek-chat` 不返回，所以这里是"无"——**空就是空**。
+  换成会返回 `reasoning_content` 的模型（如 `deepseek-reasoner`）之后这里有内容：
+  `weflow-cli config set aiModel deepseek-reasoner`（注意这类模型更慢也更贵）
+
+**与审计的分工**：审计（`assistant_audit.log`）只记事件与字节量、**绝不记内容**，是出境记录；
+轨迹（`assistant_trace.jsonl`）记的是"怎么走的"，**包含工具参数摘要**，所以它是本地排查用的。
+参数摘要过一遍脱敏、每个值截到 40 字；微信里那条 `轨迹` 不打印发送者 ID。
+
+轨迹文件上限 512KB，超了裁到最近 200 轮；它是排查用的，不做统计聚合。
+
 ### 助手的行为评测（要联网、要花钱，按需跑）
 
 助手此前没有任何质量反馈：单元测试全是注入假模型的（证明代码路径没坏，证明不了"模型拿着

@@ -469,6 +469,28 @@ function fail(what: string, result: { error?: string; stderr?: string }): string
   return `(${what}${safe ? ": " + safe : ""})`
 }
 
+/**
+ * **括号起头 = 工具没能给出内容**。这是本仓库既有的写法：`fail()` 与各分支的
+ * "查不到 / 缺参数 / 拒绝抓取"一律写成 `(…)`，而正常内容不带括号。
+ *
+ * 这张白名单是**唯一的例外**：成功的句子也可以是括号起头（不然它就不叫例外了）。
+ * 有一条测试盯着它——白名单里每一条都必须在 `assistantTools.ts` 里真的以 `return` 出现，
+ * 改措辞忘了同步就会红。反过来（有新的成功消息带括号、但没进白名单）测试抓不到，
+ * 这是这个信号的真实边界：**它靠约定，不是一个机器可读的成败字段**。
+ *
+ * 想要真字段，得把 outcome 从 ~40 个 return 处一路带出来（`ToolContext.outcome`）。
+ * 那件事记在 D-043 的"已知边界"里，没有做——这里用它是因为轨迹只想知道"这一步有没有
+ * 产出东西"，而这个判断错了的代价是报告里多一个/少一个「无内容」标记。
+ */
+export const PAREN_SUCCESS_PREFIXES = ['(已附上图片']
+
+/** 工具这次**有没有给出内容**。括号起头（除白名单外）都算没有。 */
+export function producedContent(text: string): boolean {
+  const head = (text ?? '').trimStart()
+  if (!head.startsWith('(')) return true
+  return PAREN_SUCCESS_PREFIXES.some(prefix => head.startsWith(prefix))
+}
+
 export async function executeTool(name: string, args: Record<string, any>, ctx: ToolContext): Promise<string> {
   try {
     switch (name) {

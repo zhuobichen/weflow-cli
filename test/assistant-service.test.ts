@@ -477,3 +477,30 @@ test('「记忆」在保存失败时如实说出来，而不是报一份存不�
     assert.match(report, /EISDIR/)
   })
 })
+
+test('「轨迹」说出上一轮调了什么工具，且连问两次看到的是同一份', async () => {
+  const h = harness([
+    toolCall('search_memory', { keyword: '喝茶' }),
+    answer('你之前提过喜欢喝茶。'),
+  ])
+  const user = newUser()
+  h.svc.memory.addFact(user, '喜欢喝茶')
+  await h.svc.handleMessage(user, '我喜欢喝什么来着', 'text')
+
+  const first = await h.svc.handleMessage(user, '轨迹', 'text')
+  assert.match(first, /search_memory/, '要说出调了哪个工具')
+  assert.match(first, /上一轮/)
+
+  // 内置指令自己也是一轮，但它**不该**把上一轮的记录顶掉——否则连问两次第二次就空了
+  const second = await h.svc.handleMessage(user, '轨迹', 'text')
+  assert.equal(second, first, '连问两次应当看到同一份轨迹')
+})
+
+test('「轨迹」不把发送者 ID 带进聊天里', async () => {
+  const h = harness([answer('好')])
+  const user = newUser()
+  await h.svc.handleMessage(user, '在吗', 'text')
+
+  const report = await h.svc.handleMessage(user, '轨迹', 'text')
+  assert.doesNotMatch(report, new RegExp(user), '账号标识没必要出现在聊天里')
+})

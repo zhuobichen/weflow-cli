@@ -5631,6 +5631,30 @@ assistantCmd
   })
 
 assistantCmd
+  .command('trace')
+  .description('看助手最近几轮是怎么走的（判断层 → 工具 → 答复），含模型返回的推理内容')
+  .option('-n, --last <number>', '看最近几轮', '3')
+  .option('--json', '输出结构化轨迹')
+  .action(async (opts) => {
+    const { readTurns, describeTurn, traceFile } = await import('../src/services/assistantTrace.js')
+    const count = parseCliInteger(opts.last, 'last', 1, 50, opts.json)
+    const turns = readTurns(count)
+    if (opts.json) {
+      console.log(JSON.stringify({ success: true, file: traceFile(), count: turns.length, turns }))
+      return
+    }
+    if (!turns.length) {
+      console.log('还没有轨迹。助手收到消息之后才会有；文件：' + traceFile())
+      return
+    }
+    console.log(traceFile())
+    for (const turn of turns) {
+      for (const line of describeTurn(turn)) console.log(line)
+      console.log('')
+    }
+  })
+
+assistantCmd
   .command('run')
   .description('前台运行 (调试用; 常驻请用 start)')
   .option('--dry-run', '仅预览，不连接消息通道或调用 AI')

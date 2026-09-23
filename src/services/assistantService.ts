@@ -15,6 +15,9 @@ import { AssistantMemory, type ChatTurn } from './assistantMemory.js'
 import { privacyGate } from './assistantPrivacy.js'
 import { TOOL_DEFS, executeTool } from './assistantTools.js'
 import type { AttachedImage, ToolContext } from './assistantTools.js'
+import { producedContent } from './assistantTools.js'
+import { recordTurn, describeForChat, summarizeArgs, clipReasoning } from './assistantTrace.js'
+import type { StopReason, TurnTrace } from './assistantTrace.js'
 import { appendLog } from './assistantDaemon.js'
 import type { Message, WechatInboundMessage } from '../types.js'
 import { buildEvidenceReviewInput } from './evidenceService.js'
@@ -180,7 +183,12 @@ export class AssistantService {
       const t = await res.text().catch(() => '')
       throw new Error(`LLM ${res.status}: ${t.slice(0, 120)}`)
     }
-    return res.json()
+    // 推理内容（如果这个模型给的话）单独挂在 message.reasoning_content 上，不混进 content。
+    // **只在这里接住**：不把它塞回对话（那是模型的独白，不是给用户的内容），只留给轨迹。
+    const envelope: any = await res.json()
+    const reasoning = envelope?.choices?.[0]?.message?.reasoning_content
+    this.lastReasoning = typeof reasoning === 'string' ? reasoning : ''
+    return envelope
   }
 
   /** 在明确授权后分析本地聊天，输出证据线索而非法律结论。 */
@@ -263,6 +271,10 @@ export class AssistantService {
   private firstRunHintShown = false
   /** 最近一次路由认为「这条消息需要查本机数据」的概率（0 = 没问过） */
   private lastNeedsLocalData = 0
+  /** 最近一次模型调用里**真返回**的推理内容（`reasoning_content`）。默认模型不返回，所以常是空串 */
+  private lastReasoning = ''
+  /** 每个用户最近一轮的轨迹：微信里发「轨迹」看的就是它（跨进程的历史在文件里，见 assistantTrace） */
+  private traces = new Map<string, TurnTrace>()
 
   /** 白名单为空时，把"该把谁加进去"连同**完整**的发送者 ID 打一行。
    *
@@ -298,13 +310,20 @@ export class AssistantService {
    *  抽成方法是因为守卫（见 handleMessage）要在"顶回去一次"之后**再跑一遍同一条循环**——
    *  两处各写一份，早晚有一处会漏掉既有的容错（参数解析、工具审计、轮数上限）。
    */
-  private async runReactLoop(userId: string, messages: ApiMessage[]): Promise<{ reply: string; toolCalls: number }> {
+  private async runReactLoop(userId: string, messages: ApiMessage[],
+                             trace: TurnTrace): Promise<{ reply: string; toolCalls: number }> {
     let reply = ''
     let toolCalls = 0
     for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
       const data = await this.callLLM(messages, TOOL_DEFS)
       const msg = data.choices?.[0]?.message
       if (!msg) throw new Error('LLM 返回为空')
+      trace.rounds += 1
+      // 模型这次真返回了推理内容的话，留一份（截断）。当前默认模型不返回，那就是空。
+      if (this.lastReasoning) {
+        trace.reasoningChars += this.lastReasoning.length
+        if (!trace.reasoning) trace.reasoning = clipReasoning(this.lastReasoning)
+      }
 
       if (msg.tool_calls?.length) {
         messages.push({ role: 'assistant', content: msg.content || '', tool_calls: msg.tool_calls })
@@ -312,14 +331,19 @@ export class AssistantService {
           toolCalls++
           let args: Record<string, any> = {}
           try { args = JSON.parse(tc.function?.arguments || '{}') } catch { /* 参数容错 */ }
-          await this.runToolCall(userId, messages, tc.id, tc.function?.name || '', args)
+          await this.runToolCall(userId, messages, tc.id, tc.function?.name || '', args, trace)
         }
         continue
       }
       reply = (msg.content || '').trim() || '(空回复)'
+      trace.steps.push({ kind: 'note', detail: `第 ${round + 1} 轮往返后给出答复` })
       break
     }
-    if (!reply) reply = '(这轮处理太复杂了, 换个问法试试?)'
+    if (!reply) {
+      reply = '(这轮处理太复杂了, 换个问法试试?)'
+      // 别把它记成"答完了"：这是撞上限，不是回答
+      trace.stop = 'rounds-exhausted'
+    }
     return { reply, toolCalls }
   }
 
@@ -329,9 +353,15 @@ export class AssistantService {
    *  派发工具」，两条路各写一遍，早晚有一条会漏。
    */
   private async runToolCall(userId: string, messages: ApiMessage[], callId: string,
-                            name: string, args: Record<string, any>): Promise<void> {
+                            name: string, args: Record<string, any>,
+                            trace: TurnTrace): Promise<void> {
     const ctx: ToolContext = { userId, memory: this.memory }
     const raw = await executeTool(name, args, ctx)
+    trace.toolCalls += 1
+    trace.steps.push({
+      kind: 'tool', name, args: summarizeArgs(args), bytes: raw.length,
+      produced: producedContent(raw),
+    })
     const { safe, redactions } = privacyGate.redact(raw)
     privacyGate.audit(`TOOL:${name}`, raw.length, redactions ? `redacted=${redactions}` : '')
     messages.push({ role: 'tool', tool_call_id: callId, content: safe })
@@ -354,7 +384,8 @@ export class AssistantService {
    *  返回派发了几个工具（0 = 回退）。**任何不确定都回退**，而回退就是原样跑循环——不是
    *  「另一个更差的兜底」。`log` 模式下只算不派发，用来在真实流量上观察它本来会怎么走。
    */
-  private async maybeFastRoute(userId: string, text: string, messages: ApiMessage[]): Promise<number> {
+  private async maybeFastRoute(userId: string, text: string, messages: ApiMessage[],
+                               trace: TurnTrace): Promise<number> {
     const mode = this.fastRouteMode()
     if (mode === 'off') return 0
 
@@ -363,6 +394,7 @@ export class AssistantService {
       decision = await decideRoute(text, { runDecide: this.routeDecider })
     } catch (error: any) {
       appendLog(`[快路径] 路由异常，按原样回退: ${error?.message ?? error}`)
+      trace.steps.push({ kind: 'route', detail: '判断层异常，直接走循环' })
       return 0
     }
 
@@ -370,6 +402,7 @@ export class AssistantService {
     if (!decision.capability) {
       appendLog(`[快路径] 回退: ${decision.reason}`)
       privacyGate.audit('FASTROUTE_SKIP', 0, decision.reason.slice(0, 120))
+      trace.steps.push({ kind: 'route', detail: `判断层: ${decision.reason}` })
       return 0
     }
 
@@ -377,8 +410,10 @@ export class AssistantService {
       // 灰度期：只记「本来会走哪条」，行为一个字不改
       appendLog(`[快路径/只记] ${decision.reason}`)
       privacyGate.audit('FASTROUTE_WOULD', 0, `${decision.capability.name} ${decision.model}`)
+      trace.steps.push({ kind: 'route', detail: `判断层（只记，未派发）: ${decision.reason}` })
       return 0
     }
+    trace.steps.push({ kind: 'route', detail: `判断层: ${decision.reason}` })
 
     const callId = `fastroute-${Date.now()}`
     appendLog(`[快路径] ${decision.reason}`)
@@ -395,7 +430,8 @@ export class AssistantService {
         },
       }],
     })
-    await this.runToolCall(userId, messages, callId, decision.capability.tool, decision.capability.args)
+    await this.runToolCall(userId, messages, callId, decision.capability.tool,
+                           decision.capability.args, trace)
     return 1
   }
 
@@ -404,6 +440,25 @@ export class AssistantService {
     if (kind !== 'text') return '目前只支持文字消息哦'
 
     const t = text.trim()
+    const startedAt = Date.now()
+    // 一轮的轨迹：判断了什么、调了什么、几轮、为什么停。**内置指令也要记**——
+    // 不然"我发了「轨迹」却看不到刚才那一轮"这种事自己就会发生（它本身也是一轮）。
+    const trace: TurnTrace = {
+      at: new Date(startedAt).toISOString(), userId, questionChars: t.length, steps: [],
+      rounds: 0, toolCalls: 0, reasoning: '', reasoningChars: 0, answerChars: 0,
+      stop: 'answered', elapsedMs: 0,
+    }
+    // `stop` 不给就保留循环/异常那边已经定好的结束原因（主路径走这里收尾）。
+    const finish = (reply: string, stop?: StopReason): string => {
+      trace.answerChars = reply.length
+      trace.elapsedMs = Date.now() - startedAt
+      if (stop) trace.stop = stop
+      // 内置指令**不占**内存里那一份"上一轮"：`轨迹` 本身就是一轮，占了它之后连着问两次
+      // 第二次就什么都看不到了。文件里照样留档（每轮都记）。
+      if (trace.stop !== 'builtin') this.traces.set(userId, trace)
+      recordTurn(trace)
+      return reply
+    }
 
     if (t === '帮助' || t.toLowerCase() === 'help') {
       return ['🧠 第二大脑 Agent', '',
@@ -414,12 +469,17 @@ export class AssistantService {
         '「记住: 我的项目叫weflow-cli」',
         '', '记忆: 三层 (窗口/摘要/长期事实), 重启不丢',
         '隐私: 数据库不出本机, 出境内容自动脱敏',
-        '', '指令: 记忆 | 隐私 | 清空记忆'].join('\n')
+        '', '指令: 记忆 | 隐私 | 清空记忆 | 轨迹'].join('\n')
+    }
+    if (t === '轨迹' || t === '过程' || t === '思考过程') {
+      // 上一轮**怎么走到那个答复的**。看的是本地那份轨迹，不是模型的自述——
+      // 模型说"我查了"与它真的查了，是两件事（审计里那条 TOOL_GUARD_PUSHBACK 就是这么来的）。
+      return finish(describeForChat(this.traces.get(userId)), 'builtin')
     }
     if (t === '清空记忆' || t === '重置') {
       this.memory.reset(userId)
       privacyGate.audit('MEMORY_RESET', 0, userId.slice(0, 8))
-      return '✓ 对话记忆已清空, 重新开始'
+      return finish('✓ 对话记忆已清空, 重新开始', 'builtin')
     }
     if (t === '隐私' || t === 'privacy') {
       // 只读：把当前档位和改法说清楚。**不让一条微信消息直接改隐私档位**——
@@ -439,7 +499,7 @@ export class AssistantService {
         lines.push('或者换本地模型, 内容根本不出机器:')
         lines.push('weflow-cli config set aiEngine ollama')
       }
-      return lines.join(String.fromCharCode(10))
+      return finish(lines.join(String.fromCharCode(10)), 'builtin')
     }
     if (t === '记忆') {
       const facts = this.memory.facts(userId)
@@ -468,8 +528,8 @@ export class AssistantService {
     let reply = ''
     let toolCalls = 0
     try {
-      toolCalls += await this.maybeFastRoute(userId, t, messages)
-      const first = await this.runReactLoop(userId, messages)
+      toolCalls += await this.maybeFastRoute(userId, t, messages, trace)
+      const first = await this.runReactLoop(userId, messages, trace)
       reply = first.reply
       toolCalls += first.toolCalls
 
@@ -488,7 +548,8 @@ export class AssistantService {
               + '这个问题需要本机的真实数据。请现在就调用合适的工具；'
               + '若确实查不到，说明你调用了哪个工具、它返回了什么。',
           })
-          const second = await this.runReactLoop(userId, messages)
+          trace.steps.push({ kind: 'note', detail: '守卫：路由说需要本机数据而这一轮没调工具，顶回去一次' })
+          const second = await this.runReactLoop(userId, messages, trace)
           reply = second.reply
           toolCalls += second.toolCalls
         } catch (e: any) {
@@ -497,6 +558,8 @@ export class AssistantService {
       }
     } catch (e: any) {
       reply = `❌ 大脑暂时离线: ${e.message?.slice(0, 100)}\n(本地指令仍可用: 发「帮助」)`
+      trace.stop = 'llm-error'
+      trace.error = String(e?.message ?? e).slice(0, 120)
     }
 
     // === 记忆更新 (L2 压缩 + L3 提取) ===
@@ -508,6 +571,7 @@ export class AssistantService {
     try { await this.memory.extractFactsIfNeeded(userId, llm) } catch { /* 提取失败不阻断 */ }
     this.memory.save()
     privacyGate.audit('TURN_DONE', reply.length, `tools=${toolCalls}`)
+    finish(reply)
     return reply
   }
 

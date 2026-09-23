@@ -1081,6 +1081,52 @@ messages a month), so a transcriber on the read path would never pay for itself.
   sampled messages every image resolved, so the miss path was exercised by removing index entries, not by
   observing a real eviction.
 
+## D-043: The assistant records a per-turn trace, and the audit stays what it was
+
+**Status:** Active
+
+Every assistant turn now writes one record to `~/.weflow-cli/assistant_trace.jsonl`: the fast-route's
+decision, each tool call with a **redacted argument summary**, how many model round trips it took, why
+it stopped, and how much reasoning the model returned. Two ways to read it: `weflow-cli assistant trace
+[-n N]` on the machine, and the in-chat command `轨迹` for the last turn (no `userId` in that one).
+
+**Reason:** the assistant's only output used to be the reply itself. Everything in between lived in the
+audit as separate event lines - `TURN_DONE tools=5` says five tools were called and nothing about which
+five, in what order, or with what arguments. When the answer looked wrong there was no way to see which
+step went wrong, and the one time this mattered (a turn that called `search_favorites` twice and
+`read_favorite` twice) the arguments were not recorded, so the question could not be answered from the
+log at all.
+
+**Consequences and boundaries:**
+- **The audit is unchanged and must stay narrow.** It records events and byte counts and **never
+  content**, because it is the egress record. The trace is a *local* debugging artifact and does contain
+  redacted argument summaries - that is the whole point of it, and it is why it is a separate file with
+  a separate reader rather than more fields on the audit line.
+- Argument summaries go through `privacyGate.redact` and truncate each value at 40 characters. The
+  in-chat rendering (`轨迹`) is the only path where they leave the machine, which is no more than the
+  reply itself already does; `userId` is deliberately omitted there.
+- **Reasoning is whatever the model returns**, surfaced from `reasoning_content` and clipped at 800
+  characters. The default model (`deepseek-chat`) does not return it, so the field is usually empty and
+  the trace says "无" - it does not pretend. Switching to a reasoning model fills it in; nothing else
+  changes. The reasoning text is **not** fed back into the conversation: it is the model's monologue,
+  not content for the user.
+- **"Did this step produce anything" is a convention, not a field.** The rule is "the result starts
+  with `(`", which is how this codebase already writes every "could not do it" reply (`fail()` and the
+  per-branch misses); the single exception, a success that also starts with `(`, is a whitelist entry
+  guarded by a test that scans the tool source. Measuring the honesty of this: a wrong answer here
+  costs one extra or missing "（无内容）" marker in a debugging view. The alternative - threading an
+  outcome through roughly forty return sites - was priced and not done; if a future feature needs a
+  machine-readable outcome (say, retrying differently on failure), that is the change to make, and this
+  convention should then be deleted rather than extended.
+- The trace is capped at 512 KB, trimmed to the most recent 200 turns. It is not a metrics store and
+  there is no aggregation over it: `assistant trace` prints turns, it does not compute rates. The
+  behaviour eval (D-042's sibling work) is where aggregate numbers come from, because it asserts
+  conditions instead of dumping history.
+- Writing a trace can never break a turn (failures are swallowed), which is the same posture
+  `AssistantMemory.save` takes - with the same obligation: because it is swallowed, `recordTurn`
+  creates `~/.weflow-cli` if it is missing, or a fresh machine would silently record nothing. That was
+  caught by the feature's own tests.
+
 ## Decision Template
 
 
