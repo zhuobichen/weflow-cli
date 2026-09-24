@@ -418,6 +418,25 @@ export const TOOL_DEFS: ToolDef[] = [
   {
     type: 'function',
     function: {
+      name: 'draft_reply',
+      description: '帮用户**起草**一条回复（只产出候选文本，绝不替他发送）。适合「帮我回老王那句话」'
+        + '「这条怎么回」。会先判断对方要什么、该不该给实质内容、风险多高，再给几条候选。'
+        + '涉及钱或风险很高时**不给草稿**，只说明风险与该先确认什么——别把这种情况当失败。'
+        + '（想看对方写了什么用 get_messages；想知道谁在等用 who_owes_reply。）'
+        + '代价：要把这段对话发给判断模型与生成模型，约几秒。',
+      parameters: {
+        type: 'object',
+        properties: {
+          contact: { type: 'string', description: '给谁起草（联系人名，和 get_messages 一样解析）' },
+          count: { type: 'number', description: '要几条候选，默认 3（最多 5）' },
+        },
+        required: ['contact'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'who_owes_reply',
       description: '看看谁在等你回话（对方说完就没下文的那种）。适合「我有没有漏回谁的消息」。'
         + '代价：逐会话问一次判断模型，可能要几十秒；只报谁在等，不回正文。',
@@ -587,12 +606,59 @@ export function unavailableToolReason(name: string, config: (key: any) => any = 
   if (name === 'get_weread' && !String(config('wereadApiKey') || '').trim()) {
     return '微信读书需要 wereadApiKey'
   }
+  if (name === 'draft_reply') {
+    // 起草要**两个**模型：判断（Jev）与生成（DeepSeek）。缺任何一个都跑不通，
+    // 而"跑不通"的工具不该摆出来让模型去试。
+    if (!String(config('typesafeApiKey') || '').trim()) return '起草回复需要 typesafeApiKey（判断那一步）'
+    if (!String(config('deepseekApiKey') || '').trim()) return '起草回复需要 deepseekApiKey（生成那一步）'
+  }
   return null
 }
 
 /** 这台机器上真正可用的工具表。快路径派发也要过同一道判据（见 `unavailableToolReason`）。 */
 export function availableToolDefs(config?: (key: any) => any): ToolDef[] {
   return TOOL_DEFS.filter(def => !unavailableToolReason(def.function.name, config))
+}
+
+/**
+ * 判断模型给的键翻成人话。
+ *
+ * 为什么要这一层：那些键是**英文判据的键名**（`casual_chat` / `give_commitment`），
+ * 原样交给助手，它就会照着念给用户听。映射不上就退回原键——如实展示，不硬编一个。
+ */
+const INTENT_LABELS: Record<string, string> = {
+  confirm_you_care: '想要你一个态度（在试探你还在不在意）',
+  vent_anger: '在发火，想被听见而不是被解决',
+  request_action: '有事要你办（发东西、付钱、约时间这类）',
+  seek_explanation: '想要个解释',
+  casual_chat: '在闲聊，没有事要你办',
+  close_topic: '在收尾，不想再展开',
+}
+const ACTION_LABELS: Record<string, string> = {
+  check_history: '先翻一下更早的聊天记录再说',
+  apologize: '具体地认错',
+  give_commitment: '给一个做得到的时间或交付',
+  explain: '说明经过，不辩解',
+  acknowledge: '表示收到了，先不承诺什么',
+  say_less: '少说',
+  make_plan: '一起定个时间',
+}
+const NEED_LABELS: Record<string, string> = {
+  apology: '一个道歉', action: '实际的动作', explanation: '解释', care: '被在意',
+  nothing: '什么都不用',
+}
+
+function zhLabel(map: Record<string, string>, key: unknown): string {
+  const text = String(key ?? '')
+  return map[text] || text || '说不准'
+}
+
+function riskLabel(score: unknown): string {
+  const value = Number(score ?? 0)
+  if (value >= 8) return '很危险'
+  if (value >= 6) return '偏危险'
+  if (value >= 3) return '留神'
+  return '安全'
 }
 
 export async function executeTool(name: string, args: Record<string, any>, ctx: ToolContext): Promise<string> {
@@ -920,6 +986,70 @@ export async function executeTool(name: string, args: Record<string, any>, ctx: 
           lines.push(`· ${row.name}（等了 ${row.days} 天 · 概率 ${prob.toFixed(2)}${urgency}${row.kind ? ' · ' + row.kind : ''}）`)
         }
         lines.push('（想看某人具体说了什么，用 get_messages 单独查；这里只报谁在等。）')
+        return lines.join('\n')
+      }
+      case 'draft_reply': {
+        // 起草：判断（Jev）→ 起草（DeepSeek）→ 排序（Jev）。**只产出文本，绝不发送**——
+        // 仓库里"发送"本来就不可达（TOOL_DEFS 没有任何 send 类工具），这里也不新增。
+        const contact = String(args.contact || '')
+        if (!contact) return '(缺少 contact 参数)'
+        const count = boundedToolInteger(args.count, 3, 5, 'count')
+        // strict 下**直接拒绝**，而不是把遮成"内容 N 字"的正文拿去起草——那会得到一段
+        // 基于空白的、看起来正常的回复，比拒绝更糟（同 `look_at_image` 的处置）。
+        //
+        // 这里**不看 `isLocalInference()`**，与 `look_at_image` 刻意不同：那张图确实送到
+        // 本机模型，所以"本机推理"在那里是成立的旁路；而起草出境的是**脚本自己的**两条远程
+        // 调用（`jev_client` 走 HTTP、`_utils.call_deepseek` 写死 DeepSeek），跟 `aiEngine`
+        // 配成什么毫无关系。照抄那个旁路＝用"我配了本地模型"当理由，把正文发到远端去。
+        // 这条是实测出来的：aiEngine=ollama + strict 下，原实现真的把对话交给了脚本。
+        if (privacyGate.mode() === 'strict') {
+          return '(当前隐私模式是 strict：聊天正文不出境，而起草必须把正文发给远端模型'
+            + '（判断一步、生成一步），这一步用本机推理也绕不开。'
+            + '在电脑上 `weflow-cli config set assistantPrivacy balanced`，或用本机命令 '
+            + '`weflow-cli draft <会话>`。)'
+        }
+        const talker = await resolveTalker(contact)
+        const msgs = await chatService.getMessages(talker, 30)
+        if (!msgs.length) return `(没找到「${contact}」的消息)`
+
+        // 逐条遮罩**再**交给脚本：Python 侧没有任何脱敏实现（全仓只有两处无关的位掩码），
+        // 而脱敏这一层在 TS。**不在 Python 里再写一份**——同一件事两处实现早晚有一处会漏。
+        //
+        // 说明白：上面的门**现在**已经把 strict 全挡了，所以这里的 `maskMessageBody`
+        // 在当下打不到（balanced/open 不改正文）。留着它是因为它守的是另一条不变式：
+        // "交给脚本的正文一定先过一道遮罩"，谁将来松开了上面那道门，这道还在。
+        const transcript = msgs.slice().reverse().map(m => {
+          const raw = m.localType === 1
+            ? (m.content || m.parsedContent || '')
+            : (m.parsedContent || m.content || '')
+          const body = privacyGate.maskMessageBody(clipWithMarker(raw.replace(/\n/g, ' '), MSG_BODY_CHARS),
+                                                  { isText: m.localType === 1 })
+          return `[${fmtTime(m.createTime)}] ${m.isSend ? '我' : '对方'}：${body}`
+        })
+        const result = await runPythonJson<any>('draft_reply.py',
+          ['--stdin', '--yes', '--json', '--count', String(count)],
+          { stdin: JSON.stringify({ name: contact, lines: transcript }), timeoutMs: 240_000 })
+        if (!result.ok) return fail('起草失败', result)
+
+        const data = result.data ?? {}
+        if (!data.success) return `(起草没跑通: ${String(data.error || '未知').slice(0, 120)})`
+        const judgment = data.judgment ?? {}
+        const why = `对方${zhLabel(INTENT_LABELS, judgment.intent)}`
+          + `；建议${zhLabel(ACTION_LABELS, judgment.action)}`
+          + `；风险 ${Number(judgment.risk ?? 0).toFixed(1)}/9 ${riskLabel(judgment.risk)}`
+        // 被闸门拦下：**不是失败**，是这条最该给的回答。所以不以 `(` 起头
+        // （那个前缀在本仓库里表示"工具没产出内容"，见 `producedContent`）。
+        if (data.gate === 'refused') {
+          return ['不起草。', String(data.reason || ''), '',
+                  '建议先：', ...(data.advice ?? []).map((line: string) => `· ${line}`),
+                  '', `（判断：${why}。这些只是文本，没有发送任何东西。）`].join('\n')
+        }
+        const drafts: any[] = Array.isArray(data.drafts) ? data.drafts : []
+        if (!drafts.length) return '(起草没给出候选)'
+        const lines = [`建议这样回（${drafts.length} 条，第一条是判断最合适的）：`, '']
+        drafts.forEach((draft, index) => { lines.push(`${index + 1}. ${draft.text}`) })
+        lines.push('')
+        lines.push(`（判断：${why}。这些只是文本，没有发送任何东西——回不回、怎么回由你决定。）`)
         return lines.join('\n')
       }
       case 'search_semantic': {

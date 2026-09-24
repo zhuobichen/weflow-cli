@@ -152,3 +152,15 @@ test('过滤的理由要说得出是哪一样缺了', () => {
   assert.equal(unavailableToolReason('get_messages', () => ''), null)
   assert.equal(unavailableToolReason('search_semantic', () => 'k'), null)
 })
+
+test('起草要**两个** key：只缺一个也跑不通，也得说清缺的是哪一个', () => {
+  // 判断一步要 typesafe，生成一步要 deepseek。只配了一个的话，这条工具会跑到一半才炸，
+  // 而模型会把它当成"工具坏了"——摆出来之前就该过滤掉。
+  const onlyTypesafe = (key: string) => (key === 'typesafeApiKey' ? 'k' : '')
+  const onlyDeepseek = (key: string) => (key === 'deepseekApiKey' ? 'k' : '')
+  assert.match(unavailableToolReason('draft_reply', onlyTypesafe)!, /deepseekApiKey/)
+  assert.match(unavailableToolReason('draft_reply', onlyDeepseek)!, /typesafeApiKey/)
+  assert.match(unavailableToolReason('draft_reply', () => '')!, /typesafeApiKey/)
+  assert.equal(unavailableToolReason('draft_reply',
+    (key: string) => (key === 'typesafeApiKey' || key === 'deepseekApiKey' ? 'k' : '')), null)
+})

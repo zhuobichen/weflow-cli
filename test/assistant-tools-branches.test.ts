@@ -1,7 +1,7 @@
 /**
  * 助手工具的**分支**执行。
  *
- * 覆盖到哪：18 个工具里 17 个被执行过——16 个在本文件，`save_memory` 在
+ * 覆盖到哪：19 个工具里 18 个被执行过——17 个在本文件，`save_memory` 在
  * `assistant-service.test.ts`（它只碰记忆，和整条消息链路一起测更贴近实际）。
  *
  * 此前只有 3 个纯函数被测过，**没有任何测试真正执行过一个工具分支**——也就是说"用户问
@@ -454,9 +454,11 @@ const bridge = await import('../src/services/pythonBridge.js')
 
 /** 装上假 runner，返回它收到的调用，便于断言参数 */
 function stubScript(stdout: string, code = 0, stderr = '') {
-  const calls: { script: string; args: string[]; env?: Record<string, string> }[] = []
+  // `stdin` 也要记：有一类工具把**用户数据**走标准输入送进脚本（而不是 argv 或 env），
+  // 而"送进去的到底是原文还是遮罩过的"正是要断言的东西。
+  const calls: { script: string; args: string[]; env?: Record<string, string>; stdin?: string }[] = []
   bridge.setScriptRunner(async (script: string, args: string[], options: any) => {
-    calls.push({ script, args, env: options?.env })
+    calls.push({ script, args, env: options?.env, stdin: options?.stdin })
     return { stdout, stderr, code }
   })
   return calls
@@ -1139,4 +1141,157 @@ test('get_todos 脚本没给 JSON（退出码 0）时也算失败，而不是当
     assert.match(out, /没有给出可解析的 JSON/)
     assert.doesNotMatch(out, /没有待办任务/)
   } finally { bridge.setScriptRunner(null) }
+})
+
+// ------------------------------------------------- 起草回复（判断 → 起草 → 排序）
+
+/**
+ * 这条路的输入**走 stdin**：TS 侧逐条遮罩后把对话正文交给 `draft_reply.py`。
+ * 所以断言必须看 stdin 的内容——这正是上面 `stubScript` 要记 `stdin` 的原因；
+ * 只看 argv 的桩会让"送进去的是原文还是遮过的"永远测不到。
+ */
+const DRAFT_OK = {
+  success: true, gate: 'draft', ranked: true,
+  judgment: { intent: 'request_action', need: 'action', action: 'give_commitment',
+              should_reply: 0.82, risk: 3, money: 0.05, commitment: 0.2 },
+  drafts: [{ text: '今天下班前发你', why: '给个具体时间' },
+           { text: '我找找，马上', why: '低姿态' }],
+}
+
+/** 一个能起草的世界：会话在、消息按"新的在前"给（和真实读取器一致） */
+function draftWorld(): void {
+  svc.listSessions = async () => ([{ displayName: '老王', username: 'wxid_w' }])
+  svc.getMessages = async () => ([
+    { createTime: 1758601200, isSend: false, senderUsername: '老王', localType: 3,
+      content: '<msg><appmsg><title>Base.csv</title></appmsg></msg>', parsedContent: '[文件] Base.csv' },
+    { createTime: 1758600600, isSend: true, senderUsername: '我', localType: 1,
+      content: '今天下午', parsedContent: '今天下午' },
+    { createTime: 1758600000, isSend: false, senderUsername: '老王', localType: 1,
+      content: '那个文件你什么时候发我', parsedContent: '那个文件你什么时候发我' },
+  ])
+}
+
+// 这条路的隐私模式要钉成 balanced（这个文件默认 strict，会直接拒绝起草）；
+// 复用上面 `look_at_image` 那一段的 `withBalanced`，不再写第二份同样的替换。
+
+test('draft_reply：把候选渲染出来，判定里的英文键翻成人话', async () => {
+  draftWorld()
+  const calls = stubScript(JSON.stringify(DRAFT_OK))
+  try {
+    await withBalanced(async () => {
+      const text = await run('draft_reply', { contact: '老王' })
+      assert.match(text, /建议这样回（2 条，第一条是判断最合适的）/)
+      assert.match(text, /1\. 今天下班前发你/)
+      assert.match(text, /2\. 我找找，马上/)
+      // 键名不许原样念给用户听（`request_action` 是个英文判据键，不是人话）
+      assert.doesNotMatch(text, /request_action|give_commitment/)
+      assert.match(text, /对方有事要你办/)
+      assert.match(text, /建议给一个做得到的时间或交付/)
+      assert.match(text, /风险 3\.0\/9 留神/)
+      assert.match(text, /没有发送任何东西/)
+      // 候选**不许**以 `(` 起头：那个前缀在本仓库里表示"工具没产出内容"
+      assert.doesNotMatch(text, /^\(/)
+    })
+    assert.equal(calls.length, 1, '只该跑一次脚本')
+    assert.deepEqual(calls[0].args, ['--stdin', '--yes', '--json', '--count', '3'])
+  } finally { bridge.setScriptRunner(null) }
+})
+
+test('draft_reply：给脚本的是按时间正序、带方向标签的对话，非文本消息给类型标签', async () => {
+  draftWorld()
+  const calls = stubScript(JSON.stringify(DRAFT_OK))
+  try {
+    await withBalanced(async () => { await run('draft_reply', { contact: '老王' }) })
+    const payload = JSON.parse(String(calls[0].stdin))
+    assert.equal(payload.name, '老王')
+    assert.equal(payload.lines.length, 3)
+    // 正序：读取器给的是"新的在前"，模型要按时间读
+    assert.match(payload.lines[0], /对方：那个文件你什么时候发我/)
+    assert.match(payload.lines[1], /我：今天下午/)
+    assert.match(payload.lines[2], /对方：\[文件\] Base\.csv/)
+    assert.doesNotMatch(payload.lines[2], /appmsg/, '非文本消息不许把原始 XML 交出去')
+  } finally { bridge.setScriptRunner(null) }
+})
+
+test('draft_reply：strict 下拒绝，而且一个脚本都不调（正文压根不出境）', async () => {
+  // 这个文件默认就是 strict（configService 的默认值），所以这里不覆盖配置。
+  // 拒绝的理由要落在"正文不出境 vs 起草必须出境"这对矛盾上，并给出两条出路。
+  draftWorld()
+  const calls = stubScript(JSON.stringify(DRAFT_OK))
+  try {
+    const out = await run('draft_reply', { contact: '老王' })
+    assert.equal(calls.length, 0, '拒绝就得是**真的**拒绝：不能先发出去再说不给草稿')
+    assert.match(out, /^\(当前隐私模式是 strict/)
+    assert.match(out, /assistantPrivacy balanced/)
+    assert.match(out, /weflow-cli draft/)
+  } finally { bridge.setScriptRunner(null) }
+})
+
+test('draft_reply：本机推理引擎也不是起草的免死金牌（这条出境的是脚本自己的远程调用）', async () => {
+  // 与 `look_at_image` 的关键差别：那张图确实送到本机模型，所以 `isLocalInference()`
+  // 在那里是**成立的**旁路；而 `draft_reply.py` 无论 aiEngine 配成什么，都会把正文发给
+  // 远端的判断模型与生成模型（`jev_client` 走 HTTP、`_utils.call_deepseek` 写死 DeepSeek）。
+  // 于是"用本机引擎"这个理由在这条路上不成立——照抄那个旁路就是一个静默出境的口子。
+  draftWorld()
+  const realGet = configService.get.bind(configService)
+  ;(configService as any).get =
+    (k: string) => (k === 'assistantPrivacy' ? 'strict' : k === 'aiEngine' ? 'ollama' : realGet(k))
+  const calls = stubScript(JSON.stringify(DRAFT_OK))
+  try {
+    const out = await run('draft_reply', { contact: '老王' })
+    assert.equal(calls.length, 0, 'strict 下 ollama 也不许把正文发给远端模型')
+    assert.match(out, /^\(当前隐私模式是 strict/)
+  } finally {
+    bridge.setScriptRunner(null)
+    ;(configService as any).get = realGet
+  }
+})
+
+test('draft_reply：闸门拦下时照原样报风险与建议，不当成失败', async () => {
+  // 被拦是**这条最该给的回答**，所以不能以 `(` 起头——那会让主循环判成"没产出内容"。
+  draftWorld()
+  stubScript(JSON.stringify({
+    success: true, gate: 'refused', ranked: false,
+    reason: '风险 8/9：已经闹翻或涉及法律资金',
+    advice: ['先翻一下更早的聊天记录', '拿不准就先确认'],
+    judgment: { intent: 'vent_anger', action: 'check_history', risk: 8, money: 0.05 },
+    drafts: [],
+  }))
+  try {
+    const out = await withBalanced(async () => run('draft_reply', { contact: '老王' }))
+    assert.match(out, /^不起草。/)
+    assert.doesNotMatch(out, /^\(/)
+    assert.match(out, /风险 8\/9/)
+    assert.match(out, /· 先翻一下更早的聊天记录/)
+    assert.match(out, /在发火，想被听见而不是被解决/)
+  } finally { bridge.setScriptRunner(null) }
+})
+
+test('draft_reply：脚本跑不通、或没给出候选时，如实说', async () => {
+  draftWorld()
+  stubScript('', 2, '缺少 TypeSafe key')
+  try {
+    const failed = await withBalanced(async () => run('draft_reply', { contact: '老王' }))
+    assert.match(failed, /^\(起草失败/)
+    assert.match(failed, /退出码 2/)
+  } finally { bridge.setScriptRunner(null) }
+
+  stubScript(JSON.stringify({ success: true, gate: 'draft', drafts: [] }))
+  try {
+    const empty = await withBalanced(async () => run('draft_reply', { contact: '老王' }))
+    assert.match(empty, /^\(起草没给出候选\)/)
+  } finally { bridge.setScriptRunner(null) }
+})
+
+test('draft_reply：缺 contact 与查无此人都要说得出是哪一种', async () => {
+  assert.equal(await run('draft_reply', {}), '(缺少 contact 参数)')
+
+  svc.listSessions = async () => ([{ displayName: '老王', username: 'wxid_w' }])
+  svc.getMessages = async () => []
+  assert.match(await withBalanced(async () => run('draft_reply', { contact: '老王' })), /没找到「老王」的消息/)
+})
+
+test('draft_reply：count 越界变成可读的参数错误，不悄悄用默认值', async () => {
+  assert.equal(await run('draft_reply', { contact: '老王', count: 9 }),
+               '(参数错误: count 必须是 1-5 的整数)')
 })

@@ -235,6 +235,8 @@ weflow-cli panel               # 打开本机面板窗口 (不扫码也能用)
 - 「记住：我的项目叫 weflow-cli」— 写入长期记忆
 
 运行机制：守护进程通过微信官方 Bot 通道（iLink）长轮询收发消息，Agent 循环、三层记忆（工作窗口 / 滚动摘要 / 长期事实）、数据库查询全部在本机执行；仅最终提问与回复文本会发送给所配置的 LLM，工具输出中的电话/邮箱/链接等 PII 默认自动脱敏（`config set assistantPrivacy strict` 可加强，`ollama` 本地引擎则完全不出网）。会话 24 小时未活跃需重新扫码，单窗口内主动回复有官方条数限制。
+- 「帮我回老王那句话」— 起草回复：先判断对方要什么、风险和该不该给实质内容，再给几条候选。
+  **只产出文本，不会替你发送**；涉钱或风险很高时不给草稿，只说明该先确认什么
 
 成本护栏：内置每日 100 条处理上限（防异常流量烧钱，微信内发「记忆」可查用量）；助手默认拒绝所有来信，必须明确配置白名单后才会触发 AI 调用：
 
@@ -264,6 +266,7 @@ weflow-cli config set assistantGroupRequireMention true
 | 本机判断层 | `weflow-cli decide --request <file> --dry-run` · `--yes` |
 | 导出聊天记录 | `weflow-cli export <联系人> <json\|txt\|html\|excel>` |
 | 同步检查点 | `weflow-cli sync run <联系人> --since <日期>` · `sync status` · `sync verify` |
+| 帮我起草回复（只出文字，不发送） | `weflow-cli draft <联系人> --dry-run` · `--yes` |
 | 公众号日报与阅读器 | `weflow-cli daily` · `weflow-cli daily-server` · `weflow-cli review` |
 | 朋友圈缓存 | `weflow-cli sns timeline` · `weflow-cli sns users` · `weflow-cli sns stats` |
 | 微信收藏 | `weflow-cli fav list` · `weflow-cli fav export markdown` · `weflow-cli fav set-key` |

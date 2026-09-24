@@ -326,6 +326,17 @@ program
           writesNothing: true,
           confirmationRequired: true,
         },
+        draft: {
+          cli: 'draft <会话> --yes --json',
+          preview: 'draft <会话> --dry-run --json',
+          readsLocalChat: true,
+          invokesAI: true,
+          // **它不发送任何东西**：只产出候选文本，回不回由人决定。
+          // 这条要能被机器读到——`sendsNothing` 比 `writesNothing` 更要紧。
+          writesNothing: true,
+          sendsNothing: true,
+          confirmationRequired: true,
+        },
         knowledge: { cli: 'search <query> --yes --json', preview: 'search <query> --dry-run --json', output: 'json', mcp: 'wechat.search_articles' },
       },
       primitives: {
@@ -5168,6 +5179,70 @@ program
       } catch (error) {
         if (opts.json) {
           console.log(JSON.stringify({ success: false, code: 'AWAITING_FAILED', action: 'reply-debt.scan', error: safeSubprocessError(error) }))
+        } else {
+          console.error(chalk.red(`\n✗ ${safeSubprocessError(error)}`))
+        }
+        process.exit(1)
+      }
+    })
+
+  // draft：判断在前、起草在后、**绝不发送**
+  program
+    .command('draft <talker>')
+    .description('帮我起草回复：先判断（意图/风险/该不该给实质），再起草候选 —— **只产出文本，不发送**')
+    .option('--count <n>', '要几条候选', '3')
+    .option('--gate-commitment', '承诺未兑现时也拒绝起草（默认只在提示词里约束）')
+    .option('--dry-run', '仅预览会发多少字符给哪两个模型，不调用')
+    .option('--yes', '确认把这段对话发送到判断模型与生成模型')
+    .option('--json', '输出机器可读结果；执行仍需 --yes')
+    .action(async (talker: string, opts) => {
+      const { execFile } = await import('child_process')
+      const { promisify } = await import('util')
+      const execFileAsync = promisify(execFile)
+      const pkgRoot = resolvePackageRoot()
+      const script = join(pkgRoot, 'scripts', 'draft_reply.py')
+      const count = parseCliInteger(opts.count, 'count', 1, 5, opts.json)
+      const args = [script, '--talker', String(talker), '--count', String(count),
+                    // 脚本自己有第二道闸门（`--yes` 才真的把对话发出去），所以要透传——
+                    // 漏了这一行，CLI 确认过了、脚本仍然拒绝（实测踩到过）
+                    ...(opts.yes ? ['--yes'] : []),
+                    ...(opts.gateCommitment ? ['--gate-commitment'] : []),
+                    ...(opts.json ? ['--json'] : [])]
+
+      if (opts.dryRun) {
+        // 交给脚本自己报数（它才知道这段对话有多少字符）。这一步只读本地，零出境。
+        args.push('--dry-run')
+      } else if (!opts.yes) {
+        const preview = {
+          success: false, dryRun: false, action: 'draft-reply',
+          code: 'CONFIRMATION_REQUIRED', talker, count,
+          readsLocalChat: true, invokesAI: true, writesNothing: true, sendsNothing: true,
+        }
+        if (opts.json) {
+          console.log(JSON.stringify(preview))
+          process.exit(1)
+        }
+        const { confirmed } = await inquirer.prompt([{
+          type: 'confirm',
+          name: 'confirmed',
+          message: '确认把这段对话发送到判断模型与生成模型吗？（只会产出候选文本，不会替你发送）',
+          default: false,
+        }])
+        if (!confirmed) {
+          console.log(chalk.gray('已取消'))
+          return
+        }
+      }
+
+      try {
+        const { stdout } = await execFileAsync(getPythonCommand(), args, {
+          timeout: 300_000, maxBuffer: 50 * 1024 * 1024,
+          env: pythonProcessEnv(),
+        })
+        process.stdout.write(stdout)
+      } catch (error) {
+        if (opts.json) {
+          console.log(JSON.stringify({ success: false, code: 'DRAFT_FAILED', action: 'draft-reply', error: safeSubprocessError(error) }))
         } else {
           console.error(chalk.red(`\n✗ ${safeSubprocessError(error)}`))
         }

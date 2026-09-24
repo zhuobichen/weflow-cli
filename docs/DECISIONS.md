@@ -1281,6 +1281,62 @@ with the test itself green the other three times. "Saved" and "never saved" must
   (there is a CHANGELOG entry about `MEMORY_SAVE_FAILED`), and the flake was the same class of thing
   arriving from the filesystem instead of the code.
 
+## D-047: Drafted replies produce text and stop there, the risk gate rides on the binary questions, and the assistant path masks before the script sees anything
+
+**Status:** Active
+
+`draft` (CLI) and the assistant tool `draft_reply` ask a decision model seven typed questions about one
+conversation (intent / need / action / should this get substance / risk 0-9 / money / unfulfilled
+commitment), refuse when the answer is money **or** risk >= 7, otherwise generate N candidate replies and
+rank them. The output is **text only** - there is no path from here into WeChat, no input-box filling, no
+key simulation, no focus stealing. `capabilities --json` declares `sendsNothing: true` alongside
+`writesNothing`.
+
+**Reason:** the pattern comes from reading `jev-chat-jarvis` (an Android assistant that reads the screen
+through accessibility, decides, and drafts three replies into the input box without ever sending). Two
+things it does *not* do are the two things worth doing here, and both were read from its source rather than
+assumed: its danger level (0-9) is consumed **only** as a badge colour - it never refuses a draft, degrades
+or blocks - and its judgement result is **not** in the drafting prompt (`ReplyClient.draft` takes no
+`Analysis`), so "draft with the judgement's sense of proportion" is missing. Its "never send" is its
+boundary; here sending was already structurally unreachable (`TOOL_DEFS` has no send tool, D-008), so the
+risk this feature adds is not a mis-send but **making it easier to send a message the user will regret** -
+which is what the gate is for.
+
+**Consequences and boundaries:**
+- **The gate rides on the binary questions, not on the 0-9 score.** `money` is a hard refusal; `risk >= 7`
+  is a refusal whose advice is taken from the `action` answer ("go read the earlier history first"). The
+  0-9 band is calibrated in wording but its **threshold is picked, not calibrated**, so it explains
+  ("risk 8/9: it has already turned into a fight") and does not decide alone. `commitment` deliberately
+  does **not** refuse by default - "I promised and went quiet" is exactly when a draft is most useful - it
+  constrains the prompt instead; `--gate-commitment` makes it a hard refusal, which is the trade this
+  record exists so someone can reverse.
+- **The English criteria are borrowed, and that choice is unverified here.** The question set follows the
+  reference implementation, which was calibrated against a 30-conversation Chinese set in its own
+  (intimate-relationship) domain; the criteria are English because its `TASK.md` states the model's main
+  training language is English. `reply_debt.py` still asks its own money/commitment questions in **Chinese**
+  and those two are reused **verbatim**, so this repo now runs two wording conventions against one model
+  with **no A/B run**. Recorded as an open question, not as a settled choice.
+- **Two input paths, and the mask asymmetry is deliberate.** The CLI reads the database itself and does
+  **not** mask - the user ran it explicitly and the preview states how many characters go to which models
+  (same as `awaiting`). The assistant tool masks every message through `privacyGate` and hands the result
+  to the same script **over stdin**; Python has no redaction implementation at all (`scripts/` contains
+  only two unrelated bit-masks), and the one implementation lives in TypeScript. `strict` mode **refuses**
+  the tool outright rather than drafting from a body masked into "content N characters", because that
+  produces a fluent answer built on nothing.
+- **`isLocalInference()` is deliberately *not* an escape hatch here**, unlike `look_at_image`. That image
+  really does go to the local model, so "local inference" is a valid bypass there; drafting's egress is the
+  **script's own** two remote calls (`jev_client` over HTTP, `_utils.call_deepseek` hard-wired to DeepSeek),
+  which `aiEngine` does not touch. The first implementation copied the bypass from `look_at_image` and a
+  test caught it: with `aiEngine=ollama` + `assistantPrivacy=strict` the transcript was handed to the
+  script. Verified by measurement, then removed.
+- **The panel only gets a copy button**, on the assistant's turns. It copies the whole reply rather than
+  per-candidate lines: the visible reply is the model's own rendering, so guessing which lines are
+  candidates would sometimes copy half a sentence. A failed clipboard write says so and selects the text
+  instead of claiming success.
+- Group chats are out of scope (the reference implementation documents the same limit, and local group
+  semantics are not reliable here), as is any automatic labelling: there is no gold standard for "is this
+  draft right", so the feature records what it judged and says so rather than claiming calibration.
+
 ## Decision Template
 
 

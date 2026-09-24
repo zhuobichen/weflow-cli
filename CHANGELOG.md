@@ -287,6 +287,32 @@ All notable user-facing changes are recorded here. This project follows [Semanti
   that this makes a third-party vision model part of the loop - the same content already went to
   DeepSeek as text, but images are a new class of it.
 
+- **Drafted replies** (`weflow-cli draft <联系人>`, and `draft_reply` in the assistant). Given one
+  conversation it asks a decision model seven typed questions - what the other side is after, what they
+  need, which action type fits, whether substance is owed, how risky it is (0-9), whether money is
+  involved, whether a commitment is outstanding - then writes and ranks candidate replies. The pattern is
+  borrowed from `jev-chat-jarvis`; the two things it does *not* do are the two worth doing, and both were
+  read from its source: its risk level is only a badge colour (it never refuses a draft), and its judgement
+  never reaches the drafting prompt. Here the judgement **is** injected, and the user's own earlier
+  messages are offered as a tone sample. **It produces text and stops there** - no input-box filling, no
+  key simulation, no focus stealing; `capabilities --json` reports `sendsNothing: true`.
+
+  Money, or risk >= 7, means **no draft at all**: you get what the risk is and what to confirm first. That
+  is the answer, not a failure. The 0-9 threshold is **picked, not calibrated**, so the band explains the
+  refusal and does not decide alone; an outstanding commitment deliberately does *not* refuse (that is
+  exactly when a draft helps) and constrains the prompt instead (`--gate-commitment` makes it hard).
+  Three model calls per run, all reported by `--dry-run` before anything leaves the machine. In the
+  assistant the transcript is masked first and handed over on stdin, and `strict` mode refuses outright -
+  drafting has to send the body to remote models, and drafting from a body masked into "content N
+  characters" would produce a fluent answer built on nothing. Text in the panel now carries a copy button,
+  which says so when the clipboard write fails instead of claiming success. See D-047.
+
+  Two things about the judgement are recorded rather than settled: the criteria are **English** (following
+  the reference implementation, whose `TASK.md` states that is the model's main training language) while
+  the money/commitment questions are reused **verbatim in Chinese** from `reply_debt` - two wording
+  conventions against one model with **no A/B run**; and nothing here is calibrated against a gold
+  standard, so "is this draft any good" has only your own reading as a check.
+
 - `strict` mode now keeps the **type** of a non-text message. Its own rule says "time, direction and type
   only", and masking `[图片]` / `[文件] Base.csv` into `[内容4字已按严格模式屏蔽]` was throwing the type
   away too - the model could not tell an image from a text message, and learned nothing that was not

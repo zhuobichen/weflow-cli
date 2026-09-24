@@ -229,3 +229,19 @@ footer {
   font-size: 12px;
 }
 footer .warn { color: var(--warn); }
+/* 助手回答下的复制按钮。**常显**而不是 hover 才出现：这是个常驻小窗，
+   鼠标常常不在它上面，hover 等于没有。做得很淡，不跟正文抢注意力。 */
+.turn .copy {
+  display: block;
+  margin-top: 6px;
+  padding: 1px 7px;
+  font: inherit;
+  font-size: 11px;
+  color: var(--dim);
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  cursor: pointer;
+}
+.turn .copy:hover { color: var(--text); border-color: var(--dim); }
+

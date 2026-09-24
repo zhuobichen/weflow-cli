@@ -18,13 +18,67 @@ const send = document.getElementById('send')
 const statusEl = document.getElementById('status')
 const foot = document.getElementById('foot')
 
+const COPY_LABEL = '复制'
+const COPIED_LABEL = '已复制'
+const MANUAL_LABEL = '按 Ctrl+C'
+
+/** 把节点内容全选上。用于剪贴板 API 用不了时的退路 */
+function selectContents(node) {
+  const range = document.createRange()
+  range.selectNodeContents(node)
+  const selection = window.getSelection()
+  selection.removeAllRanges()
+  selection.addRange(range)
+}
+
+/**
+ * 助手回答下面的复制按钮。
+ *
+ * 为什么要有：起草回复那条路**只产出文本**——不碰微信窗口、不模拟按键（见 D-047），
+ * 所以"把这几条候选拿到别处去用"这一步只能由用户自己做，那就得让他一键拿得走。
+ * 它是**整条回答**的复制，不做"逐条候选分别复制"：候选是模型用自己的话重述过的，
+ * 在客户端按行去猜哪行是候选，猜错就是把半句话复制走。
+ *
+ * 反馈必须落在按钮自己身上（窗口只有巴掌大，用户不会去看别处）。
+ */
+function addCopyButton(turn, textNode, text) {
+  const button = document.createElement('button')
+  button.type = 'button'
+  button.className = 'copy'
+  button.textContent = COPY_LABEL
+  let timer = null
+  const flash = (label) => {
+    button.textContent = label
+    if (timer) clearTimeout(timer)
+    timer = setTimeout(() => { button.textContent = COPY_LABEL }, 1500)
+  }
+  button.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(text)
+      flash(COPIED_LABEL)
+    } catch {
+      // 剪贴板 API 拿不到时**不许假装复制成功**：用户会以为剪贴板里有东西，粘出来
+      // 是上一次的旧内容——那比什么都不做更坏。改成把这段选上，让他自己按 Ctrl+C。
+      selectContents(textNode)
+      flash(MANUAL_LABEL)
+    }
+  })
+  turn.appendChild(button)
+}
+
 /** 把一条消息加进对话区。`who` 决定样式，**内容永远走 textContent** */
 function addTurn(who, text) {
   const empty = log.querySelector('.empty')
   if (empty) empty.remove()      // 第一句话一来，开头那段提示就该让位
   const div = document.createElement('div')
   div.className = 'turn ' + who
-  div.textContent = text
+  const body = document.createElement('div')
+  body.className = 'turn-text'
+  body.textContent = text
+  div.appendChild(body)
+  // 只有助手的回答带复制按钮：用户自己发的不用复制，"正在输入"没有内容可复制，
+  // 错误提示也不该被粘到别处去。
+  if (who === 'it') addCopyButton(div, body, text)
   log.appendChild(div)
   log.scrollTop = log.scrollHeight
   return div
