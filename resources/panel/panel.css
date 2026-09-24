@@ -48,24 +48,76 @@ header {
   cursor: pointer;
   -webkit-app-region: drag;          /* 球本身可拖动 */
 
-  /* **没有底色**：吉祥物那张图自带透明背景（实测四角 alpha=0），
-     所以这里是"一只浮在桌面上的猫"，不是"一个盘子托着猫"。
+  /* 球本身**没有底色**：下面那层 `.glow` 才是"背景"，上面 `.face` 是吉祥物。
      图上按内容包围盒裁过（源图 1024² 里内容只占 600x689），自带 12% 余量，铺满即可。 */
+  background-color: transparent;
+
+  /* 投影跟着猫的轮廓走（不是跟着那个不存在的圆），透明主体靠它跟浅色壁纸分开 */
+  filter: drop-shadow(0 6px 12px rgba(0, 0, 0, .50));
+  transition: transform .12s ease, filter .12s ease;
+}
+#ball > span { position: absolute; inset: 0; border-radius: 50%; pointer-events: none; }
+
+/* 会动的那层背景。做成**软边光晕**而不是硬边圆盘：硬边就又回到"一只盘子"了，
+   而软边在浅底与深底上都只是"猫身后的一团光"，不需要再靠一圈亮环去定边界。 */
+#ball .glow {
+  background:
+    radial-gradient(circle at 50% 46%,
+      hsl(var(--hue) 82% 58% / .95) 0%,
+      hsl(calc(var(--hue) + 26) 78% 46% / .78) 38%,
+      hsl(calc(var(--hue) + 44) 70% 38% / .32) 62%,
+      transparent 78%);
+  animation: drift 26s linear infinite;
+}
+
+/* 上面那层：吉祥物本体，形状不变 */
+#ball .face {
   background-image: url('/panel/mascot.png');
   background-size: 100%;
   background-position: center;
   background-repeat: no-repeat;
-  background-color: transparent;
+}
 
-  /* 圆环与内阴影都撤了：没有底的时候，圆环只会画出一个**悬空的圆圈**，
-     内阴影会在一圈空处留下脏边。让透明主体跟浅色壁纸分开改靠投影——
-     它跟着猫的轮廓走，而不是跟着那个已经不存在的圆。 */
-  filter: drop-shadow(0 6px 12px rgba(0, 0, 0, .50));
-  transition: transform .12s ease, filter .12s ease;
+/* 色相缓慢流动 —— 这就是"会变动的背景"。26 秒一圈：够慢，不会在余光里晃。
+   （慢到只有盯着看才注意到，这才是常驻小球该有的动静） */
+@property --hue { syntax: '<number>'; inherits: true; initial-value: 224; }
+#ball { --hue: 224; }
+@keyframes drift {
+  0%   { --hue: 224; }        /* 蓝 */
+  25%  { --hue: 268; }        /* 紫 */
+  50%  { --hue: 316; }        /* 品红 */
+  75%  { --hue: 190; }        /* 青 */
+  100% { --hue: 224; }
 }
-#ball:hover {
-  filter: drop-shadow(0 8px 16px rgba(0, 0, 0, .58)) brightness(1.08);
+
+/* ---------------------------------------------------------------- 状态 */
+
+/* 正在想事情：光晕变亮、转得快，并且轻轻呼吸。
+   这一条的用处不只是好看——球收起来的时候，此前**完全看不出它在干活**。 */
+body.busy #ball .glow {
+  /* 8 秒转一圈色相（不是 3 秒）：呼吸的节奏交给 1.5s，色相再快就变成闪了 */
+  animation: drift 8s linear infinite, breathe 1.5s ease-in-out infinite;
 }
+@keyframes breathe {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.08); opacity: .82; }
+}
+
+/* 连不上 / 出错：换成暖色并停住流动——不动的东西才会被注意到 */
+body.offline #ball { --hue: 12; }
+body.offline #ball .glow { animation: none; opacity: .9; }
+
+/* 今天的额度用完了：琥珀色 */
+body.quota #ball { --hue: 38; }
+body.quota #ball .glow { animation: none; opacity: .85; }
+
+/* 系统说"减少动态效果"就照办：停掉所有流动，只留静止的光晕 */
+@media (prefers-reduced-motion: reduce) {
+  #ball .glow,
+  body.busy #ball .glow { animation: none; }
+}
+
+#ball:hover { filter: drop-shadow(0 8px 16px rgba(0, 0, 0, .58)) brightness(1.08); }
 #ball:active { transform: scale(.95); }
 
 /* 球形态：把对话那一套全藏掉，页面背景透明（窗口本身也是透明的）。
@@ -77,8 +129,11 @@ body.mode-ball header,
 body.mode-ball main,
 body.mode-ball form,
 body.mode-ball footer { display: none; }
-body.mode-ball #ball { display: grid; }   /* 用 grid 才让 place-items 真的居中；
-                                            block 只是碰巧靠按钮默认的 text-align 居中 */
+/* 用 grid 才让 place-items 真的居中；block 只是碰巧靠按钮默认的 text-align 居中 */
+body.mode-ball #ball { display: grid; }
+/* 球形态下不许出现滚动条：busy 的呼吸动画会 scale(1.08)，
+   溢出的那点内容会在 76x76 的窗口里长出滚动条（实测：右侧冒出上下箭头）。 */
+body.mode-ball { overflow: hidden; }
 
 /* 对话形态（有外壳时）才显示"收起" */
 body.mode-chat #collapse { display: inline-block; }

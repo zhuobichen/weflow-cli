@@ -11,7 +11,13 @@
   <!-- 悬浮球。球面是 resources/panel/avatar.png（维护者自己的头像），
        由守护进程按白名单递过来；只在有外壳（Electron）时才显示——
        浏览器窗口给不了无边框置顶的小球。 -->
-  <button id="ball" type="button" title="第二大脑（点击展开 · 可拖动）" hidden></button>
+  <button id="ball" type="button" title="第二大脑（点击展开 · 可拖动）" hidden>
+    <!-- 两层：底下一层是会动的光晕（背景），上面一层是吉祥物。
+         分开是为了让光晕能变而猫不动——直接给 #ball 设 background 的话，
+         光晕与猫共用同一层，动不了其中一个。 -->
+    <span class="glow" aria-hidden="true"></span>
+    <span class="face" aria-hidden="true"></span>
+  </button>
 
   <header>
     <span class="brand">第二大脑</span>

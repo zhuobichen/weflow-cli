@@ -72,6 +72,18 @@ function renderEmptyState() {
   log.appendChild(box)
 }
 
+/**
+ * 球的背景跟着状态走（CSS 里 `body.busy/.offline/.quota #ball .glow`）。
+ *
+ * 集中在一个函数里改：之前这些类名散在 ask()/refreshStatus() 各处的话，
+ * 迟早有一条分支忘了摘掉 `busy`，球就一直亮着——那种"看起来在忙其实没在忙"比不显示更糟。
+ * 传进来的每一项都**整体替换**，不做增量。
+ */
+function setBallState(state) {
+  document.body.classList.remove('busy', 'offline', 'quota')
+  if (state) document.body.classList.add(state)
+}
+
 /** 服务端的状态码 → 一句人话。**别把 code 原样丢给用户** */
 function explain(code, fallback) {
   switch (code) {
@@ -96,6 +108,8 @@ async function refreshStatus() {
     const s = await res.json()
     const mode = s.channelActive ? '微信 + 本机' : '仅本机入口'
     statusEl.textContent = mode + '｜今日 ' + s.quota.used + '/' + s.quota.limit
+    // 额度用尽是"今天不能再用"，值得在球上看得出来（琥珀），但**不是**错误
+    if (s.quota.used >= s.quota.limit) setBallState('quota')
 
     // 记忆桶那句话说清"是不是同一个大脑"——这是用户最容易误解的地方
     foot.textContent = ''
@@ -112,6 +126,7 @@ async function refreshStatus() {
     }
   } catch {
     statusEl.textContent = '连不上本机入口'
+    setBallState('offline')     // 暖色且停住流动：不动的东西才会被注意到
   }
 }
 
@@ -120,6 +135,8 @@ async function ask(text) {
   const pending = addTurn('it pending', '…')
   input.disabled = true
   send.disabled = true
+  // 球收起来的时候，此前完全看不出它在干活——这是这条状态最主要的用处
+  setBallState('busy')
 
   try {
     const res = await fetch('/api/ask', {
@@ -145,6 +162,8 @@ async function ask(text) {
   } finally {
     input.disabled = false
     send.disabled = false
+    setBallState(null)
+    void refreshStatus()      // 顺手把用量与配额状态刷新（额度用尽会换成琥珀色）
     input.focus()
   }
 }

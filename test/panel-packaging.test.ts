@@ -267,3 +267,45 @@ test('球是**透明底**的，靠投影分离 —— 这两件事要一起改�
 // 托盘图标的**像素**断言（盘到底在不在、角是不是透的）在 `test/panel-tray-pixels.test.ts`，
 // 那边解了一次 PNG 才敢说"盘在"。这里不再重复断言尺寸与体积——同一件事两处断言，
 // 其中一处总会更弱，而更弱的那条会让人以为已经被保住了。
+
+test('球是会动的背景：两层结构 + CSS 动画 + 三个状态', () => {
+  // 用户要的"可以变动的背景"。做成两层（`.glow` 背景 / `.face` 吉祥物）而不是给 #ball
+  // 直接设 background：那样光晕和猫共用一层，动不了其中一个。
+  const html = code('index.html')
+  assert.match(html, /class="glow"/, '背景那层')
+  assert.match(html, /class="face"/, '吉祥物那层')
+  const css = code('panel.css')
+  assert.match(css, /#ball \.glow/, '光晕要能单独做动画')
+  assert.match(css, /animation:\s*drift/, '空闲时缓慢流动')
+  for (const state of ['busy', 'offline', 'quota']) {
+    assert.ok(new RegExp(`body\.${state} #ball`).test(css), `缺状态样式：${state}`)
+  }
+  assert.match(css, /@keyframes drift/)
+  assert.match(css, /@property --hue/, '色相要能被动画驱动')
+})
+
+test('"减少动态效果"要照办 —— 常驻小球不能对着系统设置跳舞', () => {
+  const css = code('panel.css')
+  assert.match(css, /@media \(prefers-reduced-motion: reduce\)/)
+  const block = css.slice(css.indexOf('@media (prefers-reduced-motion: reduce)'))
+  assert.match(block.slice(0, 240), /animation:\s*none/, '那一段里要真的停掉动画')
+})
+
+test('状态类只在一处改 —— 散着写迟早有一条分支忘了摘掉 busy', () => {
+  // 忘了摘的后果是球一直亮着"我在忙"，那比不显示更糟。
+  const renderer = code('renderer.js')
+  assert.match(renderer, /^function setBallState/m, '要有集中入口')
+  assert.match(renderer, /^  setBallState\('busy'\)$/m, '干活时要挂上')
+  assert.match(renderer, /^    setBallState\(null\)$/m, '结束时（含出错）要摘掉')
+  assert.match(renderer, /^\s+setBallState\('offline'\)/m)
+  // 反向：**这三个状态类只许在 setBallState 里被 classList 碰**。
+  // 别处直接 classList.add('busy') 的话，"集中一处"就名存实亡了。
+  const direct = renderer.match(/classList\.(?:add|remove)\([^)]*'(?:busy|offline|quota)'/g) ?? []
+  assert.equal(direct.length, 1, `这三个类只该在 setBallState 里被直接增删，实际 ${direct.length} 处`)
+})
+
+test('球形态下不许出现滚动条 —— busy 的 scale(1.08) 会溢出 76x76 的窗口', () => {
+  // 这条是真看到的：截图里右侧冒出了上下箭头。76x76 的窗口里长出滚动条极其显眼。
+  const css = code('panel.css')
+  assert.match(css, /body\.mode-ball \{[^}]*overflow: hidden/, '球形态要 overflow: hidden')
+})

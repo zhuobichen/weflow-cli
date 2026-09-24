@@ -28,6 +28,20 @@ All notable user-facing changes are recorded here. This project follows [Semanti
   taskbar there is no drop-shadow to lean on, so the disc is what keeps the outline legible. `nativeImage`
   cannot composite, so that one is generated with a canvas and committed.
 
+- **The ball's background moves, and it says what the assistant is doing.** Behind the mascot there is now
+  a soft-edged glow (deliberately not a hard disc - a hard edge is "sitting on a plate" again) whose hue
+  drifts on a 26-second loop, slow enough that it is only noticeable if you look at it. Its **state**
+  changes are the useful half: while a turn is in flight it brightens and breathes, and when the daemon
+  cannot be reached it goes warm and **stops moving** (a still thing is what gets noticed). A collapsed ball
+  previously gave no sign at all that it was working. `prefers-reduced-motion` turns all of it off, and the
+  three state classes are set from one function so a branch cannot forget to clear `busy` and leave the ball
+  glowing "working" forever - a test asserts that, and that no other code touches those class names.
+
+  Two details that came out of looking at the renders rather than the code: the breathing animation's
+  `scale(1.08)` overflowed the 76x76 window and produced a **scrollbar** inside the ball (visible as
+  up/down arrows in a screenshot), so ball mode is `overflow: hidden`; and the glow is a separate layer from
+  the mascot so the background can animate while the cat stays put.
+
 - **The panel window no longer opens to an empty void.** It used to show nothing but black until you
   typed, which says neither what the assistant can do nor that it is alive. It now opens with a
   one-line explanation (including that the database never leaves the machine) and four **clickable**
