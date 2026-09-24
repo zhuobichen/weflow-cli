@@ -48,7 +48,10 @@ header {
   cursor: pointer;
   -webkit-app-region: drag;          /* 球本身可拖动 */
 
-  /* 球面就是那张图（圆裁）。后面的渐变只是**取不到图时的兜底**，不该看见它 */
+  /* 球面就是那张图（圆裁）。后面的底色只是**取不到图时的兜底**，不该看见它。
+     源图 256px：球是 76 逻辑像素，256 够撑到 337% 显示缩放（150% 下是 114 物理像素，
+     留了 2.2 倍余量）。144px 那档只撑到 189%，本机 150% 已经贴着边；460px 要 197KB，
+     换来的余量没人用得到。 */
   background-image: url('/panel/avatar.png');
   background-size: cover;
   background-position: center;
@@ -112,6 +115,31 @@ main {
 .turn.sys { align-self: center; color: var(--dim); font-size: 12px; text-align: center; }
 .turn.err { align-self: stretch; border: 1px solid var(--err); color: var(--err); padding: 7px 11px; border-radius: 10px; }
 .turn.pending { color: var(--dim); font-style: italic; }
+
+/* ---------------------------------------------------------------- 还没聊过时的开头 */
+
+.empty {
+  margin: auto 0;                 /* 垂直居中一点，不要贴着顶 */
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 2px;
+}
+.empty-title { font-weight: 600; }
+.empty-sub { color: var(--dim); font-size: 12px; margin-bottom: 6px; }
+
+/* 例子做成扁平的胶囊按钮：全局 button 那套（蓝底、大内边距）在这儿太重了 */
+.chip {
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--text);
+  font-weight: 400;
+  font-size: 13px;
+  padding: 5px 12px;
+  border-radius: 999px;
+}
+.chip:hover { border-color: var(--accent); color: #fff; }
 
 form {
   display: flex;

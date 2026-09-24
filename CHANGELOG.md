@@ -15,7 +15,16 @@ All notable user-facing changes are recorded here. This project follows [Semanti
   fetched (a missing avatar should not leave a white hole), and the inline SVG mark it used to carry is
   gone - emoji and font glyphs render differently on every machine, which is exactly what "not the same
   mascot" means. The npm package therefore ships a personal image; it is the maintainer's own public
-  GitHub avatar, chosen deliberately.
+  GitHub avatar, chosen deliberately. The bundled copy is the **256px** rendition: the ball is 76
+  logical pixels, and 256 covers up to 337% display scaling (this machine's 150% is already close to
+  the edge of the 144px one), while 460px costs 197KB for headroom nobody uses.
+
+- **The panel window no longer opens to an empty void.** It used to show nothing but black until you
+  typed, which says neither what the assistant can do nor that it is alive. It now opens with a
+  one-line explanation (including that the database never leaves the machine) and four **clickable**
+  example questions that submit through the same path as typing. Verified end to end by clicking one
+  through the DevTools protocol: the example block gives way, the question becomes a real turn, and
+  the answer comes back through the shared quota counter (`[panel] 9字 → 已回复 (427字, 今日 1/100)`).
 
 - **A local panel: talk to the assistant without logging into the WeChat channel.** Until now the only
   way in was the WeChat Bot channel, which requires scanning a QR code - so asking one question cost a

@@ -20,12 +20,56 @@ const foot = document.getElementById('foot')
 
 /** 把一条消息加进对话区。`who` 决定样式，**内容永远走 textContent** */
 function addTurn(who, text) {
+  const empty = log.querySelector('.empty')
+  if (empty) empty.remove()      // 第一句话一来，开头那段提示就该让位
   const div = document.createElement('div')
   div.className = 'turn ' + who
   div.textContent = text
   log.appendChild(div)
   log.scrollTop = log.scrollHeight
   return div
+}
+
+/**
+ * 还没聊过时的开头。**空白是这里最糟的状态**：第一次打开的人看到一整片黑，
+ * 既不知道它能干什么，也看不出它是活的（下面没有正在输入之类的动静）。
+ * 例子做成可点的按钮——点一下就是真的问一句，走的还是同一条提交路径。
+ */
+const EXAMPLES = [
+  '我最近都在忙什么？',
+  '总结我和某某的聊天',
+  '收藏里有哪些 AI 文章？',
+  '我最近都在读什么？',
+]
+
+function renderEmptyState() {
+  if (log.children.length) return
+  const box = document.createElement('div')
+  box.className = 'empty'
+
+  const title = document.createElement('div')
+  title.className = 'empty-title'
+  title.textContent = '直接问就行，我会查本机数据回答'
+  box.appendChild(title)
+
+  const sub = document.createElement('div')
+  sub.className = 'empty-sub'
+  sub.textContent = '聊天、收藏、公众号、微信读书、待办都在本机，数据库不出这台机器。'
+  box.appendChild(sub)
+
+  for (const example of EXAMPLES) {
+    const chip = document.createElement('button')
+    chip.type = 'button'
+    chip.className = 'chip'
+    chip.textContent = example
+    chip.addEventListener('click', () => {
+      if (input.disabled) return          // 上一句还在飞的时候点了没用，就不该有反应
+      input.value = example
+      document.getElementById('composer').requestSubmit()
+    })
+    box.appendChild(chip)
+  }
+  log.appendChild(box)
 }
 
 /** 服务端的状态码 → 一句人话。**别把 code 原样丢给用户** */
@@ -161,6 +205,7 @@ if (hasShell) {
   foot.appendChild(note)
 }
 
+renderEmptyState()
 void refreshStatus()
 // 每 30 秒刷一次状态：守护进程可能被停掉，界面不该一直显示旧数字
 setInterval(refreshStatus, 30000)

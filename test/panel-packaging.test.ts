@@ -208,3 +208,28 @@ test('页面里不再有 emoji 图标 —— 字形随字体变，跟球面材�
   const html = code('index.html')
   assert.doesNotMatch(html, /\p{Extended_Pictographic}/u, 'index.html 里不该再有 emoji')
 })
+
+test('球面源图要够清晰：球是 76 逻辑像素，源图按缩放留了余量', () => {
+  // 144px 只能撑到 189% 显示缩放，本机 150% 已经贴着边；256px 撑到 337%。
+  // 这条挡的是"顺手换回小图"——那在 1x 屏幕上完全看不出来，只在别人的 4K 上糊。
+  const buf = readFileSync(join(PANEL, 'avatar.png'))
+  // PNG 的 IHDR 在固定偏移：宽高各 4 字节大端
+  assert.equal(buf.subarray(1, 4).toString('latin1'), 'PNG', '应当是 PNG')
+  const width = buf.readUInt32BE(16)
+  const height = buf.readUInt32BE(20)
+  assert.ok(width >= 256 && height >= 256, `源图只有 ${width}x${height}，球是 76 逻辑像素，至少要 256`)
+  assert.ok(buf.length < 200 * 1024, `源图 ${Math.round(buf.length / 1024)}KB 偏大`)
+})
+
+test('对话窗有开头，不是一片空白', () => {
+  const renderer = code('renderer.js')
+  // 断言**调用**而不是标识符：`renderEmptyState` 这个名字在定义处就存在，
+  // 只匹配名字的话，把调用删掉断言照样绿——那是「测了个寂寞」。
+  assert.match(renderer, /^renderEmptyState\(\)$/m, '要有空状态，而且要真的被调用')
+  assert.match(renderer, /EXAMPLES/, '要给可点的例子')
+  // 例子必须是**可点的**，否则只是换了种方式不说话
+  assert.match(renderer, /\.chip|className = 'chip'/, '例子要做成按钮')
+  // 而且仍然守 textContent 那条线（上面那条测试管 innerHTML，这里管新增代码没绕开）
+  const html = code('index.html')
+  assert.doesNotMatch(html, /empty-title|class="empty"/, '开头是脚本生成的，不该写死在 HTML 里')
+})
