@@ -1190,8 +1190,17 @@ host process with two entrances.
   authenticates **through the cookie** (visible in the daemon log as `[panel] 界面已加载（cookie）`),
   and the ball is visible on screen - confirmed by eye, because **GDI screen capture does not capture a
   transparent layered window**, so a screenshot showing nothing at that spot is a false negative.
-  Still unverified: the ball-to-chat resize, the tray menu, and the global hotkey, all of which need a
-  click.
+  The interactive paths were then driven **without** a click: over the DevTools protocol the ball was
+  really clicked (the window measured 421x560, always-on-top dropped) and collapsed again (77x76,
+  always-on-top restored); the global hotkey was verified differentially - a second Electron app
+  registering the same chord gets `false` while the panel runs and `true` once it stops, so the panel
+  genuinely holds it. Driving it that way found **two real bugs that a screenshot could never have
+  shown**: `setMode` locked the window non-resizable *before* resizing it, and Windows ignores
+  `setSize` on a non-resizable window, so collapsing left the window at chat size (a giant ball); and
+  the `ready-to-show` listener was attached *after* `await loadURL`, so when that event fired during
+  the load it was never replayed and the window stayed hidden - geometry and style all measured
+  correct, only `IsWindowVisible` was false. The one thing still unverified is a **click on the tray
+  menu itself**; its contents are pinned by static assertions instead.
 
 ## D-044: "You have no todos" and "todos were never extracted" are different answers
 

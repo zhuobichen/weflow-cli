@@ -37,7 +37,11 @@ All notable user-facing changes are recorded here. This project follows [Semanti
   (`npm i -g electron`, or `npm install` in a checkout - the binary is downloaded by its own install
   script) and the same command opens the ball. Verified on Windows 11 with Electron 42: 76x76, no
   caption, always-on-top, the renderer authenticates through the cookie, and the ball is visible on
-  screen. Not yet exercised: the ball-to-chat resize, the tray menu and the global hotkey.
+  screen, and the interactive paths were driven without a click (DevTools protocol for the ball-to-chat
+  resize, a differential registration test for the hotkey). Doing that found two bugs a screenshot
+  could not have shown: collapsing left the window at chat size because a non-resizable window
+  ignores `setSize` on Windows, and the window sometimes never appeared because `ready-to-show` was
+  listened for only after the load. Only a click on the tray menu itself remains untested.
 
 - **The four "search" tools now name each other.** They search four different stores - chat logs,
   the knowledge base, assistant memory, and a semantic index over chats - and each description used to

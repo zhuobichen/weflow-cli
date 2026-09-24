@@ -109,3 +109,45 @@ test('端点服务只认白名单里的那几个文件名（不是把目录挂�
   // 挂目录就要处理路径穿越；这里根本不需要那个能力，所以不该出现读 URL 路径再拼文件名的写法
   assert.doesNotMatch(server, /join\([^)]*url\.pathname/, '不许拿 URL 的路径去拼文件路径')
 })
+
+test('托盘菜单的四件事都在，而且"退出并停止助手"走的是 CLI 而不是自己 kill', () => {
+  // 托盘菜单的**点击**没法在 CI 里测（要一次真点击），但它的**内容**可以钉住。
+  // 要挡的两类回归：把"退出并停止助手"这一项删掉（用户就只剩命令行可用了），
+  // 以及把它改成直接 kill pid——那条路不会清端点文件、也不会走 `assistant stop` 的收尾。
+  const main = code('main.cjs')
+  assert.match(main, /menu/i, '应当是托盘菜单而不是一堆散装监听')
+  for (const label of ['显示 / 收起', '展开为对话窗', '退出面板（助手继续运行）', '退出并停止助手']) {
+    assert.ok(main.includes(label), `托盘里少了这一项：${label}`)
+  }
+  // "关窗只是收起，助手还在跑"——这个区别必须体现在界面上，不能只体现在注释里
+  assert.match(main, /isQuitting/, '关窗要走 hide 而不是 quit')
+  assert.match(main, /'assistant', 'stop'/, '停助手要经 CLI 的 assistant stop')
+  assert.match(main, /requestSingleInstanceLock/, '没有单实例锁就会有两个球、两个托盘')
+  assert.match(main, /globalShortcut\.register/, '全局快捷键')
+  assert.match(main, /if \(!ok\)/, '快捷键注册失败要报出来（它失败时是静默的）')
+})
+
+test('窗口尺寸切换要先解锁再改尺寸 —— Windows 上不可调整大小的窗口会忽略 setSize', () => {
+  // 这条是真 bug 的回归测试：第一版先 setResizable(false) 再 setSize(76,76)，
+  // 结果"收起"以后窗口停在对话窗的大小（实测 421x561），屏幕上就是一个巨大的球。
+  const main = code('main.cjs')
+  const fn = main.slice(main.indexOf('function setMode'), main.indexOf('function toggleVisible'))
+  assert.ok(fn.length > 0, '应当能找到 setMode')
+  const unlock = fn.indexOf('setResizable(true)')
+  const shrink = fn.indexOf('setSize(BALL_SIZE')
+  const lock = fn.lastIndexOf('setResizable(false)')
+  assert.ok(unlock >= 0 && shrink >= 0 && lock >= 0, '三处都要在')
+  assert.ok(unlock < shrink, '先解锁再改尺寸')
+  assert.ok(shrink < lock, '改完尺寸最后才锁上')
+})
+
+test('ready-to-show 的监听要挂在 loadURL 之前 —— 它不会重放', () => {
+  // 第二个真 bug 的回归测试：第一版在 `await loadURL` 之后才挂 `ready-to-show`，
+  // 而那个事件在加载过程中就可能已经触发过、且不会重放，于是窗口永远不显示
+  // （实测：76x76、无边框、置顶全都正常，只有 vis=False——光看几何看不出来）。
+  const main = code('main.cjs')
+  const listen = main.indexOf("once('ready-to-show'")
+  const load = main.indexOf('await win.loadURL')
+  assert.ok(listen >= 0 && load >= 0, '两处都要在')
+  assert.ok(listen < load, 'ready-to-show 必须挂在 loadURL 之前')
+})

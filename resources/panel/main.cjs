@@ -74,6 +74,12 @@ async function buildWindow() {
   })
   win.setAlwaysOnTop(true, 'floating')
 
+  // **监听要在 `loadURL` 之前挂**：`ready-to-show` 在加载过程中就可能触发（透明窗口上确实会），
+  // 而它**不会重放**——挂晚了窗口就永远不显示。第一版是 `await loadURL` 之后才挂的，
+  // 于是"有时候看得到球、有时候看不到"，而窗口的尺寸与样式全都正常（实测 `vis=False`、
+  // 76x76、无边框、置顶），光看几何完全看不出来。
+  win.once('ready-to-show', () => { if (!win.isVisible()) win.show() })
+
   const endpoint = readEndpoint()
   if (!endpoint) {
     await win.loadURL(errorPage('助手没在运行', '先在终端跑一次 weflow-cli assistant start，再打开本机面板。'))
@@ -109,20 +115,30 @@ async function buildWindow() {
     }
   })
 
-  win.once('ready-to-show', () => win.show())
+  // 兜底：`ready-to-show` 可能在我们挂上监听之前就已经触发过（透明窗口上确实会），
+  // 那时它不会重放，窗口就永远不显示。所以加载完成后再显式确认一次（幂等）。
+  if (!win.isVisible()) win.show()
 }
 
 function setMode(mode) {
   if (!win) return
   const chat = mode === 'chat'
-  win.setResizable(chat)
-  win.setSkipTaskbar(!chat)
+
+  // **顺序是有讲究的**：Windows 上不可调整大小的窗口会**忽略 `setSize`**。
+  // 第一版先 `setResizable(false)` 再 `setSize(76,76)`，结果是"收起"以后页面回到球形态、
+  // 置顶也恢复了，窗口却停在对话窗的大小（实测 421x561）——屏幕上就是一个巨大的球。
+  // 所以：先解锁 → 改尺寸 → 最后再锁上。
+  win.setResizable(true)
   if (chat) {
     win.setSize(CHAT_SIZE.width, CHAT_SIZE.height)
     win.setAlwaysOnTop(false)     // 对话时不必压着别的窗口
+    win.setSkipTaskbar(false)
+    win.setResizable(true)        // 对话窗允许用户自己拉大小
   } else {
     win.setSize(BALL_SIZE, BALL_SIZE)
     win.setAlwaysOnTop(true, 'floating')
+    win.setSkipTaskbar(true)
+    win.setResizable(false)
   }
   return { mode: chat ? 'chat' : 'ball' }
 }
