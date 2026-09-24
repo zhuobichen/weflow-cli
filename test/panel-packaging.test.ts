@@ -110,21 +110,14 @@ test('端点服务只认白名单里的那几个文件名（不是把目录挂�
   assert.doesNotMatch(server, /join\([^)]*url\.pathname/, '不许拿 URL 的路径去拼文件路径')
 })
 
-test('托盘菜单的四件事都在，而且"退出并停止助手"走的是 CLI 而不是自己 kill', () => {
-  // 托盘菜单的**点击**没法在 CI 里测（要一次真点击），但它的**内容**可以钉住。
-  // 要挡的两类回归：把"退出并停止助手"这一项删掉（用户就只剩命令行可用了），
-  // 以及把它改成直接 kill pid——那条路不会清端点文件、也不会走 `assistant stop` 的收尾。
+test('主进程：单实例锁、快捷键注册要检查返回值、关窗只是隐藏', () => {
+  // 菜单的**内容**归 `test/panel-tray-menu.test.ts` 管（那边能真的调回调）。
+  // 这条只管 main.cjs 自己的三件事，避免两处重复断言同一件事、其中一处还更弱。
   const main = code('main.cjs')
-  assert.match(main, /menu/i, '应当是托盘菜单而不是一堆散装监听')
-  for (const label of ['显示 / 收起', '展开为对话窗', '退出面板（助手继续运行）', '退出并停止助手']) {
-    assert.ok(main.includes(label), `托盘里少了这一项：${label}`)
-  }
-  // "关窗只是收起，助手还在跑"——这个区别必须体现在界面上，不能只体现在注释里
-  assert.match(main, /isQuitting/, '关窗要走 hide 而不是 quit')
-  assert.match(main, /'assistant', 'stop'/, '停助手要经 CLI 的 assistant stop')
   assert.match(main, /requestSingleInstanceLock/, '没有单实例锁就会有两个球、两个托盘')
   assert.match(main, /globalShortcut\.register/, '全局快捷键')
-  assert.match(main, /if \(!ok\)/, '快捷键注册失败要报出来（它失败时是静默的）')
+  assert.match(main, /if \(!ok\)/, '快捷键注册失败是静默的（只返回 false），必须报出来')
+  assert.match(main, /isQuitting/, '关窗要走 hide 而不是 quit：助手还在后台跑')
 })
 
 test('窗口尺寸切换要先解锁再改尺寸 —— Windows 上不可调整大小的窗口会忽略 setSize', () => {

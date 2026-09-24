@@ -17,6 +17,7 @@ const { join } = require('node:path')
 const { spawn } = require('node:child_process')
 const { pathToFileURL } = require('node:url')
 const os = require('node:os')
+const { trayMenuTemplate } = require('./tray-menu.cjs')
 
 const ENDPOINT_FILE = join(os.homedir(), '.weflow-cli', 'assistant_endpoint.json')
 const COOKIE_NAME = 'weflow_panel'
@@ -188,25 +189,20 @@ function buildTray() {
     return
   }
   tray.setToolTip('第二大脑')
-  tray.setContextMenu(Menu.buildFromTemplate([
-    { label: '显示 / 收起', click: () => toggleVisible() },
-    { label: '展开为对话窗', click: () => { win?.show(); setMode('chat'); win?.webContents.send('panel:mode', 'chat') } },
-    { type: 'separator' },
-    {
-      label: '退出面板（助手继续运行）',
-      click: () => { app.isQuitting = true; app.quit() },
+  // 菜单的**内容**在 `tray-menu.cjs` 里（纯数据、不 require electron），所以它能被 CI 直接测；
+  // 这里只负责把真实动作接上去。
+  tray.setContextMenu(Menu.buildFromTemplate(trayMenuTemplate({
+    toggleVisible,
+    expandToChat: () => { win?.show(); setMode('chat'); win?.webContents.send('panel:mode', 'chat') },
+    quitPanel: () => { app.isQuitting = true; app.quit() },
+    quitAndStopAssistant: () => {
+      app.isQuitting = true
+      // 走 CLI 而不是自己 kill：pid 文件与端点文件的清理都在那儿（见 spawnCli 的注释）。
+      // **先起进程再退出**：`app.quit()` 之后本进程就没机会 spawn 了。
+      spawnCli(['assistant', 'stop', '--yes', '--json'])
+      app.quit()
     },
-    {
-      label: '退出并停止助手',
-      click: () => {
-        app.isQuitting = true
-        // 走 CLI 而不是自己 kill：pid 文件与端点文件的清理都在那儿（见 spawnCli 的注释）。
-        // **先起进程再退出**：`app.quit()` 之后本进程就没机会 spawn 了。
-        spawnCli(['assistant', 'stop', '--yes', '--json'])
-        app.quit()
-      },
-    },
-  ]))
+  })))
   tray.on('click', () => toggleVisible())
 }
 

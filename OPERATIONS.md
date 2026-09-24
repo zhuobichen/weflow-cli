@@ -547,6 +547,40 @@ weflow-cli daily-server --date YYYY-MM-DD --open
 weflow-cli daily-stats --days 30 --limit 30
 ```
 
+### 让它每天自己跑（日报不会自己发生）
+
+**没有任何地方给日报排期，它就不会跑**——这是"日报怎么好几天没更新"最常见的答案。
+先确认流水线本身是好的（只读、不写盘、不调 AI）：
+
+```powershell
+weflow-cli daily --dry-run --json     # 看它读到多少篇、准备处理哪一天
+```
+
+正常会打印当天扫到的文章数与一个 `{"success":true,"dryRun":true,...}`。读到几百篇就说明
+读取没问题，缺的只是一个触发。交给计划任务（与「WeFlow Health Check」同一套做法，
+不依赖任何编辑器或会话开着）：
+
+```powershell
+schtasks /create /tn "WeFlow Daily" ^
+  /tr "weflow-cli daily --yes" ^
+  /sc daily /st 08:20
+```
+
+- 查看：`Get-ScheduledTask -TaskName 'WeFlow Daily'`
+- 手动跑一次：`Start-ScheduledTask -TaskName 'WeFlow Daily'`
+- 上次结果：`schtasks /query /tn "WeFlow Daily" /fo LIST /v`
+
+几点要事先知道：
+
+- **`--yes` 不能省**：机器模式下没有它就会停在确认门上（这是有意的——日报会调 AI、会写文件）。
+- **会花钱**：默认跑 AI（摘要/标签/简报）。想让它不出网、不花钱就用
+  `weflow-cli daily --yes --no-ai`；只要主题与相关度、不要摘要可用 `--no-summary`。
+- **没跑成留下的空目录不等于跑过了**：一个只有目录、没有 `README.md` / `.articles.json` /
+  `index.html` 的日期**不算完成**，再跑一次不带日期的 `daily` 会先把它补上（D-011）。
+  所以看到 `output/biz-daily/2026-09-22/` 这种空目录时，处理办法就是再跑一次，
+  不需要手工删。
+- **别把触发条件设成"上次成功才跑"**：那样第一次失败之后就再也不会被触发了。
+
 ## 6. AI 和助手
 
 日报关闭 AI 不会自动关闭其他命令的 AI。报告、RAG、助手和证据线索分析分别按命令参数和配置决定是否调用模型。云端分析前应确认输入范围、供应商和隐私设置；优先使用本地模型处理聊天正文。
