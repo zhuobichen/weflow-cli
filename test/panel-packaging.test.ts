@@ -39,9 +39,9 @@ function code(name: string): string {
 
 test('面板要用的五个文件都在（少一个用户装上就缺）', () => {
   // 球面那张图与托盘图标**共用同一个文件**（托盘由 nativeImage 现算），
-  // 所以这里只要 avatar.png 在，不该再有 tray.png。
+  // 所以这里只要 mascot.png 在，不该再有 tray.png。
   for (const name of ['index.html', 'renderer.js', 'panel.css', 'main.cjs', 'preload.cjs',
-                      'ball-position.cjs', 'tray-menu.cjs', 'avatar.png', 'package.json']) {
+                      'ball-position.cjs', 'tray-menu.cjs', 'mascot.png', 'package.json']) {
     assert.ok(existsSync(join(PANEL, name)), `缺文件: resources/panel/${name}`)
   }
 })
@@ -185,10 +185,10 @@ test('位置算术只有一份实现（在 ball-position.cjs 里），main.cjs �
   assert.doesNotMatch(main, /Math\.max\(area\.x/, '夹取的算术不该在这儿重复')
 })
 
-test('球面与托盘图标共用同一个头像文件，且托盘是现算的', () => {
+test('球面与托盘图标共用同一张吉祥物图，且托盘是现算的', () => {
   // 两处各存一张图标，改了球忘了托盘是迟早的事——这张图是用户自己的吉祥物，本来就该一致。
   const css = code('panel.css')
-  assert.match(css, /url\('\/panel\/avatar\.png'\)/, '球面用头像')
+  assert.match(css, /url\('\/panel\/mascot\.png'\)/, '球面用吉祥物')
   assert.match(css, /background-color:/, '要有兜底色：图取不到时不该是一块白')
   const main = code('main.cjs')
   assert.match(main, /nativeImage\.createFromPath/, '托盘从同一个文件现算')
@@ -198,7 +198,7 @@ test('球面与托盘图标共用同一个头像文件，且托盘是现算的',
 
 test('头像走静态白名单，且带了正确的 content-type', () => {
   const server = readFileSync(join(ROOT, 'src', 'panel', 'server.ts'), 'utf8')
-  assert.match(server, /'\/panel\/avatar\.png': 'avatar\.png'/, '白名单里要有它')
+  assert.match(server, /'\/panel\/mascot\.png': 'mascot\.png'/, '白名单里要有它')
   assert.match(server, /'\.png': 'image\/png'/, 'content-type 要对')
   // 还必须是白名单，不是"凡是 /panel/ 下的文件都发"
   assert.doesNotMatch(server, /readFileSync\(join\([^)]*fileName\)\)/, '不许按请求路径直接读文件')
@@ -212,7 +212,7 @@ test('页面里不再有 emoji 图标 —— 字形随字体变，跟球面材�
 test('球面源图要够清晰：球是 76 逻辑像素，源图按缩放留了余量', () => {
   // 144px 只能撑到 189% 显示缩放，本机 150% 已经贴着边；256px 撑到 337%。
   // 这条挡的是"顺手换回小图"——那在 1x 屏幕上完全看不出来，只在别人的 4K 上糊。
-  const buf = readFileSync(join(PANEL, 'avatar.png'))
+  const buf = readFileSync(join(PANEL, 'mascot.png'))
   // PNG 的 IHDR 在固定偏移：宽高各 4 字节大端
   assert.equal(buf.subarray(1, 4).toString('latin1'), 'PNG', '应当是 PNG')
   const width = buf.readUInt32BE(16)
@@ -232,4 +232,14 @@ test('对话窗有开头，不是一片空白', () => {
   // 而且仍然守 textContent 那条线（上面那条测试管 innerHTML，这里管新增代码没绕开）
   const html = code('index.html')
   assert.doesNotMatch(html, /empty-title|class="empty"/, '开头是脚本生成的，不该写死在 HTML 里')
+})
+
+test('吉祥物是从仓库根那张原图派生的：按内容包围盒裁过，不是原图直接塞进来', () => {
+  // 根目录的 `weflow-cli图标.png` 是 1024x1024、1.37MB，而**内容只占 600x689**——
+  // 四周全是留白（直接用会在球里显得很小）。所以面板这张是按 alpha 包围盒裁过、缩到 256 的派生件。
+  // 这条挡的是"有人图省事把原图拷进来"：那样球上的吉祥物会缩成一小团，而 1x 屏幕上不容易看出是裁切问题。
+  const buf = readFileSync(join(PANEL, 'mascot.png'))
+  const width = buf.readUInt32BE(16)
+  assert.equal(width, 256, '派生件固定 256，够撑到 337% 显示缩放')
+  assert.ok(buf.length < 120 * 1024, `派生件 ${Math.round(buf.length / 1024)}KB，别把 1.37MB 的原图塞进来`)
 })

@@ -266,8 +266,8 @@ function buildTray() {
   try {
     // 托盘图标从**同一个头像文件**现算，而不是再维护一张 tray.png：
     // 两处各存一份的话，改了球忘了托盘是迟早的事（这张图是用户自己的吉祥物，本来就该一致）。
-    const icon = nativeImage.createFromPath(join(__dirname, 'avatar.png')).resize({ width: 32, height: 32 })
-    if (icon.isEmpty()) throw new Error('头像没读出来（avatar.png 缺失或损坏）')
+    const icon = nativeImage.createFromPath(join(__dirname, 'mascot.png')).resize({ width: 32, height: 32 })
+    if (icon.isEmpty()) throw new Error('吉祥物图没读出来（mascot.png 缺失或损坏）')
     tray = new Tray(icon)
   } catch (error) {
     // 图标缺失不能静默：托盘没了，用户就只剩快捷键和窗口本身

@@ -48,20 +48,16 @@ header {
   cursor: pointer;
   -webkit-app-region: drag;          /* 球本身可拖动 */
 
-  /* 球面就是那张图（圆裁）。后面的底色只是**取不到图时的兜底**，不该看见它。
-     源图 256px：球是 76 逻辑像素，256 够撑到 337% 显示缩放（150% 下是 114 物理像素，
-     留了 2.2 倍余量）。144px 那档只撑到 189%，本机 150% 已经贴着边；460px 要 197KB，
-     换来的余量没人用得到。 */
-  background-image: url('/panel/avatar.png');
-  background-size: cover;
+  /* 吉祥物那张图**背景是透明的**（实测四角 alpha=0，只有一层很淡的暗晕），
+     所以"球"其实是这样来的：一个深色圆盘 + 圆裁的那张图。
+     底色必须偏暗——它自带暗晕，配亮底会像贴纸；配深底才连成一体。 */
+  background-image: url('/panel/mascot.png');
+  /* 图已经按内容的包围盒裁过（源图 1024 里内容只占 600x689，四周全是留白），
+     自带 12% 余量，所以这里铺满即可 */
+  background-size: 100%;
   background-position: center;
-  background-color: #3f74e6;
-  box-shadow:
-    /* 一圈细亮环：不加它，深色壁纸上整个球会糊成一团看不出边界 */
-    inset 0 0 0 1px rgba(255, 255, 255, .28),
-    inset 0 -6px 14px rgba(6, 18, 52, .30),   /* 底部内阴影：让它还是个"球"而不是一张贴图 */
-    0 10px 22px rgba(8, 20, 54, .46),         /* 投影：浮起来 */
-    0 2px 6px rgba(8, 20, 54, .32);
+  background-repeat: no-repeat;
+  background-color: #1b1f27;
   transition: transform .12s ease, box-shadow .12s ease, filter .12s ease;
 }
 #ball:hover {

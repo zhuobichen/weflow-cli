@@ -8,16 +8,16 @@ All notable user-facing changes are recorded here. This project follows [Semanti
 
 ### Added
 
-- **The panel's ball wears the maintainer's own avatar.** `resources/panel/avatar.png` is served through
-  the panel's static whitelist and circular-cropped onto the ball, with a thin ring so it does not blend
-  into a dark wallpaper; the tray icon is derived from the same file at runtime via `nativeImage.resize`.
-  Two deliberate details: the ball keeps a **fallback background colour** for when the image cannot be
-  fetched (a missing avatar should not leave a white hole), and the inline SVG mark it used to carry is
-  gone - emoji and font glyphs render differently on every machine, which is exactly what "not the same
-  mascot" means. The npm package therefore ships a personal image; it is the maintainer's own public
-  GitHub avatar, chosen deliberately. The bundled copy is the **256px** rendition: the ball is 76
-  logical pixels, and 256 covers up to 337% display scaling (this machine's 150% is already close to
-  the edge of the 144px one), while 460px costs 197KB for headroom nobody uses.
+- **The panel's ball wears the project mascot.** `resources/panel/mascot.png` is served through the
+  panel's static whitelist and sits on a dark disc, with a thin ring so it does not blend into a dark
+  wallpaper; the tray icon is derived from the same file at runtime via `nativeImage.resize`. Three
+  things were measured rather than eyeballed: the source (`weflow-cli图标.png` at the repo root) is
+  1024x1024 but its **content occupies only 600x689** - the rest is padding - so the shipped asset is
+  cropped to the alpha bounding box and resized to 256 (41KB rather than 1.37MB), which is what makes the
+  mascot fill the ball instead of floating small inside it; and the source's background is
+  **transparent**, so the ball's disc colour is what shows through, not part of the artwork. The ball
+  keeps a fallback background colour for when the image cannot be fetched, and the inline SVG mark it
+  used to carry is gone - emoji and font glyphs render differently on every machine.
 
 - **The panel window no longer opens to an empty void.** It used to show nothing but black until you
   typed, which says neither what the assistant can do nor that it is alive. It now opens with a
