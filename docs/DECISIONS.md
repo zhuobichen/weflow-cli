@@ -1208,6 +1208,22 @@ host process with two entrances.
   shape: the daemon stops and both the pid file and the endpoint file are cleaned up. The one thing
   still unverified is a **click on the tray menu itself** - its contents are pinned by static
   assertions, and each item's effect has been exercised directly.
+- **Placement and drag were then closed too, and they were not merely untested - they were wrong.**
+  The window was created without `x`/`y`, so it landed wherever Windows put it (measured 815,418,
+  mid-left) - not "a ball in the corner". It now defaults to the primary work area's bottom-right
+  corner, **remembers where it was dragged** (`~/.weflow-cli/panel_position.json`, atomic write), and
+  falls back to the corner when the remembered spot is unreachable (a monitor was unplugged, or the
+  ball was dragged off-screen). Expanding to the chat window and collapsing back both re-fit into the
+  work area, because a 420x560 window opened at a bottom-right corner would otherwise hang off the
+  screen. Two details worth keeping: the listener is `move`, not `moved` - `moved` fires on
+  `WM_EXITSIZEMOVE`, which a programmatic move never produces (measured: the window moved and the
+  position file was not written) - and only the **ball's** position is saved, since the ball is the
+  anchor and the chat window's geometry is transient.
+  The arithmetic lives in `resources/panel/ball-position.cjs` so it can be tested in CI with
+  **synthetic monitor layouts** - negative-x second displays, a removed display, a rect larger than
+  the work area - because **this machine has one monitor and cannot produce those**. What that does
+  not cover: a real second display. The code path is exercised with synthetic coordinates; plugging
+  in a second monitor is still an unperformed experiment.
 
 ## D-044: "You have no todos" and "todos were never extracted" are different answers
 

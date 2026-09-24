@@ -158,3 +158,26 @@ test('调 CLI 必须用 `-e import()` 的写法 —— 直接把脚本路径当�
   // 反向：不许再出现"把 cli.cjs 直接放进 argv"的写法
   assert.doesNotMatch(main, /\bspawn\(process\.execPath,\s*\[[^\]]*cli\.cjs/, '不许把脚本路径直接当参数')
 })
+
+test('main.cjs 该有的函数都在（一次过宽的文本替换把它们删掉过）', () => {
+  // 这条是**为自己写的**：我用 Python 做块替换重构位置逻辑时，区间划宽了，
+  // 把 `savePosition` 与 `readSavedPosition` 一起删掉了。症状是启动即
+  // `UnhandledPromiseRejectionWarning: ReferenceError: readSavedPosition is not defined`、
+  // 窗口根本不出现——而**静态断言当时一条都不红**（它们不检查函数是否存在）。
+  // 所以这里把"这几个名字必须在"明写出来：删掉任何一个都会红。
+  const main = code('main.cjs')
+  for (const fn of ['spawnCli', 'defaultBallPosition', 'fitIntoWorkArea', 'clampToVisible',
+                    'savePosition', 'readSavedPosition', 'flushPosition', 'schedulePositionSave']) {
+    // 注意这里**不能**写成模板串里的 `\b`：那在 JS 里是退格符，不是正则的词边界，
+    // 于是断言永远匹配不上（第一版就是被 heredoc 吃掉一层反斜杠弄成这样的）。
+    assert.ok(new RegExp('function ' + fn + '\\b').test(main), `main.cjs 里少了 ${fn}()`)
+  }
+})
+
+test('位置算术只有一份实现（在 ball-position.cjs 里），main.cjs 不自己再算一遍', () => {
+  const main = code('main.cjs')
+  assert.match(main, /require\('\.\/ball-position\.cjs'\)/, '要用那个纯模块')
+  // main.cjs 只负责"问 Electron 要显示器"，不该自己出现夹取/默认位置的算术
+  assert.doesNotMatch(main, /workArea\.width - BALL_SIZE/, '默认位置的算术不该在这儿重复')
+  assert.doesNotMatch(main, /Math\.max\(area\.x/, '夹取的算术不该在这儿重复')
+})

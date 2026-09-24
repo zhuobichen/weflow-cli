@@ -46,6 +46,13 @@ All notable user-facing changes are recorded here. This project follows [Semanti
   Node mode. Only a click on the tray menu itself remains untested; each item's effect has been run
   directly.
 
+  The ball also now **sits in the bottom-right corner and stays where you drag it**. It used to open
+  wherever Windows felt like it (measured 815,418, mid-left) and forget the position on every
+  restart. The remembered spot is checked before use: if it is no longer reachable - a monitor was
+  unplugged, or the ball was dragged off-screen - it falls back to the corner instead of leaving the
+  ball somewhere invisible. Expanding to the chat window and collapsing back re-fit into the work
+  area, so a 420x560 window no longer hangs off the screen when opened from a bottom-right corner.
+
 - **The four "search" tools now name each other.** They search four different stores - chat logs,
   the knowledge base, assistant memory, and a semantic index over chats - and each description used to
   explain only what it searched, not how it differed from its siblings. `search_knowledge` did not say

@@ -11,8 +11,8 @@
  *    相对地址。页面脚本永远拿不到它，但它照常能发 `/api/...` 请求。
  * 3. **不加载任何远程内容，不许导航**。窗口里显示的是助手回复，而回复里有用户的聊天内容。
  */
-const { app, BrowserWindow, Tray, Menu, globalShortcut, ipcMain, session, shell } = require('electron')
-const { readFileSync, existsSync } = require('node:fs')
+const { app, BrowserWindow, Tray, Menu, globalShortcut, ipcMain, session, shell, screen } = require('electron')
+const { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync } = require('node:fs')
 const { join } = require('node:path')
 const { spawn } = require('node:child_process')
 const { pathToFileURL } = require('node:url')
@@ -20,12 +20,16 @@ const os = require('node:os')
 const { trayMenuTemplate } = require('./tray-menu.cjs')
 
 const ENDPOINT_FILE = join(os.homedir(), '.weflow-cli', 'assistant_endpoint.json')
+const POSITION_FILE = join(os.homedir(), '.weflow-cli', 'panel_position.json')
 const COOKIE_NAME = 'weflow_panel'
 const BALL_SIZE = 76
 const CHAT_SIZE = { width: 420, height: 560 }
+/** 球离屏幕边缘留多少：贴死边缘在 Windows 上会跟任务栏/贴边功能打架 */
+const EDGE_MARGIN = 24
 
 let win = null
 let tray = null
+let ballMode = true
 let shortCircuitFailures = 0
 
 /**
@@ -56,6 +60,69 @@ function spawnCli(cliArgs) {
   }
 }
 
+// 位置算术在 `ball-position.cjs`（纯函数、能被 CI 用合成布局测）；
+// 这里只负责"问 Electron 要显示器列表"，然后把真实的显示器喂给它。
+const { defaultBallPosition: defaultBall, clampInto, resolveStartPosition } = require('./ball-position.cjs')
+
+function workAreas() { return screen.getAllDisplays().map((d) => d.workArea) }
+function primaryWorkArea() { return screen.getPrimaryDisplay().workArea }
+
+/** 小球该在哪儿。**默认放右下角**——从前不给 `x/y`，于是它落在 Windows 顺手给的位置
+ * （本机实测 815,418，屏幕中偏左），那不叫"屏幕角落一个球"。 */
+function defaultBallPosition() { return defaultBall(primaryWorkArea(), BALL_SIZE, EDGE_MARGIN) }
+
+/** 把一个矩形挪进它所在那块屏的可见区域（不缩尺寸，只挪）。
+ * 展开成对话窗时要用：球在右下角，直接按球的位置铺开一个 420x560 的窗会有一半在屏幕外。 */
+function fitIntoWorkArea(x, y, width, height) {
+  return clampInto(x, y, width, screen.getDisplayNearestPoint({ x, y }).workArea)
+}
+
+/** 记住的位置还能不能用（不可达就回默认角落） */
+function clampToVisible(pos) {
+  return resolveStartPosition(pos, workAreas(), primaryWorkArea(), BALL_SIZE, EDGE_MARGIN)
+}
+
+/**
+ * 位置落盘（原子写：先写 `.tmp` 再改名，同 `configService.save()` 的手法）。
+ * 记不住位置不是故障——下次回默认角落就是了，所以失败不抛。
+ */
+function savePosition(x, y) {
+  if (!Number.isInteger(x) || !Number.isInteger(y)) return
+  try {
+    mkdirSync(join(os.homedir(), '.weflow-cli'), { recursive: true })
+    const tmp = POSITION_FILE + '.tmp'
+    writeFileSync(tmp, JSON.stringify({ x, y }), 'utf8')
+    renameSync(tmp, POSITION_FILE)
+  } catch { /* 见上 */ }
+}
+
+/** 读回记住的位置。不存在 / JSON 坏了 / 字段不对 —— 一律当没存过（可达性另判） */
+function readSavedPosition() {
+  try {
+    const parsed = JSON.parse(readFileSync(POSITION_FILE, 'utf8'))
+    if (Number.isInteger(parsed?.x) && Number.isInteger(parsed?.y)) return { x: parsed.x, y: parsed.y }
+  } catch { /* 见上 */ }
+  return null
+}
+
+/**
+ * 拖动时记位置。**监听 `move` 而不是 `moved`**：`moved` 靠 `WM_EXITSIZEMOVE` 触发，
+ * 而程序化的 `SetWindowPos` **不产生**它——实测"窗口确实挪到了 400,300，位置文件却没写出来"。
+ * 真人的拖动会发 `WM_MOVE`，`move` 两边都收；代价是拖动过程中会连续触发，所以加防抖。
+ */
+let saveTimer = null
+function flushPosition() {
+  saveTimer = null
+  if (!ballMode || !win || win.isDestroyed()) return
+  const b = win.getBounds()
+  savePosition(b.x, b.y)
+}
+function schedulePositionSave() {
+  if (!ballMode) return
+  if (saveTimer) clearTimeout(saveTimer)
+  saveTimer = setTimeout(flushPosition, 400)
+}
+
 /** 读端点文件。**任何一种不可信都当没读出来**（同 `src/panel/endpoint.ts` 的纪律） */
 function readEndpoint() {
   try {
@@ -80,7 +147,11 @@ code{color:#4c8bf5;font-size:12px}</style></head><body>
 }
 
 async function buildWindow() {
+  // 上次拖到的位置（取不到或不可达就回右下角）
+  const start = clampToVisible(readSavedPosition() ?? defaultBallPosition())
   win = new BrowserWindow({
+    x: start.x,
+    y: start.y,
     width: BALL_SIZE,
     height: BALL_SIZE,
     frame: false,
@@ -138,6 +209,9 @@ async function buildWindow() {
     }
   })
 
+  // 拖动时记住位置。**只记球形态的**：球是锚点，对话窗的尺寸与位置是临时的。
+  win.on('move', schedulePositionSave)
+
   // 关窗 = 收进托盘，**不**顺手杀掉助手（用户在微信那边可能还要用）
   win.on('close', (event) => {
     if (!app.isQuitting) {
@@ -162,15 +236,23 @@ function setMode(mode) {
   win.setResizable(true)
   if (chat) {
     win.setSize(CHAT_SIZE.width, CHAT_SIZE.height)
+    // 球在右下角时，直接按它的位置铺开一个 420x560 的窗会有一半在屏幕外——挪进来
+    const fitted = fitIntoWorkArea(win.getBounds().x, win.getBounds().y, CHAT_SIZE.width, CHAT_SIZE.height)
+    win.setPosition(fitted.x, fitted.y)
     win.setAlwaysOnTop(false)     // 对话时不必压着别的窗口
     win.setSkipTaskbar(false)
     win.setResizable(true)        // 对话窗允许用户自己拉大小
   } else {
     win.setSize(BALL_SIZE, BALL_SIZE)
+    // 反过来也一样：从屏幕右下角的对话窗收回来，球要整个看得见（中心可见才抓得回来）
+    const fitted = fitIntoWorkArea(win.getBounds().x, win.getBounds().y, BALL_SIZE, BALL_SIZE)
+    win.setPosition(fitted.x, fitted.y)
+    savePosition(fitted.x, fitted.y)
     win.setAlwaysOnTop(true, 'floating')
     win.setSkipTaskbar(true)
     win.setResizable(false)
   }
+  ballMode = !chat
   return { mode: chat ? 'chat' : 'ball' }
 }
 
@@ -235,6 +317,7 @@ if (!app.requestSingleInstanceLock()) {
     }
   })
 
+  app.on('before-quit', () => { if (saveTimer) flushPosition() })
   app.on('will-quit', () => globalShortcut.unregisterAll())
   // 全部窗口关掉也不退出：这是个托盘常驻应用
   app.on('window-all-closed', () => { /* 故意留空 */ })
