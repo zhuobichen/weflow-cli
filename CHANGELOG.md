@@ -8,26 +8,25 @@ All notable user-facing changes are recorded here. This project follows [Semanti
 
 ### Added
 
-- **The panel's ball wears the project mascot.** `resources/panel/mascot.png` is served through the
-  panel's static whitelist and sits on a dark disc, with a thin ring so it does not blend into a dark
-  wallpaper; the tray icon is derived from the same file at runtime via `nativeImage.resize`. Three
-  things were measured rather than eyeballed: the source (`weflow-cli图标.png` at the repo root) is
-  1024x1024 but its **content occupies only 600x689** - the rest is padding - so the shipped asset is
-  cropped to the alpha bounding box and resized to 256 (41KB rather than 1.37MB), which is what makes the
-  mascot fill the ball instead of floating small inside it; and the source's background is
-  **transparent**, so the ball's disc colour is what shows through, not part of the artwork. The ball
-  keeps a fallback background colour for when the image cannot be fetched, and the inline SVG mark it
-  used to carry is gone - emoji and font glyphs render differently on every machine. The dark disc is
-  deliberate, not decoration: rendering the ball with no disc against light, mid and dark backdrops
-  showed the transparent version **losing the cat's dark body into a dark background** (only the green
-  bubble and the face outline survive) and washing out on white, while the disc reads on all three -
-  and the user's wallpaper is one of the dark ones. A test pins it so a later "cleanup" to
-  `background-color: transparent` fails rather than silently degrading the ball. The **tray icon is a
-  separate asset** for the same reason and is composited with the disc baked in: `nativeImage` cannot
-  composite, and a tray icon has no CSS to fall back on - so `mascot.png` (transparent) resized down
-  would have blended into a dark taskbar, and nothing in CI would have caught it (a transparent 64x64
-  passes every size and byte-count check). A pixel-level test decodes both PNGs and asserts the tray
-  icon is opaque where the ball's artwork is transparent, and transparent at the corners.
+- **The panel's ball wears the project mascot, with a transparent background.** `resources/panel/mascot.png`
+  is served through the panel's static whitelist and drawn with **no disc behind it** - a mascot floating on
+  the desktop rather than sitting on a plate - separated from light wallpapers by a `drop-shadow` that
+  follows its outline. Three things about it were measured rather than eyeballed: the source
+  (`weflow-cli图标.png` at the repo root) is 1024x1024 but its **content occupies only 600x689**, so the
+  shipped asset is cropped to the alpha bounding box and resized to 256 (41KB rather than 1.37MB), which is
+  what makes the mascot fill the space instead of floating small inside it; the source's background is
+  **transparent**, so nothing needs keying; and the outline the ball used to have (a 1px light ring, drawn
+  for the disc) had to go with it - with no disc it draws a circle in empty space. Dropping the ring is
+  easy to forget, so a test asserts the two changes travel together.
+
+  An earlier revision of this entry claimed the transparent version "loses the cat's body into a dark
+  background". **That was my misreading of a small comparison image** in which the mascot was rendered too
+  small; at the real size (76 logical pixels, inspected at 3x against light, mid and dark backdrops) it
+  reads fine on all three. The user picked transparent after seeing both.
+
+  The **tray icon is a separate asset** (`tray.png`) with the disc baked in: at 16-24 pixels on a dark
+  taskbar there is no drop-shadow to lean on, so the disc is what keeps the outline legible. `nativeImage`
+  cannot composite, so that one is generated with a canvas and committed.
 
 - **The panel window no longer opens to an empty void.** It used to show nothing but black until you
   typed, which says neither what the assistant can do nor that it is alive. It now opens with a

@@ -38,8 +38,9 @@ function code(name: string): string {
 }
 
 test('面板要用的五个文件都在（少一个用户装上就缺）', () => {
-  // 两张图是分开的：mascot.png 是球面（透明底），tray.png 是托盘图标（**带圆盘**——
-  // 深色的猫直接放深色任务栏上会糊，和球面那次同一个问题）。
+  // 两张图是分开的：mascot.png 是球面（透明底，靠投影分离），
+  // tray.png 是托盘图标（**烤了圆盘进去**）：托盘只有 16-24 像素、又在深色任务栏上，
+  // 那点尺寸里没有投影可依赖，得靠底色把轮廓撑出来。
   for (const name of ['index.html', 'renderer.js', 'panel.css', 'main.cjs', 'preload.cjs',
                       'ball-position.cjs', 'tray-menu.cjs', 'mascot.png', 'tray.png', 'package.json']) {
     assert.ok(existsSync(join(PANEL, name)), `缺文件: resources/panel/${name}`)
@@ -245,18 +246,22 @@ test('吉祥物是从仓库根那张原图派生的：按内容包围盒裁过�
   assert.ok(buf.length < 120 * 1024, `派生件 ${Math.round(buf.length / 1024)}KB，别把 1.37MB 的原图塞进来`)
 })
 
-test('球必须有不透明的底色 —— 吉祥物的身体是深灰的，透明底会在深色壁纸上糊掉', () => {
-  // 这条是**量出来的**，不是偏好：把两种做法放到浅/中/深三种底上并排截过图——
-  //   深色圆盘：三种底都读得清（深底上靠一圈细亮环勾出边界）
-  //   全透明　：深底上猫的身体整个糊进背景（只剩绿气泡与脸的轮廓），浅底上浅灰的猫发虚
-  // 而用户的壁纸正是深色的那一种。所以"把底色改成 transparent"不是清理，是把这个球弄坏。
+test('球是**透明底**的，靠投影分离 —— 这两件事要一起改，不能只改一件', () => {
+  // 历史：这里曾经断言"底色必须不透明"，理由是"透明版在深色壁纸上会糊"。
+  // **那个结论是我读错了一张小对照图**（猫被画得太小，低对比被我读成了糊掉）。
+  // 按真实尺寸（76 逻辑像素、3 倍放大）逐张看浅/中/深三种底之后：透明版三种底都读得清。
+  // 用户看过之后选了透明，所以现在断言的是这个方向。
+  //
+  // 关键在**两件事必须同时成立**：底色透明 + 有跟着轮廓走的投影。
+  // 只把底色改透明、留着原来那圈 inset 圆环，就会画出一个**悬空的圆圈**——
+  // 那是这次改动最容易留下的半个状态，所以这条一起钉住。
   const css = code('panel.css')
-  const block = css.slice(css.indexOf('#ball {'), css.indexOf('#ball svg'))
-  assert.match(block, /background-color:\s*#/, '球要有不透明底色')
-  assert.doesNotMatch(block, /background-color:\s*transparent/, '不许改成透明（见上面的实测）')
-  assert.match(block, /url\('\/panel\/mascot\.png'\)/)
-  // 细亮环是深底上唯一的边界来源，不能顺手删
-  assert.match(block, /inset 0 0 0 1px rgba\(255, 255, 255/, '细亮环要留着')
+  const block = css.slice(css.indexOf('#ball {'), css.indexOf('#ball:active'))
+  assert.match(block, /background-color:\s*transparent/, '球是透明底')
+  assert.match(block, /drop-shadow/, '必须有投影：透明主体靠它跟浅色壁纸分开')
+  assert.doesNotMatch(block, /inset 0 0 0 1px/, '不许留着圆环（没有底时它是个悬空的圈）')
+  assert.doesNotMatch(block, /background-color:\s*#/, '不许有实心底色')
+  assert.match(block, /url\('\/panel\/mascot\.png'\)/, '图还是吉祥物')
 })
 
 // 托盘图标的**像素**断言（盘到底在不在、角是不是透的）在 `test/panel-tray-pixels.test.ts`，

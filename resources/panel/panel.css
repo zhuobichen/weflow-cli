@@ -48,25 +48,23 @@ header {
   cursor: pointer;
   -webkit-app-region: drag;          /* 球本身可拖动 */
 
-  /* 吉祥物那张图**背景是透明的**（实测四角 alpha=0，只有一层很淡的暗晕），
-     所以"球"其实是这样来的：一个深色圆盘 + 圆裁的那张图。
-     底色必须偏暗——它自带暗晕，配亮底会像贴纸；配深底才连成一体。 */
+  /* **没有底色**：吉祥物那张图自带透明背景（实测四角 alpha=0），
+     所以这里是"一只浮在桌面上的猫"，不是"一个盘子托着猫"。
+     图上按内容包围盒裁过（源图 1024² 里内容只占 600x689），自带 12% 余量，铺满即可。 */
   background-image: url('/panel/mascot.png');
-  /* 图已经按内容的包围盒裁过（源图 1024 里内容只占 600x689，四周全是留白），
-     自带 12% 余量，所以这里铺满即可 */
   background-size: 100%;
   background-position: center;
   background-repeat: no-repeat;
-  background-color: #1b1f27;
-  transition: transform .12s ease, box-shadow .12s ease, filter .12s ease;
+  background-color: transparent;
+
+  /* 圆环与内阴影都撤了：没有底的时候，圆环只会画出一个**悬空的圆圈**，
+     内阴影会在一圈空处留下脏边。让透明主体跟浅色壁纸分开改靠投影——
+     它跟着猫的轮廓走，而不是跟着那个已经不存在的圆。 */
+  filter: drop-shadow(0 6px 12px rgba(0, 0, 0, .50));
+  transition: transform .12s ease, filter .12s ease;
 }
 #ball:hover {
-  filter: brightness(1.07);
-  box-shadow:
-    inset 0 0 0 1px rgba(255, 255, 255, .38),
-    inset 0 -6px 14px rgba(6, 18, 52, .30),
-    0 14px 26px rgba(8, 20, 54, .52),
-    0 3px 8px rgba(8, 20, 54, .34);
+  filter: drop-shadow(0 8px 16px rgba(0, 0, 0, .58)) brightness(1.08);
 }
 #ball:active { transform: scale(.95); }
 
