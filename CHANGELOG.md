@@ -17,7 +17,12 @@ All notable user-facing changes are recorded here. This project follows [Semanti
   mascot fill the ball instead of floating small inside it; and the source's background is
   **transparent**, so the ball's disc colour is what shows through, not part of the artwork. The ball
   keeps a fallback background colour for when the image cannot be fetched, and the inline SVG mark it
-  used to carry is gone - emoji and font glyphs render differently on every machine.
+  used to carry is gone - emoji and font glyphs render differently on every machine. The dark disc is
+  deliberate, not decoration: rendering the ball with no disc against light, mid and dark backdrops
+  showed the transparent version **losing the cat's dark body into a dark background** (only the green
+  bubble and the face outline survive) and washing out on white, while the disc reads on all three -
+  and the user's wallpaper is one of the dark ones. A test pins it so a later "cleanup" to
+  `background-color: transparent` fails rather than silently degrading the ball.
 
 - **The panel window no longer opens to an empty void.** It used to show nothing but black until you
   typed, which says neither what the assistant can do nor that it is alive. It now opens with a

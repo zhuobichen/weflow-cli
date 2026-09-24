@@ -243,3 +243,17 @@ test('吉祥物是从仓库根那张原图派生的：按内容包围盒裁过�
   assert.equal(width, 256, '派生件固定 256，够撑到 337% 显示缩放')
   assert.ok(buf.length < 120 * 1024, `派生件 ${Math.round(buf.length / 1024)}KB，别把 1.37MB 的原图塞进来`)
 })
+
+test('球必须有不透明的底色 —— 吉祥物的身体是深灰的，透明底会在深色壁纸上糊掉', () => {
+  // 这条是**量出来的**，不是偏好：把两种做法放到浅/中/深三种底上并排截过图——
+  //   深色圆盘：三种底都读得清（深底上靠一圈细亮环勾出边界）
+  //   全透明　：深底上猫的身体整个糊进背景（只剩绿气泡与脸的轮廓），浅底上浅灰的猫发虚
+  // 而用户的壁纸正是深色的那一种。所以"把底色改成 transparent"不是清理，是把这个球弄坏。
+  const css = code('panel.css')
+  const block = css.slice(css.indexOf('#ball {'), css.indexOf('#ball svg'))
+  assert.match(block, /background-color:\s*#/, '球要有不透明底色')
+  assert.doesNotMatch(block, /background-color:\s*transparent/, '不许改成透明（见上面的实测）')
+  assert.match(block, /url\('\/panel\/mascot\.png'\)/)
+  // 细亮环是深底上唯一的边界来源，不能顺手删
+  assert.match(block, /inset 0 0 0 1px rgba\(255, 255, 255/, '细亮环要留着')
+})
