@@ -46,7 +46,8 @@ header {
   padding: 0;
   position: relative;
   cursor: pointer;
-  -webkit-app-region: drag;          /* 球本身可拖动 */
+  /* **不要在这里写 `-webkit-app-region: drag`**：Windows 上拖拽区会吞掉鼠标事件，
+     页面收不到 click，球就点不开了（实测的故障就是这个）。拖动自己实现，见 renderer.js。 */
 
   /* 球本身**没有底色**：下面那层 `.glow` 才是"背景"，上面 `.face` 是吉祥物。
      图上按内容包围盒裁过（源图 1024² 里内容只占 600x689），自带 12% 余量，铺满即可。 */

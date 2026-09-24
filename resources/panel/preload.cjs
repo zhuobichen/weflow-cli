@@ -15,6 +15,15 @@ contextBridge.exposeInMainWorld('weflowPanel', {
   setMode: (mode) => ipcRenderer.invoke('panel:setMode', mode === 'chat' ? 'chat' : 'ball'),
   /** 'window' 只关窗（助手继续跑），'assistant' 连助手一起停 */
   quit: (what) => ipcRenderer.invoke('panel:quit', what === 'assistant' ? 'assistant' : 'window'),
+  /**
+   * 拖拽。**为什么不是 `-webkit-app-region: drag`**：在 Windows 上拖拽区会**吞掉鼠标事件**，
+   * 页面收不到 click——球就点不开了（这正是实测到的故障）。所以拖拽改成自己实现：
+   * 主进程记下按下时的窗口位置与指针位置，移动时按差值 setPosition。
+   */
+  dragStart: (x, y) => ipcRenderer.invoke('panel:dragStart', { x, y }),
+  dragMove: (x, y) => ipcRenderer.invoke('panel:dragMove', { x, y }),
+  dragEnd: () => ipcRenderer.invoke('panel:dragEnd'),
+
   /** 主进程侧的实际状态，供界面显示"关窗后助手还在跑"这类事实 */
   info: () => ipcRenderer.invoke('panel:info'),
   /**

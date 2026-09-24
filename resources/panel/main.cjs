@@ -233,20 +233,22 @@ function setMode(mode) {
   // 第一版先 `setResizable(false)` 再 `setSize(76,76)`，结果是"收起"以后页面回到球形态、
   // 置顶也恢复了，窗口却停在对话窗的大小（实测 421x561）——屏幕上就是一个巨大的球。
   // 所以：先解锁 → 改尺寸 → 最后再锁上。
+  // 尺寸与位置**一起**用 setContentBounds 设：这个窗口上 setSize + setPosition 会互相打架
+  // （setPosition 动的是外框，实测每调一次尺寸就漂 1-2px——展开后量到 421x561 而不是 420x560
+  // 就是这个漂移，拖动那条路更夸张，见 panel:dragMove 的注释）。
   win.setResizable(true)
+  const from = win.getContentBounds()
   if (chat) {
-    win.setSize(CHAT_SIZE.width, CHAT_SIZE.height)
     // 球在右下角时，直接按它的位置铺开一个 420x560 的窗会有一半在屏幕外——挪进来
-    const fitted = fitIntoWorkArea(win.getBounds().x, win.getBounds().y, CHAT_SIZE.width, CHAT_SIZE.height)
-    win.setPosition(fitted.x, fitted.y)
+    const fitted = fitIntoWorkArea(from.x, from.y, CHAT_SIZE.width, CHAT_SIZE.height)
+    win.setContentBounds({ x: fitted.x, y: fitted.y, width: CHAT_SIZE.width, height: CHAT_SIZE.height })
     win.setAlwaysOnTop(false)     // 对话时不必压着别的窗口
     win.setSkipTaskbar(false)
     win.setResizable(true)        // 对话窗允许用户自己拉大小
   } else {
-    win.setSize(BALL_SIZE, BALL_SIZE)
     // 反过来也一样：从屏幕右下角的对话窗收回来，球要整个看得见（中心可见才抓得回来）
-    const fitted = fitIntoWorkArea(win.getBounds().x, win.getBounds().y, BALL_SIZE, BALL_SIZE)
-    win.setPosition(fitted.x, fitted.y)
+    const fitted = fitIntoWorkArea(from.x, from.y, BALL_SIZE, BALL_SIZE)
+    win.setContentBounds({ x: fitted.x, y: fitted.y, width: BALL_SIZE, height: BALL_SIZE })
     savePosition(fitted.x, fitted.y)
     win.setAlwaysOnTop(true, 'floating')
     win.setSkipTaskbar(true)
@@ -304,6 +306,32 @@ if (!app.requestSingleInstanceLock()) {
 
   app.whenReady().then(async () => {
     ipcMain.handle('panel:setMode', (_event, mode) => setMode(mode))
+
+    // 拖拽：按下时记下"窗口位置 + 指针位置"，移动时按差值挪窗口。
+    // 用差值而不是绝对值，是为了不受 DPI 缩放与多屏坐标原点的影响。
+    let dragOrigin = null
+    ipcMain.handle('panel:dragStart', (_event, point) => {
+      if (!win || win.isDestroyed()) return null
+      const { x: wx, y: wy } = win.getContentBounds()
+      dragOrigin = { pointerX: point.x, pointerY: point.y, winX: wx, winY: wy }
+      return { x: wx, y: wy }
+    })
+    ipcMain.handle('panel:dragMove', (_event, point) => {
+      if (!win || win.isDestroyed() || !dragOrigin) return null
+      // **用 setBounds 而不是 setPosition**：实测这个窗口（无边框 + 透明 + resizable:false）上
+      // `setPosition` 会**把窗口一点点撑大**——每次调用宽 +2 左右，连续拖 8 次之后
+      // 76x76 变成 108x84（隔离验证：完全不碰鼠标、只调这两个 IPC 也能复现）。
+      // 显式把当前尺寸一起传进去就不会。
+      const bounds = win.getContentBounds()
+      win.setContentBounds({
+        x: Math.round(dragOrigin.winX + point.x - dragOrigin.pointerX),
+        y: Math.round(dragOrigin.winY + point.y - dragOrigin.pointerY),
+        width: bounds.width,
+        height: bounds.height,
+      })
+      return null
+    })
+    ipcMain.handle('panel:dragEnd', () => { dragOrigin = null; return null })
     ipcMain.handle('panel:info', () => ({ daemonRunning: !!readEndpoint(), endpointFile: ENDPOINT_FILE }))
     ipcMain.handle('panel:quit', (_event, what) => {
       app.isQuitting = true

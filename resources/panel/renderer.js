@@ -199,10 +199,38 @@ if (hasShell) {
   ball.hidden = false
   collapse.hidden = false
 
-  ball.addEventListener('click', () => {
-    document.body.classList.replace('mode-ball', 'mode-chat')
-    void window.weflowPanel.setMode('chat')
-    input.focus()
+  // 球：**点一下展开，按住拖动挪位置**。
+  //
+  // 为什么不用 `-webkit-app-region: drag`：Windows 上拖拽区会**吞掉鼠标事件**，
+  // 页面根本收不到 click——现象就是"点这个图标没反应"（实测的故障）。
+  // 所以拖拽自己实现：按下时告诉主进程记住窗口与指针位置，移动时按差值挪窗口；
+  // 松手时如果**指针几乎没动**，那就是一次点击。
+  // 阈值 4 像素：手抖不会把点击变成拖动，而想拖的人自然会移过 4 像素。
+  const DRAG_THRESHOLD_PX = 4
+  ball.addEventListener('pointerdown', (event) => {
+    if (event.button !== 0) return
+    const startX = event.screenX
+    const startY = event.screenY
+    let dragging = false
+
+    const onMove = (moveEvent) => {
+      if (!dragging && Math.hypot(moveEvent.screenX - startX, moveEvent.screenY - startY) > DRAG_THRESHOLD_PX) {
+        dragging = true
+      }
+      if (dragging) void window.weflowPanel.dragMove(moveEvent.screenX, moveEvent.screenY)
+    }
+    const onUp = () => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+      void window.weflowPanel.dragEnd()
+      if (dragging) return                 // 拖过了就不算点击
+      document.body.classList.replace('mode-ball', 'mode-chat')
+      void window.weflowPanel.setMode('chat')
+      input.focus()
+    }
+    void window.weflowPanel.dragStart(startX, startY)
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
   })
   collapse.addEventListener('click', () => {
     document.body.classList.replace('mode-chat', 'mode-ball')

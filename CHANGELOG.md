@@ -295,7 +295,23 @@ All notable user-facing changes are recorded here. This project follows [Semanti
 
 ### Fixed
 
-- **A save could silently not happen on Windows.** Every "atomic write" in this project (the memory file,
+- **Clicking the ball did nothing.** The ball carried `-webkit-app-region: drag` so it could be dragged -
+  and on Windows a drag region **swallows mouse events**, so the page never received the click. Dragging is
+  now implemented in the page itself (pointer events, with a 4-pixel threshold that separates a click from
+  a drag) and the native drag region is gone. The verification is the part worth recording: this had been
+  "verified" earlier by calling `element.click()` through the DevTools protocol, which **bypasses real
+  input** and happily reported a ball that could not be clicked. Both the new click and the drag are now
+  confirmed with synthetic-but-real mouse input (`SetCursorPos` + `mouse_event`): 78x76 -> 421x560 -> 77x76,
+  and a drag that moves the window without changing its size.
+
+- **Dragging made the ball grow.** `win.setPosition` / `win.setBounds` on this window (frameless,
+  transparent, non-resizable) operate on the **outer** rect and drift a little on every call - measured at
+  roughly +0.8px per call, with no bound: 20 moves took 76x76 to 97x92, and the same happens without any
+  mouse involved (calling the drag IPC directly reproduces it). `setContentBounds` (the client area) is
+  stable - 20 moves, size unchanged. The same drift was quietly affecting `setMode` too: expanding measured
+  421x561 rather than the requested 420x560.
+
+ Every "atomic write" in this project (the memory file,
   the configuration, the panel's endpoint file) wrote a `.tmp` and renamed it over the target - and on
   Windows `rename` fails with `EPERM` when another handle has the target open, which antivirus and search
   indexers do briefly and routinely. The callers all record a reason and carry on, so the visible effect

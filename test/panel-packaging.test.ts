@@ -70,10 +70,10 @@ test('渲染进程不碰文件系统、不碰进程、不碰凭据', () => {
   }
 })
 
-test('preload 只暴露四个方法，且**不含**通用的 on/send', () => {
+test('preload 只暴露固定的几个方法，且**不含**通用的 on/send', () => {
   const preload = code('preload.cjs')
   const exposed = [...preload.matchAll(/^\s{2}(\w+):/gm)].map((m) => m[1]).sort()
-  assert.deepEqual(exposed, ['info', 'onMode', 'quit', 'setMode'])
+  assert.deepEqual(exposed, ['dragEnd', 'dragMove', 'dragStart', 'info', 'onMode', 'quit', 'setMode'])
   // 通用订阅才是危险的：通道名一旦由渲染进程决定，那层隔离就名存实亡
   assert.doesNotMatch(preload, /on\s*:\s*\(/, '不许暴露通用的 on(name, cb)')
   assert.doesNotMatch(preload, /send\s*:\s*\(/)
@@ -131,9 +131,11 @@ test('窗口尺寸切换要先解锁再改尺寸 —— Windows 上不可调整�
   const fn = main.slice(main.indexOf('function setMode'), main.indexOf('function toggleVisible'))
   assert.ok(fn.length > 0, '应当能找到 setMode')
   const unlock = fn.indexOf('setResizable(true)')
-  const shrink = fn.indexOf('setSize(BALL_SIZE')
+  // 尺寸现在走 setContentBounds（用 setSize + setPosition 会互相打架，见那条断言）。
+  // 球那一支：width: BALL_SIZE 的那次调用之后必须把窗口重新锁上。
+  const shrink = fn.indexOf('width: BALL_SIZE')
   const lock = fn.lastIndexOf('setResizable(false)')
-  assert.ok(unlock >= 0 && shrink >= 0 && lock >= 0, '三处都要在')
+  assert.ok(unlock >= 0 && shrink >= 0 && lock >= 0, `三处都要在（unlock=${unlock} shrink=${shrink} lock=${lock}）`)
   assert.ok(unlock < shrink, '先解锁再改尺寸')
   assert.ok(shrink < lock, '改完尺寸最后才锁上')
 })
@@ -308,4 +310,30 @@ test('球形态下不许出现滚动条 —— busy 的 scale(1.08) 会溢出 76
   // 这条是真看到的：截图里右侧冒出了上下箭头。76x76 的窗口里长出滚动条极其显眼。
   const css = code('panel.css')
   assert.match(css, /body\.mode-ball \{[^}]*overflow: hidden/, '球形态要 overflow: hidden')
+})
+
+test('拖动必须用 setContentBounds —— setPosition/setBounds 会把这个窗口越拖越大', () => {
+  // 实测出来的：无边框 + 透明 + resizable:false 这种窗口上，Electron 的
+  // `setPosition`/`setBounds` 动的是**外框**，每调用一次就把窗口撑大一点点——
+  // 连续拖 20 次后 76x76 变成 97x92，而且是**无界**的（一直在长）。
+  // 隔离验证：完全不碰鼠标、只调 panel:dragMove 也能复现，所以跟鼠标无关。
+  // 换成 `setContentBounds`（客户区）之后，20 次移动尺寸纹丝不动。
+  const main = code('main.cjs')
+  assert.match(main, /win\.setContentBounds\(/, '拖拽要用 setContentBounds')
+  assert.match(main, /win\.getContentBounds\(\)/, '取当前位置也要用客户区坐标，两边一致')
+  assert.doesNotMatch(main, /win\.setPosition\(/, '不许用 setPosition（会漂）')
+  assert.doesNotMatch(main, /win\.setBounds\(/, '不许用 setBounds（同样漂）')
+})
+
+test('球要能点开 —— 不许在球上用 -webkit-app-region: drag', () => {
+  // 这就是"点这个图标没反应"的根因：Windows 上拖拽区会**吞掉鼠标事件**，
+  // 页面根本收不到 click。我用 CDP 调 element.click() 验过它"能点开"——
+  // 那绕过了真实输入，于是把一个点不动的球报成了正常。拖拽改成自己实现（见 renderer.js）。
+  const css = code('panel.css')
+  const ballBlock = css.slice(css.indexOf('#ball {'), css.indexOf('#ball > span'))
+  assert.doesNotMatch(ballBlock, /-webkit-app-region:\s*drag/, '球上不许有拖拽区')
+  const renderer = code('renderer.js')
+  assert.match(renderer, /pointerdown/, '拖拽要自己实现')
+  assert.match(renderer, /DRAG_THRESHOLD_PX/, '要能区分"点一下"和"按住拖"')
+  assert.match(renderer, /dragStart|dragMove/, '要走那两个 IPC')
 })
