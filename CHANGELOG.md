@@ -41,7 +41,10 @@ All notable user-facing changes are recorded here. This project follows [Semanti
   resize, a differential registration test for the hotkey). Doing that found two bugs a screenshot
   could not have shown: collapsing left the window at chat size because a non-resizable window
   ignores `setSize` on Windows, and the window sometimes never appeared because `ready-to-show` was
-  listened for only after the load. Only a click on the tray menu itself remains untested.
+  listened for only after the load. A third came out of running what the tray items actually do: the
+  "quit and stop the assistant" action spawned the CLI in a form commander rejects inside Electron's
+  Node mode. Only a click on the tray menu itself remains untested; each item's effect has been run
+  directly.
 
 - **The four "search" tools now name each other.** They search four different stores - chat logs,
   the knowledge base, assistant memory, and a semantic index over chats - and each description used to

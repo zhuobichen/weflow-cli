@@ -151,3 +151,17 @@ test('ready-to-show 的监听要挂在 loadURL 之前 —— 它不会重放', (
   assert.ok(listen >= 0 && load >= 0, '两处都要在')
   assert.ok(listen < load, 'ready-to-show 必须挂在 loadURL 之前')
 })
+
+test('调 CLI 必须用 `-e import()` 的写法 —— 直接把脚本路径当参数会被 commander 当成未知命令', () => {
+  // 第三个真 bug 的回归测试。`spawn(electron, [cliEntry, 'assistant', 'stop'])` 配
+  // `ELECTRON_RUN_AS_NODE=1` 会得到 `error: unknown command '…\cli.cjs'`：
+  // Electron 的 Node 模式里 commander 不跳过 `process.argv[1]`。
+  // 实测两种写法（前者报 unknown command、后者正常），解法记在 `bin/weflow-cli-electron.cjs` 的注释里。
+  const main = code('main.cjs')
+  assert.match(main, /'-e'/, '要用 -e 传一段脚本')
+  assert.match(main, /import\(/, '脚本内容应当是 import(file:///…)')
+  assert.match(main, /pathToFileURL/, '路径要过 pathToFileURL（本机的仓库目录是中文）')
+  assert.match(main, /ELECTRON_RUN_AS_NODE/, '要electron 以 Node 模式跑')
+  // 反向：不许再出现"把 cli.cjs 直接放进 argv"的写法
+  assert.doesNotMatch(main, /\bspawn\(process\.execPath,\s*\[[^\]]*cli\.cjs/, '不许把脚本路径直接当参数')
+})

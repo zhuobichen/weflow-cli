@@ -14,6 +14,8 @@
 const { app, BrowserWindow, Tray, Menu, globalShortcut, ipcMain, session, shell } = require('electron')
 const { readFileSync, existsSync } = require('node:fs')
 const { join } = require('node:path')
+const { spawn } = require('node:child_process')
+const { pathToFileURL } = require('node:url')
 const os = require('node:os')
 
 const ENDPOINT_FILE = join(os.homedir(), '.weflow-cli', 'assistant_endpoint.json')
@@ -24,6 +26,34 @@ const CHAT_SIZE = { width: 420, height: 560 }
 let win = null
 let tray = null
 let shortCircuitFailures = 0
+
+/**
+ * 跑一条 CLI 命令（目前只用来停助手）。**这里踩过一个坑，写法不能再简化**：
+ *
+ * 直接把脚本路径当参数传（`spawn(process.execPath, [cliEntry, 'assistant', 'stop', …])`，
+ * 配 `ELECTRON_RUN_AS_NODE=1`）会得到 `error: unknown command '…\cli.cjs'` ——
+ * Electron 的 Node 模式里 commander **不会跳过 `process.argv[1]`**，于是它把脚本路径当成了未知命令。
+ * 仓库里 `bin/weflow-cli-electron.cjs` 早就记着这个坑，解法是
+ * `-e "import('file:///…')" -- <参数>`。实测两种写法：前者报 unknown command，后者正常。
+ *
+ * 路径要过 `pathToFileURL`：本机的仓库目录就是中文（`ZhaoWen_GitHub维护`），
+ * `file:///` 后面直接拼原始字符不是合法 URL。它同时负责百分号编码。
+ */
+function spawnCli(cliArgs) {
+  try {
+    const entry = join(__dirname, '..', '..', 'cli.cjs')
+    if (!existsSync(entry)) return false
+    const script = `import(${JSON.stringify(pathToFileURL(entry).href)})`
+    spawn(process.execPath, ['-e', script, '--', ...cliArgs], {
+      detached: true, stdio: 'ignore', windowsHide: true,
+      env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+    }).unref()
+    return true
+  } catch (error) {
+    console.error('[panel] 调 CLI 失败:', error.message)
+    return false
+  }
+}
 
 /** 读端点文件。**任何一种不可信都当没读出来**（同 `src/panel/endpoint.ts` 的纪律） */
 function readEndpoint() {
@@ -168,14 +198,11 @@ function buildTray() {
     },
     {
       label: '退出并停止助手',
-      click: async () => {
+      click: () => {
         app.isQuitting = true
-        try {
-          const { spawn } = require('node:child_process')
-          // 走 CLI 而不是自己 kill：pid 文件与端点文件的清理都在那儿
-          spawn(process.execPath, [join(__dirname, '..', '..', 'cli.cjs'), 'assistant', 'stop', '--yes', '--json'],
-            { stdio: 'ignore', windowsHide: true, env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' } })
-        } catch { /* 停不掉也不该拦着退出 */ }
+        // 走 CLI 而不是自己 kill：pid 文件与端点文件的清理都在那儿（见 spawnCli 的注释）。
+        // **先起进程再退出**：`app.quit()` 之后本进程就没机会 spawn 了。
+        spawnCli(['assistant', 'stop', '--yes', '--json'])
         app.quit()
       },
     },
@@ -195,14 +222,8 @@ if (!app.requestSingleInstanceLock()) {
     ipcMain.handle('panel:setMode', (_event, mode) => setMode(mode))
     ipcMain.handle('panel:info', () => ({ daemonRunning: !!readEndpoint(), endpointFile: ENDPOINT_FILE }))
     ipcMain.handle('panel:quit', (_event, what) => {
-      if (what === 'assistant') {
-        const { spawn } = require('node:child_process')
-        try {
-          spawn(process.execPath, [join(__dirname, '..', '..', 'cli.cjs'), 'assistant', 'stop', '--yes', '--json'],
-            { stdio: 'ignore', windowsHide: true, env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' } })
-        } catch { /* 同上 */ }
-      }
       app.isQuitting = true
+      if (what === 'assistant') spawnCli(['assistant', 'stop', '--yes', '--json'])
       app.quit()
     })
 

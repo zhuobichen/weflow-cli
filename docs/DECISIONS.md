@@ -1199,8 +1199,15 @@ host process with two entrances.
   `setSize` on a non-resizable window, so collapsing left the window at chat size (a giant ball); and
   the `ready-to-show` listener was attached *after* `await loadURL`, so when that event fired during
   the load it was never replayed and the window stayed hidden - geometry and style all measured
-  correct, only `IsWindowVisible` was false. The one thing still unverified is a **click on the tray
-  menu itself**; its contents are pinned by static assertions instead.
+  correct, only `IsWindowVisible` was false. A third bug came out of exercising what the tray items *do* rather than clicking them: the
+  "quit and stop the assistant" action spawned the CLI as `spawn(electron, [cli.cjs, …])`, which
+  fails with `error: unknown command '…\cli.cjs'` because commander in Electron's Node mode does not
+  skip `process.argv[1]`. The repository already knew this (`bin/weflow-cli-electron.cjs` documents
+  it); the working form is `-e "import('file:///…')" -- <args>`, with the path passed through
+  `pathToFileURL` because this checkout's directory name is non-ASCII. Verified by running that exact
+  shape: the daemon stops and both the pid file and the endpoint file are cleaned up. The one thing
+  still unverified is a **click on the tray menu itself** - its contents are pinned by static
+  assertions, and each item's effect has been exercised directly.
 
 ## D-044: "You have no todos" and "todos were never extracted" are different answers
 
