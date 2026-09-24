@@ -44,14 +44,32 @@ header {
   border-radius: 50%;
   border: 0;
   padding: 0;
-  font-size: 30px;
-  line-height: 1;
-  background: radial-gradient(circle at 32% 28%, #6ba1ff, #2f6fd0 72%);
-  box-shadow: 0 6px 18px rgba(0, 0, 0, .38);
+  position: relative;
   cursor: pointer;
   -webkit-app-region: drag;          /* 球本身可拖动 */
+
+  /* 球面就是那张图（圆裁）。后面的渐变只是**取不到图时的兜底**，不该看见它 */
+  background-image: url('/panel/avatar.png');
+  background-size: cover;
+  background-position: center;
+  background-color: #3f74e6;
+  box-shadow:
+    /* 一圈细亮环：不加它，深色壁纸上整个球会糊成一团看不出边界 */
+    inset 0 0 0 1px rgba(255, 255, 255, .28),
+    inset 0 -6px 14px rgba(6, 18, 52, .30),   /* 底部内阴影：让它还是个"球"而不是一张贴图 */
+    0 10px 22px rgba(8, 20, 54, .46),         /* 投影：浮起来 */
+    0 2px 6px rgba(8, 20, 54, .32);
+  transition: transform .12s ease, box-shadow .12s ease, filter .12s ease;
 }
-#ball:active { transform: scale(.94); }
+#ball:hover {
+  filter: brightness(1.07);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, .38),
+    inset 0 -6px 14px rgba(6, 18, 52, .30),
+    0 14px 26px rgba(8, 20, 54, .52),
+    0 3px 8px rgba(8, 20, 54, .34);
+}
+#ball:active { transform: scale(.95); }
 
 /* 球形态：把对话那一套全藏掉，页面背景透明（窗口本身也是透明的）。
    **`html` 也要一起清掉**——只清 `body` 的话根元素那层不透明底色会把整个窗口填满，
@@ -62,7 +80,8 @@ body.mode-ball header,
 body.mode-ball main,
 body.mode-ball form,
 body.mode-ball footer { display: none; }
-body.mode-ball #ball { display: block; }
+body.mode-ball #ball { display: grid; }   /* 用 grid 才让 place-items 真的居中；
+                                            block 只是碰巧靠按钮默认的 text-align 居中 */
 
 /* 对话形态（有外壳时）才显示"收起" */
 body.mode-chat #collapse { display: inline-block; }

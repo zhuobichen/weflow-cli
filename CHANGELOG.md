@@ -8,6 +8,15 @@ All notable user-facing changes are recorded here. This project follows [Semanti
 
 ### Added
 
+- **The panel's ball wears the maintainer's own avatar.** `resources/panel/avatar.png` is served through
+  the panel's static whitelist and circular-cropped onto the ball, with a thin ring so it does not blend
+  into a dark wallpaper; the tray icon is derived from the same file at runtime via `nativeImage.resize`.
+  Two deliberate details: the ball keeps a **fallback background colour** for when the image cannot be
+  fetched (a missing avatar should not leave a white hole), and the inline SVG mark it used to carry is
+  gone - emoji and font glyphs render differently on every machine, which is exactly what "not the same
+  mascot" means. The npm package therefore ships a personal image; it is the maintainer's own public
+  GitHub avatar, chosen deliberately.
+
 - **A local panel: talk to the assistant without logging into the WeChat channel.** Until now the only
   way in was the WeChat Bot channel, which requires scanning a QR code - so asking one question cost a
   login. `weflow-cli panel` opens a small always-on-top window that talks to the same brain: the same
@@ -253,6 +262,15 @@ All notable user-facing changes are recorded here. This project follows [Semanti
   `[图片]` is still masked as text: only the reader's own non-text labels count as labels.
 
 ### Fixed
+
+- **A save could silently not happen on Windows.** Every "atomic write" in this project (the memory file,
+  the configuration, the panel's endpoint file) wrote a `.tmp` and renamed it over the target - and on
+  Windows `rename` fails with `EPERM` when another handle has the target open, which antivirus and search
+  indexers do briefly and routinely. The callers all record a reason and carry on, so the visible effect
+  was nothing at all: one full-suite run here saved the memory file and the file came back without its
+  `version` field, with the test green on the other three runs. The write now retries a busy target and
+  then falls back to writing in place (D-046) - the bytes are the same either way, so only the atomicity of
+  that single write is given up, and the test that reproduces it is in the suite.
 
 - **"No pending todos" and "todos were never extracted" were the same sentence.** Todo extraction reads
   chat logs, so it runs only when the user invokes `weflow-cli todos extract --days N --yes` - it is a

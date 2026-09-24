@@ -56,11 +56,14 @@ const STATIC_FILES: Record<string, string> = {
   '/panel/index.html': 'index.html',
   '/panel/renderer.js': 'renderer.js',
   '/panel/panel.css': 'panel.css',
+  // 悬浮球上那张图（维护者自己的头像）。走白名单而不是挂目录，理由同上。
+  '/panel/avatar.png': 'avatar.png',
 }
 const CONTENT_TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
+  '.png': 'image/png',
 }
 
 export interface PanelServerOptions {

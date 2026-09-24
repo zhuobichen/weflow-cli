@@ -3,6 +3,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync } from '
 import { homedir, hostname, userInfo } from 'os'
 import crypto from 'crypto'
 import { expandHomePath } from '../utils/pathUtils.js'
+import { writeFileAtomic } from '../utils/atomicWrite.js'
 import type { ConfigData } from '../types.js'
 
 const LOCK_PREFIX = 'lock:'
@@ -196,10 +197,10 @@ export class ConfigService {
           }
         }
       } catch { /* 磁盘副本不可读时退回整份写入 */ }
-      // 原子写入: 先写临时文件再改名, 防止进程中途被杀导致配置损坏
-      const tmpFile = CONFIG_FILE + '.tmp'
-      writeFileSync(tmpFile, JSON.stringify(merged, null, 2), 'utf8')
-      renameSync(tmpFile, CONFIG_FILE)
+      // 原子写入: 先写临时文件再改名, 防止进程中途被杀导致配置损坏。
+      // 改名在 Windows 上会因"文件正被别的句柄打开"而 EPERM（见 atomicWrite 的注释），
+      // 那里重试并兜底，所以配置不会因为一个索引器扫过就静默没存上
+      writeFileAtomic(CONFIG_FILE, JSON.stringify(merged, null, 2))
       this.dirty.clear()
     } catch (e) {
       console.error('保存配置失败:', e)

@@ -1255,6 +1255,32 @@ hypothetical: on this machine `~/.weflow-cli/todos.json` does not exist at all, 
 - Not fixed: nothing here makes extraction happen. The pipeline that would run it on a schedule is the
   same open question as the daily report's (no scheduled task is registered on this machine).
 
+## D-046: Atomic writes retry a busy target, and fall back to writing in place
+
+**Status:** Active
+
+`writeFileAtomic` (`src/utils/atomicWrite.ts`) writes `<target>.tmp` and renames it over the target, as
+before - but when the rename fails with `EPERM` / `EACCES` / `EBUSY` it retries five times with a short
+synchronous backoff, and if the target is still busy it **writes the target directly** instead of giving
+up. Both `AssistantMemory.save()`, `configService.save()` and the panel's endpoint file go through it.
+
+**Reason:** on Windows, `renameSync` over a file that **another handle has open** fails with `EPERM` -
+measured: a second handle opening the target read-only is enough, and the rename succeeds the moment that
+handle closes. Antivirus, search indexers and other readers produce that state briefly and routinely. The
+callers all swallow the failure (they record a reason and carry on), so the result was a **silent lost
+write**: one full-suite run here saved the memory file and the file came back without its `version` field,
+with the test itself green the other three times. "Saved" and "never saved" must not look the same.
+
+**Consequences and boundaries:**
+- The fallback gives up **atomicity** for that one write, not correctness of the bytes: the same string is
+  written either way, so a reader never sees a half-written file. What is lost is the guarantee that the
+  replacement is instantaneous.
+- If the other handle holds the file with a deny-write share mode, the direct write fails too and the error
+  propagates, exactly as before. The fallback is best-effort, not a guarantee - do not describe it as one.
+- Deciding to fix this was not cosmetic: this repository already treats a silently failed save as a defect
+  (there is a CHANGELOG entry about `MEMORY_SAVE_FAILED`), and the flake was the same class of thing
+  arriving from the filesystem instead of the code.
+
 ## Decision Template
 
 

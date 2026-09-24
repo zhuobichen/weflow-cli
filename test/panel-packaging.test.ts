@@ -38,7 +38,10 @@ function code(name: string): string {
 }
 
 test('面板要用的五个文件都在（少一个用户装上就缺）', () => {
-  for (const name of ['index.html', 'renderer.js', 'panel.css', 'main.cjs', 'preload.cjs', 'tray.png', 'package.json']) {
+  // 球面那张图与托盘图标**共用同一个文件**（托盘由 nativeImage 现算），
+  // 所以这里只要 avatar.png 在，不该再有 tray.png。
+  for (const name of ['index.html', 'renderer.js', 'panel.css', 'main.cjs', 'preload.cjs',
+                      'ball-position.cjs', 'tray-menu.cjs', 'avatar.png', 'package.json']) {
     assert.ok(existsSync(join(PANEL, name)), `缺文件: resources/panel/${name}`)
   }
 })
@@ -180,4 +183,28 @@ test('位置算术只有一份实现（在 ball-position.cjs 里），main.cjs �
   // main.cjs 只负责"问 Electron 要显示器"，不该自己出现夹取/默认位置的算术
   assert.doesNotMatch(main, /workArea\.width - BALL_SIZE/, '默认位置的算术不该在这儿重复')
   assert.doesNotMatch(main, /Math\.max\(area\.x/, '夹取的算术不该在这儿重复')
+})
+
+test('球面与托盘图标共用同一个头像文件，且托盘是现算的', () => {
+  // 两处各存一张图标，改了球忘了托盘是迟早的事——这张图是用户自己的吉祥物，本来就该一致。
+  const css = code('panel.css')
+  assert.match(css, /url\('\/panel\/avatar\.png'\)/, '球面用头像')
+  assert.match(css, /background-color:/, '要有兜底色：图取不到时不该是一块白')
+  const main = code('main.cjs')
+  assert.match(main, /nativeImage\.createFromPath/, '托盘从同一个文件现算')
+  assert.match(main, /\.resize\(\{ width: 32/, '托盘要缩到 32')
+  assert.doesNotMatch(main, /tray\.png/, '不该再引用 tray.png')
+})
+
+test('头像走静态白名单，且带了正确的 content-type', () => {
+  const server = readFileSync(join(ROOT, 'src', 'panel', 'server.ts'), 'utf8')
+  assert.match(server, /'\/panel\/avatar\.png': 'avatar\.png'/, '白名单里要有它')
+  assert.match(server, /'\.png': 'image\/png'/, 'content-type 要对')
+  // 还必须是白名单，不是"凡是 /panel/ 下的文件都发"
+  assert.doesNotMatch(server, /readFileSync\(join\([^)]*fileName\)\)/, '不许按请求路径直接读文件')
+})
+
+test('页面里不再有 emoji 图标 —— 字形随字体变，跟球面材质放一起很跳', () => {
+  const html = code('index.html')
+  assert.doesNotMatch(html, /\p{Extended_Pictographic}/u, 'index.html 里不该再有 emoji')
 })

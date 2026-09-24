@@ -11,7 +11,7 @@
  *    相对地址。页面脚本永远拿不到它，但它照常能发 `/api/...` 请求。
  * 3. **不加载任何远程内容，不许导航**。窗口里显示的是助手回复，而回复里有用户的聊天内容。
  */
-const { app, BrowserWindow, Tray, Menu, globalShortcut, ipcMain, session, shell, screen } = require('electron')
+const { app, BrowserWindow, Tray, Menu, globalShortcut, ipcMain, session, shell, screen, nativeImage } = require('electron')
 const { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync } = require('node:fs')
 const { join } = require('node:path')
 const { spawn } = require('node:child_process')
@@ -264,7 +264,11 @@ function toggleVisible() {
 
 function buildTray() {
   try {
-    tray = new Tray(join(__dirname, 'tray.png'))
+    // 托盘图标从**同一个头像文件**现算，而不是再维护一张 tray.png：
+    // 两处各存一份的话，改了球忘了托盘是迟早的事（这张图是用户自己的吉祥物，本来就该一致）。
+    const icon = nativeImage.createFromPath(join(__dirname, 'avatar.png')).resize({ width: 32, height: 32 })
+    if (icon.isEmpty()) throw new Error('头像没读出来（avatar.png 缺失或损坏）')
+    tray = new Tray(icon)
   } catch (error) {
     // 图标缺失不能静默：托盘没了，用户就只剩快捷键和窗口本身
     console.error('[panel] 托盘图标加载失败:', error.message)

@@ -25,6 +25,7 @@
  * 静默丢弃用户记忆是不能接受的，所以留档这一步是强制的，`loadIssue` 会把话说出来。
  */
 import { join } from 'path'
+import { writeFileAtomic } from '../utils/atomicWrite.js'
 import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync } from 'fs'
 import os from 'os'
 import { privacyGate } from './assistantPrivacy.js'
@@ -210,9 +211,9 @@ export class AssistantMemory {
       const dir = join(os.homedir(), '.weflow-cli')
       if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
       const payload = { version: MEMORY_FORMAT_VERSION, users: merged }
-      const tmp = `${MEMORY_FILE}.tmp`
-      writeFileSync(tmp, JSON.stringify(payload, null, 1), 'utf8')
-      renameSync(tmp, MEMORY_FILE)
+      // 走 writeFileAtomic：Windows 上 rename 覆盖被别的句柄打开的文件会 EPERM，
+      // 直接 rename 的话这里会**静默失败**（本条就是这个 bug 的现场）
+      writeFileAtomic(MEMORY_FILE, JSON.stringify(payload, null, 1))
       this.states = merged
       this.dirtyUsers.clear()
       this.saveIssue = null

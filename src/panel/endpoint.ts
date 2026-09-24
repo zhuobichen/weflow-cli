@@ -27,7 +27,8 @@
  * 它**挡不住**以同一用户身份运行、且愿意翻 `~/.weflow-cli/` 的程序——那种程序本来就能直接读库。
  * 这是这条设计的真实边界，别把它说成比这更强。
  */
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'fs'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs'
+import { writeFileAtomic } from '../utils/atomicWrite.js'
 import { randomBytes, timingSafeEqual } from 'crypto'
 import { join } from 'path'
 import os from 'os'
@@ -85,11 +86,9 @@ function isEndpoint(value: any): value is PanelEndpoint {
 export function writeEndpoint(endpoint: PanelEndpoint): boolean {
   try {
     mkdirSync(weflowHome(), { recursive: true })
-    const target = endpointFile()
-    const tmp = target + '.tmp'
-    // `mode` 在 Windows 上是空操作，见文件头注释；不是为了"安全"，是为了别的平台
-    writeFileSync(tmp, JSON.stringify(endpoint, null, 2), { encoding: 'utf8', mode: 0o600 })
-    renameSync(tmp, target)
+    // `mode` 在 Windows 上是空操作，见文件头注释；不是为了"安全"，是为了别的平台。
+    // 用 writeFileAtomic：rename 在被占用时会 EPERM，重试+兜底由它负责
+    writeFileAtomic(endpointFile(), JSON.stringify(endpoint, null, 2), { mode: 0o600 })
     return true
   } catch {
     return false
