@@ -11,8 +11,16 @@
 const { contextBridge, ipcRenderer } = require('electron')
 
 contextBridge.exposeInMainWorld('weflowPanel', {
-  /** 'ball' 收成小球，'chat' 展开成对话窗 */
-  setMode: (mode) => ipcRenderer.invoke('panel:setMode', mode === 'chat' ? 'chat' : 'ball'),
+  /**
+   * 'ball' 收成小球，'chat' 展开成对话窗。
+   *
+   * `opts.animate === false` 表示"别做动画，直接到位"——页面读 `prefers-reduced-motion`
+   * 之后传进来。**为什么让页面来读**：那个媒体查询只有渲染进程有，主进程这边没有等价 API；
+   * 而窗口几何的补间在主进程，CSS 管不着它。默认是**动画**（不传就是动画）。
+   */
+  setMode: (mode, opts) => ipcRenderer.invoke('panel:setMode',
+    mode === 'chat' ? 'chat' : 'ball',
+    { animate: !opts || opts.animate !== false }),
   /** 'window' 只关窗（助手继续跑），'assistant' 连助手一起停 */
   quit: (what) => ipcRenderer.invoke('panel:quit', what === 'assistant' ? 'assistant' : 'window'),
   /**
@@ -27,11 +35,25 @@ contextBridge.exposeInMainWorld('weflowPanel', {
   /** 主进程侧的实际状态，供界面显示"关窗后助手还在跑"这类事实 */
   info: () => ipcRenderer.invoke('panel:info'),
   /**
-   * 主进程（托盘菜单）把窗口切成了对话模式时通知页面。**通道名是常量，不由调用方给**。
-   * 回调只收到 'ball' / 'chat' 两个字符串。
+   * 主进程把窗口切成了球形态/气泡形态时通知页面。**通道名是常量，不由调用方给**。
+   *
+   * 载荷在这里**收窄**过再交出去：`mode` 只认 'ball'/'chat'，`side` 只认 'left'/'right'，
+   * `anchorY` 只认 'top'/'bottom'，`bubbleHeight` 夹进 1..10000，`fadeMs` 夹进 0..2000，
+   * `done` 只认布尔。跟通道名同一个道理——不把主进程给的东西原样透传。
    */
   onMode: (cb) => {
     if (typeof cb !== 'function') return
-    ipcRenderer.on('panel:mode', (_event, mode) => cb(mode === 'chat' ? 'chat' : 'ball'))
+    const clampInt = (value, max, min = 0) => {
+      const n = Math.round(Number(value))
+      return Number.isFinite(n) ? Math.min(Math.max(n, min), max) : min
+    }
+    ipcRenderer.on('panel:mode', (_event, payload) => cb({
+      mode: payload && payload.mode === 'ball' ? 'ball' : 'chat',
+      side: payload && payload.side === 'right' ? 'right' : 'left',
+      anchorY: payload && payload.anchorY === 'top' ? 'top' : 'bottom',
+      bubbleHeight: clampInt(payload && payload.bubbleHeight, 10000, 1),
+      fadeMs: clampInt(payload && payload.fadeMs, 2000),
+      done: !!(payload && payload.done),
+    }))
   },
 })

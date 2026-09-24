@@ -248,8 +248,66 @@ const ball = document.getElementById('ball')
 const collapse = document.getElementById('collapse')
 const hasShell = typeof window.weflowPanel !== 'undefined'
 
+/**
+ * 系统关了动画没有。**这一条只有渲染进程能问**（`prefers-reduced-motion` 是媒体查询，
+ * 主进程那边没有等价 API），而窗口几何的补间在主进程、CSS 管不着——所以读出来的结果
+ * 要随 `setMode` 带过去。
+ *
+ * `typeof` 那半不是客套：`matchMedia` 在 jsdom 里**根本不存在**（测试就是拿 jsdom 跑这个
+ * 文件的），直接调会在加载时就抛。
+ */
+function prefersReducedMotion() {
+  return typeof window.matchMedia === 'function'
+    && window.matchMedia('(prefers-reduced-motion: reduce)').matches
+}
+
+/** 气泡方位相关的类，每次切形态先全摘掉再按主进程说的挂上 */
+const LAYOUT_CLASSES = ['bubble-left', 'bubble-right', 'anchor-top']
+
+/**
+ * 按主进程说的形态切 class。**这里是唯一改形态的地方**。
+ *
+ * 载荷带方位：`side` 是气泡在球的哪一边（球就在窗口的另一边），`anchorY` 是球贴窗口的
+ * 上边还是下边（气泡跟着它竖着对齐），`bubbleHeight` 是气泡该有多高——**屏幕不够高时
+ * 气泡会变矮**，那是为了让球待在窗口的角上不动（见 `ball-position.cjs` 的 `bubbleLayout`）。
+ *
+ * 页面自己算不出这些：它不知道自己在屏幕上的位置，也不知道工作区多大。
+ */
+function applyMode(payload) {
+  const mode = payload && payload.mode === 'ball' ? 'ball' : 'chat'
+  const side = payload && payload.side === 'right' ? 'right' : 'left'
+  document.body.classList.remove('mode-ball', 'mode-chat', 'closing', ...LAYOUT_CLASSES)
+  document.body.classList.add(mode === 'chat' ? 'mode-chat' : 'mode-ball')
+  if (mode === 'chat') {
+    document.body.classList.add(side === 'right' ? 'bubble-right' : 'bubble-left')
+    if (payload && payload.anchorY === 'top') document.body.classList.add('anchor-top')
+    const height = Number(payload && payload.bubbleHeight)
+    document.body.style.setProperty('--bubble-height',
+      `${Number.isFinite(height) && height > 0 ? Math.round(height) : 560}px`)
+    input.focus()
+  }
+}
+
+/**
+ * 请主进程换形态。**页面自己不先换 class**：从前这条路是页面直接 `classList.replace`，
+ * 而托盘那条走的是 `panel:mode`，两条路行为不一样（一边球瞬间消失、一边等主进程）。
+ * 现在形态只有主进程一个来源，页面照着 `panel:mode` 做，展开与收起于是必然对称。
+ */
+function requestMode(mode) {
+  void window.weflowPanel.setMode(mode, { animate: !prefersReducedMotion() })
+}
+
+/**
+ * 点球 = 开关：站着就展开、展开了就收起。**球全程不消失**——它是"在说话的那个图标"，
+ * 让它先撤下去再冒出个窗口，就是用户嫌的那股突兀劲。
+ */
+function toggleMode() {
+  requestMode(document.body.classList.contains('mode-chat') ? 'ball' : 'chat')
+}
+
 if (hasShell) {
-  document.body.classList.add('mode-ball')
+  // `shell` 这个类决定球在不在场（见 panel.css）：浏览器降级那条路永远不该看见球
+  document.body.classList.add('shell', 'mode-ball')
   ball.hidden = false
   collapse.hidden = false
 
@@ -278,24 +336,28 @@ if (hasShell) {
       window.removeEventListener('pointerup', onUp)
       void window.weflowPanel.dragEnd()
       if (dragging) return                 // 拖过了就不算点击
-      document.body.classList.replace('mode-ball', 'mode-chat')
-      void window.weflowPanel.setMode('chat')
-      input.focus()
+      toggleMode()
     }
     void window.weflowPanel.dragStart(startX, startY)
     window.addEventListener('pointermove', onMove)
     window.addEventListener('pointerup', onUp)
   })
-  collapse.addEventListener('click', () => {
-    document.body.classList.replace('mode-chat', 'mode-ball')
-    void window.weflowPanel.setMode('ball')
-  })
+  collapse.addEventListener('click', () => { requestMode('ball') })
 
-  // 托盘里点"展开为对话窗"时窗口已经被主进程放大了，页面得跟上换形态
-  window.weflowPanel.onMode((mode) => {
-    document.body.classList.remove('mode-ball', 'mode-chat')
-    document.body.classList.add(mode === 'chat' ? 'mode-chat' : 'mode-ball')
-    if (mode === 'chat') input.focus()
+  // 形态由主进程说了算（球、收起、托盘菜单、快捷键都是这条路），收起分两步：
+  //   `fadeMs > 0` → 先把气泡淡掉（窗口这会儿还是大的，淡出真看得见），**不换形态**；
+  //   `done` → 主进程已经把窗口缩回球那么大，这时才把气泡摘掉。
+  // 顺序不能反：提前换，76x76 的窗口里会露出一条气泡的边；不换，气泡会一直在。
+  window.weflowPanel.onMode((payload) => {
+    if (payload && payload.mode === 'ball' && !payload.done) {
+      if (payload.fadeMs > 0 && document.body.classList.contains('mode-chat')) {
+        document.body.classList.add('closing')
+        return
+      }
+      applyMode(payload)
+      return
+    }
+    applyMode(payload)
   })
 } else {
   // 浏览器降级：把话说清，别让用户以为悬浮球坏了

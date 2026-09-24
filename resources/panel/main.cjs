@@ -22,15 +22,19 @@ const { trayMenuTemplate } = require('./tray-menu.cjs')
 const ENDPOINT_FILE = join(os.homedir(), '.weflow-cli', 'assistant_endpoint.json')
 const POSITION_FILE = join(os.homedir(), '.weflow-cli', 'panel_position.json')
 const COOKIE_NAME = 'weflow_panel'
-const BALL_SIZE = 76
-const CHAT_SIZE = { width: 420, height: 560 }
-/** 球离屏幕边缘留多少：贴死边缘在 Windows 上会跟任务栏/贴边功能打架 */
-const EDGE_MARGIN = 24
+/** 收起时气泡淡出多久。页面照着淡、主进程照着等——**只此一处**，两边不会走散。
+ *  另外它还是缩窗口的**下限延迟**：页面得先收到通知把气泡摘掉，窗口再缩，否则会闪出一条边。 */
+const CLOSE_FADE_MS = 130
 
 let win = null
 let tray = null
 let ballMode = true
 let shortCircuitFailures = 0
+/**
+ * 球挂在窗口的哪一侧、竖向离窗口顶多远。展开时由 `bubbleLayout` 定下来（页面照它把球钉住），
+ * 收起时用它把球从窗口里算回来——**不能假定是窗口的左上角**。
+ */
+let ballAnchor = { side: 'left', anchorY: 'bottom' }
 
 /**
  * 跑一条 CLI 命令（目前只用来停助手）。**这里踩过一个坑，写法不能再简化**：
@@ -41,7 +45,7 @@ let shortCircuitFailures = 0
  * 仓库里 `bin/weflow-cli-electron.cjs` 早就记着这个坑，解法是
  * `-e "import('file:///…')" -- <参数>`。实测两种写法：前者报 unknown command，后者正常。
  *
- * 路径要过 `pathToFileURL`：本机的仓库目录就是中文（`ZhaoWen_GitHub维护`），
+ * 路径要过 `pathToFileURL`：仓库目录**可能是中文/带空格的**（本机就是），
  * `file:///` 后面直接拼原始字符不是合法 URL。它同时负责百分号编码。
  */
 function spawnCli(cliArgs) {
@@ -62,7 +66,12 @@ function spawnCli(cliArgs) {
 
 // 位置算术在 `ball-position.cjs`（纯函数、能被 CI 用合成布局测）；
 // 这里只负责"问 Electron 要显示器列表"，然后把真实的显示器喂给它。
-const { defaultBallPosition: defaultBall, clampInto, resolveStartPosition } = require('./ball-position.cjs')
+// 球的尺寸与气泡的尺寸/间距**只有一份**（就在那里）。这里原本又写了一遍 `76` 和一个
+// `CHAT_SIZE`——每样东西两处各写一个数字，改一处就等着它们分家；`panel.css` 那边有对应的
+// `--ball-size` / `--bubble-width` / `--bubble-gap`（CSS 拿不到 JS 的值），那几份由
+// `test/panel-packaging.test.ts` 断言与本模块的这些值相等。
+const { BALL_SIZE, EDGE_MARGIN, BUBBLE_SIZE, bubbleLayout, ballRectInWindow,
+        defaultBallPosition: defaultBall, clampInto, resolveStartPosition } = require('./ball-position.cjs')
 
 function workAreas() { return screen.getAllDisplays().map((d) => d.workArea) }
 function primaryWorkArea() { return screen.getPrimaryDisplay().workArea }
@@ -71,10 +80,15 @@ function primaryWorkArea() { return screen.getPrimaryDisplay().workArea }
  * （本机实测 815,418，屏幕中偏左），那不叫"屏幕角落一个球"。 */
 function defaultBallPosition() { return defaultBall(primaryWorkArea(), BALL_SIZE, EDGE_MARGIN) }
 
+/** 这个点落在哪块屏的可见区域里。**问 Electron 的那一半只此一处**。 */
+function workAreaAt(x, y) {
+  return screen.getDisplayNearestPoint({ x, y }).workArea
+}
+
 /** 把一个矩形挪进它所在那块屏的可见区域（不缩尺寸，只挪）。
- * 展开成对话窗时要用：球在右下角，直接按球的位置铺开一个 420x560 的窗会有一半在屏幕外。 */
+ * 收回球形态时要用：气泡拖到屏幕角落，直接从那儿缩回 76x76 会有一半在屏幕外。 */
 function fitIntoWorkArea(x, y, width, height) {
-  return clampInto(x, y, width, screen.getDisplayNearestPoint({ x, y }).workArea)
+  return clampInto(x, y, width, workAreaAt(x, y))
 }
 
 /** 记住的位置还能不能用（不可达就回默认角落） */
@@ -225,7 +239,25 @@ async function buildWindow() {
   if (!win.isVisible()) win.show()
 }
 
-function setMode(mode) {
+/**
+ * 展开/收起。三件事决定了它的形状：
+ *
+ * 1. **球不能撤**（用户原话："气泡在它旁边展开，像这个图标在说话，点击收起"）；
+ * 2. **球一个像素都不许动**——所以窗口的矩形由 `bubbleLayout`（`ball-position.cjs`，
+ *    有测试）算成"球 + 空隙 + 气泡"的并集，并把球在窗口里的偏移一并返回，页面照着钉；
+ * 3. **窗口只改一次大小**。从前那版是逐帧补间窗口几何，用户实测"闪好多才弹出"——
+ *    透明窗口每 resize 一次 DWM 就要重新合成一次，一秒钟里改七八次就是七八次闪。
+ *    现在：窗口一次到位，**动效全交给页面那边**（气泡的淡入与缩放是合成器做的，不重新布局）。
+ *
+ * 两次 resize 都发生在**看不见的时刻**：展开时窗口先长出来（那一大片是透明的，页面上
+ * 什么都还没显示，随后气泡淡入）；收起时页面先把气泡淡掉，淡完这里才缩窗口。所以任何一帧
+ * 里"可见的东西"都没有跟着窗口跳过。
+ *
+ * **形态与方位由这里说了算**：页面只请求，照着 `panel:mode` 做。收起分两步
+ * （`fade` → 页面开始淡出；`done` → 页面换成球形态），因为窗口要等淡完才能缩，而页面
+ * 要等窗口缩完才能把气泡摘掉——晚一帧就会在 76x76 的窗口里看见一条气泡的边。
+ */
+function setMode(mode, opts) {
   if (!win) return
   const chat = mode === 'chat'
 
@@ -233,29 +265,47 @@ function setMode(mode) {
   // 第一版先 `setResizable(false)` 再 `setSize(76,76)`，结果是"收起"以后页面回到球形态、
   // 置顶也恢复了，窗口却停在对话窗的大小（实测 421x561）——屏幕上就是一个巨大的球。
   // 所以：先解锁 → 改尺寸 → 最后再锁上。
-  // 尺寸与位置**一起**用 setContentBounds 设：这个窗口上 setSize + setPosition 会互相打架
-  // （setPosition 动的是外框，实测每调一次尺寸就漂 1-2px——展开后量到 421x561 而不是 420x560
-  // 就是这个漂移，拖动那条路更夸张，见 panel:dragMove 的注释）。
+  // 尺寸与位置**一起**走 setContentBounds（详见 `panel:dragMove` 那条注释）。
+  // 顺带更正一句旧注释：它把"展开后量到 421x561 而不是 420x560"记成了 setContentBounds 的漂移。
+  // 2026-09-24 用探针分开量过（显示缩放 150%）：**紧挨着 setContentBounds 调 getContentBounds，
+  // 读回来可能是上一拍的值**（实测要 420x560 读回 421x560，只差宽 1px），隔一拍再读就是
+  // 420x560，20 次往返也没有任何累积漂移。也就是说那是**读得早**，不是它漂。
   win.setResizable(true)
   const from = win.getContentBounds()
+
   if (chat) {
-    // 球在右下角时，直接按它的位置铺开一个 420x560 的窗会有一半在屏幕外——挪进来
-    const fitted = fitIntoWorkArea(from.x, from.y, CHAT_SIZE.width, CHAT_SIZE.height)
-    win.setContentBounds({ x: fitted.x, y: fitted.y, width: CHAT_SIZE.width, height: CHAT_SIZE.height })
+    const layout = bubbleLayout(from, BUBBLE_SIZE, workAreaAt(from.x, from.y))
+    ballAnchor = { side: layout.side, anchorY: layout.anchorY }
     win.setAlwaysOnTop(false)     // 对话时不必压着别的窗口
     win.setSkipTaskbar(false)
-    win.setResizable(true)        // 对话窗允许用户自己拉大小
-  } else {
-    // 反过来也一样：从屏幕右下角的对话窗收回来，球要整个看得见（中心可见才抓得回来）
-    const fitted = fitIntoWorkArea(from.x, from.y, BALL_SIZE, BALL_SIZE)
-    win.setContentBounds({ x: fitted.x, y: fitted.y, width: BALL_SIZE, height: BALL_SIZE })
+    win.setContentBounds(layout.window)
+    win.setResizable(true)        // 展开后可调大小
+    ballMode = false
+    win.webContents.send('panel:mode', {
+      mode: 'chat', side: layout.side, anchorY: layout.anchorY, bubbleHeight: layout.bubbleHeight,
+    })
+    return { mode: 'chat' }
+  }
+
+  // 收起：页面先把气泡淡掉（窗口这会儿还是大的，所以淡出真看得见），淡完再缩。
+  const fadeMs = opts && opts.animate === false ? 0 : CLOSE_FADE_MS
+  const shrink = () => {
+    if (!win) return
+    // **球的落点从当前窗口与其锚反推**，不是窗口的左上角（球在侧边上）
+    const ball = ballRectInWindow(win.getContentBounds(), ballAnchor, BALL_SIZE)
+    const fitted = fitIntoWorkArea(ball.x, ball.y, BALL_SIZE, BALL_SIZE)
     savePosition(fitted.x, fitted.y)
+    win.setContentBounds({ x: fitted.x, y: fitted.y, width: BALL_SIZE, height: BALL_SIZE })
     win.setAlwaysOnTop(true, 'floating')
     win.setSkipTaskbar(true)
     win.setResizable(false)
+    ballMode = true
+    win.webContents.send('panel:mode', { mode: 'ball', done: true })
   }
-  ballMode = !chat
-  return { mode: chat ? 'chat' : 'ball' }
+  win.webContents.send('panel:mode', { mode: 'ball', fadeMs })
+  // 至少等一帧：页面先把气泡摘掉，这里再缩窗口。反过来那一帧里 76x76 的窗口会露出气泡的一条边
+  setTimeout(shrink, Math.max(fadeMs, 16))
+  return { mode: 'ball' }
 }
 
 function toggleVisible() {
@@ -283,7 +333,8 @@ function buildTray() {
   // 这里只负责把真实动作接上去。
   tray.setContextMenu(Menu.buildFromTemplate(trayMenuTemplate({
     toggleVisible,
-    expandToChat: () => { win?.show(); setMode('chat'); win?.webContents.send('panel:mode', 'chat') },
+    // 形态通知由 `setMode` 自己发（不再由调用方发一遍：两处发同一个事件，早晚有一处忘）
+    expandToChat: () => { win?.show(); setMode('chat') },
     quitPanel: () => { app.isQuitting = true; app.quit() },
     quitAndStopAssistant: () => {
       app.isQuitting = true
@@ -305,7 +356,7 @@ if (!app.requestSingleInstanceLock()) {
   app.on('second-instance', () => { win?.show(); win?.focus() })
 
   app.whenReady().then(async () => {
-    ipcMain.handle('panel:setMode', (_event, mode) => setMode(mode))
+    ipcMain.handle('panel:setMode', (_event, mode, opts) => setMode(mode, opts))
 
     // 拖拽：按下时记下"窗口位置 + 指针位置"，移动时按差值挪窗口。
     // 用差值而不是绝对值，是为了不受 DPI 缩放与多屏坐标原点的影响。

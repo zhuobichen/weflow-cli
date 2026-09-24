@@ -6,11 +6,11 @@
 <link rel="stylesheet" href="/panel/panel.css">
 </head>
 <body>
-  <!-- 悬浮球。只在有外壳（Electron）时才显示；浏览器那条路没有它，
-       因为浏览器窗口给不了无边框置顶的小球。 -->
-  <!-- 悬浮球。球面是 resources/panel/avatar.png（维护者自己的头像），
-       由守护进程按白名单递过来；只在有外壳（Electron）时才显示——
-       浏览器窗口给不了无边框置顶的小球。 -->
+  <!-- 悬浮球。球面是 resources/panel/mascot.png（按内容包围盒裁过的吉祥物），
+       由守护进程按白名单递过来；只在**有外壳**（Electron）时才显示，靠 renderer 加的
+       `body.shell` 这个类——浏览器那条路给不了无边框置顶的小球，硬做只会做出一个
+       奇怪的方窗口，所以那边永远看不见球（`hidden` 属性与 CSS 里那条 `display:none`
+       都是为它留的）。 -->
   <button id="ball" type="button" title="第二大脑（点击展开 · 可拖动）" hidden>
     <!-- 两层：底下一层是会动的光晕（背景），上面一层是吉祥物。
          分开是为了让光晕能变而猫不动——直接给 #ball 设 background 的话，
@@ -19,20 +19,27 @@
     <span class="face" aria-hidden="true"></span>
   </button>
 
-  <header>
-    <span class="brand">第二大脑</span>
-    <span id="status" class="status">连接中…</span>
-    <button id="collapse" type="button" class="ghost" hidden>收起</button>
-  </header>
+  <!-- 对话气泡。**单独一层**：它要有自己的圆角与底色，而展开时窗口比它大一圈
+       （多出来的是球占的那条 + 空隙），那一圈必须是**透明**的——所以底色不能画在 body 上。
+       尾巴是它的子节点，这样补间过程中自动跟着气泡走，还没露出来时被窗口裁掉即可。 -->
+  <div id="bubble">
+    <header>
+      <span class="brand">第二大脑</span>
+      <span id="status" class="status">连接中…</span>
+      <button id="collapse" type="button" class="ghost" hidden>收起</button>
+    </header>
 
-  <main id="log" aria-live="polite"></main>
+    <main id="log" aria-live="polite"></main>
 
-  <form id="composer" autocomplete="off">
-    <textarea id="input" rows="2" placeholder="问点什么…（Enter 发送，Shift+Enter 换行）"></textarea>
-    <button id="send" type="submit">发送</button>
-  </form>
+    <form id="composer" autocomplete="off">
+      <textarea id="input" rows="2" placeholder="问点什么…（Enter 发送，Shift+Enter 换行）"></textarea>
+      <button id="send" type="submit">发送</button>
+    </form>
 
-  <footer id="foot"></footer>
+    <footer id="foot"></footer>
+
+    <div id="tail" aria-hidden="true"></div>
+  </div>
 
   <script src="/panel/renderer.js"></script>
 </body>

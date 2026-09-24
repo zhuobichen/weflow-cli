@@ -217,9 +217,12 @@ weflow-cli panel               # 打开本机面板窗口 (不扫码也能用)
 
 `weflow-cli panel` 打开的是一个常驻小窗，它跟微信里问的**是同一个大脑**（同一份记忆、
 同一条每日配额）。**不登录微信也能用**——消息通道是可选的。窗口只是客户端：消息走守护进程
-开在 `127.0.0.1` 上的入口，所以两个入口不会各写一份记忆。悬浮球形态需要 Electron
-（`npm i -g electron`）；没装的话会降级成 Edge/Chrome 的 `--app` 小窗，界面一样，
-但没有无边框置顶、没有托盘与快捷键。
+开在 `127.0.0.1` 上的入口，所以两个入口不会各写一份记忆。
+
+悬浮球需要 Electron（`npm i -g electron`）；没装的话会降级成 Edge/Chrome 的 `--app` 小窗，
+界面一样，但没有无边框置顶、没有托盘与快捷键。有球时：**点一下它在旁边展开对话气泡
+（球不动，再点一下收起）**；气泡默认开在球的左边，左边放不下会自己翻到右边，上方不够就
+改成顶对齐；拖动球可以换位置（位置会记住）。
 
 之后在手机微信的 ClawBot 对话里直接说话，助手会自动查询本地聊天记录和收藏作答，并具备跨会话记忆：
 
@@ -232,11 +235,11 @@ weflow-cli panel               # 打开本机面板窗口 (不扫码也能用)
 - 「我在读什么书？」「XX 这本书的笔记」— 微信读书书架与笔记本
 - 「我有什么待办？有急事吗？」— 待办清单（按紧急度排序）
 - 「知识库里怎么讲 RAG 的？」— 概念 Wiki 检索
+- 「帮我回老王那句话」— 起草回复：先判断对方要什么、风险和该不该给实质内容，再给几条候选。
+  **只产出文本，不会替你发送**；涉钱或风险很高时不给草稿，只说明该先确认什么
 - 「记住：我的项目叫 weflow-cli」— 写入长期记忆
 
 运行机制：守护进程通过微信官方 Bot 通道（iLink）长轮询收发消息，Agent 循环、三层记忆（工作窗口 / 滚动摘要 / 长期事实）、数据库查询全部在本机执行；仅最终提问与回复文本会发送给所配置的 LLM，工具输出中的电话/邮箱/链接等 PII 默认自动脱敏（`config set assistantPrivacy strict` 可加强，`ollama` 本地引擎则完全不出网）。会话 24 小时未活跃需重新扫码，单窗口内主动回复有官方条数限制。
-- 「帮我回老王那句话」— 起草回复：先判断对方要什么、风险和该不该给实质内容，再给几条候选。
-  **只产出文本，不会替你发送**；涉钱或风险很高时不给草稿，只说明该先确认什么
 
 成本护栏：内置每日 100 条处理上限（防异常流量烧钱，微信内发「记忆」可查用量）；助手默认拒绝所有来信，必须明确配置白名单后才会触发 AI 调用：
 
@@ -263,10 +266,10 @@ weflow-cli config set assistantGroupRequireMention true
 | 初始化或手动指定路径 | `weflow-cli init [--path <目录>]` |
 | 浏览聊天数据 | `weflow-cli sessions` · `weflow-cli messages <联系人>` · `weflow-cli contacts` |
 | 谁在等我回话 | `weflow-cli awaiting --dry-run` · `weflow-cli awaiting --yes` |
+| 帮我起草回复（只出文字，不发送） | `weflow-cli draft <联系人> --dry-run` · `--yes` |
 | 本机判断层 | `weflow-cli decide --request <file> --dry-run` · `--yes` |
 | 导出聊天记录 | `weflow-cli export <联系人> <json\|txt\|html\|excel>` |
 | 同步检查点 | `weflow-cli sync run <联系人> --since <日期>` · `sync status` · `sync verify` |
-| 帮我起草回复（只出文字，不发送） | `weflow-cli draft <联系人> --dry-run` · `--yes` |
 | 公众号日报与阅读器 | `weflow-cli daily` · `weflow-cli daily-server` · `weflow-cli review` |
 | 朋友圈缓存 | `weflow-cli sns timeline` · `weflow-cli sns users` · `weflow-cli sns stats` |
 | 微信收藏 | `weflow-cli fav list` · `weflow-cli fav export markdown` · `weflow-cli fav set-key` |

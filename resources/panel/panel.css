@@ -8,6 +8,17 @@
   --accent: #4c8bf5;
   --warn: #e0a23c;
   --err: #e5645f;
+  /* 球多大。CSS 拿不到 JS 的值，所以这里是**第二份**——与 `ball-position.cjs` 的
+     `BALL_SIZE`（main.cjs 也从那里取）必须一致，`test/panel-packaging.test.ts` 断言这一点。 */
+  --ball-size: 76px;
+  /* 气泡多大、离球多远、圆角多少。同样是 `ball-position.cjs`（`BUBBLE_SIZE` / `BUBBLE_GAP`）
+     的第二份拷贝：JS 那边用它算窗口矩形，CSS 这边用它排版，两边必须一致——有测试钉住。 */
+  --bubble-width: 420px;
+  /* 气泡的高度**会被页面改**（屏幕不够高时变矮，好让球仍然待在窗口的角上不动），
+     这个值是页面还没说话时的默认。`ball-position.cjs` 的 BUBBLE_SIZE.height 是同一个数。 */
+  --bubble-height: 560px;
+  --bubble-gap: 12px;
+  --bubble-radius: 14px;
 }
 
 * { box-sizing: border-box; }
@@ -20,7 +31,57 @@ html, body {
   font: 14px/1.55 -apple-system, "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
 }
 
+/* 有外壳时窗口是**透明的**：展开后窗口比气泡大一圈，多出来的是球占的那条与它们之间的空隙，
+   那一圈必须能透出桌面（用户要的就是"图标旁边冒出一个气泡"）。所以底色不能再画在 body 上，
+   改由 `#bubble` 自己画。降级那条路（没有 shell，页面铺满整个浏览器窗）照旧用 body 的底色。 */
+html:has(body.shell),
+body.shell { background: transparent; }
+
 body { display: flex; flex-direction: column; }
+
+/* ---------------------------------------------------------------- 对话气泡 */
+
+/* 单独一层：自己的圆角与底色。**不用 `overflow: hidden`**——尾巴是它的子节点，
+   会被一起剪掉；代价只是带底色的那几条要自己圆角（目前只有 header）。 */
+#bubble {
+  position: relative;              /* 尾巴的定位基准 */
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  background: var(--bg);
+}
+
+/* 有外壳时它是屏幕上一块**面板**，钉在窗口里离球最远的那条边上（球在窗口那一角，
+   气泡占剩下的地方）。窗口这一整块的尺寸由主进程一次算好（`bubbleLayout`），
+   页面这边只管"贴哪条边"。 */
+body.shell #bubble {
+  position: fixed;
+  width: var(--bubble-width);
+  min-width: var(--bubble-width);
+  height: var(--bubble-height);
+  border-radius: var(--bubble-radius);
+}
+/* 气泡钉在窗口离球最远的那一侧，竖向与球同边（球贴窗口底 → 气泡也贴底，反之亦然）。
+   窗口整块的尺寸由主进程算（`bubbleLayout`），这里只负责"球在哪一侧、贴哪条边"。 */
+body.shell.bubble-left #bubble { left: 0; }
+body.shell.bubble-right #bubble { right: 0; }
+body.shell.anchor-top #bubble { top: 0; }
+body.shell:not(.anchor-top) #bubble { bottom: 0; }
+
+/* 小尾巴：指向球的一个斜方块。它贴在气泡靠球那条边上，高度对球心——
+   球贴窗口底时球心离底 38px（76 高），尾巴 12 高，所以 bottom: 32px。
+   底色取那一条子元素的 --panel（底对齐时是输入栏，顶对齐时是标题栏，两处同色）。 */
+#tail {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  background: var(--panel);
+  transform: rotate(45deg);
+}
+body.shell.bubble-left #tail { right: -6px; bottom: 32px; }
+body.shell.bubble-right #tail { left: -6px; bottom: 32px; }
+body.shell.anchor-top #tail { bottom: auto; top: 32px; }
 
 header {
   display: flex;
@@ -38,13 +99,19 @@ header {
 /* ---------------------------------------------------------------- 悬浮球形态 */
 
 #ball {
+  /* 球**一直在场**（有外壳时，见下面 `body.shell`）：展开成气泡时它不消失、不淡出，
+     就地待着当锚点——用户要的是"这个图标在说话"，说话的人当然不能先撤了。
+     浏览器降级那条路靠这条 `display: none` 永远看不见球（那一侧 `hidden` 属性也还在）。 */
   display: none;
-  width: 100vw;
-  height: 100vh;
+  /* 固定尺寸、钉在窗口的某个角上（下面的 shell 规则给角）：**尺寸不跟着窗口长**，
+     否则展开过程中会看到一只被拉成巨型的猫。球形态下窗口就是 76×76，铺满即整窗。 */
+  position: fixed;
+  width: var(--ball-size);
+  height: var(--ball-size);
+  z-index: 2;               /* 压在气泡之上：气泡要从它后面滑出来 */
   border-radius: 50%;
   border: 0;
   padding: 0;
-  position: relative;
   cursor: pointer;
   /* **不要在这里写 `-webkit-app-region: drag`**：Windows 上拖拽区会吞掉鼠标事件，
      页面收不到 click，球就点不开了（实测的故障就是这个）。拖动自己实现，见 renderer.js。 */
@@ -57,6 +124,16 @@ header {
   filter: drop-shadow(0 6px 12px rgba(0, 0, 0, .50));
   transition: transform .12s ease, filter .12s ease;
 }
+
+body.shell #ball { display: grid; }
+/* 球钉在窗口的**某一个角**上，由气泡在哪一侧、贴哪条边决定（`ball-position.cjs` 的
+   `bubbleLayout` 保证那个角就是球原来所在的位置）。
+   **这条是"球全程不动"的全部**：窗口改大小时，只要球所在的这个角没动，球在屏幕上的位置
+   就不动——哪怕窗口是在页面收到通知之前就变大了。上一版让球按坐标钉、窗口逐帧补间，
+   窗口每改一次大小，球都要等页面把新坐标设回来才回位，那就是用户看到的"闪好多"。 */
+body.shell #ball { right: 0; bottom: 0; }
+body.shell.bubble-right #ball { right: auto; left: 0; }
+body.shell.anchor-top #ball { bottom: auto; top: 0; }
 #ball > span { position: absolute; inset: 0; border-radius: 50%; pointer-events: none; }
 
 /* 会动的那层背景。做成**软边光晕**而不是硬边圆盘：硬边就又回到"一只盘子"了，
@@ -112,32 +189,65 @@ body.offline #ball .glow { animation: none; opacity: .9; }
 body.quota #ball { --hue: 38; }
 body.quota #ball .glow { animation: none; opacity: .85; }
 
-/* 系统说"减少动态效果"就照办：停掉所有流动，只留静止的光晕 */
+/* 系统说"减少动态效果"就照办：停掉所有流动，只留静止的光晕。
+   展开/收起那两段也一起停（下面那几条，**写在原来那条之后**——测试盯的是这一段开头
+   240 个字符里就有 `animation: none`，把新规则插在前面会把它挤出窗口）。 */
 @media (prefers-reduced-motion: reduce) {
   #ball .glow,
   body.busy #ball .glow { animation: none; }
+  body.mode-chat #bubble { animation: none; }
+  body.mode-chat.closing #bubble { animation: none; opacity: 0; }
+  #ball { transition: none; }
 }
 
 #ball:hover { filter: drop-shadow(0 8px 16px rgba(0, 0, 0, .58)) brightness(1.08); }
 #ball:active { transform: scale(.95); }
 
-/* 球形态：把对话那一套全藏掉，页面背景透明（窗口本身也是透明的）。
-   **`html` 也要一起清掉**——只清 `body` 的话根元素那层不透明底色会把整个窗口填满，
-   透明窗口里就会看到一个方块而不是一个圆球。 */
-html:has(body.mode-ball),
-body.mode-ball { background: transparent; }
-body.mode-ball header,
-body.mode-ball main,
-body.mode-ball form,
-body.mode-ball footer { display: none; }
-/* 用 grid 才让 place-items 真的居中；block 只是碰巧靠按钮默认的 text-align 居中 */
-body.mode-ball #ball { display: grid; }
+/* 球形态：把气泡整个藏掉，窗口缩回 76x76（主进程那边做）。
+   底色早就不是 body 的了（见上面 `body.shell` 那两条）——气泡自己画，窗口是透明的。 */
+body.mode-ball #bubble { display: none; }
 /* 球形态下不许出现滚动条：busy 的呼吸动画会 scale(1.08)，
    溢出的那点内容会在 76x76 的窗口里长出滚动条（实测：右侧冒出上下箭头）。 */
 body.mode-ball { overflow: hidden; }
 
 /* 对话形态（有外壳时）才显示"收起" */
 body.mode-chat #collapse { display: inline-block; }
+
+/* header 顶在气泡的圆角上，得自己把上面两个角修圆（气泡那层没开 overflow: hidden，
+   开了会把尾巴剪掉）。只有它需要：下面几层的底边不是气泡的底边（footer 才是，而它没有底色）。 */
+body.shell header { border-radius: var(--bubble-radius) var(--bubble-radius) 0 0; }
+
+/* 展开时气泡淡进来。放在**稳定态那个类**上（不是临时的过渡类）：只要页面变成对话形态
+   就播一次——第一次打开、从球展开、托盘展开都算，它本来就是"气泡出现了"这件事。
+   **这段动画是全部动效**：窗口那边主进程是一次到位的，不逐帧改大小——透明窗口每 resize
+   一次 DWM 就要重新合成一次，用户实测"闪好多才弹出"就是这么来的。这里只动 opacity 与
+   transform，合成器直接做，不重新布局、不改窗口。
+   `transform-origin` 取球那一侧：气泡看起来是从球那儿"长出来"的，而不是凭空出现。
+   **不给 `main` 加 transform**：`#log` 是滚动容器，加位移会多出一个包含块。 */
+/* 原点取球心那一侧：球贴窗口底时球心离底 38px（球 76 高），贴顶时离顶 38px */
+body.mode-chat #bubble {
+  transform-origin: right calc(100% - 38px);
+  animation: bubble-in .2s cubic-bezier(.2, .8, .2, 1) both;
+}
+body.mode-chat.bubble-right #bubble { transform-origin: left calc(100% - 38px); }
+body.mode-chat.anchor-top #bubble { transform-origin: right 38px; }
+body.mode-chat.bubble-right.anchor-top #bubble { transform-origin: left 38px; }
+@keyframes bubble-in {
+  from { opacity: 0; transform: scale(.94); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* 收起：先把气泡淡掉（**窗口这会儿还是大的**，所以这 130ms 真看得见），主进程等这段时间
+   过去再缩窗口，缩完才通知页面把气泡摘掉（`display: none`）。顺序不能反：提前摘掉就成了
+   "啪"地消失，晚摘掉就会在 76x76 的窗口里露出一条气泡的边。
+   **这里用 animation 而不是 transition**：上面那条 `bubble-in` 带着 `both` 填充，而动画在
+   层叠里**压过**过渡——写 `opacity: 0` 会被它一直覆盖着，收起时看着就像没反应。
+   两条都是动画时，靠"更靠后的选择器 + 更高的特指度"（多一个 `.closing`）取胜。 */
+body.mode-chat.closing #bubble { animation: bubble-out .13s ease both; }
+@keyframes bubble-out {
+  from { opacity: 1; }
+  to   { opacity: 0; }
+}
 
 .ghost {
   margin-left: auto;
@@ -165,6 +275,22 @@ main {
 .turn.sys { align-self: center; color: var(--dim); font-size: 12px; text-align: center; }
 .turn.err { align-self: stretch; border: 1px solid var(--err); color: var(--err); padding: 7px 11px; border-radius: 10px; }
 .turn.pending { color: var(--dim); font-style: italic; }
+
+/* 助手回答下的复制按钮。**常显**而不是 hover 才出现：这是个常驻小窗，
+   鼠标常常不在它上面，hover 等于没有。做得很淡，不跟正文抢注意力。 */
+.turn .copy {
+  display: block;
+  margin-top: 6px;
+  padding: 1px 7px;
+  font: inherit;
+  font-size: 11px;
+  color: var(--dim);
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  cursor: pointer;
+}
+.turn .copy:hover { color: var(--text); border-color: var(--dim); }
 
 /* ---------------------------------------------------------------- 还没聊过时的开头 */
 
@@ -229,19 +355,3 @@ footer {
   font-size: 12px;
 }
 footer .warn { color: var(--warn); }
-/* 助手回答下的复制按钮。**常显**而不是 hover 才出现：这是个常驻小窗，
-   鼠标常常不在它上面，hover 等于没有。做得很淡，不跟正文抢注意力。 */
-.turn .copy {
-  display: block;
-  margin-top: 6px;
-  padding: 1px 7px;
-  font: inherit;
-  font-size: 11px;
-  color: var(--dim);
-  background: transparent;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  cursor: pointer;
-}
-.turn .copy:hover { color: var(--text); border-color: var(--dim); }
-

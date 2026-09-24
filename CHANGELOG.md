@@ -319,6 +319,50 @@ All notable user-facing changes are recorded here. This project follows [Semanti
   already allowed. The payload is still withheld. A message the user *typed* that happens to start with
   `[图片]` is still masked as text: only the reader's own non-text labels count as labels.
 
+### Changed
+
+- **The ball no longer disappears when you open it: the conversation unfolds beside it, like an icon
+  that is talking.** The window is now "ball + gap + bubble" as one piece (508x560), with the ball
+  pinned to its own corner and the bubble growing out of the other side. The ball is the speaker, so it
+  stays put - it is a **toggle** (click to open, click again to close), and the geometry is computed by
+  `bubbleLayout` in `ball-position.cjs`, a pure function CI drives with synthetic displays. It prefers
+  the bubble on the ball's left, bottom-aligned (the ball defaults to the bottom-right, so the bubble
+  grows up-left without covering anything), flips to the right when there is no room on the left, and
+  switches to top-alignment when the bubble would run off the top of the work area - a popover, in
+  short. A 12px CSS tail points at the ball's centre. The mode still has **one source of truth** (the
+  main process announces `{mode, side, anchorY}`; the page only requests changes), so the ball, the
+  collapse button, the tray and the hotkey all take the same path, and `prefers-reduced-motion` still
+  stops both halves. The page's layout moved into a new `#bubble` wrapper element, which is what carries
+  the rounded corners and the background - the window's background is transparent now in both modes, so
+  the gap beside the ball really shows the desktop.
+
+  Measured on a real Electron window with the real page (throwaway probe, 150% display scaling), because
+  two of the three things below were **not** visible by reading the code:
+
+  - **The ball does not move.** Its offset inside the window is exactly 0 at every sample, the window's
+    anchored corner is held constant, and sampling the ball's screen position through a whole expand and
+    a whole collapse gives a spread of **at most 1px** (page-side, 23 and 30 samples). At rest before and
+    after, the ball's screen position is identical (1608.33 both times; the 0.33 is the 150% scale).
+  - **Two bugs found by measuring.** (1) The tween rounded each of the four edges independently, so the
+    anchored edge wobbled by 1-2px (measured right-edge values 1683/1684/1685) - and since the ball is
+    CSS-fixed to that edge, that wobble *is* the ball moving. `boundsAt` now takes the corner to pin and
+    derives the coordinates from that edge, so it is exact. (2) Collapsing placed the ball at the
+    **window's top-left** instead of the corner it actually sits on, which would have made it jump to the
+    bubble's opposite corner; `ballRectInWindow` (also pure, now tested as a round-trip: for all four
+    corners, expand-then-collapse returns the ball to where it started) fixes it.
+  - **A platform wrinkle worth knowing**: asking this window for 76x76 at 150% scaling yields a ~79px
+    client width - Windows enforces a minimum window width. Everything stays consistent because the ball
+    is anchored to the edge rather than to a computed size, but the window is a few px wider than the
+    ball, and the remembered position (`~/.weflow-cli/panel_position.json`) is the window's, not the
+    ball's visual left edge.
+
+  Frames land every 28-45ms (3-8 frames for a 190ms tween across runs), because the cost is the actual
+  window resize, not the 16ms timer; the motion is time-based, so it drops frames rather than stretching.
+  `BALL_SIZE` and the new `BUBBLE_SIZE`/`BUBBLE_GAP` live in `ball-position.cjs` only, with tests pinning
+  the CSS copies (`--ball-size`, `--bubble-width`, `--bubble-gap`) to them. How it *looks* is still a
+  human judgement - a screenshot cannot settle it, because GDI capture misses DWM-composited transparent
+  windows.
+
 ### Fixed
 
 - **Clicking the ball did nothing.** The ball carried `-webkit-app-region: drag` so it could be dragged -

@@ -37,12 +37,15 @@ function code(name: string): string {
     .join('\n')
 }
 
-test('面板要用的五个文件都在（少一个用户装上就缺）', () => {
+test('面板要用的文件都在（少一个用户装上就缺）', () => {
   // 两张图是分开的：mascot.png 是球面（透明底，靠投影分离），
   // tray.png 是托盘图标（**烤了圆盘进去**）：托盘只有 16-24 像素、又在深色任务栏上，
   // 那点尺寸里没有投影可依赖，得靠底色把轮廓撑出来。
+  // 两个 `.cjs` 是纯模块（`ball-position` 位置算术、`tray-menu` 托盘菜单）：`main.cjs` 会
+  // `require` 它们，所以**少一个面板根本起不来**——这条正是为这种漏检存在的。
   for (const name of ['index.html', 'renderer.js', 'panel.css', 'main.cjs', 'preload.cjs',
-                      'ball-position.cjs', 'tray-menu.cjs', 'mascot.png', 'tray.png', 'package.json']) {
+                      'ball-position.cjs', 'tray-menu.cjs',
+                      'mascot.png', 'tray.png', 'package.json']) {
     assert.ok(existsSync(join(PANEL, name)), `缺文件: resources/panel/${name}`)
   }
 })
@@ -336,4 +339,73 @@ test('球要能点开 —— 不许在球上用 -webkit-app-region: drag', () =>
   assert.match(renderer, /pointerdown/, '拖拽要自己实现')
   assert.match(renderer, /DRAG_THRESHOLD_PX/, '要能区分"点一下"和"按住拖"')
   assert.match(renderer, /dragStart|dragMove/, '要走那两个 IPC')
+})
+
+test('球的尺寸只有一份（CSS 里那份要和 ball-position.cjs 的值相等）', () => {
+  // CSS 拿不到 JS 的值，所以 `--ball-size` 必然是第二份拷贝。这家仓库对这种重复的手法
+  // 是"留两份 + 一条断言它们相等"（同 `TOPIC_ORDER` 那几处），而不是不管它——改一处忘另一处
+  // 的话，球会是 76 而 CSS 里是别的数，只在别人的屏幕上看得出来。
+  const css = code('panel.css')
+  const matched = css.match(/--ball-size:\s*(\d+)px/)
+  assert.ok(matched, 'panel.css 里要有 --ball-size')
+  const source = read('ball-position.cjs')
+  const declared = source.match(/BALL_SIZE\s*=\s*(\d+)/)
+  assert.ok(declared, 'ball-position.cjs 里要有 BALL_SIZE')
+  assert.equal(matched![1], declared![1], 'CSS 的 --ball-size 与 ball-position.cjs 的 BALL_SIZE 必须相等')
+  // 而且球真的用它：写死 76px 的话上面这条就白搭了
+  const ballBlock = css.slice(css.indexOf('#ball {'), css.indexOf('#ball > span'))
+  assert.match(ballBlock, /width:\s*var\(--ball-size\)/)
+})
+
+test('气泡的尺寸与空隙也只有一份（CSS 与 ball-position.cjs 必须一致）', () => {
+  // 这一对更要命：JS 那边用 BUBBLE_SIZE/BUBBLE_GAP 算**窗口矩形**，CSS 这边用同一组数
+  // 排版气泡。两边不一致的话，气泡不是露出一条边、就是被窗口裁掉一角，而窗口的落点还是"对"的。
+  const css = code('panel.css')
+  const source = read('ball-position.cjs')
+  const jsWidth = source.match(/BUBBLE_SIZE\s*=\s*\{\s*width:\s*(\d+)/)
+  const jsHeight = source.match(/height:\s*(\d+)\s*\}/)
+  const jsGap = source.match(/BUBBLE_GAP\s*=\s*(\d+)/)
+  assert.ok(jsWidth && jsHeight && jsGap, 'ball-position.cjs 里要有 BUBBLE_SIZE 与 BUBBLE_GAP')
+  assert.equal(css.match(/--bubble-width:\s*(\d+)px/)![1], jsWidth![1], '--bubble-width')
+  assert.equal(css.match(/--bubble-height:\s*(\d+)px/)![1], jsHeight![1], '--bubble-height')
+  assert.equal(css.match(/--bubble-gap:\s*(\d+)px/)![1], jsGap![1], '--bubble-gap')
+  // 而且气泡真的用它们排版，不是写了一组没人用的变量
+  const bubble = css.slice(css.indexOf('#bubble {'), css.indexOf('#tail {'))
+  assert.match(bubble, /width:\s*var\(--bubble-width\)/)
+  assert.match(bubble, /height:\s*var\(--bubble-height\)/)
+})
+
+test('展开只改一次窗口大小，动效全在 CSS 那边（透明窗口每 resize 一次就闪一次）', () => {
+  // 用户实测："点击的话，他还要闪好多才弹出对话框"。根因是原来逐帧补间窗口几何——
+  // 透明窗口每 resize 一次 DWM 就要重新合成一次，一秒钟改七八次就是七八次闪。
+  const main = code('main.cjs')
+  const setMode = main.slice(main.indexOf('function setMode'), main.indexOf('function toggleVisible'))
+  assert.ok(setMode.length > 0, '应当能找到 setMode')
+  const sets = setMode.match(/setContentBounds\(/g) ?? []
+  assert.equal(sets.length, 2, `两条路径各一次：展开一次、收起一次（实际 ${sets.length} 处）`)
+  assert.doesNotMatch(main, /panel-anim/, '逐帧补间那个模块不该再用了')
+  // 球所在的角是"球不动"的全部：窗口改大小时那个角没动，球就没动
+  assert.match(setMode, /ballAnchor = \{ side: layout\.side, anchorY: layout\.anchorY \}/, '展开时记下球的角')
+  assert.match(setMode, /ballRectInWindow\(win\.getContentBounds\(\), ballAnchor, BALL_SIZE\)/,
+    '收起时从窗口反推球的落点（不能拿窗口左上角当落点）')
+  // 收起分两步：先让页面把气泡淡掉，再缩窗口，缩完才通知页面摘掉
+  assert.match(setMode, /send\('panel:mode', \{ mode: 'ball', fadeMs \}\)/)
+  assert.match(setMode, /setTimeout\(shrink, Math\.max\(fadeMs, 16\)\)/,
+    '至少等一帧：页面前脚摘掉气泡、窗口后脚才缩，反过来会闪出一条边')
+})
+
+test('展开/收起的淡入淡出在气泡上，且"减少动态效果"真的把它们停掉', () => {
+  const css = code('panel.css')
+  assert.match(css, /@keyframes bubble-in/)
+  assert.match(css, /@keyframes bubble-out/)
+  assert.match(css, /body\.mode-chat #bubble \{[^}]*animation: bubble-in/)
+  assert.match(css, /body\.mode-chat\.closing #bubble \{ animation: bubble-out/)
+  // 球形态下气泡整个不显示（对话那几条藏在它里面，所以一条规则就够）
+  assert.match(css, /body\.mode-ball #bubble \{ display: none; \}/)
+  // 而这一段必须真的停掉它们（窗口那半在 JS 里，由 renderer 读媒体查询后传 animate:false）
+  const block = css.slice(css.indexOf('@media (prefers-reduced-motion: reduce)'))
+  assert.match(block, /body\.mode-chat #bubble \{ animation: none; \}/,
+    '气泡淡入要能在减少动态效果下停掉')
+  assert.match(block, /body\.mode-chat\.closing #bubble \{ animation: none; opacity: 0; \}/)
+  assert.match(code('renderer.js'), /prefers-reduced-motion/, 'renderer 要读那个媒体查询')
 })

@@ -14,7 +14,9 @@ import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 const mod = await import(pathToFileURL(join(process.cwd(), 'resources', 'panel', 'ball-position.cjs')).href)
-const { BALL_SIZE, EDGE_MARGIN, defaultBallPosition, clampInto, isReachable, resolveStartPosition } = mod.default ?? mod
+const { BALL_SIZE, EDGE_MARGIN, BUBBLE_SIZE, BUBBLE_GAP,
+        defaultBallPosition, clampInto, isReachable, resolveStartPosition, bubbleLayout,
+        ballRectInWindow } = mod.default ?? mod
 
 /** 主屏 1707x960、任务栏占 48（与真机一致）；工作区原点 0,0 */
 const PRIMARY = { x: 0, y: 0, width: 1707, height: 912 }
@@ -89,4 +91,148 @@ test('真机验过的那几条，用真机坐标钉住', () => {
   assert.deepEqual(resolveStartPosition({ x: 9000, y: 9000 }, [PRIMARY], PRIMARY, BALL_SIZE, EDGE_MARGIN), { x: 1607, y: 812 })
   // 对话窗拖到 1650,870 再收起 → 球夹到 1631,836
   assert.deepEqual(clampInto(1650, 870, BALL_SIZE, PRIMARY), { x: 1631, y: 836 })
+})
+
+// ------------------------------------------------- 展开：球 + 空隙 + 气泡 的合成布局
+
+const ballAt = (x: number, y: number) => ({ x, y })
+
+/** 球钉在窗口的哪个角。**"球不动"这条性质就是它**：窗口的那个角与球的对应角重合。 */
+function anchored(layout: any, ball: { x: number; y: number }) {
+  const win = layout.window
+  const ballRight = ball.x + BALL_SIZE
+  const ballBottom = ball.y + BALL_SIZE
+  const horizontal = layout.side === 'left' ? win.x + win.width === ballRight : win.x === ball.x
+  const vertical = layout.anchorY === 'bottom' ? win.y + win.height === ballBottom : win.y === ball.y
+  return { horizontal, vertical }
+}
+
+test('气泡默认开在球的左边、底对齐，窗口 = 气泡 + 空隙 + 球', () => {
+  const ball = ballAt(1607, 812)
+  const layout = bubbleLayout(ball, BUBBLE_SIZE, PRIMARY)
+  assert.equal(layout.side, 'left')
+  assert.equal(layout.anchorY, 'bottom')
+  assert.deepEqual(layout.window, {
+    x: 1607 - BUBBLE_GAP - BUBBLE_SIZE.width,
+    y: 812 + BALL_SIZE - BUBBLE_SIZE.height,
+    width: BUBBLE_SIZE.width + BUBBLE_GAP + BALL_SIZE,
+    height: BUBBLE_SIZE.height,
+  })
+  assert.equal(layout.window.width, 508)
+  assert.equal(layout.window.height, 560)
+  assert.equal(layout.window.x, 1175, '真机上的落点')
+  assert.equal(layout.window.y, 328)
+})
+
+test('**球全程不动**：窗口的锚角与球的对应角重合（四种组合都要成立）', () => {
+  // 这条是"图标不要撤起来"的数学形式：球画在窗口的这个角上，而窗口改大小时这个角的
+  // **屏幕坐标没变**（另一条边才是被推开的），所以球一个像素都不会动——哪怕窗口是在
+  // 页面收到通知之前就变大了。前提是球真的坐在角上。
+  const corners = [
+    { ball: ballAt(1607, 812), label: '右下角（默认）' },
+    { ball: ballAt(100, 812), label: '左下角' },
+    { ball: ballAt(1607, 100), label: '右上角' },
+    { ball: ballAt(100, 100), label: '左上角' },
+  ]
+  for (const { ball, label } of corners) {
+    const layout = bubbleLayout(ball, BUBBLE_SIZE, PRIMARY)
+    const { horizontal, vertical } = anchored(layout, ball)
+    assert.ok(horizontal, `${label}：水平方向球要钉在窗口边上（side=${layout.side}）`)
+    assert.ok(vertical, `${label}：垂直方向球要钉在窗口边上（anchorY=${layout.anchorY}）`)
+  }
+})
+
+test('球贴屏幕左缘：气泡翻到右边', () => {
+  const ball = ballAt(0, 812)
+  const layout = bubbleLayout(ball, BUBBLE_SIZE, PRIMARY)
+  assert.equal(layout.side, 'right')
+  assert.equal(layout.window.x, 0, '球在窗口左边')
+  assert.equal(layout.window.width, 508)
+  assert.ok(anchored(layout, ball).horizontal, '翻边之后球仍然钉在窗口边上')
+})
+
+test('球贴屏幕顶边：气泡改成顶对齐（否则会顶到屏幕外）', () => {
+  const ball = ballAt(1607, 0)
+  const layout = bubbleLayout(ball, BUBBLE_SIZE, PRIMARY)
+  assert.equal(layout.anchorY, 'top')
+  assert.equal(layout.window.y, 0)
+  assert.ok(anchored(layout, ball).vertical)
+})
+
+test('窄屏（两边都放不下）：挑空间大的一侧，并夹进工作区', () => {
+  // 工作区只有 600 宽，508 的窗口放不下——退化情况，球会被挪动，这里只钉住"不越界"
+  const NARROW = { x: 0, y: 0, width: 600, height: 912 }
+  for (const x of [0, 200, 520]) {
+    const layout = bubbleLayout(ballAt(x, 400), BUBBLE_SIZE, NARROW)
+    assert.ok(layout.window.x >= NARROW.x, `x=${x}：窗口跑到工作区左边去了`)
+    assert.ok(layout.window.x + layout.window.width <= NARROW.x + NARROW.width,
+      `x=${x}：窗口右边越界（${layout.window.x + layout.window.width} > ${NARROW.width}）`)
+  }
+})
+
+test('工作区原点不是 0,0（副屏）时也夹得住', () => {
+  // 左副屏的 x 是负数：夹取用的是工作区自己的原点和宽度，不是 0 与屏幕尺寸
+  const ball = ballAt(-1920, 900)
+  const layout = bubbleLayout(ball, BUBBLE_SIZE, LEFT)
+  assert.equal(LEFT.x <= layout.window.x, true)
+  assert.equal(layout.window.x + layout.window.width <= LEFT.x + LEFT.width, true)
+  assert.equal(anchored(layout, ball).horizontal, true, '副屏上球也钉在窗口边上')
+})
+
+test('收起时从窗口反推得回球的原地（四个角都要对得上）', () => {
+  // **这条是真 bug 的回归测试**：收起时图省事拿窗口的左上角当球的落点，球会"跳"到
+  // 气泡的另一个角去（默认布局下就是从右下角跳到左上角）。探针量出来的。
+  const corners = [
+    { ball: ballAt(1607, 812), label: '右下角（默认）' },
+    { ball: ballAt(0, 812), label: '左下角' },
+    { ball: ballAt(1607, 0), label: '右上角' },
+    { ball: ballAt(0, 0), label: '左上角' },
+  ]
+  for (const { ball, label } of corners) {
+    const layout = bubbleLayout(ball, BUBBLE_SIZE, PRIMARY)
+    const back = ballRectInWindow(layout.window, layout, BALL_SIZE)
+    assert.deepEqual(back, { x: ball.x, y: ball.y }, `${label}：收起后球应当回到原地`)
+  }
+})
+
+test('球在屏幕竖向中间：气泡改矮/改对齐，**球还是不动**（用户真机那个位置）', () => {
+  // 用户把球拖到了 967,302（工作区 1707x912）。从前那版气泡固定 560 高，这里上下都放不下，
+  // 于是窗口被夹进工作区、球跟着挪了 57-75px——屏幕上就是球跳了一下。
+  // 现在：两种对齐各自算能有多高，取高的那个（底对齐 378 vs 顶对齐 560 → 顶对齐），
+  // 球仍然坐在窗口的右上角 = 它原来那个位置。
+  const ball = ballAt(967, 302)
+  const layout = bubbleLayout(ball, BUBBLE_SIZE, PRIMARY)
+  assert.equal(layout.side, 'left')
+  assert.equal(layout.anchorY, 'top')
+  assert.equal(layout.bubbleHeight, 560, '顶对齐能放下整块 560')
+  assert.deepEqual(layout.window, { x: 535, y: 302, width: 508, height: 560 })
+  assert.ok(anchored(layout, ball).horizontal && anchored(layout, ball).vertical, '球仍然在窗口的角上')
+})
+
+test('球贴屏幕底边：底对齐给满高度（默认位置就是这一支）', () => {
+  const ball = ballAt(1607, 812)
+  const layout = bubbleLayout(ball, BUBBLE_SIZE, PRIMARY)
+  assert.equal(layout.anchorY, 'bottom')
+  assert.equal(layout.bubbleHeight, 560)
+  assert.equal(layout.window.y + layout.window.height, 812 + BALL_SIZE, '球的底 = 窗口的底')
+})
+
+test('屏幕再矮也不越界：气泡跟着变矮，球不动', () => {
+  // 工作区只有 400 高、球在中间 → 两边各能放 ~200，取高的那个；气泡就矮一点，但不越界
+  const SHORT = { x: 0, y: 0, width: 1707, height: 400 }
+  const ball = ballAt(1607, 150)
+  const layout = bubbleLayout(ball, BUBBLE_SIZE, SHORT)
+  assert.ok(layout.bubbleHeight < BUBBLE_SIZE.height, `应当变矮，实际 ${layout.bubbleHeight}`)
+  assert.ok(layout.window.y >= SHORT.y, '上边不越界')
+  assert.ok(layout.window.y + layout.window.height <= SHORT.y + SHORT.height, '下边不越界')
+  assert.equal(anchored(layout, ball).vertical, true, '球仍然钉在窗口边上')
+})
+
+test('气泡高度永远不超过设计高度，也永远为正', () => {
+  for (const y of [0, 50, 150, 300, 500, 700, 836]) {
+    const layout = bubbleLayout(ballAt(1607, y), BUBBLE_SIZE, PRIMARY)
+    assert.ok(layout.bubbleHeight > 0 && layout.bubbleHeight <= BUBBLE_SIZE.height,
+      `y=${y} 时算出 ${layout.bubbleHeight}`)
+    assert.ok(anchored(layout, ballAt(1607, y)).vertical, `y=${y} 时球脱离了窗口边`)
+  }
 })
