@@ -22,7 +22,12 @@ All notable user-facing changes are recorded here. This project follows [Semanti
   showed the transparent version **losing the cat's dark body into a dark background** (only the green
   bubble and the face outline survive) and washing out on white, while the disc reads on all three -
   and the user's wallpaper is one of the dark ones. A test pins it so a later "cleanup" to
-  `background-color: transparent` fails rather than silently degrading the ball.
+  `background-color: transparent` fails rather than silently degrading the ball. The **tray icon is a
+  separate asset** for the same reason and is composited with the disc baked in: `nativeImage` cannot
+  composite, and a tray icon has no CSS to fall back on - so `mascot.png` (transparent) resized down
+  would have blended into a dark taskbar, and nothing in CI would have caught it (a transparent 64x64
+  passes every size and byte-count check). A pixel-level test decodes both PNGs and asserts the tray
+  icon is opaque where the ball's artwork is transparent, and transparent at the corners.
 
 - **The panel window no longer opens to an empty void.** It used to show nothing but black until you
   typed, which says neither what the assistant can do nor that it is alive. It now opens with a

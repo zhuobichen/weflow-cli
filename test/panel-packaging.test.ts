@@ -38,10 +38,10 @@ function code(name: string): string {
 }
 
 test('面板要用的五个文件都在（少一个用户装上就缺）', () => {
-  // 球面那张图与托盘图标**共用同一个文件**（托盘由 nativeImage 现算），
-  // 所以这里只要 mascot.png 在，不该再有 tray.png。
+  // 两张图是分开的：mascot.png 是球面（透明底），tray.png 是托盘图标（**带圆盘**——
+  // 深色的猫直接放深色任务栏上会糊，和球面那次同一个问题）。
   for (const name of ['index.html', 'renderer.js', 'panel.css', 'main.cjs', 'preload.cjs',
-                      'ball-position.cjs', 'tray-menu.cjs', 'mascot.png', 'package.json']) {
+                      'ball-position.cjs', 'tray-menu.cjs', 'mascot.png', 'tray.png', 'package.json']) {
     assert.ok(existsSync(join(PANEL, name)), `缺文件: resources/panel/${name}`)
   }
 })
@@ -185,15 +185,16 @@ test('位置算术只有一份实现（在 ball-position.cjs 里），main.cjs �
   assert.doesNotMatch(main, /Math\.max\(area\.x/, '夹取的算术不该在这儿重复')
 })
 
-test('球面与托盘图标共用同一张吉祥物图，且托盘是现算的', () => {
+test('球面用吉祥物图，托盘用合成好的带盘图标', () => {
   // 两处各存一张图标，改了球忘了托盘是迟早的事——这张图是用户自己的吉祥物，本来就该一致。
   const css = code('panel.css')
   assert.match(css, /url\('\/panel\/mascot\.png'\)/, '球面用吉祥物')
   assert.match(css, /background-color:/, '要有兜底色：图取不到时不该是一块白')
   const main = code('main.cjs')
-  assert.match(main, /nativeImage\.createFromPath/, '托盘从同一个文件现算')
-  assert.match(main, /\.resize\(\{ width: 32/, '托盘要缩到 32')
-  assert.doesNotMatch(main, /tray\.png/, '不该再引用 tray.png')
+  assert.match(main, /nativeImage\.createFromPath/, '托盘图标从文件读')
+  assert.match(main, /tray\.png/, '托盘用 tray.png（带圆盘那张）')
+  assert.doesNotMatch(main, /createFromPath\(join\(__dirname, 'mascot\.png'\)\)\).*resize/,
+    '托盘不该直接拿球面那张透明底的图去缩')
 })
 
 test('头像走静态白名单，且带了正确的 content-type', () => {
@@ -257,3 +258,7 @@ test('球必须有不透明的底色 —— 吉祥物的身体是深灰的，透
   // 细亮环是深底上唯一的边界来源，不能顺手删
   assert.match(block, /inset 0 0 0 1px rgba\(255, 255, 255/, '细亮环要留着')
 })
+
+// 托盘图标的**像素**断言（盘到底在不在、角是不是透的）在 `test/panel-tray-pixels.test.ts`，
+// 那边解了一次 PNG 才敢说"盘在"。这里不再重复断言尺寸与体积——同一件事两处断言，
+// 其中一处总会更弱，而更弱的那条会让人以为已经被保住了。
