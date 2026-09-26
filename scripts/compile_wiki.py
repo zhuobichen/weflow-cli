@@ -20,7 +20,7 @@ CONCEPT_PROMPT = """为概念生成 Wiki 知识页。
 
 概念名：{name}
 
-参考来源（来自公众号文章）：
+参考来源（每条是"某篇材料 + 它关于这个概念说的那句话"）：
 {references}
 
 请按格式返回：
@@ -107,12 +107,27 @@ def aggregate_concepts(articles: list[dict]) -> dict[str, list[dict]]:
     return dict(concept_map)
 
 
+def build_ref_lines(refs: list[dict], limit: int = 5) -> list[str]:
+    """每个概念喂给模型的参考行。
+
+    **优先用 `desc`（这条 wikilink 关于该概念写的那句话），没有才退回 note 摘要。**
+    这两者一直都被 `aggregate_concepts` 收着，但生成时只用了摘要——后果是一个被 20 篇提到的
+    概念，拿到的却是 5 篇**泛泛的**摘要，关于它自己反倒没说什么。人物页尤其吃这个亏：
+    每条的 `desc` 就是"那时候发生了什么"，那是时间线的原料。
+
+    `limit=5`：参考条数多了会把提示词撑长，而模型对第 6 条以后的边际收益很小。
+    """
+    lines = []
+    for ref in refs[:limit]:
+        detail = ref.get('desc') or ref.get('summary') or ''
+        lines.append(f'- [{ref["title"]}]（{ref["source"]}）：{detail[:150]}')
+    return lines
+
+
 def generate_concept(name: str, refs: list[dict], api_key: str) -> str | None:
     """Call DeepSeek to generate a concept Wiki page."""
     # Build references section
-    ref_lines = []
-    for r in refs[:5]:  # max 5 references
-        ref_lines.append(f'- [{r["title"]}]（{r["source"]}）：{r["summary"][:150]}')
+    ref_lines = build_ref_lines(refs)
     ref_text = '\n'.join(ref_lines) if ref_lines else '(无详细信息)'
 
     prompt = CONCEPT_PROMPT.format(name=name, references=ref_text)

@@ -5240,17 +5240,12 @@ program
       const pkgRoot = resolvePackageRoot()
       const script = join(pkgRoot, 'scripts', 'draft_reply.py')
       const count = parseCliInteger(opts.count, 'count', 1, 5, opts.json)
-      const args = [script, '--talker', String(talker), '--count', String(count),
-                    // 脚本自己有第二道闸门（`--yes` 才真的把对话发出去），所以要透传——
-                    // 漏了这一行，CLI 确认过了、脚本仍然拒绝（实测踩到过）
-                    ...(opts.yes ? ['--yes'] : []),
-                    ...(opts.gateCommitment ? ['--gate-commitment'] : []),
-                    ...(opts.json ? ['--json'] : [])]
-
-      if (opts.dryRun) {
-        // 交给脚本自己报数（它才知道这段对话有多少字符）。这一步只读本地，零出境。
-        args.push('--dry-run')
-      } else if (!opts.yes) {
+      // **"确认过了"只用一个变量表示**（`--yes` 或交互回答"是"），参数在确认之后才拼。
+      // 原来的写法是先拼参数、再问，于是**交互确认那条路是坏的**：答了"是"，`args` 里
+      // 却从没补上 `--yes`，脚本照样拒绝（用户看到的是"我确认了它却说没确认"）。
+      // 两者合成一个变量之后，这种漏传在结构上不可能再发生。
+      let confirmed = !!opts.yes
+      if (!opts.dryRun && !confirmed) {
         const preview = {
           success: false, dryRun: false, action: 'draft-reply',
           code: 'CONFIRMATION_REQUIRED', talker, count,
@@ -5260,17 +5255,25 @@ program
           console.log(JSON.stringify(preview))
           process.exit(1)
         }
-        const { confirmed } = await inquirer.prompt([{
+        const answer = await inquirer.prompt([{
           type: 'confirm',
           name: 'confirmed',
           message: '确认把这段对话发送到判断模型与生成模型吗？（只会产出候选文本，不会替你发送）',
           default: false,
         }])
+        confirmed = !!answer.confirmed
         if (!confirmed) {
           console.log(chalk.gray('已取消'))
           return
         }
       }
+      const args = [script, '--talker', String(talker), '--count', String(count),
+                    // 脚本自己有第二道闸门（`--yes` 才真的把对话发出去），所以要透传
+                    ...(confirmed ? ['--yes'] : []),
+                    ...(opts.gateCommitment ? ['--gate-commitment'] : []),
+                    ...(opts.json ? ['--json'] : []),
+                    // dry-run 交给脚本自己报数（它才知道这段对话有多少字符），这一步只读本地、零出境
+                    ...(opts.dryRun ? ['--dry-run'] : [])]
 
       try {
         const { stdout } = await execFileAsync(getPythonCommand(), args, {
@@ -5281,6 +5284,67 @@ program
       } catch (error) {
         if (opts.json) {
           console.log(JSON.stringify({ success: false, code: 'DRAFT_FAILED', action: 'draft-reply', error: safeSubprocessError(error) }))
+        } else {
+          console.error(chalk.red(`\n✗ ${safeSubprocessError(error)}`))
+        }
+        process.exit(1)
+      }
+    })
+
+  // chat-notes：把会话整理成知识卡，喂给 wiki compile 聚成概念页
+  program
+    .command('chat-notes')
+    .description('把最近一段时间的会话整理成知识卡（之后用 wiki compile 聚成概念页）—— **只写本地文件，不发送**')
+    .option('--days <n>', '看最近多少天', '30')
+    .option('--limit <n>', '最多处理几个会话', '40')
+    .option('--dry-run', '仅预览：几个会话、多少字符会发给生成模型（只读本地，零出境）')
+    .option('--yes', '确认把对话发送给生成模型')
+    .option('--json', '输出机器可读结果；执行仍需 --yes')
+    .action(async (opts) => {
+      const { execFile } = await import('child_process')
+      const { promisify } = await import('util')
+      const execFileAsync = promisify(execFile)
+      const pkgRoot = resolvePackageRoot()
+      const script = join(pkgRoot, 'scripts', 'chat_notes.py')
+      const days = parseCliInteger(opts.days, 'days', 1, 3650, opts.json)
+      const limit = parseCliInteger(opts.limit, 'limit', 1, 200, opts.json)
+      // 与 `draft` 同一条纪律：**"确认过了"只用一个变量**，参数在确认之后才拼
+      let confirmed = !!opts.yes
+      if (!opts.dryRun && !confirmed) {
+        const preview = {
+          success: false, dryRun: false, action: 'chat-notes',
+          code: 'CONFIRMATION_REQUIRED', days, limit,
+          readsLocalChat: true, invokesAI: true, writesLocalFiles: true, sendsNothing: true,
+        }
+        if (opts.json) {
+          console.log(JSON.stringify(preview))
+          process.exit(1)
+        }
+        const answer = await inquirer.prompt([{
+          type: 'confirm',
+          name: 'confirmed',
+          message: '确认把最近这些会话的对话发送给生成模型吗？（只会产出本地知识卡，不会替你发送任何消息）',
+          default: false,
+        }])
+        confirmed = !!answer.confirmed
+        if (!confirmed) {
+          console.log(chalk.gray('已取消'))
+          return
+        }
+      }
+      const args = [script, '--days', String(days), '--limit', String(limit),
+                    ...(confirmed ? ['--yes'] : []),
+                    ...(opts.json ? ['--json'] : []),
+                    ...(opts.dryRun ? ['--dry-run'] : [])]
+      try {
+        const { stdout } = await execFileAsync(getPythonCommand(), args, {
+          timeout: 900_000, maxBuffer: 50 * 1024 * 1024,
+          env: pythonProcessEnv(),
+        })
+        process.stdout.write(stdout)
+      } catch (error) {
+        if (opts.json) {
+          console.log(JSON.stringify({ success: false, code: 'CHAT_NOTES_FAILED', action: 'chat-notes', error: safeSubprocessError(error) }))
         } else {
           console.error(chalk.red(`\n✗ ${safeSubprocessError(error)}`))
         }

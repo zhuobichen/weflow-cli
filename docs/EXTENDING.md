@@ -109,6 +109,31 @@ prints JSON). Three rules that this project has been bitten by:
 Tests for Python live in `test/*_test.py` and run on the same filesystem as everything else (`npm test` covers
 TypeScript; `python -m unittest discover -s test -p '*_test.py'` covers these).
 
+## Recipe F - a new knowledge source
+
+The knowledge base is fed by "material that carries `[[wikilinks]]`": `compile_wiki` scans a source directory
+(`--source`, already a flag - no code change needed to add a source), aggregates every wikilink into concepts, and
+writes concept pages into the Vault. Two sources exist: `output/biz-daily` (articles) and `output/chat-notes`
+(conversation cards, from the `chat-notes` command).
+
+To add a third, the producer must satisfy the consumer's contract exactly:
+
+| The consumer (`scan_articles`) needs | Notes |
+| --- | --- |
+| `*.md` under the source dir, with frontmatter | `title`, `source`, `topic`, `tags` are read; `README.md` is skipped |
+| A `## AI 摘要` (or `## 深度解析`) section | the paragraph after it becomes the note's summary |
+| `[[name]] — description` lines | anywhere in the body; the description is what gets fed to page generation, so keep it clean (no trailing labels) |
+
+**Two rules that are not obvious from that table.** Links should be rendered by your code, not written by a model -
+the consumer collects *every* wikilink in a body and cannot tell who wrote it, so a stray one invents a concept
+(this is why `chat_notes.plain()` strips `[[...]]` from model-authored free text). And a wikilink whose description
+is polluted - a trailing `（话题）`, a stray marker - silently degrades every concept page it feeds, because that
+description is the material for the page.
+
+The guard to copy: `test/chat_notes_test.py` writes a card and then runs the **real consumer**
+(`compile_wiki.scan_articles`) over it, asserting the links and descriptions come back. That is the shape of every
+producer/consumer pair in this project - do not assert on the markdown text, assert that the other side reads it.
+
 ## What will catch you
 
 | Invariant | Test |
@@ -121,6 +146,7 @@ TypeScript; `python -m unittest discover -s test -p '*_test.py'` covers these).
 | The MCP subset contains no write/send/publish tool | `test/assistant-tools.test.ts` |
 | Panel IPC surface is exactly the declared method list | `test/panel-packaging.test.ts` |
 | Interactive-menu entries match `switch` cases, and the commands they call exist | `test/cli-menu.test.ts` |
+| A knowledge source's output is readable by the wiki aggregator, links and descriptions intact | `test/chat_notes_test.py`, `test/compile_wiki_test.py` |
 
 ## Red lines
 

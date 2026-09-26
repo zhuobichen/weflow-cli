@@ -8,6 +8,39 @@ All notable user-facing changes are recorded here. This project follows [Semanti
 
 ### Added
 
+- **Chat conversations can now feed the knowledge base, as notes the existing wiki pipeline aggregates.**
+  Until now the knowledge side had one source - `output/biz-daily`, the article line, over ten thousand files -
+  while conversations could only be searched, never condensed. `chat-notes` closes that: one knowledge card
+  per conversation (summary, timeline, topics and people, what is owed), written to `output/chat-notes/`, and
+  `wiki compile --source ./output/chat-notes` turns the `[[topic]]` and `[[person]]` links into concept pages,
+  because `compile_wiki` already takes a `--source` and already aggregates wikilinks. The three shapes asked
+  for therefore come out of **one** producer plus the aggregator that was already there: the card is the
+  per-conversation shape, and topic pages and people/timeline pages are what the aggregator makes of it. No
+  second aggregator, no new concept format, and backlinks and search keep working.
+
+  Four things in it are deliberate. **The `[[...]]` links are rendered by our code, never by the model**: the
+  model returns structured lists plus free text, and any `[[...]]` inside that free text is stripped, because
+  `scan_articles` collects *every* wikilink in a body and cannot tell who wrote it - a stray one would invent
+  a concept. **Thin conversations get no card** (under 3 messages or 60 characters) and are reported as
+  skipped rather than silently dropped: a three-line chat yields a card saying "they said two things", at the
+  cost of a model call and one contentless source in a concept page. **Cards roll, concepts accumulate** - one
+  file per conversation, rewritten on each run with its window recorded, so repeated runs cannot multiply; the
+  cards are a snapshot and the concept pages are the ledger. And the prompt tells the model it is a compiler
+  rather than a writer, so contradictions stay side by side instead of being smoothed into one sentence, which
+  is what a knowledge base of real conversations needs. That phrasing is borrowed from Tencent/WeKnora's wiki
+  prompts, read for this work - as is the "too little content, do not call the model" gate.
+
+  Verified by running it: `chat-notes --dry-run` reports 37 conversations, 2913 messages and 105,607
+  characters over 30 days on this machine, and names the 3 that are too thin to card.
+
+- **`wiki compile` now uses the per-topic description it was already collecting and throwing away.** The
+  aggregator collects, for every wikilink, the sentence the source wrote *about that concept* - and page
+  generation only ever used the note's overall summary. A concept mentioned in twenty notes was therefore
+  described by five of their generic summaries, never by what any of them actually said about it. Reference
+  lines now prefer that description and fall back to the summary, which is also what makes a person page read
+  as a timeline: each contributing line is "what happened then".
+
+
 - **The panel's ball wears the project mascot, with a transparent background.** `resources/panel/mascot.png`
   is served through the panel's static whitelist and drawn with **no disc behind it** - a mascot floating on
   the desktop rather than sitting on a plate - separated from light wallpapers by a `drop-shadow` that
@@ -473,6 +506,14 @@ All notable user-facing changes are recorded here. This project follows [Semanti
   windows.
 
 ### Fixed
+
+- **`draft`'s interactive confirmation was broken: answering "yes" ran nothing.** The command built the
+  script's arguments *before* asking, so `--yes` was only ever present when it was passed on the command line;
+  the interactive answer never became that flag, and the script - which has its own `--yes` gate - refused the
+  run. What the user saw was "I confirmed, and it told me I had not". The two ways of saying yes are now one
+  variable and the arguments are built after the decision, so the flag cannot be missing on one path while
+  present on the other. The interactive path itself has no test (it needs a terminal), which is exactly why the
+  fix is structural: the shape that could forget the flag no longer exists.
 
 - **The transcript line was implemented twice, and the two copies had drifted in four ways.** Nothing failed - the two
   paths just fed different text into the same judgement and drafting prompts. The tool path

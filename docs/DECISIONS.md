@@ -1400,6 +1400,39 @@ which is what the gate is for.
   semantics are not reliable here), as is any automatic labelling: there is no gold standard for "is this
   draft right", so the feature records what it judged and says so rather than claiming calibration.
 
+## D-049: Conversations become knowledge notes locally, the model call is the only egress, and it is the user's call
+
+**Status:** Active
+
+**Decision:** `chat-notes` turns recent conversations into knowledge cards (`output/chat-notes/<会话>.md`), and
+`wiki compile --source ./output/chat-notes` aggregates them into concept pages through the pipeline that already
+exists. It is two-phase in the same shape as the rest of the project: `--dry-run` reports how many conversations,
+messages and characters would be sent (reading only local data), and nothing leaves the machine without `--yes` -
+one model call per conversation, which is the only egress. What it writes is local markdown; it never sends a
+message.
+
+**Reason:** the knowledge base had exactly one source - the article line, `output/biz-daily` - while conversations
+could be searched but never condensed into anything, which is the half of "a personal WeChat knowledge base" that
+was missing. Reusing `compile_wiki`'s input contract (frontmatter + `[[wikilinks]]`, `--source` already supported)
+means one concept format, one backlink mechanism, and no second aggregator to keep in step - the three shapes asked
+for (per-conversation cards, topic pages, people/timeline pages) fall out of one producer plus the aggregator that
+was already there. Two constraints follow from that choice rather than from taste: **the wikilinks are rendered by
+our code**, never by the model, because `scan_articles` collects every wikilink in a body and cannot tell who wrote
+it - a stray one would invent a concept, so free text from the model has `[[...]]` stripped; and **thin
+conversations get no card at all**, because a three-line chat yields a card that says "they said two things" while
+costing a model call and adding one contentless source to a concept page.
+
+**Consequences:** running it over a wide window sends a lot of chat text - measured on this machine, 30 days is 37
+conversations / 2913 messages / 105,607 characters - so the preview, not a limit, is what the user steers by; the
+number is also why this is not offered as an assistant tool or over MCP (a model-initiated call of this size would
+be an egress nobody asked for). Cards are rolling snapshots (one file per conversation, rewritten with its recorded
+window) while concept pages accumulate: cards are the snapshot, concepts are the ledger. Fabrication is constrained
+in the prompt (compiler not author, contradictions stay side by side) rather than by post-hoc verification of every
+claim - the project keeps its judgement in a separate layer and a second implementation of "is this claim
+supported" was not wanted. Not copied on purpose from the reference implementation this borrowed its phrasing from
+(Tencent/WeKnora, read for this work): page revisions and a lint/repair pass over generated pages. So **there is
+currently no check for orphaned or broken links among the produced pages** - recorded as a known gap, not as done.
+
 ## D-048: There is no in-process plugin loader; extension is in-repo, and the boundary for outside code is MCP
 
 **Status:** Active
@@ -1426,8 +1459,8 @@ not exist yet" so a reader cannot mistake the gap for an oversight.
 and guarded (`test/tool-registry.test.ts`, `test/config-keys.test.ts`) - a framework that can only be extended by
 editing it had better make "did I edit all the places?" answerable. The last unguarded extension point - the CLI's
 interactive menu, where a menu entry with no `switch` case does nothing when picked and `runCmd` silently no-ops on a
-renamed command - was covered on 2026-09-25 by `test/cli-menu.test.ts`, so all five recipes in `docs/EXTENDING.md` now
-name the test that catches a missed step. Should a loader be built later, these guards are the parts that would have to
+renamed command - was covered on 2026-09-25 by `test/cli-menu.test.ts`, so every recipe in `docs/EXTENDING.md` now
+names the test that catches a missed step. Should a loader be built later, these guards are the parts that would have to
 be re-derived for the plugin path rather than deleted.
 
 ## Decision Template
