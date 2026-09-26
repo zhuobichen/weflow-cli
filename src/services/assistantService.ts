@@ -47,6 +47,11 @@ export interface AssistantChannel {
   startPolling(): Promise<void>
   sendText(conversationId: string, text: string): Promise<boolean>
   stop(): Promise<void> | void
+  /**
+   * 服务端是否已判这个 token 失效。**可选**：它是"通道实况"的一部分，而通道是可以被替身实现的
+   * （测试里的假通道、将来的别的入口），没这个方法的通道一律当成没过期。
+   */
+  isTokenExpired?(): boolean
 }
 
 /** 一轮从哪来。**决定要不要过白名单**，见 `runTurn` */
@@ -850,7 +855,14 @@ export class AssistantService {
   }
 
   /** 消息通道接上了吗（未登录时是 false）。status 要靠它区分两种"没通道" */
-  isChannelActive(): boolean { return this.svc !== null }
+  /**
+   * 微信通道**现在**是否可用。
+   *
+   * 原来是 `this.svc !== null`——那只是"启动时配了 token"，于是 token 失效之后它照样报 true，
+   * 面板与状态页都在说"微信 + 本机"而通道其实已经死了（用户看不到任何异常）。
+   * 现在把长轮询那边的实况算进来：服务端判过期时，这里如实变 false（面板就会显示"仅本机入口"）。
+   */
+  isChannelActive(): boolean { return this.svc !== null && !this.svc.isTokenExpired?.() }
 
   /** 配额用量。**内存态**（重启归零），所以它不是"今天一共花了多少"的账本，是护栏的余量 */
   quotaState(): { used: number; limit: number } {

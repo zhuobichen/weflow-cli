@@ -18,6 +18,42 @@ function uuidHex(): string {
   return crypto.randomUUID().replace(/-/g, '')
 }
 
+/**
+ * 长轮询失败的分类。
+ *
+ * **`-14` 才是"token 已失效"**——这是厂商实现里写死的（`third-party/WeKnora/internal/im/wechat/longpoll.go:10,151`
+ * `if result.ErrCode == -14 { return ErrTokenExpired }`），而本仓原来只查 `-1 || 401`。
+ * 查错码的后果**不是报错**，而是把"过期"当成普通错误：每 5 秒重试一次，永远重试下去，
+ * 而用户那边看不到任何异常（`channelActive` 只表示"配了 token"，不表示轮询是活的）。
+ *
+ * 三分类的用意：
+ * - `ok`：正常（长轮询空响应会带 0，或干脆没有这两个字段——见下面的调用处注释）；
+ * - `token-expired`：`-14` 或 HTTP 401。**重试不可能成功**，所以它的待遇与别的失败不同；
+ * - `retryable`：其余（网络抖动、`-1` 这类语义不明的码）。仍然重试，但**退避**，
+ *   免得把日志刷成噪音——噪音等于没说。
+ */
+export function classifyPollResult(
+  data: { ret?: number | null; errcode?: number | null } | null | undefined,
+  httpStatus?: number,
+): 'ok' | 'token-expired' | 'retryable' {
+  if (httpStatus === 401) return 'token-expired'
+  const errcode = data?.errcode
+  if (errcode === -14) return 'token-expired'
+  const ret = data?.ret
+  const badRet = ret != null && ret !== 0
+  const badCode = errcode != null && errcode !== 0
+  if (badRet || badCode) return 'retryable'
+  return 'ok'
+}
+
+/** 重试间隔：1s 起、翻倍、封顶 30s（厂商那边是 1s→30s 指数退避，同一条路数） */
+export const POLL_BACKOFF_MS = [1000, 2000, 4000, 8000, 16000, 30000]
+
+export function nextPollDelay(failures: number): number {
+  const index = Math.min(Math.max(failures - 1, 0), POLL_BACKOFF_MS.length - 1)
+  return POLL_BACKOFF_MS[index]
+}
+
 export class WechatMessageService {
   private client: WechatClient
   private config: WechatOCConfig
@@ -26,6 +62,8 @@ export class WechatMessageService {
   private contextTokens: Map<string, string> = new Map()
   private syncBuf: string
   private messageCallbacks: Array<(msg: WechatInboundMessage) => void> = []
+  /** 服务端说过 token 失效了。**只由长轮询置位**（见 `classifyPollResult`），恢复时清掉 */
+  private tokenExpired = false
 
   constructor(config: WechatOCConfig = {}) {
     this.config = config
@@ -140,6 +178,8 @@ export class WechatMessageService {
   // ====== Message Polling ======
 
   async startPolling(): Promise<void> {
+    let failures = 0
+    let expiryReported = false
     while (!this.shutdownFlag) {
       try {
         const data = await this.client.requestJson('POST', 'ilink/bot/getupdates', {
@@ -152,14 +192,30 @@ export class WechatMessageService {
         })
 
         // ret/errcode may be absent on empty response (normal for long-poll timeout)
-        if (data.ret != null && data.ret !== 0 || data.errcode != null && data.errcode !== 0) {
-          console.error(`getupdates error: ret=${data.ret} errcode=${data.errcode} errmsg=${data.errmsg || 'unknown'}`)
-          if (data.errcode === -1 || data.errcode === 401) {
-            console.error('Token may have expired, please login again')
+        const kind = classifyPollResult(data)
+        if (kind !== 'ok') {
+          failures += 1
+          const detail = `ret=${data.ret} errcode=${data.errcode} errmsg=${data.errmsg || 'unknown'}`
+          if (kind === 'token-expired') {
+            this.tokenExpired = true
+            // **只在状态翻过去时喊一次**：每 5 秒刷一行会被当成噪音，而噪音等于没说
+            if (!expiryReported) {
+              expiryReported = true
+              console.error(`微信通道的 token 已失效（${detail}）——重试不会成功。`
+                + '重新登录：weflow-cli login-wechat，之后重启助手（weflow-cli assistant stop/start）'
+                + '；在此之前本机面板那条入口照常可用。')
+            }
+          } else {
+            console.error(`getupdates error: ${detail}`)
           }
-          await sleep(5000)
+          await sleep(nextPollDelay(failures))
           continue
         }
+
+        // 这一轮是通的：清掉失败计数与"说过一次"的标记（恢复了就该重新能喊）
+        failures = 0
+        expiryReported = false
+        this.tokenExpired = false
 
         if (data.get_updates_buf) {
           this.syncBuf = data.get_updates_buf
@@ -172,7 +228,11 @@ export class WechatMessageService {
           const inbound = this.parseInboundMessage(msg)
           if (inbound) {
             for (const cb of this.messageCallbacks) {
-              try { cb(inbound) } catch {}
+              try { cb(inbound) } catch (error: any) {
+                // **不许吞**：这里进的是助手处理消息的入口。吞掉的话，用户发了消息、
+                // 助手什么都没发生、日志里一个字都没有——三种证据全无，最难查的一种坏法。
+                console.error(`消息回调异常（这条消息没有被处理）：${error?.message || error}`)
+              }
             }
           }
         }
@@ -183,10 +243,16 @@ export class WechatMessageService {
           // Restart poll immediately
           continue
         }
+        failures += 1
         console.error(`Polling error: ${e.message}`)
-        await sleep(5000)
+        await sleep(nextPollDelay(failures))
       }
     }
+  }
+
+  /** token 是否已被服务端判为失效（面板/状态用它来说实话，见 `isChannelActive`） */
+  isTokenExpired(): boolean {
+    return this.tokenExpired
   }
 
   async stop(): Promise<void> {

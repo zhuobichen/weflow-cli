@@ -507,6 +507,36 @@ All notable user-facing changes are recorded here. This project follows [Semanti
 
 ### Fixed
 
+- **The WeChat channel could die silently, and one of the three reasons was a wrong error code.** Checked
+  against the vendor's own implementation (`third-party/WeKnora/internal/im/wechat/longpoll.go:151`), which
+  encodes what this side had been guessing at: **`errcode: -14` is "this token is no longer valid"**, while this
+  repository only ever looked at `-1 || 401`. A wrong code does not raise anything - it quietly reclassifies
+  "expired" as an ordinary error, so the loop retried every 5 seconds, forever, while the user saw nothing.
+  Three things changed, and the third is the one that matters most:
+
+  - `-14` (and HTTP 401) are now recognised, and treated differently from a network blip, because retrying an
+    expired token cannot succeed;
+  - retries use 1s→30s exponential backoff instead of a fixed 5 seconds, so a long outage no longer floods the
+    log - noise is the same as saying nothing;
+  - **the failure is now stated where a user will see it**: one unmissable log line naming the remedy, and
+    `isChannelActive()` - which the panel shows - reports `false`, because it used to mean "a token was
+    configured at startup" and stayed true forever after the token died. The panel now reads "仅本机入口",
+    which is the truth, and the local entrance keeps working either way.
+
+  Also: the message callback was wrapped in `try { cb(msg) } catch {}`, so **any exception raised while the
+  assistant handled a message vanished** - the user sent something, nothing happened, and the log had no trace
+  of either. It is logged now. A fourth item from the same 2026-09-17 comparison turns out **not** to have been
+  a defect and is retracted: this side uses a 40 s HTTP timeout for the long poll, and so does the vendor
+  (`longPollHTTPTimeout = 40 * time.Second`, in the same file) - the "we might abort on the boundary" worry in
+  that note does not hold.
+
+  Five tests were added for the parts that can be tested without a live channel: the classification table, the
+  backoff curve, and a driven loop (a stubbed client reporting `-14` once and then a message whose callback
+  throws) asserting that the expiry is reported **once** rather than every round, that the callback's exception
+  is logged, and that the state recovers after a healthy poll. Four mutations - reverting the error code, the
+  backoff, the channel-status semantics, and the swallowing - each turn one red. The live path (a real expired
+  token) has not been exercised: it needs the server to say `-14`, which cannot be forced from here.
+
 - **`draft`'s interactive confirmation was broken: answering "yes" ran nothing.** The command built the
   script's arguments *before* asking, so `--yes` was only ever present when it was passed on the command line;
   the interactive answer never became that flag, and the script - which has its own `--yes` gate - refused the

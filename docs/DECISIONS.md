@@ -1400,6 +1400,36 @@ which is what the gate is for.
   semantics are not reliable here), as is any automatic labelling: there is no gold standard for "is this
   draft right", so the feature records what it judged and says so rather than claiming calibration.
 
+## D-050: The WeChat channel's failures are classified, retried with backoff, and reported where the user looks
+
+**Status:** Active
+
+**Decision:** `wechatMessageService.startPolling` classifies every failure before acting on it. `errcode: -14`
+(or HTTP 401) means the token is invalid - retrying cannot succeed - so it is reported once, in a single
+unmissable line naming the remedy, and `isChannelActive()` turns false so the panel stops claiming the channel
+works; the loop keeps polling rather than exiting, because the local entrance is unaffected and a restart is the
+user's decision. Everything else is `retryable` and retried with 1s→30s exponential backoff, reset by any healthy
+poll. Exceptions thrown by registered message callbacks are logged rather than swallowed.
+
+**Reason:** this was fixed by checking the vendor's own implementation instead of guessing -
+`third-party/WeKnora/internal/im/wechat/longpoll.go:151` states `ErrCode == -14 → ErrTokenExpired`, while this
+repository checked `-1 || 401`. The consequence of a wrong code is not an error: it reclassifies "expired" as
+ordinary, so the loop retried every 5 seconds forever and the user saw nothing at all. Two further differences
+were closed at the same time (fixed 5 s interval → backoff; `try { cb(msg) } catch {}` → logged), and one earlier
+claim was **retracted**: the long-poll timeout is 40 s here and 40 s in the vendor's `longPollHTTPTimeout`, so
+that item from the 2026-09-17 comparison was not a divergence. The reason the *reporting* half is in this
+decision rather than the code: the old `isChannelActive()` meant "a token was configured at startup", so every
+status surface kept saying the channel was fine - silence, not breakage, was the real defect.
+
+**Consequences:** `isChannelActive()` now means "the channel is usable", which is what the panel actually wants to
+show; a fake channel without `isTokenExpired` is treated as healthy (the method is optional on the interface). A
+re-login does **not** heal a running daemon - it still holds the old token in memory - so OPERATIONS.md says to
+restart it, and the log line says so too. `assistant status --json` still derives `channelActive` from the
+endpoint file rather than from the live loop, so after an expiry it can disagree with the panel for as long as
+the daemon runs: recorded here as a known gap rather than fixed quietly, because publishing live state into that
+file is its own change. The live expiry path has never been observed end to end (it needs the server to send
+`-14`); what is tested is the classification, the backoff and a driven loop.
+
 ## D-049: Conversations become knowledge notes locally, the model call is the only egress, and it is the user's call
 
 **Status:** Active
