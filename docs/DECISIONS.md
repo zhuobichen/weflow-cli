@@ -1460,8 +1460,14 @@ window) while concept pages accumulate: cards are the snapshot, concepts are the
 in the prompt (compiler not author, contradictions stay side by side) rather than by post-hoc verification of every
 claim - the project keeps its judgement in a separate layer and a second implementation of "is this claim
 supported" was not wanted. Not copied on purpose from the reference implementation this borrowed its phrasing from
-(Tencent/WeKnora, read for this work): page revisions and a lint/repair pass over generated pages. So **there is
-currently no check for orphaned or broken links among the produced pages** - recorded as a known gap, not as done.
+(Tencent/WeKnora, read for this work): page revisions. The other half - a check over the produced pages - was recorded
+here as a known gap and **closed the same day** by `wiki lint` (`scripts/wiki_lint.py`, surfaced as `weflow-cli wiki
+lint`): it reports broken links (a `[[card.md]]` whose card is gone), orphan pages, empty pages and duplicate titles,
+locally and with no model calls. One judgement in it is worth keeping: it **separates "a concept the pages link to
+that has no page yet" from a break** - on the first real run that was 38 expansion candidates against 0 breaks -
+because reporting both as "40 dead links" teaches the reader to ignore the tool. A second judgement came from the
+first run too: card-side links count as inbound links, otherwise every page is reported as an orphan (the pages
+mostly link forward to concepts that do not exist yet, so page-to-page inlinks are nearly empty by construction).
 
 ## D-048: There is no in-process plugin loader; extension is in-repo, and the boundary for outside code is MCP
 

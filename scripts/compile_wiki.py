@@ -211,6 +211,19 @@ def build_ref_lines(refs: list[dict], limit: int = 5) -> list[str]:
     return lines
 
 
+def rank_concepts(concept_map: dict, min_refs: int = 1) -> list:
+    """按被引用的篇数排序，并滤掉"不够格"的。
+
+    **为什么要有这个闸门**：只被一篇提到的概念，多半是那篇新闻里的人名/机构/单次事件——
+    给它们逐条写页不是知识库，是剪报。实测 120 篇材料聚出 387 个概念，其中只有 **37 个**
+    被 ≥2 篇提到（`--min-refs 2` 就是拿这条实测数据定的默认建议值）。
+    """
+    ranked = sorted(concept_map.items(), key=lambda item: len(item[1]), reverse=True)
+    if min_refs > 1:
+        ranked = [(name, refs) for name, refs in ranked if len(refs) >= min_refs]
+    return ranked
+
+
 def generate_concept(name: str, refs: list[dict], api_key: str) -> str | None:
     """Call DeepSeek to generate a concept Wiki page."""
     # Build references section
@@ -273,6 +286,8 @@ def main():
     parser = argparse.ArgumentParser(description='概念图谱编译')
     parser.add_argument('--api-key', help='DeepSeek API key (或环境变量 DEEPSEEK_API_KEY)')
     parser.add_argument('--limit', type=int, default=20, help='最多生成概念数 (默认20)')
+    parser.add_argument('--min-refs', type=int, default=1,
+                        help='至少被几篇材料提到才建页（默认 1；2 能滤掉新闻里的一次性实体）')
     parser.add_argument('--source', default=SOURCE_ROOT, help='文章目录')
     parser.add_argument('--output', default=OUTPUT_ROOT, help='概念页输出目录')
     args = parser.parse_args()
@@ -298,7 +313,10 @@ def main():
     # Step 2: Aggregate
     print(f'\n=== Step 2: 聚合概念 ===')
     concept_map = aggregate_concepts(articles)
-    ranked = sorted(concept_map.items(), key=lambda x: len(x[1]), reverse=True)
+    before = len(concept_map)
+    ranked = rank_concepts(concept_map, args.min_refs)
+    if args.min_refs > 1:
+        print('  按 --min-refs %d 过滤：%d → %d 个概念' % (args.min_refs, before, len(ranked)))
     print(f'  共 {len(ranked)} 个概念（限制 TOP {args.limit}）')
     for i, (name, refs) in enumerate(ranked[:10]):
         print(f'  {i+1}. [[{name}]] — {len(refs)} 篇文章引用')

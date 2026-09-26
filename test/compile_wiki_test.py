@@ -208,6 +208,29 @@ class FilterTests(unittest.TestCase):
         self.assertEqual(cw.concept_links(body, 'AI'), [])
 
 
+class RankTests(unittest.TestCase):
+    """够不够格建页——这条闸门是**实测定的**。
+
+    120 篇材料聚出 387 个概念，其中只有 37 个被 ≥2 篇提到：其余多半是那篇新闻里的人名、
+    机构、单次事件。给它们逐条写页不是知识库，是剪报。
+    """
+
+    MAP = {'甲': [1, 2, 3], '乙': [1], '丙': [1, 2]}
+
+    def test_按被提到的篇数排序(self):
+        self.assertEqual([name for name, _ in cw.rank_concepts(self.MAP)], ['甲', '丙', '乙'])
+
+    def test_min_refs_滤掉只被一篇提到的(self):
+        got = [name for name, _ in cw.rank_concepts(self.MAP, 2)]
+        self.assertEqual(got, ['甲', '丙'])
+
+    def test_默认不过滤(self):
+        self.assertEqual(len(cw.rank_concepts(self.MAP)), 3)
+
+    def test_全都不够格时是空表_而不是报错(self):
+        self.assertEqual(cw.rank_concepts({'甲': [1]}, 5), [])
+
+
 class RefLineTests(unittest.TestCase):
     def test_参考行优先用_desc_而不是摘要(self):
         # 这条是"人物时间线"能不能成立的关键：desc 是"那时候发生了什么"，

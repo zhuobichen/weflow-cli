@@ -1,6 +1,6 @@
 # Project State
 
-> Last reviewed: 2026-09-26 (the WeChat channel reports an expired token instead of retrying forever; conversations now feed the knowledge base as cards the existing wiki pipeline aggregates; drafted replies: text only, never sent, and never judged against the user's own last message; the assistant may not invent a reason for a tool failure; every extension point in docs/EXTENDING.md now names the test that catches a missed step; extension is in-repo or over MCP, by decision). This is the current maintenance snapshot, not a release note. Keep it factual and update it with meaningful project changes.
+> Last reviewed: 2026-09-26 (the knowledge base has a health check and a gate on what deserves a page - 120 article notes produced 387 concepts of which 37 were durable, and the 39 resulting pages passed `wiki lint` with 0 breaks; the WeChat channel reports an expired token instead of retrying forever; conversations now feed the knowledge base as cards the existing wiki pipeline aggregates; drafted replies: text only, never sent, and never judged against the user's own last message; the assistant may not invent a reason for a tool failure; every extension point in docs/EXTENDING.md now names the test that catches a missed step; extension is in-repo or over MCP, by decision). This is the current maintenance snapshot, not a release note. Keep it factual and update it with meaningful project changes.
 
 ## Purpose
 

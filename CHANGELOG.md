@@ -8,6 +8,36 @@ All notable user-facing changes are recorded here. This project follows [Semanti
 
 ### Added
 
+- **The knowledge base can now be checked, and the check found three things worth fixing.** `wiki lint`
+  (`scripts/wiki_lint.py`, `weflow-cli wiki lint`) reports broken links, orphan pages, empty pages and duplicate
+  titles - locally, with no model calls. The gap was recorded in D-049 as deliberately not done; running it against
+  the real 39 pages is what justified closing it, because two judgements in it are not obvious:
+
+  - **It separates "a concept the pages link to that has no page yet" from a break.** `## 相关概念` sections name
+    concepts the model proposed; only the most-referenced ones have pages. Reporting both kinds as "dead links"
+    gave "40 dead links" on a healthy knowledge base - the fastest way to teach a reader to ignore a tool. It now
+    reports expansions as candidates (131 of them) and breaks as breaks (0).
+  - **Card-side links count as inbound.** Without that, every single page was reported as an orphan, because pages
+    mostly link *forward* to concepts that do not exist yet - so page-to-page inlinks are nearly empty by
+    construction. Card links are the real inbound edges, and counting them turned "10 orphans" into the truth.
+
+- **`wiki compile --min-refs` - a gate on what deserves a page.** Measured on the real corpus: 120 article notes
+  produce **387 concepts, of which only 37 are mentioned by more than one** - the rest are the people, companies and
+  single events of one news story. Writing a page each is not a knowledge base, it is a clippings file. `--min-refs 2`
+  keeps only the durable ones, and it is what the default recommendation is based on, not a guess.
+
+- **`article-notes` is incremental by default.** It used to re-ask the model about every article on every run:
+  thirty articles meant thirty wasted calls, and the full 1633 would have meant a whole run's money. A card newer
+  than its source note now means "skip"; a changed source note means "redo"; `--refresh` forces everything. The
+  chat line keeps rewriting its cards on purpose - those are rolling snapshots.
+
+- **`wiki lint` also reports degenerate fields** - a metadata column that is nearly one value. Measured: all 39
+  concept pages carry `topics: [学术]`, i.e. the field looks like metadata and says nothing, and it is the kind of
+  thing that gets trusted. (An independent measurement on the same corpus: of 224 notes whose titles read as news,
+  40 are labelled `学术`.) This reports the degeneracy rather than fixing the classifier - that classifier belongs to
+  the daily pipeline, and changing its criteria without labels would be a guess.
+
+
 - **The article line can now produce knowledge pages, and this was the missing half of the pipeline.** Running the
   aggregator over the whole Vault had shown that the 1633 article notes contain no concept links at all - only their own
   topic and `## 关联网络` path links - so `wiki compile` had nothing to aggregate, no matter how it was invoked.

@@ -109,6 +109,32 @@ class ListTests(unittest.TestCase):
         self.assertEqual(an.list_articles('不存在的目录', 10), [])
 
 
+class IncrementalTests(unittest.TestCase):
+    """默认增量：不然每跑一次都把同样的文章重问一遍（三十篇=三十次白花的调用）。"""
+
+    def test_已有卡就跳过_原笔记改了才重做(self):
+        import os, time
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / 'src'
+            source.mkdir()
+            note = source / '2026-09-05-甲.md'
+            note.write_text('---\ntitle: 甲\n---\n\n正文\n', encoding='utf-8')
+            out = Path(tmp) / 'out'
+            article = {'path': note}
+
+            self.assertFalse(an.already_carded(article, str(out)), '还没卡 → 要做')
+            out.mkdir()
+            an.note_path(out, note.stem).write_text('x', encoding='utf-8')
+
+            old = time.time() - 100
+            os.utime(note, (old, old))
+            self.assertTrue(an.already_carded(article, str(out)), '卡比原笔记新 → 跳过')
+
+            future = time.time() + 100
+            os.utime(note, (future, future))
+            self.assertFalse(an.already_carded(article, str(out)), '原笔记改过了 → 重做')
+
+
 class GateTests(unittest.TestCase):
     def test_太短的不值得一次调用(self):
         self.assertFalse(an.worth_concepts('短'))

@@ -68,6 +68,22 @@ frontmatter 里了），也不是文章标题。
 """
 
 
+def already_carded(article: dict, out_dir: str) -> bool:
+    """这篇文章已经有卡了吗（按卡片的 mtime 比原笔记新）。
+
+    **默认增量**：不然每跑一次都把同样的文章重问一遍——三十篇就是三十次白花的调用，
+    一千六百篇就是一整轮的钱。原笔记改了（mtime 更新）就重做 ✓；提炼规则变了则用
+    `--refresh` 强制重做（规则变不在文件时间上体现，只能靠人喊）。
+    """
+    card = note_path(out_dir, article['path'].stem)
+    if not card.exists():
+        return False
+    try:
+        return card.stat().st_mtime >= article['path'].stat().st_mtime
+    except OSError:
+        return False
+
+
 def worth_concepts(body: str, min_chars: int = MIN_ARTICLE_CHARS) -> bool:
     """这篇够不够提炼——不够就跳过，**并报出来**（不是静默丢）。
 
@@ -200,6 +216,8 @@ def main():
     parser.add_argument('--limit', type=int, default=DEFAULT_LIMIT,
                         help='最多处理几篇（默认 %d，按发布时间倒序）' % DEFAULT_LIMIT)
     parser.add_argument('--dry-run', action='store_true', help='只报要发多少给模型，不调用')
+    parser.add_argument('--refresh', action='store_true',
+                        help='已有卡的也重做（默认增量：只做还没卡的）')
     parser.add_argument('--refresh-summaries', action='store_true',
                         help='只按原笔记重算已有卡片的摘要（本地，不调用模型）')
     parser.add_argument('--yes', action='store_true', help='确认调用云端模型')
@@ -230,9 +248,13 @@ def main():
               file=sys.stdout if args.json else sys.stderr)
         return 1
 
-    runnable, thin = [], []
+    runnable, thin, existing = [], [], []
     for article in articles:
-        (runnable if worth_concepts(article['body']) else thin).append(article)
+        if worth_concepts(article['body']):
+            # **默认增量**：已经有卡（且比原笔记新）的不再重复问一遍
+            (runnable if args.refresh or not already_carded(article, args.out) else existing).append(article)
+        else:
+            thin.append(article)
 
     if args.dry_run:
         preview = {
@@ -240,6 +262,7 @@ def main():
             'source': args.source, 'articles': len(runnable),
             'chars': sum(len(a['body']) for a in runnable),
             'skipped': len(thin), 'skippedTitles': [a['title'][:24] for a in thin][:10],
+            'alreadyCarded': len(existing),
             'model': 'DeepSeek（生成）', 'calls': len(runnable),
             'readsLocalData': True, 'invokesAI': False, 'writesFiles': True,
             'note': '每篇一次调用，**只问概念**（摘要照抄原笔记）；卡片写到 %s' % args.out,
@@ -249,6 +272,8 @@ def main():
         else:
             print('%d 篇、约 %d 字会发给 DeepSeek（每篇一次调用，只问概念）'
                   % (len(runnable), preview['chars']))
+            if existing:
+                print('已有卡、跳过 %d 篇（要重做加 --refresh）' % len(existing))
             if thin:
                 print('另有 %d 篇太短（<%d 字）跳过' % (len(thin), MIN_ARTICLE_CHARS))
             print('卡片写到 %s；之后跑 python scripts/compile_wiki.py --source %s' % (args.out, args.out))

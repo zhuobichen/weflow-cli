@@ -3769,6 +3769,7 @@ program
       new Command('compile')
         .description('扫描文章 [[Wikilinks]] 聚合生成概念页')
         .option('-l, --limit <n>', '最多生成概念数', '20')
+        .option('--min-refs <n>', '至少被几篇材料提到才建页（2 能滤掉新闻里的一次性实体）', '1')
         .option('--source <dir>', '材料目录（**必须含 [[概念]] — 说明 形状的链接**，否则聚合不出任何概念）', './output/biz-daily')
         .option('-o, --output <dir>', '概念页输出目录', './output/wechat-vault/Wiki/Concepts')
         .option('--api-key <key>', 'DeepSeek API key')
@@ -3780,12 +3781,14 @@ program
           const script = join(pkgRoot, 'scripts', 'compile_wiki.py')
 
           const limit = parseCliInteger(opts.limit, 'limit', 1, 1000, opts.json)
+          const minRefs = parseCliInteger(opts.minRefs ?? '1', 'min-refs', 1, 50, opts.json)
           await runConfirmedPythonMutation({
             action: 'wiki.compile',
             script,
-            args: ['--limit', String(limit), '--source', opts.source, '--output', opts.output],
+            args: ['--limit', String(limit), '--source', opts.source, '--output', opts.output,
+                   '--min-refs', String(minRefs)],
             cliOptions: opts,
-            preview: { limit, readsLocalArticles: true, usesAi: true, writesConceptPages: true },
+            preview: { limit, minRefs, readsLocalArticles: true, usesAi: true, writesConceptPages: true },
             confirmationMessage: `确认调用 AI 并生成最多 ${limit} 个概念页？`,
             apiKey: opts.apiKey,
             timeout: 300_000,
@@ -5290,6 +5293,31 @@ program
         process.exit(1)
       }
     })
+
+  // wiki lint：知识库体检（全本地：不联网、不调用模型）
+  program.commands.find(c => c.name() === 'wiki')?.addCommand(
+    new Command('lint')
+      .description('知识库体检：断链、孤儿、空页、同名（本地，不联网）')
+      .option('--dir <dir>', '概念页目录', './output/wechat-vault/Wiki/Concepts')
+      .option('--json', '输出机器可读结果')
+      .action(async (opts) => {
+        const { execFile } = await import('child_process')
+        const { promisify } = await import('util')
+        const execFileAsync = promisify(execFile)
+        const script = join(resolvePackageRoot(), 'scripts', 'wiki_lint.py')
+        const args = [script, '--dir', String(opts.dir), ...(opts.json ? ['--json'] : [])]
+        try {
+          const { stdout } = await execFileAsync(getPythonCommand(), args, {
+            timeout: 120_000, maxBuffer: 20 * 1024 * 1024, env: pythonProcessEnv(),
+          })
+          process.stdout.write(stdout)
+        } catch (error) {
+          if (opts.json) console.log(JSON.stringify({ success: false, code: 'WIKI_LINT_FAILED', error: safeSubprocessError(error) }))
+          else console.error(chalk.red(`
+✗ ${safeSubprocessError(error)}`))
+          process.exit(1)
+        }
+      }))
 
   // chat-notes：把会话整理成知识卡，喂给 wiki compile 聚成概念页
   program
