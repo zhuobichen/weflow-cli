@@ -8,6 +8,28 @@ All notable user-facing changes are recorded here. This project follows [Semanti
 
 ### Added
 
+- **The article line can now produce knowledge pages, and this was the missing half of the pipeline.** Running the
+  aggregator over the whole Vault had shown that the 1633 article notes contain no concept links at all - only their own
+  topic and `## 关联网络` path links - so `wiki compile` had nothing to aggregate, no matter how it was invoked.
+  `article-notes` is the step that was missing: one model call per article, **asking only for concepts** (the summary is
+  copied from the existing note rather than regenerated, which removes one chance to invent something), writing a card
+  into `output/article-notes/` in exactly the shape the aggregator reads. Measured on this machine: 30 articles -> 110
+  concepts -> 10 concept pages plus an index (`Wiki/00-Overview.md`), and those pages are now searchable locally
+  (`vault search`, and the assistant's `search_knowledge`, which until today could only answer "the knowledge base has
+  not been generated yet"). The concepts that come out are specific ("标签配料表一致性", "椰子水全覆盖风险排查") rather than
+  taxonomy words, which is what the prompt asks for in so many words.
+
+  Two noise sources in the *upstream* material surfaced in that trial and are deliberately not papered over here: some
+  article notes carry the WeChat reader's own UI text inside their summary (`在小说阅读器读本章 去阅读`), which the card
+  copies verbatim because copying is the point; and the topic classifier puts unrelated stories in one bucket (a murder
+  case and a food-safety notice both came out as `学术`). Both belong to the daily pipeline rather than this one, and both
+  are recorded in `docs/PROJECT_STATE.md`.
+
+- **The knowledge-card helpers are shared rather than copied.** `chat_notes` and `article_notes` produce the same kind of
+  card, so `note_path`, `plain` (the `[[...]]` stripper) and `SEPARATOR` now live in `_utils.py` - one implementation,
+  two callers - and `_utils` is deliberately dependency-light so the CI job that installs only `zstandard pycryptodome`
+  can still import it (importing `chat_notes` would have dragged in `nt_decrypt`).
+
 - **Chat conversations can now feed the knowledge base, as notes the existing wiki pipeline aggregates.**
   Until now the knowledge side had one source - `output/biz-daily`, the article line, over ten thousand files -
   while conversations could only be searched, never condensed. `chat-notes` closes that: one knowledge card

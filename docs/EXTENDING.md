@@ -113,8 +113,9 @@ TypeScript; `python -m unittest discover -s test -p '*_test.py'` covers these).
 
 The knowledge base is fed by "material that carries `[[wikilinks]]`": `compile_wiki` scans a source directory
 (`--source`, already a flag - no code change needed to add a source), aggregates every wikilink into concepts, and
-writes concept pages into the Vault. Two sources exist: `output/biz-daily` (articles) and `output/chat-notes`
-(conversation cards, from the `chat-notes` command).
+writes concept pages into the Vault. Producers are `chat_notes.py` (conversation cards) and `article_notes.py` (concept cards
+extracted from the Vault's article notes - the latter exists because those notes, measured over the whole
+corpus, carry **no** concept links; the `output/*-notes/` directories are what `--source` points at).
 
 To add a third, the producer must satisfy the consumer's contract exactly:
 

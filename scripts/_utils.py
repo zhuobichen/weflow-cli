@@ -747,3 +747,45 @@ def generate_action_suggestion(title: str, source: str, topic: str,
     )
     engine = create_engine(engine_type, api_key)
     return engine.chat(prompt, max_tokens=max_tokens)
+
+# ---------------------------------------------------------------- 知识卡片的公共件
+#
+# `chat_notes.py`（对话线）与 `article_notes.py`（文章线）产出的是**同一种卡片**：
+# 带 frontmatter + `## AI 摘要` + `[[概念]] — 说明` 的 markdown，都喂给 `compile_wiki`。
+# 所以这几样放在这里，一份实现两边用——两处各写一份，早晚有一处会漏。
+
+SEPARATOR = '—'   # 与 `compile_wiki` 认的破折号一致（那条描述要能被它读回描述）
+
+# 文件名里不许出现的字符（Windows 一套 + 控制字符）
+_ILLEGAL_IN_NAME = set('\\/:*?"<>|') | {chr(code) for code in range(0, 32)}
+
+
+def plain(text) -> str:
+    """自由文本里的 `[[…]]` 一律拆掉。
+
+    纪律是「wikilink 只由我们的代码渲染，不由模型写」：`compile_wiki.scan_articles` 收正文里
+    **所有** wikilink，它不会问这是谁写的——模型在摘要里随手一个 `[[X]]`，就会凭空长出一个概念。
+    """
+    out, index = [], 0
+    source = str(text or '')
+    while True:
+        start = source.find('[[', index)
+        if start < 0:
+            out.append(source[index:])
+            break
+        end = source.find(']]', start)
+        if end < 0:
+            out.append(source[index:])
+            break
+        out.append(source[index:start])
+        out.append(source[start + 2:end])
+        index = end + 2
+    return ''.join(out).replace('[[', '').replace(']]', '')
+
+
+def note_path(out_root, name: str, fallback: str = '未命名'):
+    """一张卡一个文件。名字要过文件名安全：会话/文章名里有 `/` 会写到别的目录去。"""
+    from pathlib import Path as _Path
+    cleaned = ''.join('_' if ch in _ILLEGAL_IN_NAME else ch for ch in str(name))
+    cleaned = ' '.join(cleaned.split())[:80].strip().strip('.')
+    return _Path(out_root) / ('%s.md' % (cleaned or fallback))

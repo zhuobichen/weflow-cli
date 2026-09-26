@@ -42,7 +42,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _utils import call_deepseek, decrypt_lock, get_api_key, load_config, write_with_frontmatter  # noqa: E402
+from _utils import (SEPARATOR, call_deepseek, decrypt_lock, get_api_key, load_config,  # noqa: E402
+                    note_path as _shared_note_path, plain, write_with_frontmatter)
 from reply_debt import collect_conversations, format_line  # noqa: E402
 
 import nt_decrypt  # noqa: E402
@@ -56,7 +57,6 @@ NOTE_MESSAGES = 120
 # 与 `draft_reply.DRAFT_MSG_CHARS=160` 是两件事，别互相套用。
 NOTE_MSG_CHARS = 300
 MAX_CONVERSATIONS = 40
-SEPARATOR = '—'          # 与 `compile_wiki.scan_articles` 的破折号一致
 # 太薄的会话不值得产卡：几句话的对话写出来的"知识卡"只会是"只说了两句话"，
 # 而它**照样会占掉一次模型调用、并往概念页里灌一条没有信息量的来源**。
 # 借自 WeKnora 那道"内容太少就拒绝调用 LLM"的闸门（`wiki_ingest_batch.go:1286`）。
@@ -91,20 +91,8 @@ NOTE_PROMPT = """你在为一个人整理他和某个会话最近 {days} 天的�
 
 
 def note_path(out_root, name):
-    """一张卡一个文件。会话名要过文件名安全：名字里有 `/` 的话会写到别的目录去。"""
-    safe = re.sub(r'[\\/:*?"<>|\x00-\x1f]', '_', str(name)).strip().strip('.')
-    safe = re.sub(r'\s+', ' ', safe)[:80] or '未命名会话'
-    return Path(out_root) / ('%s.md' % safe)
-
-
-def plain(text):
-    """自由文本里的 `[[…]]` 一律拆掉。
-
-    纪律是"wikilink 只由本脚本渲染"（见文件头）。摘要/时间线/欠着什么这三段是模型的原话，
-    照原样写进正文的话，模型随手一个 `[[X]]` 就会**凭空造出一个概念**——`compile_wiki` 收正文里
-    所有的 wikilink，而它不会去问这是谁写的。
-    """
-    return re.sub(r'\[\[([^\]]*)\]\]', r'\1', str(text or '')).replace('[[', '').replace(']]', '')
+    """本功能的兜底名（共用实现见 `_utils.note_path`）"""
+    return _shared_note_path(out_root, name, fallback='未命名会话')
 
 
 def parse_note(raw):

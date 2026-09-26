@@ -5352,6 +5352,66 @@ program
       }
     })
 
+  // article-notes：从文章笔记里提炼概念，喂给 wiki compile
+  program
+    .command('article-notes')
+    .description('从 Vault 的文章笔记里提炼概念（之后用 wiki compile 聚成概念页）—— **只写本地文件，不发送**')
+    .option('--source <dir>', '文章笔记目录', './output/wechat-vault/002_Literature')
+    .option('--limit <n>', '最多处理几篇（按发布时间倒序）', '30')
+    .option('--dry-run', '仅预览：几篇、多少字会发给生成模型（只读本地，零出境）')
+    .option('--yes', '确认把文章发给生成模型')
+    .option('--json', '输出机器可读结果；执行仍需 --yes')
+    .action(async (opts) => {
+      const { execFile } = await import('child_process')
+      const { promisify } = await import('util')
+      const execFileAsync = promisify(execFile)
+      const pkgRoot = resolvePackageRoot()
+      const script = join(pkgRoot, 'scripts', 'article_notes.py')
+      const limit = parseCliInteger(opts.limit, 'limit', 1, 5000, opts.json)
+      // 与 `chat-notes`/`draft` 同一条纪律：**"确认过了"只用一个变量**，参数在确认之后才拼
+      let confirmed = !!opts.yes
+      if (!opts.dryRun && !confirmed) {
+        const preview = {
+          success: false, dryRun: false, action: 'article-notes',
+          code: 'CONFIRMATION_REQUIRED', source: opts.source, limit,
+          readsLocalData: true, invokesAI: true, writesLocalFiles: true, sendsNothing: true,
+        }
+        if (opts.json) {
+          console.log(JSON.stringify(preview))
+          process.exit(1)
+        }
+        const answer = await inquirer.prompt([{
+          type: 'confirm',
+          name: 'confirmed',
+          message: '确认把这些文章（只问概念，摘要照抄）发给生成模型吗？（只写本地知识卡，不会发送任何消息）',
+          default: false,
+        }])
+        confirmed = !!answer.confirmed
+        if (!confirmed) {
+          console.log(chalk.gray('已取消'))
+          return
+        }
+      }
+      const args = [script, '--source', String(opts.source), '--limit', String(limit),
+                    ...(confirmed ? ['--yes'] : []),
+                    ...(opts.json ? ['--json'] : []),
+                    ...(opts.dryRun ? ['--dry-run'] : [])]
+      try {
+        const { stdout } = await execFileAsync(getPythonCommand(), args, {
+          timeout: 1_800_000, maxBuffer: 50 * 1024 * 1024,
+          env: pythonProcessEnv(),
+        })
+        process.stdout.write(stdout)
+      } catch (error) {
+        if (opts.json) {
+          console.log(JSON.stringify({ success: false, code: 'ARTICLE_NOTES_FAILED', action: 'article-notes', error: safeSubprocessError(error) }))
+        } else {
+          console.error(chalk.red(`\n✗ ${safeSubprocessError(error)}`))
+        }
+        process.exit(1)
+      }
+    })
+
   // todos
   const todosCmd = program
     .command('todos')
