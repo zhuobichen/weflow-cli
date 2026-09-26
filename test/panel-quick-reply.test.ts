@@ -39,7 +39,7 @@ interface Booted {
   rightClick: (x?: number, y?: number) => void
   menuItems: () => string[]
   clickItem: (label: string) => void
-  setNativePick: (value: string | null) => void
+  setNativePick: (value: {kind: string, name?: string, label?: string, prompt?: string} | null) => void
   /** 主进程那一侧的通知（形态由它说了算） */
   notifyMode: (payload: Record<string, unknown>) => void
   bodyHas: (cls: string) => boolean
@@ -54,7 +54,7 @@ async function boot(options: { quickReplies?: string[]; shell?: boolean; stayInB
   let modeListener: ((payload: any) => void) | null = null
   // 原生菜单那条路：桩里让它返回名单里的第一个（或者 options.nativePick 指定的），
   // `null` 表示"用户把菜单关掉了、没选"
-  let nativePick: string | null | undefined = undefined
+  let nativePick: {kind: string, name?: string, label?: string, prompt?: string} | null | undefined = undefined
 
   window.setInterval = () => 0
   window.matchMedia = () => ({ matches: false, media: '', addListener() {}, removeListener() {}, addEventListener() {}, removeEventListener() {} })
@@ -77,7 +77,10 @@ async function boot(options: { quickReplies?: string[]; shell?: boolean; stayInB
       setMode: (mode: string) => { modeCalls.push(mode); return Promise.resolve({}) },
       openQuickMenu: (labels: string[]) => {
         nativeMenus.push(labels)
-        return Promise.resolve(nativePick === undefined ? (labels[0] ?? null) : nativePick)
+        // 菜单回传的是**结构化的一项**（`{kind:'contact'|'action', ...}`），不是光一个名字：
+        // 菜单有两段，页面得知道点的是哪一段。没指定就当作"点了名单里的第一个人"。
+        const fallback = labels[0] ? { kind: 'contact', name: labels[0] } : null
+        return Promise.resolve(nativePick === undefined ? fallback : nativePick)
       },
       onMode: (cb: any) => { modeListener = cb },
       dragStart: () => Promise.resolve(), dragMove: () => Promise.resolve(), dragEnd: () => Promise.resolve(),
@@ -102,7 +105,7 @@ async function boot(options: { quickReplies?: string[]; shell?: boolean; stayInB
     asked,
     nativeMenus,
     modeCalls,
-    setNativePick: (value: string | null) => { nativePick = value },
+    setNativePick: (value: {kind: string, name?: string} | null) => { nativePick = value },
     rightClick: (x = 30, y = 40) => {
       // 右键是个 MouseEvent（`contextmenu`），要带上坐标——菜单就在那个点上弹
       window.document.body.dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: x, clientY: y }))
@@ -149,7 +152,7 @@ test('球形态下**选中一个人**才展开窗口 —— 候选得有地方�
 
 test('原生菜单里选了一个人 → 照样发出那句带名字的请求', async () => {
   const app = await boot({ quickReplies: ['咸鱼梦想家', '老王'] })
-  app.setNativePick('老王')
+  app.setNativePick({ kind: 'contact', name: '老王' })
   app.rightClick()
   await wait(30)
   assert.equal(app.asked.length, 1)
@@ -157,6 +160,38 @@ test('原生菜单里选了一个人 → 照样发出那句带名字的请求', 
   assert.match(app.asked[0], /draft_reply/, '发出去的仍是点名工具的请求')
   const meTurn = app.window.document.querySelector('.turn.me')
   assert.equal(meTurn.textContent, '快速回复：老王', '对话里显示的是人话，不是那句机器指令')
+  app.window.close()
+})
+
+test('原生菜单里选了一个快捷功能 → 发出它自己的话术，而不是起草', async () => {
+  // 菜单第二段（快捷功能）。**话术由菜单项带回来**，页面不按 id 查表——所以这里断言的是
+  // "原样发出"，而不是"发出了某个我们认识的 id 对应的话"。
+  const action = {
+    kind: 'action', label: '我的待办',
+    prompt: '用 get_todos 把我的待办列出来，按紧急程度排。',
+  }
+  const app = await boot({ quickReplies: ['甲'], stayInBall: true })
+  app.setNativePick(action)
+  app.rightClick()
+  await wait(30)
+  assert.equal(app.asked.length, 1)
+  assert.equal(app.asked[0], action.prompt, '原样发出菜单带回来的话术')
+  assert.doesNotMatch(app.asked[0], /draft_reply/, '选功能不该走起草那条路')
+  assert.deepEqual(app.modeCalls, ['chat'], '功能也要展开——球那个 76x76 里看不到回答')
+  const meTurn = app.window.document.querySelector('.turn.me')
+  assert.equal(meTurn.textContent, '我的待办', '对话里显示标签，不是那句机器指令')
+  app.window.close()
+})
+
+test('回传的形状不对（比如上一版的字符串契约）→ 忽略，不是当成起草发出去', async () => {
+  // 菜单与页面是两个进程里的两份代码，升级过程中"一边新一边旧"是会发生的。
+  // 旧契约回的是一个裸名字，若把它当联系人用，发出去的就是一次**没人让它发的**起草。
+  const app = await boot({ quickReplies: ['甲'] })
+  app.setNativePick('老王' as any)
+  app.rightClick()
+  await wait(30)
+  assert.equal(app.asked.length, 0, '不认识的东西不该被当成请求发出去')
+  assert.deepEqual(app.modeCalls, [])
   app.window.close()
 })
 

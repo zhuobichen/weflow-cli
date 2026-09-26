@@ -372,7 +372,10 @@ if (!app.requestSingleInstanceLock()) {
       let picked = null
       // 先记下来、关菜单时再 resolve：`click` 与 `popup` 的 callback 谁先到不该决定结果
       const menu = Menu.buildFromTemplate(quickMenuTemplate(labels, {
-        pick: (name) => { picked = name },
+        // 回传的是**结构化的一项**（{kind:'contact'|'action', ...}），不是光一个名字：
+        // 菜单现在有两段，"点的是哪一段"必须跟着回来，否则页面只能靠"名字长得像不像动作"来猜。
+        // 动作的话术（`prompt`）也由菜单项带回来——id→话术的映射只存一份，不存两处。
+        pick: (item) => { picked = item },
         // 菜单最后那一项「关闭悬浮球」：**只把窗口收起来**，不退出（退出那一类在托盘菜单里）。
         // 收起来是可逆的——托盘图标、托盘菜单的「显示 / 收起」、Ctrl+Shift+W 都叫得回来，
         // 所以标签里写明了从哪叫回来。收起之后 `picked` 仍是 null，页面那边什么都不会发。

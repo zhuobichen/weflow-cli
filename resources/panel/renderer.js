@@ -369,12 +369,20 @@ if (hasShell) {
     event.preventDefault()
     void (async () => {
       const picked = await window.weflowPanel.openQuickMenu(quickReplies)
-      if (typeof picked !== 'string' || !picked.trim()) return
-      const name = picked.trim()
-      // 选中了人：**这时才展开**。右键本身不该动窗口（那是用户嫌的那一下），
-      // 但起草出来的候选得有地方看——球那个 76x76 里看不到任何东西。
+      if (!picked || typeof picked !== 'object') return
+      // 选中任何一项都要展开：球那个 76x76 里看不到任何回答，而这几项全都要出文字。
+      // 但**右键本身不动窗口**（那是用户嫌的那一下）——展开只发生在真的选了东西之后。
       if (document.body.classList.contains('mode-ball')) requestMode('chat')
-      void ask(draftRequest(name), `快速回复：${name}`)
+      if (picked.kind === 'contact' && typeof picked.name === 'string' && picked.name.trim()) {
+        const name = picked.name.trim()
+        void ask(draftRequest(name), `快速回复：${name}`)
+        return
+      }
+      if (picked.kind === 'action' && typeof picked.prompt === 'string' && picked.prompt.trim()) {
+        // 话术**由菜单项带过来**，页面不自己按 id 查表——两份映射会漂移，而漂移的后果是
+        // "菜单写着甲、点下去做了乙"，不报错。
+        void ask(picked.prompt, String(picked.label || '快捷功能'))
+      }
     })()
   })
   document.addEventListener('click', () => closeQuickMenu())

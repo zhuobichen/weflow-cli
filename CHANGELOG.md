@@ -8,6 +8,29 @@ All notable user-facing changes are recorded here. This project follows [Semanti
 
 ### Added
 
+- **The right-click menu gained a second section: eight one-click functions.** The first section is still the
+  `quickReplyContacts` list (draft a reply for that person); below it now sit 谁在等我回话 / 我的待办 / 今日日报 /
+  最近统计 / 阅读统计 / 最近会话 / 朋友圈 / 微信读书. The admission rule for that section is one thing only:
+  **the action has to be completable by one fixed sentence**, because a native menu cannot collect input. Anything
+  needing a query, a target, or a path (search, export, read-one-message) is therefore excluded rather than shipped
+  as an item that does nothing when clicked. All eight map to tools the assistant already has, and each prompt names
+  its tool (`用 get_todos …`) - that is a **request to the model, not a hard binding**: the assistant still picks,
+  from 19 tools, and a wrong pick is possible; adding a parameter to force it is a separate decision for when that
+  actually happens.
+
+  Three design points, each with a failure it prevents. **The prompt travels with the menu item** rather than the
+  page keeping its own id→prompt table: two tables drift, and the drift shows up as "the menu says A, clicking does
+  B", silently. A test asserts `renderer.js` contains no action id at all. **The cost line is derived from the
+  actions** (`costNote()`), not written down: the hand-written version goes stale the moment a function is added,
+  and a stale cost warning is worse than none - it makes people think they were told. It now names exactly which
+  items call a cloud model (起草回复 and 谁在等我回话) and says the rest are local reads, so the free ones are
+  visibly free. **An empty contact list no longer produces a nearly-empty menu**: the functions and the close item
+  are always there, so a user who never configured `quickReplyContacts` still gets a usable menu.
+
+  The pick payload changed shape (`{kind:'contact'|'action', …}` instead of a bare name), and the page ignores
+  anything that is not that shape - during an upgrade the menu and the page are two pieces of code in two processes,
+  and a bare name from the old contract would otherwise be dispatched as a *draft nobody asked for*.
+
 - **`article-notes --topic` - and the number that makes it worth having.** Concept extraction is the only step in
   this pipeline that costs money per article, so the useful question is not "does it support filtering" but "how
   much does filtering save". Measured rather than estimated, on the 3,498 backfilled articles: news is **57%**, AI
