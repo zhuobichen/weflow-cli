@@ -93,7 +93,7 @@ def worth_concepts(body: str, min_chars: int = MIN_ARTICLE_CHARS) -> bool:
     return len(body.strip()) >= min_chars
 
 
-def list_articles(source_root: str, limit: int) -> list:
+def list_articles(source_root: str, limit: int, since: str = '', until: str = '') -> list:
     """按发布时间倒序取前 N 篇（文件名前缀就是日期，frontmatter 里也有 published）。"""
     root = Path(source_root)
     if not root.exists():
@@ -116,6 +116,13 @@ def list_articles(source_root: str, limit: int) -> list:
             'published': str(frontmatter.get('published') or (path.name[:10] if re.match(r'\d{4}-\d{2}-\d{2}', path.name) else '')),
             'body': body,
         })
+    # 时间窗口：按 `published` 过滤（ISO 日期串比大小就行）。**为什么要它**：
+    # "把 9 月份的解析一遍"是人的说法，而 `--limit` 只能表达"最近 N 篇"——
+    # 用 limit 去凑月份，要么漏掉要么带上隔壁月份的。
+    if since:
+        found = [item for item in found if item['published'] >= since]
+    if until:
+        found = [item for item in found if item['published'] <= until]
     found.sort(key=lambda item: item['published'], reverse=True)
     return found[:limit] if limit else found
 
@@ -223,6 +230,8 @@ def main():
     parser = argparse.ArgumentParser(description='文章知识卡（从文章笔记提炼概念，喂给 wiki compile）')
     parser.add_argument('--source', default=SOURCE_ROOT, help='文章笔记目录')
     parser.add_argument('--out', default=OUTPUT_ROOT, help='卡片输出目录')
+    parser.add_argument('--since', default='', help='只看这个日期之后的（YYYY-MM-DD）')
+    parser.add_argument('--until', default='', help='只看这个日期之前的（YYYY-MM-DD）')
     parser.add_argument('--limit', type=int, default=DEFAULT_LIMIT,
                         help='最多处理几篇（默认 %d，按发布时间倒序）' % DEFAULT_LIMIT)
     parser.add_argument('--dry-run', action='store_true', help='只报要发多少给模型，不调用')
@@ -251,7 +260,7 @@ def main():
                 print('找不到来源或没有摘要小节，跳过 %d 张' % len(result['missing']), file=sys.stderr)
         return 0
 
-    articles = list_articles(args.source, args.limit)
+    articles = list_articles(args.source, args.limit, since=args.since, until=args.until)
     if not articles:
         message = '在 %s 下没找到 .md 笔记' % args.source
         print(json.dumps({'success': False, 'error': message}) if args.json else message,

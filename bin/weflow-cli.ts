@@ -5510,6 +5510,8 @@ program
     .description('从 Vault 的文章笔记里提炼概念（之后用 wiki compile 聚成概念页）—— **只写本地文件，不发送**')
     .option('--source <dir>', '文章笔记目录', './output/wechat-vault/002_Literature')
     .option('--limit <n>', '最多处理几篇（按发布时间倒序）', '30')
+    .option('--since <date>', '只看这个日期之后的（YYYY-MM-DD）—— 比 --limit 精确，例："9 月的都跑一遍"')
+    .option('--until <date>', '只看这个日期之前的（YYYY-MM-DD）')
     .option('--dry-run', '仅预览：几篇、多少字会发给生成模型（只读本地，零出境）')
     .option('--refresh-summaries', '只按原笔记重算已有卡片的摘要（本地，不调用模型、不必 --yes）')
     .option('--yes', '确认把文章发给生成模型')
@@ -5546,6 +5548,8 @@ program
         }
       }
       const args = [script, '--source', String(opts.source), '--limit', String(limit),
+                    ...(opts.since ? ['--since', String(opts.since)] : []),
+                    ...(opts.until ? ['--until', String(opts.until)] : []),
                     ...(opts.refreshSummaries ? ['--refresh-summaries'] : []),
                     ...(confirmed ? ['--yes'] : []),
                     ...(opts.json ? ['--json'] : []),

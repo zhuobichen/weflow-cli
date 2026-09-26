@@ -8,6 +8,12 @@ All notable user-facing changes are recorded here. This project follows [Semanti
 
 ### Added
 
+- **`article-notes --since / --until` - a date window, because "do all of September" is how a person says it.**
+  `--limit` can only express "the newest N", so using it to cover a month either misses articles (a busy month
+  exceeds the limit) or drags in the neighbouring month (a quiet one does not reach it). Measured on the real vault:
+  September holds 710 article notes, 120 already carded, so the exact job is 590 calls - a number `--limit` could only
+  have approximated. With the default incremental behaviour the already-carded 120 are skipped rather than re-asked.
+
 - **Your own notes are now a source: the AI reads what you write and generates notes back.** The three existing
   lines all read *material* - articles, conversations, favourites. This one reads **notes the user wrote**, which
   changes what has to be guaranteed:

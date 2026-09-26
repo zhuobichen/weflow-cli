@@ -409,7 +409,7 @@ weflow-cli search-index --days 3650 --article-days 365 --yes   # 要"整段历�
 
 | 命令 | 出境 | 说什么 |
 | --- | --- | --- |
-| `weflow-cli article-notes --limit N --yes` | 文章发给 DeepSeek（每篇一次） | 默认**增量**：已有卡的不重做（`--refresh` 强制） |
+| `weflow-cli article-notes --limit N --yes` | 文章发给 DeepSeek（每篇一次） | 默认**增量**：已有卡的不重做（`--refresh` 强制）。**按时间跑用 `--since`/`--until`**（"把 9 月的跑一遍"是人的说法，`--limit` 表达不了：用 limit 凑月份，要么漏要么带上隔壁月） |
 | `weflow-cli chat-notes --days N --yes` | 对话发给 DeepSeek（每会话一次） | 卡是滚动快照，重跑即覆盖 |
 | `weflow-cli fav-notes --limit N --yes` | 收藏的正文发给 DeepSeek（每条一次） | 正文优先用收藏自带的；文章类走日报那条线的抓取（**带缓存**，日报抓过就零网络）；`--dry-run` 只报"几条要抓"，自己不联网 |
 | `weflow-cli user-notes --limit N --yes` | **你自己写的**笔记发给 DeepSeek（每篇一次） | 你的笔记**只读、绝不修改**；卡上标 `summary_by: model`（那是模型的理解，不是你的原话）；**你笔记里的 `[[链接]]` 优先** |

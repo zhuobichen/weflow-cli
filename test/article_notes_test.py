@@ -109,6 +109,37 @@ class ListTests(unittest.TestCase):
         self.assertEqual(an.list_articles('不存在的目录', 10), [])
 
 
+class DateWindowTests(unittest.TestCase):
+    """时间窗口：**"把 9 月的跑一遍"是人话，`--limit` 表达不了它**。
+
+    用 limit 去凑月份，要么漏掉（月内多于 limit）要么带上隔壁月份（少于 limit）——
+    所以按 `published` 过滤才是精确的那种。
+    """
+
+    def build(self, tmp):
+        for day in ('2026-08-31', '2026-09-01', '2026-09-15', '2026-10-01'):
+            (Path(tmp) / f'{day}-甲.md').write_text(
+                '---\ntitle: 甲-%s\npublished: %s\n---\n\n正文\n' % (day, day), encoding='utf-8')
+
+    def test_only_september(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.build(tmp)
+            got = an.list_articles(tmp, 0, since='2026-09-01', until='2026-09-30')
+        self.assertEqual([a['published'] for a in got], ['2026-09-15', '2026-09-01'],
+                         '倒序、且两个端点都含在内')
+
+    def test_since_alone_是开区间(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.build(tmp)
+            got = an.list_articles(tmp, 0, since='2026-09-01')
+        self.assertEqual(len(got), 3, '9/1 之后（含当天）的三篇')
+
+    def test_不传窗口就是全部(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.build(tmp)
+            self.assertEqual(len(an.list_articles(tmp, 0)), 4)
+
+
 class IncrementalTests(unittest.TestCase):
     """默认增量：不然每跑一次都把同样的文章重问一遍（三十篇=三十次白花的调用）。"""
 
