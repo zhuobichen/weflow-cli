@@ -113,9 +113,12 @@ TypeScript; `python -m unittest discover -s test -p '*_test.py'` covers these).
 
 The knowledge base is fed by "material that carries `[[wikilinks]]`": `compile_wiki` scans a source directory
 (`--source`, already a flag - no code change needed to add a source), aggregates every wikilink into concepts, and
-writes concept pages into the Vault. Producers are `chat_notes.py` (conversation cards) and `article_notes.py` (concept cards
-extracted from the Vault's article notes - the latter exists because those notes, measured over the whole
-corpus, carry **no** concept links; the `output/*-notes/` directories are what `--source` points at).
+writes concept pages into the Vault. There are three producers today, all writing the same card shape into `output/*-notes/`: `article_notes.py`
+(concepts extracted from the Vault's article notes - it exists because those notes, measured over the whole corpus,
+carry **no** concept links), `chat_notes.py` (conversation cards) and `fav_notes.py` (WeChat favourites, whose
+article bodies come from the daily line's cached fetcher rather than a second downloader). Adding a fourth means
+writing one producer that satisfies the table below; the aggregator, the lint and the assistant-facing search do not
+change - the lint finds card directories with an `output/*-notes` glob for exactly that reason.
 
 To add a third, the producer must satisfy the consumer's contract exactly:
 

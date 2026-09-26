@@ -28,8 +28,11 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _utils import parse_frontmatter  # noqa: E402
 
 DEFAULT_PAGES_DIR = 'output/wechat-vault/Wiki/Concepts'
-# 卡片在哪（`## 来源` 那节的 `[[<相对路径>.md]]` 要从这些目录里找）
-CARD_DIRS = ('output/article-notes', 'output/chat-notes')
+# 卡片在哪（`## 来源` 那节的 `[[<相对路径>.md]]` 要从这些目录里找）。
+# **用通配而不是写死目录名**：今天是文章线与对话线，明天再加一条来源（收藏线就是这么加的），
+# 写死的话体检会**静默漏算**那条线的入链——而漏算的表现是"每张新页都是孤儿"。
+CARD_DIRS = tuple(str(path) for path in sorted(Path('output').glob('*-notes'))) or (
+    'output/article-notes', 'output/chat-notes')
 # 少于这个字数就算空页（概念页有定义+要点，正常几百字）
 MIN_BODY_CHARS = 80
 

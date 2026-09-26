@@ -6,7 +6,33 @@ All notable user-facing changes are recorded here. This project follows [Semanti
 
 ## Unreleased
 
+### Added
+
+- **WeChat favourites are the third source feeding the knowledge base.** The daily line covers what the user *read*;
+  favourites are what they deliberately **kept**, which includes articles outside the daily window and is a stronger
+  signal of interest. `fav-notes` reads the favourites (locally), takes each one's text where the record carries it and
+  otherwise fetches the article, then writes the same card shape the other two producers write - so the aggregator,
+  the health check and the assistant's search needed no changes. The fetch **reuses the daily line's cached
+  fetcher** rather than growing a second downloader: the WeChat-UA/WAF/gzip retry logic was hard-won once, and the
+  cache means favourites the daily line already fetched cost no network at all - measured on the first real run, all
+  four fetched bodies came from the cache.
+
+  One thing this line does differently and says so on the card: the article and chat lines **copy** an existing
+  summary, while a favourite record has none, so this summary is **model-written** and marked `summary_by: model`.
+  `saved` (when the user kept it) is deliberately not called `published`.
+
+- **`wiki lint` finds card directories with a glob now** (`output/*-notes`), because hard-coding the two directories
+  meant a third source's inbound links would be silently missed - and the visible symptom of that is "every new page
+  is an orphan", which is worse than no check at all.
+
 ### Fixed
+
+- **`fav-notes --dry-run` was fetching articles.** The preview's own description says "local only", but it classified
+  each favourite by calling the function that fetches - so a preview quietly made four HTTP requests. Classification
+  is now a separate, side-effect-free question (`local` / `needs-fetch` / `none`), the preview reports what *would*
+  be fetched without fetching it, and a test asserts that classifying an unreachable URL does not resolve it. Found by
+  running the preview, not by reading it.
+
 
 - **The chat knowledge line was failing on long conversations, and the failure said nothing useful.** Two of three
   conversations came back as "the model did not return usable JSON" - a reason that fits both "the output was

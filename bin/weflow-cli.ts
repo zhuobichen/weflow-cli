@@ -5380,6 +5380,68 @@ program
       }
     })
 
+  // fav-notes：把微信收藏里的文章变成知识卡（第三条来源）
+  program
+    .command('fav-notes')
+    .description('把微信收藏里的文章整理成知识卡（之后用 wiki compile 聚成概念页）—— **只写本地文件，不发送**')
+    .option('--limit <n>', '最多处理几条收藏（按收藏时间倒序）', '10')
+    .option('--refresh', '已有卡的也重做（默认增量：只做还没卡的）')
+    .option('--dry-run', '仅预览：几条、多少要联网抓（只读本地，零出境）')
+    .option('--yes', '确认把收藏的正文发给生成模型')
+    .option('--json', '输出机器可读结果；执行仍需 --yes')
+    .action(async (opts) => {
+      const { execFile } = await import('child_process')
+      const { promisify } = await import('util')
+      const execFileAsync = promisify(execFile)
+      const script = join(resolvePackageRoot(), 'scripts', 'fav_notes.py')
+      const limit = parseCliInteger(opts.limit, 'limit', 1, 500, opts.json)
+      // 与另外两条线同一条纪律：**「确认过了」只用一个变量**，参数在确认之后才拼
+      let confirmed = !!opts.yes
+      if (!opts.dryRun && !confirmed) {
+        const preview = {
+          success: false, dryRun: false, action: 'fav-notes',
+          code: 'CONFIRMATION_REQUIRED', limit,
+          readsLocalData: true, fetchesArticleUrls: true, invokesAI: true,
+          writesLocalFiles: true, sendsNothing: true,
+        }
+        if (opts.json) {
+          console.log(JSON.stringify(preview))
+          process.exit(1)
+        }
+        const answer = await inquirer.prompt([{
+          type: 'confirm',
+          name: 'confirmed',
+          message: '确认把这些收藏的正文发给生成模型吗？（只写本地知识卡；正文取不到时会去抓文章链接）',
+          default: false,
+        }])
+        confirmed = !!answer.confirmed
+        if (!confirmed) {
+          console.log(chalk.gray('已取消'))
+          return
+        }
+      }
+      const args = [script, '--limit', String(limit),
+                    ...(opts.refresh ? ['--refresh'] : []),
+                    ...(confirmed ? ['--yes'] : []),
+                    ...(opts.json ? ['--json'] : []),
+                    ...(opts.dryRun ? ['--dry-run'] : [])]
+      try {
+        const { stdout } = await execFileAsync(getPythonCommand(), args, {
+          timeout: 1_800_000, maxBuffer: 50 * 1024 * 1024,
+          env: pythonProcessEnv(),
+        })
+        process.stdout.write(stdout)
+      } catch (error) {
+        if (opts.json) {
+          console.log(JSON.stringify({ success: false, code: 'FAV_NOTES_FAILED', action: 'fav-notes',
+            error: safeSubprocessError(error), detail: String((error as any)?.stdout || '').slice(0, 2000) }))
+        } else {
+          console.error(chalk.red(`\n✗ ${safeSubprocessError(error)}`))
+        }
+        process.exit(1)
+      }
+    })
+
   // article-notes：从文章笔记里提炼概念，喂给 wiki compile
   program
     .command('article-notes')

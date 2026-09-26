@@ -411,8 +411,13 @@ weflow-cli search-index --days 3650 --article-days 365 --yes   # 要"整段历�
 | --- | --- | --- |
 | `weflow-cli article-notes --limit N --yes` | 文章发给 DeepSeek（每篇一次） | 默认**增量**：已有卡的不重做（`--refresh` 强制） |
 | `weflow-cli chat-notes --days N --yes` | 对话发给 DeepSeek（每会话一次） | 卡是滚动快照，重跑即覆盖 |
+| `weflow-cli fav-notes --limit N --yes` | 收藏的正文发给 DeepSeek（每条一次） | 正文优先用收藏自带的；文章类走日报那条线的抓取（**带缓存**，日报抓过就零网络）；`--dry-run` 只报"几条要抓"，自己不联网 |
 | `weflow-cli wiki compile --source … --min-refs 2 --yes` | 概念发给 DeepSeek（每个概念一次） | `--min-refs 2` 滤掉只被一篇提到的一次性实体 |
-| `weflow-cli wiki lint` | **不出境** | 断链 / 孤儿 / 空页 / 同名 / 退化字段 |
+| `weflow-cli wiki lint` | **不出境** | 断链 / 孤儿 / 空页 / 同名 / 近似重名 / 退化字段 |
+
+三条卡片来源产出的东西是**同一种形状**（带 frontmatter + `## AI 摘要` + `[[概念]] — 说明`），
+所以 `wiki compile` 一视同仁——加第四条来源时改的是产卡那一步，聚合那一步不用动
+（体检也一样：卡片目录用 `output/*-notes` 通配找，不写死目录名）。
 
 ### 从聊天长出知识页（文章线之外的那一半）
 
