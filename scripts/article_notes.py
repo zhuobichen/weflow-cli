@@ -162,6 +162,36 @@ def parse_concepts(raw: str) -> list:
     return out
 
 
+def refresh_summaries(out_dir: str, source_root: str) -> dict:
+    """只重写卡片里的 `## AI 摘要` 那一节——**本地重算，不调用任何模型**。
+
+    卡里的摘要本来就是从原笔记**照抄**的（见 `build_card`），所以原笔记或清理规则一变，
+    它能本地重算，不必再花一次调用。`from` 那栏记着来源，按它找回原笔记；
+    找不到就跳过（如实报数），**不猜**。
+    """
+    rewritten, missing = [], []
+    for card in sorted(Path(out_dir).glob('*.md')):
+        content = card.read_text(encoding='utf-8')
+        frontmatter, body = parse_frontmatter(content)
+        origin = str(frontmatter.get('from') or '')
+        source = Path(source_root) / origin if origin else None
+        if not origin or not source or not source.exists():
+            missing.append(card.name)
+            continue
+        _, source_body = parse_frontmatter(source.read_text(encoding='utf-8'))
+        fresh = strip_wx_ads(compile_wiki._extract_summary(source_body)) or '(原笔记没有摘要小节)'
+        head, sep, tail = body.partition('## AI 摘要')
+        if not sep:
+            missing.append(card.name)
+            continue
+        rest = tail.split('\n## ', 1)
+        rebuilt = head + '## AI 摘要\n\n' + fresh + '\n\n' + ('## ' + rest[1] if len(rest) > 1 else '')
+        if rebuilt != body:
+            write_with_frontmatter(str(card), frontmatter, rebuilt)
+            rewritten.append(card.name)
+    return {'rewritten': rewritten, 'missing': missing}
+
+
 def main():
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')
     parser = argparse.ArgumentParser(description='文章知识卡（从文章笔记提炼概念，喂给 wiki compile）')
@@ -170,6 +200,8 @@ def main():
     parser.add_argument('--limit', type=int, default=DEFAULT_LIMIT,
                         help='最多处理几篇（默认 %d，按发布时间倒序）' % DEFAULT_LIMIT)
     parser.add_argument('--dry-run', action='store_true', help='只报要发多少给模型，不调用')
+    parser.add_argument('--refresh-summaries', action='store_true',
+                        help='只按原笔记重算已有卡片的摘要（本地，不调用模型）')
     parser.add_argument('--yes', action='store_true', help='确认调用云端模型')
     parser.add_argument('--json', action='store_true')
     args = parser.parse_args()
@@ -177,6 +209,19 @@ def main():
     if args.limit < 1:
         print(json.dumps({'success': False, 'error': '--limit 要 ≥ 1'}))
         return 1
+
+    if args.refresh_summaries:
+        # 摘要本来就是照抄的，所以能本地重算：清理规则一变，不必再花一次调用
+        result = refresh_summaries(args.out, args.source)
+        if args.json:
+            print(json.dumps({'success': True, 'action': 'article-notes.refresh',
+                              'model': None, 'invokesAI': False, **result},
+                             ensure_ascii=False, indent=2))
+        else:
+            print('重写了 %d 张卡的摘要' % len(result['rewritten']))
+            if result['missing']:
+                print('找不到来源或没有摘要小节，跳过 %d 张' % len(result['missing']), file=sys.stderr)
+        return 0
 
     articles = list_articles(args.source, args.limit)
     if not articles:

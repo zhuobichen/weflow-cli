@@ -126,6 +126,10 @@ class AdResidueTests(unittest.TestCase):
     """
     REAL_TAIL = ('正文第一句。 原创 开源星探 开源星探 开源星探 ______ '
                  '在小说阅读器读本章 去阅读 在公众号小说中沉浸阅读')
+    # **真实的形状是"在中间"**：摘要拼的是文章前 10 行，阅读器控件插在段落之间。
+    # 我第一版只测了行尾那种，于是"中间那串"一直没被清掉也不红——所以两种都要钉。
+    REAL_MIDDLE = ('正文第一句。 原创 开源星探 开源星探 开源星探 ______ '
+                   '在小说阅读器读本章 去阅读 在公众号小说中沉浸阅读 今天要聊的工具。')
 
     def test_真串里的界面残留被清干净(self):
         from _utils import strip_wx_ads
@@ -133,6 +137,10 @@ class AdResidueTests(unittest.TestCase):
         self.assertEqual(cleaned, '正文第一句。')
         for junk in ('在小说阅读器读本章', '去阅读', '沉浸阅读', '______', '原创'):
             self.assertNotIn(junk, cleaned)
+
+    def test_那串出现在段间时也要清掉_而正文留着(self):
+        from _utils import strip_wx_ads
+        self.assertEqual(strip_wx_ads(self.REAL_MIDDLE), '正文第一句。 今天要聊的工具。')
 
     def test_只动已知的几样_正文一个字不改(self):
         from _utils import strip_wx_ads

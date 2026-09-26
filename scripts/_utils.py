@@ -837,8 +837,9 @@ def strip_wx_ads(text: str) -> str:
         _JS_LINK = _re.compile(r'\[.*?\]\(javascript:void\(0\);?\)')
     out = _JS_LINK.sub(' ', out)
     # 「原创 开源星探 开源星探 开源星探」：公众号名在文末被重复粘了几遍，压成一个
+    out = _re.sub(r'原创\s+(\S{2,12})(?:\s+\1\b){1,}\s*', ' ', out)
+    out = _re.sub(r'原创\s+[一-龥A-Za-z0-9]{2,12}\s*$', '', out)
     out = _re.sub(r'\b(\S{2,12})(?:\s+\1\b)+', r'\1', out)
-    out = _re.sub(r'原创(?:\s+\S{2,12})?\s*$', '', out)
     out = _re.sub(r'[ \t]{2,}', ' ', out)
     out = _re.sub(r'\n{3,}', '\n\n', out)
     # 短语被删掉之后可能留下孤零零的空白或行首标点

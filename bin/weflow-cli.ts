@@ -5359,6 +5359,7 @@ program
     .option('--source <dir>', '文章笔记目录', './output/wechat-vault/002_Literature')
     .option('--limit <n>', '最多处理几篇（按发布时间倒序）', '30')
     .option('--dry-run', '仅预览：几篇、多少字会发给生成模型（只读本地，零出境）')
+    .option('--refresh-summaries', '只按原笔记重算已有卡片的摘要（本地，不调用模型、不必 --yes）')
     .option('--yes', '确认把文章发给生成模型')
     .option('--json', '输出机器可读结果；执行仍需 --yes')
     .action(async (opts) => {
@@ -5370,7 +5371,7 @@ program
       const limit = parseCliInteger(opts.limit, 'limit', 1, 5000, opts.json)
       // 与 `chat-notes`/`draft` 同一条纪律：**"确认过了"只用一个变量**，参数在确认之后才拼
       let confirmed = !!opts.yes
-      if (!opts.dryRun && !confirmed) {
+      if (!opts.dryRun && !opts.refreshSummaries && !confirmed) {
         const preview = {
           success: false, dryRun: false, action: 'article-notes',
           code: 'CONFIRMATION_REQUIRED', source: opts.source, limit,
@@ -5393,6 +5394,7 @@ program
         }
       }
       const args = [script, '--source', String(opts.source), '--limit', String(limit),
+                    ...(opts.refreshSummaries ? ['--refresh-summaries'] : []),
                     ...(confirmed ? ['--yes'] : []),
                     ...(opts.json ? ['--json'] : []),
                     ...(opts.dryRun ? ['--dry-run'] : [])]
