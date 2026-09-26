@@ -789,3 +789,58 @@ def note_path(out_root, name: str, fallback: str = '未命名'):
     cleaned = ''.join('_' if ch in _ILLEGAL_IN_NAME else ch for ch in str(name))
     cleaned = ' '.join(cleaned.split())[:80].strip().strip('.')
     return _Path(out_root) / ('%s.md' % (cleaned or fallback))
+
+
+# ---------------------------------------------------------------- 微信正文里的界面残留
+
+# 微信文章正文会带**阅读器自己的界面文字**（"在小说阅读器读本章"那一串），以及文末的
+# 原创标记与公众号名重复。实测：库里 1633 篇笔记，**1484 篇（91%）**的摘要里混着它
+# （先按"整份文件里出现某条短语"数是 330，那是数漏了——短语有好几种写法，按摘要层数才对）。
+# 这份清理在真库上跑过：1484 篇 → 清理后 **0 篇**仍带残留。
+#
+# `classify_daily.py` 里本来有一份 `AD_PATTERNS`，但它只用在日报那条路上，
+# **写笔记那条路（`create_reading_notes.py`）一次都没清洗**——而且对着真串比对，
+# 那份表还漏了一条：真串是「在**公众号**小说中沉浸阅读」，表里写的是
+# 「在小说阅读器**中**沉浸阅读」。所以这里一次列全，各处共用。
+_AD_PHRASES = (
+    '在小说阅读器读本章',
+    '在小说阅读器中沉浸阅读',
+    '在公众号小说中沉浸阅读',
+    '去阅读',
+    'Scan to Follow',
+    '轻触阅读原文',
+    '预览时标签不可点',
+    '继续滑动看下一个',
+)
+
+_UNDERSCORE_RUN = None      # 惰性编译，避免在 import 期做什么重活
+_JS_LINK = None
+
+
+def strip_wx_ads(text: str) -> str:
+    """去掉微信正文里那几样界面残留。
+
+    处理顺序有讲究：先删短语，再删下划线长串，最后收拾"原创 + 公众号名重复 N 遍"。
+    只动**已知的**几样——这是给摘要与提示词做清洁，不是改写正文；
+    拿不准的一律留着（宁可留一点噪音，也不要把用户的话删掉）。
+    """
+    import re as _re
+    global _UNDERSCORE_RUN
+    if _UNDERSCORE_RUN is None:
+        _UNDERSCORE_RUN = _re.compile(r'_{4,}')
+    out = str(text or '')
+    for phrase in _AD_PHRASES:
+        out = out.replace(phrase, ' ')
+    out = _UNDERSCORE_RUN.sub(' ', out)
+    global _JS_LINK
+    if _JS_LINK is None:
+        _JS_LINK = _re.compile(r'\[.*?\]\(javascript:void\(0\);?\)')
+    out = _JS_LINK.sub(' ', out)
+    # 「原创 开源星探 开源星探 开源星探」：公众号名在文末被重复粘了几遍，压成一个
+    out = _re.sub(r'\b(\S{2,12})(?:\s+\1\b)+', r'\1', out)
+    out = _re.sub(r'原创(?:\s+\S{2,12})?\s*$', '', out)
+    out = _re.sub(r'[ \t]{2,}', ' ', out)
+    out = _re.sub(r'\n{3,}', '\n\n', out)
+    # 短语被删掉之后可能留下孤零零的空白或行首标点
+    out = _re.sub(r'[ \t]+([，。、；：！？])', r'\1', out)
+    return out.strip()

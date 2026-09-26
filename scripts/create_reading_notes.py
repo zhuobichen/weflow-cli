@@ -243,6 +243,11 @@ def extract_summary(body: str, max_len=300) -> str:
         line = line.replace('[[', '').replace(']]', '')
         if line:
             lines.append(line)
+    # **界面残留要在这里清掉**：正文来自微信，带着阅读器自己的文字与文末的原创标记。
+    # 实测 1633 篇里 330 篇的摘要在这一步之前就混进了它（写笔记这条路此前没清洗）。
+    from _utils import strip_wx_ads
+    lines = [strip_wx_ads(line) for line in lines]
+    lines = [line for line in lines if line]
     summary = ' '.join(lines[:10])
     if len(summary) > max_len:
         summary = summary[:max_len] + '...'

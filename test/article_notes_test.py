@@ -116,6 +116,44 @@ class GateTests(unittest.TestCase):
         self.assertTrue(an.worth_concepts('把' * an.MIN_ARTICLE_CHARS))
 
 
+class AdResidueTests(unittest.TestCase):
+    """微信正文里的界面残留——**用真串钉的**，不是我想象的形状。
+
+    实测：库里 1633 篇笔记有 **330 篇**（20%）的摘要里混着这几样。而原来那份清理表
+    （`classify_daily.AD_PATTERNS`）对着真串比对时**漏了一条**：真串是
+    「在**公众号**小说中沉浸阅读」，表里写的是「在小说阅读器**中**沉浸阅读」；
+    文末的「原创 + 公众号名重复三遍 + 下划线长串」也一条都没覆盖。
+    """
+    REAL_TAIL = ('正文第一句。 原创 开源星探 开源星探 开源星探 ______ '
+                 '在小说阅读器读本章 去阅读 在公众号小说中沉浸阅读')
+
+    def test_真串里的界面残留被清干净(self):
+        from _utils import strip_wx_ads
+        cleaned = strip_wx_ads(self.REAL_TAIL)
+        self.assertEqual(cleaned, '正文第一句。')
+        for junk in ('在小说阅读器读本章', '去阅读', '沉浸阅读', '______', '原创'):
+            self.assertNotIn(junk, cleaned)
+
+    def test_只动已知的几样_正文一个字不改(self):
+        from _utils import strip_wx_ads
+        prose = '这句话里有「沉浸」两个字，也有一个下划线的变量名 my_var 和原创性的讨论。'
+        self.assertEqual(strip_wx_ads(prose), prose, '不是那几样固定的串就不许动')
+
+    def test_空输入不炸(self):
+        from _utils import strip_wx_ads
+        for value in ('', None, '   '):
+            self.assertEqual(strip_wx_ads(value), '')
+
+    def test_卡里的摘要要过这一关(self):
+        # 卡是「照抄摘要」的，所以抄之前必须擦——否则那串东西跟着卡进概念页
+        article = dict(ARTICLE)
+        article['body'] = ('## 📋 摘要\n\n' + self.REAL_TAIL + '\n\n## 💡 核心观点\n\n- 观点\n')
+        _, body = an.build_card(article, [], '2026-09-26 15:00')
+        self.assertIn('正文第一句。', body)
+        self.assertNotIn('在小说阅读器读本章', body)
+        self.assertNotIn('______', body)
+
+
 class PromptTests(unittest.TestCase):
     def test_提示词说清了三件事(self):
         prompt = an.CONCEPT_PROMPT.format(title='甲', source='某号', topic='AI', body='正文')

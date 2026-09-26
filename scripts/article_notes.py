@@ -33,7 +33,8 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _utils import (SEPARATOR, call_deepseek, get_api_key, load_config,  # noqa: E402
-                    note_path, plain, parse_frontmatter, write_with_frontmatter)
+                    note_path, plain, parse_frontmatter, strip_wx_ads,
+                    write_with_frontmatter)
 import compile_wiki  # noqa: E402  （用它的 concept_body / _extract_summary，同一份实现）
 
 TZ = timezone(timedelta(hours=8))
@@ -121,7 +122,10 @@ def build_card(article: dict, concepts: list, updated: str):
         'updated': updated,
     }
     parts = ['# %s\n' % article['title'], '## AI 摘要\n']
-    parts.append(compile_wiki._extract_summary(article['body']) or '(原笔记没有摘要小节)')
+    # 原笔记的摘要直接从微信正文来的，可能带着界面残留（实测 20% 的笔记如此）。
+    # 卡是「照抄」摘要的，所以**抄之前要擦一遍**——否则那串东西会跟着卡进概念页。
+    parts.append(strip_wx_ads(compile_wiki._extract_summary(article['body']))
+                 or '(原笔记没有摘要小节)')
     parts.append('')
     if concepts:
         parts.append('## 概念\n')
@@ -226,7 +230,8 @@ def main():
         prompt = CONCEPT_PROMPT.format(
             title=article['title'], source=article['source'] or '未知',
             topic=article['topic'] or '未分类',
-            body=compile_wiki.concept_body(article['body'])[:MAX_ARTICLE_CHARS])
+            # 喂给模型的正文也擦一遍：界面残留被当成「文章内容」读进去，会污染概念
+            body=strip_wx_ads(compile_wiki.concept_body(article['body']))[:MAX_ARTICLE_CHARS])
         try:
             raw = call_deepseek(prompt, api_key, max_tokens=800, timeout=90)
         except Exception as error:

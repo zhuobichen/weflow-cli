@@ -529,6 +529,25 @@ All notable user-facing changes are recorded here. This project follows [Semanti
 
 ### Fixed
 
+- **91% of the article notes had WeChat's own reader UI text inside their summary.** The article body comes from
+  WeChat, so it carries the reader's widget text and the footer's 原创 marker with the account name pasted three
+  times - and the summary is built from the article's first lines, so it went straight in. Measured over the corpus:
+  **1484 of 1633** notes are affected (an earlier count of 330 in this work was wrong - it counted one exact phrase
+  over whole files, and the residue has several spellings). The cleaner now runs where notes are written and where
+  knowledge cards are built, and re-running it over the corpus leaves **0** affected.
+
+  Two things about it are worth recording. The pattern list that already existed in `classify_daily.py` was used only
+  on the daily-report path - the note writer never called it - and comparing it against the real string showed it
+  **missed one of the three reader phrases**: the actual text is 在**公众号**小说中沉浸阅读 while the list had
+  在小说阅读器**中**沉浸阅读. The list now covers the observed forms, lives in `_utils.strip_wx_ads` (one
+  implementation; `classify_daily.clean_ads` delegates to it and keeps only its daily-specific rules), and strips the
+  underscore runs and the repeated account name as well. It is deliberately narrow: a test asserts that a sentence
+  containing 沉浸, an underscore in a variable name and the word 原创性 comes back untouched.
+
+  The **existing** vault notes still carry the residue - the cleaner applies to what gets written, not to what is
+  already there - but the knowledge path cleans at the card step, so it does not reach concept pages. Rewriting the
+  1484 existing summaries is a separate, approval-shaped action and has not been done.
+
 - **The wiki aggregator was reading the wrong fields and treating non-concepts as concepts, and scanning the whole
   corpus showed why the article line produces nothing.** This was found by running the aggregator over the real Vault
   rather than over fixtures - 1633 notes, read-only - which turned up four things at once:

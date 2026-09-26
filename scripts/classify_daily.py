@@ -23,18 +23,6 @@ from _utils import (
 OUTPUT_ROOT = 'output/biz-daily'
 
 
-AD_PATTERNS = [
-    re.compile(r'在小说阅读器读本章\s*'),
-    re.compile(r'在小说阅读器中沉浸阅读\s*'),
-    re.compile(r'去阅读\s*'),
-    re.compile(r'Scan to Follow\s*'),
-    re.compile(r'轻触阅读原文\s*'),
-    re.compile(r'预览时标签不可点\s*'),
-    re.compile(r'继续滑动看下一个\s*'),
-    re.compile(r'\[.*?\]\(javascript:void\(0\);\)'),
-    re.compile(r'\n{4,}'),
-]
-
 INTEREST_PROMPT = """对以下AI领域文章生成深度解析：
 
 标题：{title}
@@ -140,8 +128,10 @@ def generate_batch_action_suggestions(articles_data: list[dict], api_key: str, p
 
 
 def clean_ads(text: str) -> str:
-    for pat in AD_PATTERNS:
-        text = pat.sub('', text)
+    # 那几样界面残留（阅读器文字、下划线长串、原创标记）用共用的一份：
+    # `_utils.strip_wx_ads`。这里只留日报专属的几条。
+    from _utils import strip_wx_ads
+    text = strip_wx_ads(text)
     text = re.sub(r'\n来源：[^\n]+\n编辑：[^\n]+\n校对：[^\n]+\n校审：[^\n]+', '', text)
     text = re.sub(r'\n>/ [^\n]+', '', text)
     text = re.sub(r'\n{4,}', '\n\n\n', text)
