@@ -6,6 +6,23 @@ All notable user-facing changes are recorded here. This project follows [Semanti
 
 ## Unreleased
 
+### Fixed
+
+- **The chat knowledge line was failing on long conversations, and the failure said nothing useful.** Two of three
+  conversations came back as "the model did not return usable JSON" - a reason that fits both "the output was
+  truncated" and "the model answered in prose", so it points at neither. The cause was truncation: the JSON a long
+  conversation has to produce (summary, timeline, topics, people) is token-hungry in Chinese and the call was capped
+  at 1200 tokens, so the JSON ended mid-object. The cap is now 2000 with a longer timeout, and a failed call records
+  the **tail of what the model actually returned**, so the next occurrence is diagnosable instead of guessable.
+  Measured after the change: 3 of 3 conversations succeed.
+
+- **A partly-successful build was reported as a total failure.** Both `chat-notes` and `article-notes` exited
+  non-zero if *anything* failed, so "2 of 3 cards written" arrived at the CLI as a failure - and the CLI then
+  replaced the script's own JSON (which listed which one failed and why) with a bare `(exit 1)`. Partial success is
+  now exit 0 with the failures listed as data, only "nothing was written" is a failure, and the CLI's error path
+  carries the child's output so a real failure keeps its reason. (This is the same principle as the earlier fix to
+  the assistant prompt: an error that does not carry its cause invites a guess that is wrong.)
+
 ### Added
 
 - **The knowledge base can now be checked, and the check found three things worth fixing.** `wiki lint`
@@ -30,6 +47,13 @@ All notable user-facing changes are recorded here. This project follows [Semanti
   thirty articles meant thirty wasted calls, and the full 1633 would have meant a whole run's money. A card newer
   than its source note now means "skip"; a changed source note means "redo"; `--refresh` forces everything. The
   chat line keeps rewriting its cards on purpose - those are rolling snapshots.
+
+- **`wiki lint` reports near-duplicate titles too**, because the same event arrives from several accounts. The real
+  run produced a pair of *pages for one event* (`尼泊尔热索瓦泥石流` and `热索瓦泥石流灾害`) - which the orphan check
+  cannot catch, since both have cards linking to them - and a four-source cluster around one news story, which is what
+  inflates a concept's rank (visible directly in a page's `sources`). Report only, no automatic merging: two accounts
+  writing about one event may genuinely carry different information, and deciding which page to drop is a person's
+  call.
 
 - **`wiki lint` also reports degenerate fields** - a metadata column that is nearly one value. Measured: all 39
   concept pages carry `topics: [学术]`, i.e. the field looks like metadata and says nothing, and it is the kind of

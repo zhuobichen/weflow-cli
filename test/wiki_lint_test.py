@@ -101,6 +101,31 @@ class InspectTests(unittest.TestCase):
         self.assertEqual(report['duplicateTitles'], {})
 
 
+class NearDuplicateTests(unittest.TestCase):
+    """同一件事被多个来源写成两个概念名——**孤儿检查抓不到它**（两个名字都有入链）。
+
+    实测抓到的一组：`尼泊尔热索瓦泥石流` 与 `热索瓦泥石流灾害`。只报告不去重：
+    不同来源的写法可能各有信息，删哪个该由人定。
+    """
+
+    def pages(self, *titles):
+        body = '# x' + chr(10) + chr(10) + '够长的正文，写满八十个字以上免得被当空页，这里再补几个字。' * 3
+        return [dict(page(t, body, title=t)) for t in titles]
+
+    def test_同一件事的两种写法会被认出来(self):
+        got = wl.near_duplicate_titles(self.pages('尼泊尔热索瓦泥石流', '热索瓦泥石流灾害'))
+        self.assertEqual(len(got), 1)
+
+    def test_不相关的标题不会误报(self):
+        got = wl.near_duplicate_titles(self.pages('椰子水全覆盖风险排查', '全国人大常委会会议'))
+        self.assertEqual(got, [])
+
+    def test_公共子串长度(self):
+        self.assertEqual(wl.longest_common_run('热索瓦泥石流灾害', '尼泊尔热索瓦泥石流'), 6)
+        self.assertEqual(wl.longest_common_run('甲', '乙'), 0)
+        self.assertEqual(wl.longest_common_run('', '乙'), 0)
+
+
 class DegenerateFieldTests(unittest.TestCase):
     """一个字段整列同一个值——看起来像有元数据，实际什么也没说，而**它会被照着信**。
 

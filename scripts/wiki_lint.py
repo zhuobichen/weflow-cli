@@ -139,12 +139,51 @@ def inspect(pages: list, exists, card_links=()) -> dict:
     duplicates = {title: stems for title, stems in titles.items() if len(stems) > 1}
     return {'pages': len(pages), 'broken': broken, 'aspirational': aspirational,
             'orphans': orphans, 'empty': empty, 'duplicateTitles': duplicates,
-            'degenerateFields': degenerate_fields(pages)}
+            'degenerateFields': degenerate_fields(pages),
+            'nearDuplicates': near_duplicate_titles(pages)}
 
 
 # 一个字段有 ≥ 这么多页、且某一个值占了 ≥ 这个比例，就当成"退化了"（等于没携带信息）
 DEGENERATE_MIN_PAGES = 5
 DEGENERATE_RATIO = 0.8
+
+
+def longest_common_run(left: str, right: str) -> int:
+    """两串的最长公共子串长度（中文里"同一件事被转发多次"的信号）。"""
+    if not left or not right:
+        return 0
+    previous = [0] * (len(right) + 1)
+    best = 0
+    for i in range(1, len(left) + 1):
+        current = [0] * (len(right) + 1)
+        for j in range(1, len(right) + 1):
+            if left[i - 1] == right[j - 1]:
+                current[j] = previous[j - 1] + 1
+                best = max(best, current[j])
+        previous = current
+    return best
+
+
+DUP_RUN_CHARS = 5          # 公共子串至少这么长
+DUP_COVER_RATIO = 0.4      # 而且占较短标题的这么一大部分
+
+
+def near_duplicate_titles(pages: list) -> list:
+    """标题高度相似的页——**同一件事被多个公众号转发**的痕迹。
+
+    实测那批里有一组四条：《中国建筑集团有限公司党组成员、副总经理陈勇被查》《中建集团副总经理陈勇被查》
+    《打虎！中建集团副总经理陈勇，被查》《打虎！陈勇被查》——同一件事四个来源，于是相关概念的
+    引用数被灌到榜首（`sources` 那栏能直接看到）。这只是**报告**，不自动去重：
+    不同公众号对同一件事的写法可能确实各有信息，删哪张该由人定。
+    """
+    groups = []
+    for i, left in enumerate(pages):
+        for right in pages[i + 1:]:
+            a, b = left['title'] or left['stem'], right['title'] or right['stem']
+            run = longest_common_run(a, b)
+            if run >= DUP_RUN_CHARS and run >= DUP_COVER_RATIO * min(len(a), len(b)):
+                groups.append([a, b])
+    return groups
 
 
 def degenerate_fields(pages: list) -> dict:
@@ -238,6 +277,12 @@ def main():
         print('\n还没建页的相关概念 %d 个（**扩张候选，不是错误**）：%s'
               % (len(names), '、'.join(names[:12])))
         print('  想要它们就再跑 wiki compile（提高 --limit），或把它们当下一步的线索')
+    if report.get('nearDuplicates'):
+        print('\n标题高度相似的页 %d 组（**同一件事可能被转发多次**，会让概念排名灌水）：'
+              % len(report['nearDuplicates']))
+        for pair in report['nearDuplicates'][:4]:
+            print('  %s ／ %s' % (pair[0][:28], pair[1][:28]))
+        print('  只报告不去重：不同公众号的写法可能各有信息，删哪张该由人定')
     if report.get('degenerateFields'):
         print('\n退化字段（整列几乎同一个值，等于没携带信息）：')
         for field, info in report['degenerateFields'].items():

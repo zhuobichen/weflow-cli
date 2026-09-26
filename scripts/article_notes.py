@@ -208,6 +208,16 @@ def refresh_summaries(out_dir: str, source_root: str) -> dict:
     return {'rewritten': rewritten, 'missing': missing}
 
 
+def exit_code(written: int) -> int:
+    """**部分成功算成功**（退出码 0），失败清单是数据不是进程状态。
+
+    原来写的是"只要有失败就 exit 1"——于是"3 个会话里 2 张卡写出来了"被上层当成
+    **整体失败**，连脚本自己那份写着原因的 JSON 都被丢掉（CLI 只报一句退出码）。
+    只有**一张都没写出来**才算失败。
+    """
+    return 0 if written else 1
+
+
 def main():
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')
     parser = argparse.ArgumentParser(description='文章知识卡（从文章笔记提炼概念，喂给 wiki compile）')
@@ -332,7 +342,7 @@ def main():
             print('✗ %s：%s' % (item['title'], item['reason']), file=sys.stderr)
         print('\n共 %d 张卡；接着跑 python scripts/compile_wiki.py --source %s'
               % (len(written), args.out))
-    return 0 if not failed else 1
+    return exit_code(len(written))
 
 
 if __name__ == '__main__':

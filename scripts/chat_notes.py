@@ -250,6 +250,16 @@ def collect(out_root, days, limit):
             conn.close()
 
 
+def exit_code(written: int) -> int:
+    """**部分成功算成功**（退出码 0），失败清单是数据不是进程状态。
+
+    原来写的是"只要有失败就 exit 1"——于是"3 个会话里 2 张卡写出来了"被上层当成
+    **整体失败**，连脚本自己那份写着原因的 JSON 都被丢掉（CLI 只报一句退出码）。
+    只有**一张都没写出来**才算失败。
+    """
+    return 0 if written else 1
+
+
 def main():
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')
     parser = argparse.ArgumentParser(description='聊天知识卡（把会话变成 Wiki 的输入；只产文本，不发送）')
@@ -322,14 +332,19 @@ def main():
     for card in cards:
         prompt = build_note_prompt(card['name'], card['lines'], args.days)
         try:
-            raw = call_deepseek(prompt, api_key, max_tokens=1200, timeout=90)
+            # 2000 而不是 1200：长对话要产出的 JSON（摘要+时间线+话题+人物）中文很吃 token，
+            # 被截断的 JSON 解不出来，而失败清单只说「没返回可用 JSON」——查不出是哪种失败。
+            raw = call_deepseek(prompt, api_key, max_tokens=2000, timeout=120)
         except Exception as error:
             failed.append({'name': card['name'], 'reason': '调用失败：%s' % error})
             continue
         note = parse_note(raw)
         if note is None:
             # **不猜**：模型没按形状返回，就说这张卡没生成，不拿半成品糊上去
-            failed.append({'name': card['name'], 'reason': '模型没返回可用 JSON'})
+            # **带上现场**：末尾一截原文能直接看出是「被截断」还是「答成了散文」——
+            # 只写「没返回可用 JSON」的话，只能靠猜（而猜错就会去调错的东西）
+            failed.append({'name': card['name'], 'reason': '模型没返回可用 JSON',
+                           'rawTail': str(raw)[-200:] if raw else '(空)'})
             continue
         path = note_path(args.out, card['name'])
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -352,7 +367,7 @@ def main():
             print('✗ %s：%s' % (item['name'], item['reason']), file=sys.stderr)
         print('\n共 %d 张卡；接着跑 python scripts/compile_wiki.py --source %s'
               % (len(written), args.out))
-    return 0 if not failed else 1
+    return exit_code(len(written))
 
 
 if __name__ == '__main__':
