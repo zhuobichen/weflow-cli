@@ -3769,7 +3769,7 @@ program
       new Command('compile')
         .description('扫描文章 [[Wikilinks]] 聚合生成概念页')
         .option('-l, --limit <n>', '最多生成概念数', '20')
-        .option('--source <dir>', '文章目录', './output/biz-daily')
+        .option('--source <dir>', '材料目录（**必须含 [[概念]] — 说明 形状的链接**，否则聚合不出任何概念）', './output/biz-daily')
         .option('-o, --output <dir>', '概念页输出目录', './output/wechat-vault/Wiki/Concepts')
         .option('--api-key <key>', 'DeepSeek API key')
         .option('--dry-run', '仅预览，不读取文章、调用 AI 或写入概念页')

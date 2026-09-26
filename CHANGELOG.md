@@ -507,6 +507,34 @@ All notable user-facing changes are recorded here. This project follows [Semanti
 
 ### Fixed
 
+- **The wiki aggregator was reading the wrong fields and treating non-concepts as concepts, and scanning the whole
+  corpus showed why the article line produces nothing.** This was found by running the aggregator over the real Vault
+  rather than over fixtures - 1633 notes, read-only - which turned up four things at once:
+
+  - the notes' theme lives in `hasTopic: [[AI]]` (because the vault's own dataview queries use that field), while the
+    aggregator read `topic`, so **every note's theme was silently empty**. It now reads both and strips the brackets;
+    the writer was deliberately *not* changed, since renaming the field would break the user's Obsidian queries;
+  - the summary section of those notes is headed `## 📋 摘要`, which the aggregator did not recognise - it was landing
+    on the same paragraph only because the "first paragraph" fallback happened to reach it. That heading is now
+    explicit, with the fallback kept for producers that write no heading;
+  - **the body's `[[...]]` links are not concepts**: 1631 of 1633 notes have exactly one body link and it is their own
+    theme (`> - **主题**: [[AI]]`), and the `## 🔗 关联网络` sections link **note paths** (`[[AI/某篇.md]]`). Taken at
+    face value those produced a concept ranking led by "新闻 (752), 政治 (388), 学术 (341)" plus two `.md` file paths -
+    a `--limit 20` run would have spent twenty model calls writing that into the Vault. Relation sections are now
+    excluded by structure and path-shaped links by form;
+  - and the conclusion: **after filtering, the article corpus yields zero concepts**, because these notes have no
+    concept section at all. `wiki compile` cannot produce concept pages from articles until something extracts
+    concepts from them - the same gap the conversation line closed on 2026-09-26 with `chat-notes`, which is the only
+    source that produces them today. `--source`'s help text and `OPERATIONS.md` now state the requirement instead of
+    pointing at a directory that cannot satisfy it.
+
+  The theme is also *used* now, not just read: it appears in the reference lines handed to page generation and as
+  `topics` in a concept page's frontmatter (`topic` had been collected and dropped since the aggregator was written).
+  Eleven tests cover it, six of them new here, including one that pins the measured corpus shape and one that asserts
+  a relation section yields no concepts *whatever* is written in it. Mutation checks caught two of my own tests being
+  unable to distinguish the two filters - each filter alone could be deleted without a failure, because the fixture
+  only exercised them together - so both now have a case of their own.
+
 - **The WeChat channel could die silently, and one of the three reasons was a wrong error code.** Checked
   against the vendor's own implementation (`third-party/WeKnora/internal/im/wechat/longpoll.go:151`), which
   encodes what this side had been guessing at: **`errcode: -14` is "this token is no longer valid"**, while this

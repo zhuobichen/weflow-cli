@@ -1,9 +1,21 @@
 #!/usr/bin/env python3
 """
-概念图谱编译 — 扫描文章的 [[Wikilinks]] → 聚合 → DeepSeek 生成概念页。
+概念图谱编译 — 扫描材料的 [[Wikilinks]] → 聚合 → DeepSeek 生成概念页。
 
 用法:
-  python scripts/compile_wiki.py --api-key <key> [--limit 20] [--source output/biz-daily]
+  python scripts/compile_wiki.py --api-key <key> [--limit 20] [--source <材料目录>]
+
+**源的硬要求：材料里必须有"概念形状"的链接**（`[[概念]] — 关于它说了什么`）。
+没有它就聚合不出任何概念，而这个脚本会照实说 `No articles with wikilinks found` 然后退出。
+
+两个目录都**不**满足这个要求，各自的坑不同（2026-09-26 实测）：
+- `output/biz-daily`（老默认值）：2231 个 .md，抽样 300 个**一个 wikilink 都没有** ✗；
+- `output/wechat-vault/002_Literature`（Vault 里的文章笔记）：1633 篇里正文链接只有两类——
+  **1631 条与自己的主题同名**（`> - **主题**: [[AI]]`）和 `## 🔗 关联网络` 里的**路径互链**。
+  "其它"候选概念 **0 条**：这批笔记**没有概念那一节**。
+
+所以要文章线产出概念页，**还得有一道"从文章里提炼概念"的步骤**（对话线已经有：
+`chat_notes.py` 产出的卡自带 `[[话题]]/[[人名]]`）。在那之前，本脚本只在对话线上有效。
 """
 import sys, os, json, re, time, hashlib
 from pathlib import Path
@@ -41,6 +53,51 @@ tag1, tag2, tag3
 要求：定义精准，要点简洁（每条≤30字），标签2-3个，相关概念2-4个。"""
 
 
+# 笔记里**不是概念**的那几节：它们是"笔记之间的关系"，而且链接的名字是**路径**
+# （实测：`## 🔗 关联网络` 里写的是 `- [[AI/某篇标题.md]]`）。
+RELATION_SECTIONS = ('## 🔗 关联网络', '## 关联网络', '## 📊 相关文章', '## 相关文章')
+
+_SECTION_RE = r'^##\s+%s\s*$'
+
+
+def concept_body(body: str) -> str:
+    """去掉"关系"那几节之后的正文（只在里面找概念链接）。"""
+    lines = body.split('\n')
+    kept, dropping = [], False
+    for line in lines:
+        if line.strip().startswith('## '):
+            dropping = any(line.strip().startswith(s) for s in RELATION_SECTIONS)
+        if not dropping:
+            kept.append(line)
+    return '\n'.join(kept)
+
+
+def concept_links(body: str, topic: str = '') -> list[tuple]:
+    """正文里**真正算概念**的 `[[wikilink]]`。
+
+    实测真库一篇笔记，正文里的 `[[…]]` 有三类，**只有第三类是概念**：
+    - `> - **主题**: [[AI]]` —— 主题是**元数据**（就是 `hasTopic` 那份），不是概念；
+    - `## 🔗 关联网络` 里的 `- [[AI/某篇标题.md]]` —— 笔记之间的引用，**名字是路径**；
+    - `- [[MCP 协议]] — 它把时间线开放给 Agent 操作` —— 这才是概念，**破折号后那句才是原料**。
+
+    不滤的代价是实测过的：1631 篇聚出来的引用榜首是「新闻(752) / 政治(388) / 学术(341)」
+    外加两条 `.md` 路径。照那个跑 `--limit 20`，就是拿二十次模型调用去生成这种"概念页"，
+    再写进你的 Vault。
+    """
+    body = concept_body(body)
+    links = []
+    for name, desc in re.findall(r'\[\[([^\]]+)\]\](?:\s*—?\s*([^\n]+))?', body):
+        name, desc = name.strip(), desc.strip()
+        # 路径形状的一律不要（`a/b.md`、`x.md`）：那是笔记引用，不是概念
+        if not name or '/' in name or name.endswith('.md'):
+            continue
+        # 与自己的主题同名的一律不要：主题是分类，不是概念
+        if topic and name == topic:
+            continue
+        links.append((name, desc))
+    return links
+
+
 def scan_articles(source_dir: str) -> list[dict]:
     """Scan all .md files, extract frontmatter + wikilinks."""
     articles = []
@@ -55,9 +112,8 @@ def scan_articles(source_dir: str) -> list[dict]:
 
         fm, body = parse_frontmatter(content)
 
-        # Extract [[wikilinks]] with optional descriptions
-        wiki_pattern = re.findall(r'\[\[([^\]]+)\]\](?:\s*—?\s*([^\n]+))?', body)
-        wikilinks = [(name.strip(), desc.strip()) for name, desc in wiki_pattern]
+        # Extract [[wikilinks]] with optional descriptions（过滤规则见 `concept_links`）
+        wikilinks = concept_links(body, article_topic(fm))
 
         if not wikilinks:
             continue
@@ -66,7 +122,7 @@ def scan_articles(source_dir: str) -> list[dict]:
             'file': str(md_file.relative_to(source_dir)),
             'title': fm.get('title', md_file.stem),
             'source': fm.get('source', ''),
-            'topic': fm.get('topic', ''),
+            'topic': article_topic(fm),
             'tags': fm.get('tags', []),
             'summary': _extract_summary(body),
             'wikilinks': wikilinks,
@@ -74,9 +130,36 @@ def scan_articles(source_dir: str) -> list[dict]:
     return articles
 
 
+# 认哪些小节算"摘要"。
+#
+# **`📋 摘要` 是 Vault 里那 1633 篇笔记实际用的标题**（由 `create_reading_notes.py` 写），
+# 而这里的正则原来只认 `AI 摘要` / `深度解析`——它一直靠下面那个"正文第一段"的兜底
+# **碰巧**读到同一段。兜底能用，但那是运气：笔记前面多一行别的东西（一行来源、一句引用之外的
+# 普通文本），摘要就会静默变成那一行，而概念页会照着它生成。
+SUMMARY_HEADINGS = ('AI 摘要', '深度解析', '📋 摘要', '摘要')
+_SUMMARY_RE = re.compile(
+    r'## (?:%s)\s*\n+(.+?)(?=\n\n##|\n\n---|\Z)' % '|'.join(re.escape(h) for h in SUMMARY_HEADINGS),
+    re.DOTALL)
+
+
+def article_topic(frontmatter: dict) -> str:
+    """这篇材料的主题。
+
+    两个键都认：`topic`（新写的笔记用它，如 `chat_notes`）与 **`hasTopic`**（Vault 里那批用它，
+    而且是**给你 Obsidian 的 dataview 查询用的**——`create_reading_notes.py:43` 写 `hasTopic: [[AI]]`，
+    查询里 `WHERE contains(hasTopic, "AI")`）。所以**改读的、不改写的**：一改字段名，你库里的
+    查询就全断了；而读 `hasTopic` 还能让现有 1633 篇**立刻**有主题。值可能是 `[[AI]]` / `AI`，
+    两种都拆成 `AI`。
+    """
+    raw = frontmatter.get('topic') or frontmatter.get('hasTopic') or ''
+    if isinstance(raw, (list, tuple)):
+        raw = raw[0] if raw else ''
+    return str(raw).strip().strip('[]').strip()
+
+
 def _extract_summary(body: str) -> str:
     """Extract the AI summary section from article body."""
-    m = re.search(r'## (?:AI 摘要|深度解析)\n\n(.+?)(?=\n\n##|\n\n---|\Z)', body, re.DOTALL)
+    m = _SUMMARY_RE.search(body)
     if m:
         return m.group(1).strip()[:500]
     # Fallback: first paragraph after metadata
@@ -100,6 +183,7 @@ def aggregate_concepts(articles: list[dict]) -> dict[str, list[dict]]:
             concept_map[name].append({
                 'title': art['title'],
                 'source': art['source'],
+                'topic': art.get('topic', ''),
                 'summary': art['summary'],
                 'desc': desc,
                 'file': art['file'],
@@ -120,7 +204,10 @@ def build_ref_lines(refs: list[dict], limit: int = 5) -> list[str]:
     lines = []
     for ref in refs[:limit]:
         detail = ref.get('desc') or ref.get('summary') or ''
-        lines.append(f'- [{ref["title"]}]（{ref["source"]}）：{detail[:150]}')
+        # 主题也带上：**收集了就要用**。原来 `topic` 被收进文章字典之后一次都没被读过，
+        # 于是"按主题分"这件事根本无从谈起；带上它，模型才知道这些来源属于同一个领域。
+        where = f'{ref["source"]} · {ref["topic"]}' if ref.get('topic') else ref['source']
+        lines.append(f'- [{ref["title"]}]（{where}）：{detail[:150]}')
     return lines
 
 
@@ -172,6 +259,8 @@ def generate_concept(name: str, refs: list[dict], api_key: str) -> str | None:
         'type': 'concept',
         'tags': tags,
         'created': today,
+        # 这个概念的来源都来自哪些主题——按主题翻知识库时用得上
+        'topics': sorted({r['topic'] for r in refs[:5] if r.get('topic')}),
         'sources': source_files,
     }
 
