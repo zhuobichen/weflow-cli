@@ -8,6 +8,34 @@ All notable user-facing changes are recorded here. This project follows [Semanti
 
 ### Added
 
+- **Your own notes are now a source: the AI reads what you write and generates notes back.** The three existing
+  lines all read *material* - articles, conversations, favourites. This one reads **notes the user wrote**, which
+  changes what has to be guaranteed:
+
+  - **your notes are read-only.** Nothing in this line writes to, moves or renames them; the output is a separate
+    card under `output/user-notes/`. The failure mode here is asymmetric - corrupting someone's own writing is worse
+    than any of the other three lines going wrong - so the promise is stated in the command's own description.
+  - **the card's summary is marked `summary_by: model`** and the body says it in words: *this is the model's reading
+    of your note, not your words*. A model's paraphrase mistaken for the user's own writing is the worst confusion
+    this line could produce.
+  - **links the user wrote win.** If the note contains `[[权限边界]]`, that concept name is kept, ranked first, and
+    the model only fills in what the note did not mention - the user's own vocabulary is what they will search with
+    later. Verified on a demo note: 5 concepts came out, one of them the user's own link.
+  - **the prompt forbids completing the user's thoughts.** "Do not fill in what they left open, and do not pretend
+    to be certain where they were unsure" is the one instruction that differs most from the other three lines - a
+    note is where someone thinks out loud, and a model that tidies that up destroys the signal.
+
+  It reads only the human layers (`000_Inbox`, `003_Ideas`, `004_Permanent`, `005_Reference`, `006_Projects`,
+  `008_MOC`, `999_Archive`) plus loose `.md` files in the vault root, and never `Wiki/` (generated),
+  `001_Daily`/`002_Literature` (pipeline) or `Sources/` (raw material) - otherwise the AI would read its own output
+  back and drift. Pages derived from these notes are tagged `来源/我的笔记`, so `tag:#来源/我的笔记` separates
+  "what I thought" from "what I read" in the graph.
+
+  The loop closes: write a note → the AI makes concepts → edit a generated page and it is overwritten on the next
+  run, so anything worth keeping belongs in `004_Permanent` (a human layer), where the next run will read it back as
+  a source rather than discard it.
+
+
 - **The generated vault now says four things it should have said all along**, borrowed from a local Obsidian vault
   built for exam prep (studied at the user's request; its own usage doc is a good example of a generated knowledge
   base that explains itself):

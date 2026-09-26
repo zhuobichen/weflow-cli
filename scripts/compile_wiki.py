@@ -232,6 +232,7 @@ SOURCE_TAGS = {
     'article-notes': '来源/文章',
     'chat-notes': '来源/聊天',
     'fav-notes': '来源/收藏',
+    'user-notes': '来源/我的笔记',
 }
 
 

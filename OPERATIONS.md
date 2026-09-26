@@ -412,6 +412,7 @@ weflow-cli search-index --days 3650 --article-days 365 --yes   # 要"整段历�
 | `weflow-cli article-notes --limit N --yes` | 文章发给 DeepSeek（每篇一次） | 默认**增量**：已有卡的不重做（`--refresh` 强制） |
 | `weflow-cli chat-notes --days N --yes` | 对话发给 DeepSeek（每会话一次） | 卡是滚动快照，重跑即覆盖 |
 | `weflow-cli fav-notes --limit N --yes` | 收藏的正文发给 DeepSeek（每条一次） | 正文优先用收藏自带的；文章类走日报那条线的抓取（**带缓存**，日报抓过就零网络）；`--dry-run` 只报"几条要抓"，自己不联网 |
+| `weflow-cli user-notes --limit N --yes` | **你自己写的**笔记发给 DeepSeek（每篇一次） | 你的笔记**只读、绝不修改**；卡上标 `summary_by: model`（那是模型的理解，不是你的原话）；**你笔记里的 `[[链接]]` 优先** |
 | `weflow-cli wiki compile --source … --min-refs 2 --yes` | 概念发给 DeepSeek（每个概念一次） | `--min-refs 2` 滤掉只被一篇提到的一次性实体 |
 | `weflow-cli wiki lint` | **不出境** | 断链 / 孤儿 / 空页 / 同名 / 近似重名 / 退化字段 |
 
@@ -457,7 +458,25 @@ weflow-cli wiki compile --source ./output/chat-notes --yes   # 聚成概念页�
   所以不会越跑越多；而概念页是累积的——**卡是快照，概念是账本**。要看更长的时间跨度，
   就用更大的 `--days` 重跑。
 
-#### 在 Obsidian 里怎么用这些页
+#### 一边自己写、一边让 AI 读（闭环）
+
+```powershell
+# 1) 你在 Obsidian 里写：000_Inbox / 003_Ideas / 004_Permanent / 005_Reference … 或库根目录直接新建
+# 2) 让 AI 读你写的，长出概念
+weflow-cli user-notes --dry-run      # 先看几篇、多少字会出境（空笔记会被列出来）
+weflow-cli user-notes --yes
+weflow-cli wiki compile --source ./output/user-notes --min-refs 1 --yes
+```
+
+- **你的笔记只读**：这条线一个字都不会改你的笔记，产出另存在 `output/user-notes/`；
+- **卡上的摘要是模型的理解**（`summary_by: model`，正文里也写着"不是你的原话"）——
+  一段模型的理解被当成"我自己写的"，是这条线最该防的事；
+- **你笔记里自己写的 `[[链接]]` 优先**：你自己起的概念名排前面，模型只补你没提到的；
+- **闭环怎么闭**：写 → AI 长出概念页 → 你若手改概念页，**下次 compile 会覆盖** ✗
+  所以值得留的版本请挪到 `004_Permanent/`（人写层）——下次 `user-notes` 会把它当**来源**读回去 ✓
+- 生成的概念页带 `来源/我的笔记` 标签：`tag:#来源/我的笔记` 一眼分出"我想到的"和"我读到的"。
+
+### 在 Obsidian 里怎么用这些页
 
 - **按类型筛**：每个概念页带嵌套标签 `知识/概念`，搜索 `tag:#知识/概念` 就是全部知识页
   （嵌套标签的写法借自一个现成的考公知识库）；

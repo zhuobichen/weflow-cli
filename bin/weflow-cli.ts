@@ -5380,6 +5380,68 @@ program
       }
     })
 
+  // user-notes：读你自己写的笔记（第四条来源，也是唯一读"人写的东西"的一条）
+  program
+    .command('user-notes')
+    .description('读你自己写的笔记，长成知识卡（之后用 wiki compile 聚成概念页）—— **你的笔记只读，绝不修改**')
+    .option('--limit <n>', '最多处理几篇笔记', '20')
+    .option('--vault <dir>', '库目录', './output/wechat-vault')
+    .option('--refresh', '已有卡的也重做')
+    .option('--dry-run', '仅预览：几篇笔记会发给模型（只读本地，零出境）')
+    .option('--yes', '确认把笔记发给生成模型')
+    .option('--json', '输出机器可读结果；执行仍需 --yes')
+    .action(async (opts) => {
+      const { execFile } = await import('child_process')
+      const { promisify } = await import('util')
+      const execFileAsync = promisify(execFile)
+      const script = join(resolvePackageRoot(), 'scripts', 'user_notes.py')
+      const limit = parseCliInteger(opts.limit, 'limit', 1, 500, opts.json)
+      let confirmed = !!opts.yes
+      if (!opts.dryRun && !confirmed) {
+        const preview = {
+          success: false, dryRun: false, action: 'user-notes',
+          code: 'CONFIRMATION_REQUIRED', limit,
+          readsLocalData: true, invokesAI: true, writesLocalFiles: true,
+          modifiesYourNotes: false, sendsNothing: true,
+        }
+        if (opts.json) {
+          console.log(JSON.stringify(preview))
+          process.exit(1)
+        }
+        const answer = await inquirer.prompt([{
+          type: 'confirm',
+          name: 'confirmed',
+          message: '确认把你自己写的这些笔记发给生成模型吗？（你的笔记只读，产出的卡另存；只写本地文件）',
+          default: false,
+        }])
+        confirmed = !!answer.confirmed
+        if (!confirmed) {
+          console.log(chalk.gray('已取消'))
+          return
+        }
+      }
+      const args = [script, '--limit', String(limit), '--vault', String(opts.vault),
+                    ...(opts.refresh ? ['--refresh'] : []),
+                    ...(confirmed ? ['--yes'] : []),
+                    ...(opts.json ? ['--json'] : []),
+                    ...(opts.dryRun ? ['--dry-run'] : [])]
+      try {
+        const { stdout } = await execFileAsync(getPythonCommand(), args, {
+          timeout: 1_800_000, maxBuffer: 50 * 1024 * 1024,
+          env: pythonProcessEnv(),
+        })
+        process.stdout.write(stdout)
+      } catch (error) {
+        if (opts.json) {
+          console.log(JSON.stringify({ success: false, code: 'USER_NOTES_FAILED', action: 'user-notes',
+            error: safeSubprocessError(error), detail: String((error as any)?.stdout || '').slice(0, 2000) }))
+        } else {
+          console.error(chalk.red(`\n✗ ${safeSubprocessError(error)}`))
+        }
+        process.exit(1)
+      }
+    })
+
   // fav-notes：把微信收藏里的文章变成知识卡（第三条来源）
   program
     .command('fav-notes')
