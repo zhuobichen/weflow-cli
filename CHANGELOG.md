@@ -8,6 +8,24 @@ All notable user-facing changes are recorded here. This project follows [Semanti
 
 ### Added
 
+- **`scripts/backfill_articles.py` - pulling months of articles into a knowledge base, without the 250-hour path.**
+  The existing `pipeline run --date` cannot do this, for three measured reasons rather than guessed ones: the CLI
+  wraps the whole pipeline in a hardcoded 10-minute timeout (`bin/weflow-cli.ts:3906`) that one historical day
+  already exceeds, so the run dies with zero output; `biz_daily` fetches serially *and* downloads 13-21 images per
+  article (~30s each - a 25-minute pilot processed 47 articles); and none of that is needed downstream, because
+  `create_reading_notes` reads only the md frontmatter (`title`/`source`/`url`/`topic`/`date`) plus the first ten
+  lines of the body, and `compile_wiki` reads only the `## AI 摘要` section. So this script reuses `biz_daily`'s
+  collection, topic-normalisation, md-writing and `.articles.json` functions - one implementation of each, not a
+  second copy - and changes exactly three things: fetch concurrently, do not download images, do not emit the HTML
+  reader. Measured over 2026-03-01..2026-08-31: 164 days, 25,603 articles, of which **12,386 actually need a
+  fetch** (the other half already carry usable text in the database), ~2.5-3 articles/second at 10 workers.
+
+  Two limits are stated rather than discovered later. **Image-only articles yield nothing**: measured on 3/4 and
+  7/4, 27/40 and 44/60 carried text, and the rest are 图文 messages whose content is in the pictures - the same
+  `内容过短` gate `biz_daily` applies, not a fetch failure. And the topic comes from `_guess_topic` (the keyword
+  fallback `biz_daily` uses when AI classification fails) rather than a model, because this step makes no AI calls
+  at all; the concept extraction that does is a separate, later command.
+
 - **`article-notes --since / --until` - a date window, because "do all of September" is how a person says it.**
   `--limit` can only express "the newest N", so using it to cover a month either misses articles (a busy month
   exceeds the limit) or drags in the neighbouring month (a quiet one does not reach it). Measured on the real vault:
