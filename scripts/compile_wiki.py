@@ -270,7 +270,12 @@ def generate_concept(name: str, refs: list[dict], api_key: str) -> str | None:
     fm = {
         'title': f'"{name}"',
         'type': 'concept',
-        'tags': tags,
+        # 嵌套标签（借自那个考公脑库的做法）：`tag:#知识/概念` 一键筛出所有知识页，
+        # 而模型给的分类词继续当第二层用
+        'tags': ['知识/概念'] + list(tags),
+        # **未经人工核验**：这些页是模型生成的。写出来，免得它被当成定论
+        # （与那个考公库 README 里"未核验的信息必须明确标注"是同一条纪律）
+        'verified': False,
         'created': today,
         # 这个概念的来源都来自哪些主题——按主题翻知识库时用得上
         'topics': sorted({r['topic'] for r in refs[:5] if r.get('topic')}),
@@ -280,17 +285,69 @@ def generate_concept(name: str, refs: list[dict], api_key: str) -> str | None:
     return fm, ''.join(body_parts)
 
 
+def count_cards_per_concept(card_dirs=None) -> dict:
+    """每个概念被**多少张卡片**提到——跨**所有**产卡目录数。
+
+    为什么不能用本次运行的 `concept_map`：索引页是每次 compile 都重写的，而三条线（文章/对话/收藏）
+    各跑一次 compile。用本次的 map 的话，索引会**轮流被覆盖成"只看到最后那条源"的视角**——
+    实测到的症状是：收藏线产出的概念在索引里显示"引用数 0"，而它看着只是"没人引用"。
+    """
+    import glob as _glob
+    counts = {}
+    dirs = card_dirs or sorted(p for p in _glob.glob('output/*-notes') if os.path.isdir(p))
+    for directory in dirs:
+        for path in Path(directory).rglob('*.md'):
+            try:
+                _, body = parse_frontmatter(path.read_text(encoding='utf-8'))
+            except Exception:
+                continue
+            for name in {n.strip() for n in re.findall(r'\[\[([^\]]+)\]\]', body) if n.strip()}:
+                counts[name] = counts.get(name, 0) + 1
+    return counts
+
+
+def relabel_pages(out_dir) -> int:
+    """给**已经生成好的**页补上标签与"未核验"标记。**本地、不调用模型。**
+
+    与 `article_notes --refresh-summaries` 同一个路数：frontmatter 是本地就能算出来的东西，
+    规则一变不必把 51 个概念重问一遍。只在缺的时候补（幂等）。
+    """
+    changed = 0
+    for path in sorted(Path(out_dir).glob('*.md')):
+        if path.name == '00-Overview.md':
+            continue
+        content = path.read_text(encoding='utf-8')
+        frontmatter, body = parse_frontmatter(content)
+        tags = list(frontmatter.get('tags') or [])
+        needs = ('知识/概念' not in tags) or ('verified' not in frontmatter)
+        if not needs:
+            continue
+        frontmatter['tags'] = ['知识/概念'] + [t for t in tags if t != '知识/概念']
+        frontmatter['verified'] = False
+        write_with_frontmatter(str(path), frontmatter, body)
+        changed += 1
+    return changed
+
+
 def main():
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')
     import argparse
     parser = argparse.ArgumentParser(description='概念图谱编译')
     parser.add_argument('--api-key', help='DeepSeek API key (或环境变量 DEEPSEEK_API_KEY)')
     parser.add_argument('--limit', type=int, default=20, help='最多生成概念数 (默认20)')
+    parser.add_argument('--relabel', action='store_true',
+                        help='只给已有页面补标签与未核验标记（本地，不调用模型）')
     parser.add_argument('--min-refs', type=int, default=1,
                         help='至少被几篇材料提到才建页（默认 1；2 能滤掉新闻里的一次性实体）')
     parser.add_argument('--source', default=SOURCE_ROOT, help='文章目录')
     parser.add_argument('--output', default=OUTPUT_ROOT, help='概念页输出目录')
     args = parser.parse_args()
+
+    if getattr(args, 'relabel', False):
+        # 本地重贴标签：不必有 key、不必调模型
+        changed = relabel_pages(args.output)
+        print('重贴标签：%d 张页面' % changed)
+        return
 
     api_key = args.api_key or os.environ.get('DEEPSEEK_API_KEY', '')
     if not api_key:
@@ -357,16 +414,27 @@ def main():
         '',
         f'共 {len(concept_files)} 个概念 | 生成时间：{time.strftime("%Y-%m-%d %H:%M")}',
         '',
+        '**这一页是生成的**：重跑 `weflow-cli wiki compile` 会覆盖它，也会覆盖每个概念页。'
+        '要改内容，改上游的材料（卡片）再重跑，别在笔记里直接改——手改会在下次导出时消失。',
+        '',
+        '**这些页由模型生成、未经人工核验**（每个概念页的 frontmatter 里 `verified: false`）。'
+        '它们可以当线索用，别当成定论。',
+        '',
+        '**看关系图谱请带筛选**：这个库里有上万条材料，直接开全局图谱会卡住。'
+        '只想看知识页，把图谱左上角的筛选框填成 `path:"Wiki/Concepts"`；'
+        '更顺手的日常用法是**局部图谱**（打开任意一页 → 右上角更多 →「局部图谱」），只加载邻接节点，秒开。',
+        '',
         '| # | 概念 | 引用数 |',
         '|---|------|--------|',
     ]
+    # 跨所有产卡目录数引用（见 `count_cards_per_concept` 的注释：不能用本次的 concept_map）
+    all_counts = count_cards_per_concept()
+    concept_files.sort(key=lambda p: str(parse_frontmatter(p.read_text(encoding='utf-8'))[0].get('title', p.stem)))
     for i, cf in enumerate(concept_files):
-        with open(cf, 'r', encoding='utf-8') as f:
-            content = f.read()
-        fm, _ = parse_frontmatter(content)
-        title = fm.get('title', cf.stem)
-        count = len(concept_map.get(title, []))
-        index_lines.append(f'| {i+1} | [[{title}]] | {count} |')
+        fm, _ = parse_frontmatter(cf.read_text(encoding='utf-8'))
+        # **标题要先去引号再当键**：写出去的是 `title: "甲"`（YAML 安全），而这里的键是裸的 `甲`
+        title = str(fm.get('title', cf.stem)).strip().strip('"')
+        index_lines.append(f'| {i+1} | [[{title}]] | {all_counts.get(title, 0)} |')
 
     index_path = out_dir.parent / '00-Overview.md'
     with open(index_path, 'w', encoding='utf-8') as f:

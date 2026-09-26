@@ -208,6 +208,39 @@ class FilterTests(unittest.TestCase):
         self.assertEqual(cw.concept_links(body, 'AI'), [])
 
 
+class OverviewHelperTests(unittest.TestCase):
+    """索引页的两个坑（都是实测撞上的，不是想出来的）。
+
+    - 概念页写出去的标题带引号（`title: "甲"`），当键用之前**必须去引号**，
+      否则整页显示"引用数 0"——而它看起来只是"没人引用"；
+    - 索引是每次 compile 重写的，而三条线各跑一次。用"本次源"的概念表数引用，
+      索引会轮流被覆盖成只看到最后那条源的视角（实测症状：收藏线的概念全显示 0）。
+    """
+
+    def test_跨所有卡片目录数引用(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            for name, body in (('a.md', '- [[甲]]\n- [[乙]]\n'), ('b.md', '- [[甲]]\n')):
+                (Path(tmp) / name).write_text(body, encoding='utf-8')
+            counts = cw.count_cards_per_concept([tmp])
+        self.assertEqual(counts, {'甲': 2, '乙': 1})
+
+    def test_同一张卡里提到两次只算一次(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / 'a.md').write_text('- [[甲]]\n- [[甲]]\n', encoding='utf-8')
+            self.assertEqual(cw.count_cards_per_concept([tmp]), {'甲': 1})
+
+    def test_重贴标签是幂等的_并且会补未核验标记(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / '甲.md'
+            from _utils import write_with_frontmatter
+            write_with_frontmatter(str(path), {'title': '"甲"', 'tags': ['话题']}, '# 甲\n正文。\n')
+            self.assertEqual(cw.relabel_pages(tmp), 1, '第一次该补')
+            fm, _ = cw.parse_frontmatter(path.read_text(encoding='utf-8'))
+            self.assertEqual(fm['tags'], ['知识/概念', '话题'])
+            self.assertIn('verified', fm)
+            self.assertEqual(cw.relabel_pages(tmp), 0, '第二次不该再动（幂等）')
+
+
 class RankTests(unittest.TestCase):
     """够不够格建页——这条闸门是**实测定的**。
 

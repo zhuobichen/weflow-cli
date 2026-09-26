@@ -8,6 +8,40 @@ All notable user-facing changes are recorded here. This project follows [Semanti
 
 ### Added
 
+- **The generated vault now says four things it should have said all along**, borrowed from a local Obsidian vault
+  built for exam prep (studied at the user's request; its own usage doc is a good example of a generated knowledge
+  base that explains itself):
+
+  - **"This page is generated"** - re-running `wiki compile` overwrites the overview and every concept page, so a
+    note edited by hand disappears on the next run. Their vault states this in the first line of its usage doc; ours
+    said nothing, which is how a user loses an afternoon of editing.
+  - **"Model-generated, not human-verified"** - every concept page now carries `verified: false`. The borrowed
+    vault's README states the same rule ("unverified information must be marked, never presented as settled"), which
+    is also this project's own rule for drafts (`judged: false`); concept pages had no such marker.
+  - **A nested type tag** (`知识/概念`) so `tag:#知识/概念` finds every knowledge page - their vault uses nested tags
+    (`资料分析/增长`) exactly this way, and it costs nothing to make our pages filterable by kind.
+  - **How to open the graph without hanging**: the vault holds thousands of source notes, so a global graph is
+    unusable; the index now names the filter string (`path:"Wiki/Concepts"`) and the better habit (local graph).
+    Their doc does this with a table of filter strings, including one row that says "the panorama is slow, use with
+    care" - an honest note this project is happy to copy. The Obsidian config file itself is **not** written: our
+    vault has no `.obsidian` directory, and guessing a config schema would be worse than giving the user a string to
+    paste.
+
+- **`wiki compile --relabel`** rewrites only the frontmatter of existing pages (type tag, verification marker) with no
+  model calls - the same trick as `article-notes --refresh-summaries`: metadata is computable locally, so a
+  convention change should not cost 51 regenerations. Idempotent, and tested as such.
+
+### Fixed
+
+- **The index page reported "0 references" for pages that had them.** Concept titles are written as `title: "甲"`
+  (YAML-safe) while the aggregation keys them bare, so the lookup missed and the page looked merely un-cited rather
+  than mis-counted.
+- **The index could only ever show one source's view.** It is rewritten by every compile, and the three lines
+  (articles, conversations, favourites) are compiled separately - so the table was rebuilt each time against
+  whichever source ran last, and a favourite-derived concept showed 0 while its card was right there. Counts are now
+  taken across **all** `output/*-notes` directories, which also fixes the first bug's symptom.
+
+
 - **WeChat favourites are the third source feeding the knowledge base.** The daily line covers what the user *read*;
   favourites are what they deliberately **kept**, which includes articles outside the daily window and is a stronger
   signal of interest. `fav-notes` reads the favourites (locally), takes each one's text where the record carries it and
