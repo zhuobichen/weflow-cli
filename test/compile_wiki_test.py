@@ -229,6 +229,23 @@ class OverviewHelperTests(unittest.TestCase):
             (Path(tmp) / 'a.md').write_text('- [[甲]]\n- [[甲]]\n', encoding='utf-8')
             self.assertEqual(cw.count_cards_per_concept([tmp]), {'甲': 1})
 
+    def test_来源标签从卡片住在哪推断(self):
+        # 借自那个考公库的 private/ 与"注意隐私"：我们的公开文章与私人对话是混在一起的，
+        # 用嵌套标签分开，`tag:#来源/聊天` 一眼看出哪些页该当私密内容对待
+        with tempfile.TemporaryDirectory() as tmp:
+            article, chat = Path(tmp) / 'article-notes', Path(tmp) / 'chat-notes'
+            article.mkdir(); chat.mkdir()
+            (article / '某篇.md').write_text('x', encoding='utf-8')
+            (chat / '某会话.md').write_text('x', encoding='utf-8')
+            # 用集合比，别依赖顺序：中文按 Unicode 排（文 < 来），不是拼音——这一处我又栽了一次
+            self.assertEqual(set(cw.source_kinds_for(['某篇.md', '某会话.md'], [str(article), str(chat)])),
+                             {'来源/文章', '来源/聊天'})
+            self.assertEqual(cw.source_kinds_for(['找不到.md'], [str(article)]), [],
+                             '找不到就不加——不猜')
+
+    def test_认不出的来源目录不加标签(self):
+        self.assertEqual(cw.origin_tag('output/某个新目录'), '')
+
     def test_重贴标签是幂等的_并且会补未核验标记(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / '甲.md'

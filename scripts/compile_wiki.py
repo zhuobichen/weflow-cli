@@ -224,7 +224,24 @@ def rank_concepts(concept_map: dict, min_refs: int = 1) -> list:
     return ranked
 
 
-def generate_concept(name: str, refs: list[dict], api_key: str) -> str | None:
+# 一条来源（`--source` 目录名）→ 它派生出来的页该带什么来源标签。
+# 借自那个考公库：它把私密内容单放 `private/`，README 里也点明"家庭/健康/情绪类内容注意隐私"。
+# 我们的库里**公开文章与私人对话是混在一起的**——用嵌套标签分开，`tag:#来源/聊天`
+# 就能一眼看出哪些页该当私密内容对待（要分享、要截图、要导出时用得上）。
+SOURCE_TAGS = {
+    'article-notes': '来源/文章',
+    'chat-notes': '来源/聊天',
+    'fav-notes': '来源/收藏',
+}
+
+
+def origin_tag(source_dir: str) -> str:
+    """`--source` 指向哪个产卡目录 → 来源标签。认不出来就不加（不猜）。"""
+    name = Path(str(source_dir)).name
+    return SOURCE_TAGS.get(name, '')
+
+
+def generate_concept(name: str, refs: list[dict], api_key: str, origin: str = '') -> str | None:
     """Call DeepSeek to generate a concept Wiki page."""
     # Build references section
     ref_lines = build_ref_lines(refs)
@@ -272,7 +289,7 @@ def generate_concept(name: str, refs: list[dict], api_key: str) -> str | None:
         'type': 'concept',
         # 嵌套标签（借自那个考公脑库的做法）：`tag:#知识/概念` 一键筛出所有知识页，
         # 而模型给的分类词继续当第二层用
-        'tags': ['知识/概念'] + list(tags),
+        'tags': ['知识/概念'] + ([origin] if origin else []) + list(tags),
         # **未经人工核验**：这些页是模型生成的。写出来，免得它被当成定论
         # （与那个考公库 README 里"未核验的信息必须明确标注"是同一条纪律）
         'verified': False,
@@ -306,11 +323,34 @@ def count_cards_per_concept(card_dirs=None) -> dict:
     return counts
 
 
-def relabel_pages(out_dir) -> int:
+def source_kinds_for(page_sources, card_dirs=None) -> list:
+    """这一页的来源卡片住在哪几类目录里 → 该带的来源标签（本地推断，不猜）。
+
+    `sources` 里记的是**卡片文件名**（相对各自产卡目录），所以拿它在 `output/*-notes`
+    里一找就知道这张页是文章派生的、聊天派生的，还是两者都有。
+    """
+    import glob as _glob
+    dirs = [Path(p) for p in (card_dirs or sorted(p for p in _glob.glob('output/*-notes')
+                                                  if os.path.isdir(p)))]
+    kinds = set()
+    for name in page_sources or []:
+        for directory in dirs:
+            if (directory / str(name)).exists():
+                tag = SOURCE_TAGS.get(directory.name)
+                if tag:
+                    kinds.add(tag)
+                break
+    return sorted(kinds)
+
+
+def relabel_pages(out_dir, card_dirs=None) -> int:
     """给**已经生成好的**页补上标签与"未核验"标记。**本地、不调用模型。**
 
     与 `article_notes --refresh-summaries` 同一个路数：frontmatter 是本地就能算出来的东西，
     规则一变不必把 51 个概念重问一遍。只在缺的时候补（幂等）。
+
+    来源标签（`来源/聊天` 那类）也从**已有信息**推出来：`sources` 里记的是卡片文件名，
+    去 `output/*-notes` 里一找就知道它住在哪一类目录。
     """
     changed = 0
     for path in sorted(Path(out_dir).glob('*.md')):
@@ -318,11 +358,11 @@ def relabel_pages(out_dir) -> int:
             continue
         content = path.read_text(encoding='utf-8')
         frontmatter, body = parse_frontmatter(content)
-        tags = list(frontmatter.get('tags') or [])
-        needs = ('知识/概念' not in tags) or ('verified' not in frontmatter)
-        if not needs:
+        tags = [t for t in (frontmatter.get('tags') or []) if t != '知识/概念']
+        wanted = ['知识/概念'] + source_kinds_for(frontmatter.get('sources'), card_dirs) + tags
+        if wanted == list(frontmatter.get('tags') or []) and 'verified' in frontmatter:
             continue
-        frontmatter['tags'] = ['知识/概念'] + [t for t in tags if t != '知识/概念']
+        frontmatter['tags'] = wanted
         frontmatter['verified'] = False
         write_with_frontmatter(str(path), frontmatter, body)
         changed += 1
@@ -395,7 +435,7 @@ def main():
             continue
 
         print(f'  [{generated+1}/{args.limit}] {name} ({len(refs)} 引用)...')
-        result = generate_concept(name, refs, api_key)
+        result = generate_concept(name, refs, api_key, origin=origin_tag(args.source))
         if result:
             fm, body = result
             write_with_frontmatter(str(out_file), fm, body)
