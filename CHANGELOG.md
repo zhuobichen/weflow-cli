@@ -29,6 +29,22 @@ All notable user-facing changes are recorded here. This project follows [Semanti
   per call), so trimming what is sent is the only lever that could matter - which is what `--topic` does, by sending
   nothing at all for the articles that are not wanted.
 
+### Changed
+
+- **The floating ball is just the cat while idle.** The coloured halo behind it (`#ball .glow`) used to be painted
+  at all times, which was the point when it was added - the user asked for a background that moves. Two costs only
+  became visible after living with it: the ball always had a coloured disc behind it, so **"this image has a
+  transparent background" was impossible to see**; and that same layer doubles as the status light (`offline` turns
+  it red, `quota` amber, `busy` speeds it up and makes it breathe), so having it always on meant having no status
+  light - offline, busy and quota-out all looked identical. Now the glow is painted **only** under
+  `body.busy` / `body.offline` / `body.quota`: still = the cat, lit = something to say. This is the earlier request
+  **narrowed, not cancelled** - the hue drift is still there, it just happens while busy rather than always.
+  `test/panel-packaging.test.ts` was rewritten to pin the new contract rather than loosened: idle must be
+  `background: none`, and each of the three states must appear **in the selector of the rule that carries the
+  radial-gradient** - the first version searched the whole stylesheet for `body.quota #ball .glow`, which also
+  matches that state's unrelated `animation: none` rule, so deleting quota from the gradient selector passed. A
+  mutation check confirmed both halves of the new assertion fail when broken.
+
 - **`scripts/backfill_articles.py` - pulling months of articles into a knowledge base, without the 250-hour path.**
   The existing `pipeline run --date` cannot do this, for three measured reasons rather than guessed ones: the CLI
   wraps the whole pipeline in a hardcoded 10-minute timeout (`bin/weflow-cli.ts:3906`) that one historical day

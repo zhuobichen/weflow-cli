@@ -136,16 +136,21 @@ body.shell.bubble-right #ball { right: auto; left: 0; }
 body.shell.anchor-top #ball { bottom: auto; top: 0; }
 #ball > span { position: absolute; inset: 0; border-radius: 50%; pointer-events: none; }
 
-/* 会动的那层背景。做成**软边光晕**而不是硬边圆盘：硬边就又回到"一只盘子"了，
-   而软边在浅底与深底上都只是"猫身后的一团光"，不需要再靠一圈亮环去定边界。 */
 #ball .glow {
+  background: none;
+}
+
+/* 光晕**只在有状态时画出来**。做成软边光晕而不是硬边圆盘：硬边就又回到"一只盘子"了，
+   而软边在浅底与深底上都只是"猫身后的一团光"，不需要再靠一圈亮环去定边界。 */
+body.busy #ball .glow,
+body.offline #ball .glow,
+body.quota #ball .glow {
   background:
     radial-gradient(circle at 50% 46%,
       hsl(var(--hue) 82% 58% / .95) 0%,
       hsl(calc(var(--hue) + 26) 78% 46% / .78) 38%,
       hsl(calc(var(--hue) + 44) 70% 38% / .32) 62%,
       transparent 78%);
-  animation: drift 26s linear infinite;
 }
 
 /* 上面那层：吉祥物本体，形状不变 */
@@ -156,8 +161,8 @@ body.shell.anchor-top #ball { bottom: auto; top: 0; }
   background-repeat: no-repeat;
 }
 
-/* 色相缓慢流动 —— 这就是"会变动的背景"。26 秒一圈：够慢，不会在余光里晃。
-   （慢到只有盯着看才注意到，这才是常驻小球该有的动静） */
+/* 色相流动 —— 现在只在**忙碌**时跑（空闲时那一层根本不画）。
+   8 秒一圈由 `body.busy` 那条给；色相本身只是被 `drift` 驱动的数值。 */
 @property --hue { syntax: '<number>'; inherits: true; initial-value: 224; }
 #ball { --hue: 224; }
 @keyframes drift {
@@ -167,6 +172,15 @@ body.shell.anchor-top #ball { bottom: auto; top: 0; }
   75%  { --hue: 190; }        /* 青 */
   100% { --hue: 224; }
 }
+
+/* **空闲时球后面什么都没有**（2026-09-26 改）。
+
+   这一层原来一直亮着，那是用户当初要的"会变动的背景"。但两个代价在用过之后才显出来：
+   球背后永远有一圈彩色圆盘，**"这张图是透明的"这件事根本看不出来**；而它同时兼着状态灯，
+   一直亮着就等于没有状态灯——离线、忙碌、额度用完，球长得都一样。
+
+   现在：**静止 = 只有猫，亮起来 = 有话说**。这是那条需求的**范围缩小，不是取消**——
+   色相流动还在，只是改在忙碌时发生（下面那条）。 */
 
 /* ---------------------------------------------------------------- 状态 */
 

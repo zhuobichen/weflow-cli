@@ -301,17 +301,30 @@ test('球是**透明底**的，靠投影分离 —— 这两件事要一起改�
 // 那边解了一次 PNG 才敢说"盘在"。这里不再重复断言尺寸与体积——同一件事两处断言，
 // 其中一处总会更弱，而更弱的那条会让人以为已经被保住了。
 
-test('球是会动的背景：两层结构 + CSS 动画 + 三个状态', () => {
-  // 用户要的"可以变动的背景"。做成两层（`.glow` 背景 / `.face` 吉祥物）而不是给 #ball
-  // 直接设 background：那样光晕和猫共用一层，动不了其中一个。
+test('球：空闲时只有猫，有状态时才亮光晕', () => {
+  // 2026-09-26 改。原先这层**一直**亮着（用户当初要的"会变动的背景"），但两个代价在用过
+  // 之后才显出来：球背后永远有一圈彩色圆盘，"这张图是透明的"根本看不出来；而它同时兼着
+  // 状态灯，一直亮着就等于没有状态灯——离线、忙碌、额度用完，球长得一模一样。
+  //
+  // 所以这条测试盯的是**新的**契约（不是把旧断言放宽）：空闲态不许画底，三个状态各自
+  // 必须真的有画出来的那条规则——只改 `--hue` 而不画背景，状态灯就是哑的。
   const html = code('index.html')
-  assert.match(html, /class="glow"/, '背景那层')
+  assert.match(html, /class="glow"/, '光晕那层还在（空闲时只是不画）')
   assert.match(html, /class="face"/, '吉祥物那层')
   const css = code('panel.css')
-  assert.match(css, /#ball \.glow/, '光晕要能单独做动画')
-  assert.match(css, /animation:\s*drift/, '空闲时缓慢流动')
+  assert.match(css, /#ball \.glow\s*\{\s*background:\s*none/, '空闲态必须是干净的猫')
+
+  // **要按"光晕所在的规则"判，不能全文搜状态名。** 同一份 CSS 里
+  // `body.quota #ball .glow { animation: none }` 也是一条，于是"把 quota 从渐变选择器里
+  // 删掉"这种回归搜不出来——第一版断言就是这么漏的（变异检查实测到的：删掉 quota 那条，
+  // 测试照样绿）。所以这里先取出含径向渐变那条规则的选择器，再要求三个状态都在里面。
+  const gradientAt = css.indexOf('radial-gradient')
+  assert.ok(gradientAt > 0, '有状态时画的仍是那圈软边光晕')
+  const openBrace = css.lastIndexOf('{', gradientAt)
+  const gradientSelector = css.slice(css.lastIndexOf('}', openBrace) + 1, openBrace)
   for (const state of ['busy', 'offline', 'quota']) {
-    assert.ok(new RegExp(`body\.${state} #ball`).test(css), `缺状态样式：${state}`)
+    assert.ok(new RegExp(`body\.${state} #ball \.glow`).test(gradientSelector),
+      `缺状态样式：${state} —— 要长在渐变那条规则的选择器里，不是只在别处提一句`)
   }
   assert.match(css, /@keyframes drift/)
   assert.match(css, /@property --hue/, '色相要能被动画驱动')
