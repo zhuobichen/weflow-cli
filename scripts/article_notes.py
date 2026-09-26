@@ -28,6 +28,7 @@ import json
 import os
 import re
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
@@ -45,6 +46,9 @@ DEFAULT_LIMIT = 30
 MAX_ARTICLE_CHARS = 3000
 # 太短的不值得一次调用（与对话线那道闸门同一个理由，阈值按文章的量级定）
 MIN_ARTICLE_CHARS = 200
+# 并发数。和 `biz_daily` 那三个（`JEV_WORKERS` / `SUMMARY_WORKERS` / `IMAGE_WORKERS`）
+# 取同一个值：它们量的都是同一个上游的同一个延迟。实测 8 并发 319 张/分钟。
+CONCEPT_WORKERS = 6
 
 CONCEPT_PROMPT = """你是知识库的**编译者，不是作者**。下面是一篇公众号文章笔记。
 
@@ -224,6 +228,51 @@ def refresh_summaries(out_dir: str, source_root: str) -> dict:
     return {'rewritten': rewritten, 'missing': missing}
 
 
+def build_prompt(article: dict) -> str:
+    """一篇笔记 → 提示词。抽出来是为了让并发版与串行版**喂给模型的是同一个串**。"""
+    return CONCEPT_PROMPT.format(
+        title=article['title'], source=article['source'] or '未知',
+        topic=article['topic'] or '未分类',
+        # 喂给模型的正文也擦一遍：界面残留被当成「文章内容」读进去，会污染概念
+        body=strip_wx_ads(compile_wiki.concept_body(article['body']))[:MAX_ARTICLE_CHARS])
+
+
+def iter_concepts(articles: list, api_key: str, workers: int = CONCEPT_WORKERS):
+    """并发问概念，**按输入顺序一篇一篇地产出** `(article, raw, error)`。
+
+    返回的是**生成器**，不是列表——这一点是踩出来的。第一版写成
+    `list(pool.map(...))`：它把整批问完才返回，于是 5,852 篇跑着的十几分钟里磁盘上
+    **一张卡都没有**（实测：8 分钟卡片数纹丝不动），进程一死全部白花。串行版是从第一篇
+    就开始写的，并发版不许在这件事上退化。
+
+    **只把"问"并行，"写"仍旧串行。** 实测：一次调用约 1.2 秒（纯粹等网络），而写一张
+    md 是毫秒级——并发写没有任何收益，只会让"哪张卡是谁写的"变难查。实测速率：
+    串行 49 张/分钟，8 并发 319 张/分钟（6.5 倍），**花的钱一样**（token 数不变）。
+
+    **顺序由 `pool.map` 保证**：调用方靠位置把回答配回文章，换成 `as_completed`
+    就会把甲的答案写进乙的卡里——卡片照样生成、格式照样对，只有内容错位。
+
+    失败**不吞**：逐篇产出错误字符串，由调用方走**与串行版完全相同**的那条记录路径。
+    两版的失败清单必须长得一样，否则"有几篇没做出来"这件事在两版之间不可比。
+    """
+    def one(article):
+        try:
+            return call_deepseek(build_prompt(article), api_key, max_tokens=800, timeout=90), None
+        except Exception as error:
+            return None, str(error)
+
+    if workers <= 1:
+        for article in articles:
+            raw, error = one(article)
+            yield article, raw, error
+        return
+    with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
+        # 用 `with` 保住线程池：生成器被消费完之前不能关掉它，否则 `map` 后面的
+        # 那些 future 会连同池子一起消失。
+        for article, (raw, error) in zip(articles, pool.map(one, articles)):
+            yield article, raw, error
+
+
 def exit_code(written: int) -> int:
     """**部分成功算成功**（退出码 0），失败清单是数据不是进程状态。
 
@@ -243,6 +292,8 @@ def main():
     parser.add_argument('--until', default='', help='只看这个日期之前的（YYYY-MM-DD）')
     parser.add_argument('--topic', action='append', default=[],
                         help='只做这些主题（可重复或逗号分隔，如 --topic AI）；不传=全部')
+    parser.add_argument('--workers', type=int, default=CONCEPT_WORKERS,
+                        help='并发问几篇（默认 %d）。只并行"问"，写仍是串行' % CONCEPT_WORKERS)
     parser.add_argument('--limit', type=int, default=DEFAULT_LIMIT,
                         help='最多处理几篇（默认 %d，按发布时间倒序）' % DEFAULT_LIMIT)
     parser.add_argument('--dry-run', action='store_true', help='只报要发多少给模型，不调用')
@@ -256,6 +307,10 @@ def main():
 
     if args.limit < 1:
         print(json.dumps({'success': False, 'error': '--limit 要 ≥ 1'}))
+        return 1
+    if args.workers < 1:
+        print(json.dumps({'success': False, 'error': '--workers 要 ≥ 1'}) if args.json
+              else '--workers 要 ≥ 1')
         return 1
 
     if args.refresh_summaries:
@@ -294,6 +349,7 @@ def main():
         preview = {
             'success': True, 'dryRun': True, 'action': 'article-notes',
             'source': args.source, 'topics': topics, 'articles': len(runnable),
+            'workers': args.workers,
             'chars': sum(len(a['body']) for a in runnable),
             'skipped': len(thin), 'skippedTitles': [a['title'][:24] for a in thin][:10],
             'alreadyCarded': len(existing),
@@ -330,15 +386,9 @@ def main():
 
     updated = datetime.now(TZ).strftime('%Y-%m-%d %H:%M')
     written, failed = [], []
-    for article in runnable:
-        prompt = CONCEPT_PROMPT.format(
-            title=article['title'], source=article['source'] or '未知',
-            topic=article['topic'] or '未分类',
-            # 喂给模型的正文也擦一遍：界面残留被当成「文章内容」读进去，会污染概念
-            body=strip_wx_ads(compile_wiki.concept_body(article['body']))[:MAX_ARTICLE_CHARS])
-        try:
-            raw = call_deepseek(prompt, api_key, max_tokens=800, timeout=90)
-        except Exception as error:
+    # 边收边写：生成器一有结果就落盘，不等整批。见 `iter_concepts` 的注释。
+    for article, raw, error in iter_concepts(runnable, api_key, args.workers):
+        if error:
             failed.append({'title': article['title'][:30], 'reason': '调用失败：%s' % error})
             continue
         concepts = parse_concepts(raw)

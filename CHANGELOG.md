@@ -31,6 +31,25 @@ All notable user-facing changes are recorded here. This project follows [Semanti
 
 ### Changed
 
+- **`article-notes` asks concurrently, which is 6.5x faster for the same money.** The loop was one blocking call
+  per article; measured, that is 49 cards/minute against **319 cards/minute at 8 workers** - and the token count is
+  unchanged, so the bill is identical (~¥11.5 for 6,409 articles). Only the *asking* is parallel: the writing stays
+  serial, because a call is ~1.2s (pure network wait) while writing a card is sub-millisecond, so concurrency there
+  buys nothing and only makes "who wrote which card" harder to trace. The default is 6, matching `biz_daily`'s
+  `JEV_WORKERS` / `SUMMARY_WORKERS` / `IMAGE_WORKERS`, which measure the same upstream.
+
+  **Why not batch several articles into one call** - it is the other obvious saving, and it was measured too: the
+  fixed instructions are 459 characters (32% of a 1,394-character prompt), so 5-per-call cuts prompt tokens to 74%
+  and would save roughly ¥2.3. It was **rejected on two grounds**. First, batching does not save *time*: latency is
+  dominated by output length, so five times fewer calls each four times slower is a wash - concurrency is the lever,
+  and the two are orthogonal anyway. Second, and the reason that matters: `compile_wiki.build_ref_lines` feeds the
+  concept-page model up to five references collected **from different articles**, each being that article's `desc`
+  line - so cross-article synthesis already happens, downstream and deterministically, and the `desc` line is its raw
+  material. A `desc` means "what **this** article said about it"; five articles in one prompt makes "this article"
+  ambiguous and blurs exactly the input the fusion depends on. **Not tested**: whether batched extraction yields
+  *better* concepts. That needs human labels, and this project does not record calibration conclusions without a
+  gold standard - what could be measured is how much the concept sets differ, which is consistency, not quality.
+
 - **The floating ball is just the cat while idle.** The coloured halo behind it (`#ball .glow`) used to be painted
   at all times, which was the point when it was added - the user asked for a background that moves. Two costs only
   became visible after living with it: the ball always had a coloured disc behind it, so **"this image has a

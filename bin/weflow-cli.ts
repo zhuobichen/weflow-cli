@@ -5514,6 +5514,7 @@ program
     .option('--until <date>', '只看这个日期之前的（YYYY-MM-DD）')
     .option('--topic <name>', '只做这些主题，可重复或用逗号分隔（如 --topic AI）；不传=全部',
             (value, previous: string[] = []) => [...previous, value], [])
+    .option('--workers <n>', '并发问几篇（只并行"问"，写仍是串行）', '6')
     .option('--dry-run', '仅预览：几篇、多少字会发给生成模型（只读本地，零出境）')
     .option('--refresh-summaries', '只按原笔记重算已有卡片的摘要（本地，不调用模型、不必 --yes）')
     .option('--yes', '确认把文章发给生成模型')
@@ -5532,6 +5533,7 @@ program
         .flatMap(value => String(value).split(','))
         .map(value => value.trim())
         .filter(Boolean)
+      const workers = parseCliInteger(opts.workers, 'workers', 1, 64, opts.json)
       // 与 `chat-notes`/`draft` 同一条纪律：**"确认过了"只用一个变量**，参数在确认之后才拼
       let confirmed = !!opts.yes
       if (!opts.dryRun && !opts.refreshSummaries && !confirmed) {
@@ -5560,6 +5562,7 @@ program
                     ...(opts.since ? ['--since', String(opts.since)] : []),
                     ...(opts.until ? ['--until', String(opts.until)] : []),
                     ...(topics.length ? ['--topic', topics.join(',')] : []),
+                    '--workers', String(workers),
                     ...(opts.refreshSummaries ? ['--refresh-summaries'] : []),
                     ...(confirmed ? ['--yes'] : []),
                     ...(opts.json ? ['--json'] : []),

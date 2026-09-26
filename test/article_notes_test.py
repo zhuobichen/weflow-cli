@@ -208,6 +208,103 @@ class TopicFilterTests(unittest.TestCase):
             self.assertEqual(an.list_articles(tmp, 0, topics=['不存在的主题']), [])
 
 
+class ParallelTests(unittest.TestCase):
+    """并发问概念：**只是把"等"叠起来，不改"问什么"、也不改"怎么写"**。
+
+    两条最容易错、错了又都不报错的事，钉在这里：
+
+    1. **顺序**。结果靠 `zip(runnable, answers)` 配回文章；`pool.map` 保序，
+       换成 `as_completed` 就会把甲的概念写进乙的卡里——卡片照样生成、格式照样对，
+       只有内容错位。
+    2. **单篇失败不拖垮整批**。串行版一次异常只影响那一篇；并发版要是让异常冒出来，
+       一整批都没了，而失败清单还会显示"0 篇失败"。
+    """
+
+    def setUp(self):
+        self.articles = [dict(ARTICLE, title='第%d篇' % i) for i in range(6)]
+        self.seen = []
+        self.original = an.call_deepseek
+
+    def tearDown(self):
+        an.call_deepseek = self.original
+
+    def fake(self, delay=None):
+        """假调用。`delay(index)` 决定第 index 篇睡多久——默认**先发的睡得最久**，
+        于是"完成的先后"与"输入的先后"正好相反。"""
+        import time as _t
+        if delay is None:
+            delay = lambda index: 0.02 * (5 - index)   # noqa: E731
+        def call(prompt, api_key, **kwargs):
+            self.seen.append(prompt)
+            title = prompt.split('文章：')[1].split('（')[0]
+            index = int(title.replace('第', '').replace('篇', ''))
+            _t.sleep(delay(index))
+            if title == '第3篇':
+                raise RuntimeError('模拟单篇失败')
+            return '{"concepts": [{"name": "概念-%s", "desc": "讲的是%s"}]}' % (title, title)
+        return call
+
+    def test_并发返回的顺序与输入一致(self):
+        an.call_deepseek = self.fake()
+        got = list(an.iter_concepts(self.articles, 'k', workers=4))
+        self.assertEqual(len(got), 6)
+        for article, raw, error in got:
+            if article['title'] == '第3篇':      # 这个假实现故意让它失败，见 fake()
+                self.assertIn('模拟单篇失败', error)
+                continue
+            self.assertIsNone(error)
+            self.assertIn('概念-%s' % article['title'], raw,
+                          '%s 拿到的不是自己的回答——顺序错了' % article['title'])
+
+    def test_单篇失败只落在那一篇上(self):
+        an.call_deepseek = self.fake()
+        got = list(an.iter_concepts(self.articles, 'k', workers=4))
+        bad = [(a['title'], e) for a, r, e in got if e]
+        self.assertEqual([t for t, _ in bad], ['第3篇'], '失败清单必须只有那一篇')
+        self.assertIn('模拟单篇失败', bad[0][1])
+        self.assertEqual(len([1 for r, e in ((r, e) for _, r, e in got) if r]), 5)
+
+    def test_串行与并发问的是同一串(self):
+        an.call_deepseek = self.fake()
+        list(an.iter_concepts(self.articles, 'k', workers=1))
+        serial = list(self.seen)
+        self.seen.clear()
+        an.call_deepseek = self.fake()
+        list(an.iter_concepts(self.articles, 'k', workers=4))
+        self.assertEqual(sorted(serial), sorted(self.seen),
+                         '两条路喂给模型的提示词必须一模一样（顺序可以不同）')
+
+    def test_并发数为_1_时也是同一条路(self):
+        an.call_deepseek = self.fake()
+        got = list(an.iter_concepts(self.articles, 'k', workers=0))
+        self.assertEqual(len(got), 6, 'workers<1 要夹到 1，不是什么都不做')
+
+    def test_第一篇出得来就不等全批(self):
+        """**这条是真踩出来的回归。**
+
+        第一版写成 `list(pool.map(...))`：整批问完才返回，于是 5,852 篇跑着的十几分钟里
+        磁盘上一张卡都没有（实测：卡片数 8 分钟纹丝不动），进程一死全部白花。串行版是从
+        第一篇就开始写的，并发版不许在这件事上退化。
+
+        构造：**第 0 篇立刻返回、第 5 篇最慢**。所以"第一篇就绪"必须明显早于"整批跑完"——
+        一条 materialize 的实现会让第一个 yield 一直等到最后。
+        """
+        import time as _t
+        an.call_deepseek = self.fake(delay=lambda index: 0.05 * index)
+        started = _t.time()
+        stream = an.iter_concepts(self.articles, 'k', workers=4)
+        first = next(stream)
+        first_at = _t.time() - started
+        list(stream)                       # 剩下的全部消费掉
+        self.assertLess(first_at, 0.15,
+                        '第一篇等了 %.2fs，说明整批被物化了（应为 0 秒级）' % first_at)
+
+    def test_产出的是生成器而不是列表(self):
+        # 这条更直白地钉住同一个契约：返回列表就必然是全问完才有第一篇
+        import inspect
+        self.assertTrue(inspect.isgenerator(an.iter_concepts([], 'k', workers=4)))
+
+
 class IncrementalTests(unittest.TestCase):
     """默认增量：不然每跑一次都把同样的文章重问一遍（三十篇=三十次白花的调用）。"""
 
