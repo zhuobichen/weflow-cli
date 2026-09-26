@@ -8,6 +8,27 @@ All notable user-facing changes are recorded here. This project follows [Semanti
 
 ### Added
 
+- **`article-notes --topic` - and the number that makes it worth having.** Concept extraction is the only step in
+  this pipeline that costs money per article, so the useful question is not "does it support filtering" but "how
+  much does filtering save". Measured rather than estimated, on the 3,498 backfilled articles: news is **57%**, AI
+  28%, academia 13%. Carding only AI therefore removes more than half the spend. The filter is applied **before**
+  `--limit`, so `--limit 500 --topic AI` means "500 AI articles", not "the newest 500, of which keep the AI ones" -
+  the latter silently under-delivers as you page backwards and looks like the corpus is that small. Both spellings
+  of the topic field are accepted because the Vault's existing 1,633 notes use `hasTopic: [[AI]]` while newer
+  writers use `topic: AI`; the read path is `compile_wiki.article_topic`, unchanged. The confirmation prompt now
+  shows the resolved topic list, because the number a person is agreeing to is the filtered one.
+
+  **The per-call cost was measured against the account balance, not a price table.** DeepSeek's published pricing
+  has at least three mutually inconsistent versions in circulation (¥3/6, $0.14/0.28 and $0.22/0.66 per million for
+  the same model), so 120 probe calls were run and the balance delta read: **¥0.22 for 120 calls, ¥0.0018 each,
+  ≈¥30 for 16,600 articles**. The balance endpoint resolves in ¥0.01, so that figure carries a few percent of
+  rounding error, and it is the account's real spend rather than a rate card's. It also surfaced something no price
+  table could: the balance was ¥27.12, i.e. the unfiltered run would have run out of money partway through. Two
+  cheaper-looking knobs were measured and rejected: `MAX_ARTICLE_CHARS` (3000) never binds, because a real call
+  sends ~1,394 characters, so lowering it saves nothing; and the input is the larger half (803 of the ~945 tokens
+  per call), so trimming what is sent is the only lever that could matter - which is what `--topic` does, by sending
+  nothing at all for the articles that are not wanted.
+
 - **`scripts/backfill_articles.py` - pulling months of articles into a knowledge base, without the 250-hour path.**
   The existing `pipeline run --date` cannot do this, for three measured reasons rather than guessed ones: the CLI
   wraps the whole pipeline in a hardcoded 10-minute timeout (`bin/weflow-cli.ts:3906`) that one historical day

@@ -140,6 +140,74 @@ class DateWindowTests(unittest.TestCase):
             self.assertEqual(len(an.list_articles(tmp, 0)), 4)
 
 
+class TopicFilterTests(unittest.TestCase):
+    """`--topic`：只做关心的主题。
+
+    **为什么值得单独一组**：这一步是纯花钱的（一篇一次调用），而主题分布实测是
+    新闻 57% / AI 28% / 学术 13%。所以"只做 AI"不是锦上添花，是省掉一半以上的钱。
+    另外这两种写法都要认：Vault 里那批笔记写的是 `hasTopic: [[AI]]`，新的写 `topic: AI`
+    （读法在 `compile_wiki.article_topic`，这里只是确认筛选确实走了它）。
+    """
+
+    def build(self, tmp):
+        rows = [('2026-09-05', 'AI', ['source/wechat', 'ai']),
+                ('2026-09-04', '新闻', []),
+                ('2026-09-03', '学术', []),
+                ('2026-09-02', 'AI', [])]
+        for day, topic, tags in rows:
+            tag_line = ('tags: [%s]\n' % ', '.join(tags)) if tags else ''
+            (Path(tmp) / f'{day}-甲.md').write_text(
+                '---\ntitle: 甲-%s\ntopic: %s\npublished: %s\n%s---\n\n正文\n'
+                % (day, topic, day, tag_line), encoding='utf-8')
+
+    def test_只留指定主题(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.build(tmp)
+            got = an.list_articles(tmp, 0, topics=['AI'])
+        self.assertEqual(sorted(a['published'] for a in got), ['2026-09-02', '2026-09-05'])
+
+    def test_多个主题(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.build(tmp)
+            got = an.list_articles(tmp, 0, topics=['AI', '学术'])
+        self.assertEqual(len(got), 3)
+
+    def test_大小写不敏感(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.build(tmp)
+            self.assertEqual(len(an.list_articles(tmp, 0, topics=['ai'])), 2)
+
+    def test_读得懂_hasTopic_那种写法(self):
+        # Vault 里现存的 1633 篇用的是 `hasTopic: [[AI]]`，不是 `topic:`
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / '2026-09-05-甲.md').write_text(
+                '---\ntitle: 甲\nhasTopic: [[AI]]\npublished: 2026-09-05\n---\n\n正文\n',
+                encoding='utf-8')
+            got = an.list_articles(tmp, 0, topics=['AI'])
+        self.assertEqual(len(got), 1)
+
+    def test_不传主题就是全部(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.build(tmp)
+            self.assertEqual(len(an.list_articles(tmp, 0)), 4)
+
+    def test_筛选发生在截断之前(self):
+        """`--limit 1` 的语义是"最新的一篇 AI"，不是"最新一篇恰好是 AI 才要"。
+
+        顺序反了不会报错，只会静默少给——而且越往后翻越挑不满，看着像"库就这样"。
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            self.build(tmp)
+            got = an.list_articles(tmp, 1, topics=['AI'])
+        self.assertEqual([a['published'] for a in got], ['2026-09-05'],
+                         '最新的 AI 是 09-05；若先截断就会拿到 09-05 的…新闻')
+
+    def test_筛选后一篇都没有时返回空_不是全部(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.build(tmp)
+            self.assertEqual(an.list_articles(tmp, 0, topics=['不存在的主题']), [])
+
+
 class IncrementalTests(unittest.TestCase):
     """默认增量：不然每跑一次都把同样的文章重问一遍（三十篇=三十次白花的调用）。"""
 

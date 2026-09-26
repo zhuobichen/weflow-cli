@@ -93,8 +93,14 @@ def worth_concepts(body: str, min_chars: int = MIN_ARTICLE_CHARS) -> bool:
     return len(body.strip()) >= min_chars
 
 
-def list_articles(source_root: str, limit: int, since: str = '', until: str = '') -> list:
-    """按发布时间倒序取前 N 篇（文件名前缀就是日期，frontmatter 里也有 published）。"""
+def list_articles(source_root: str, limit: int, since: str = '', until: str = '',
+                  topics: list = None) -> list:
+    """按发布时间倒序取前 N 篇（文件名前缀就是日期，frontmatter 里也有 published）。
+
+    `topics` 给了就只留这些主题的。**过滤在截断之前**——`--limit 500` 的语义是
+    "500 篇 AI 文章"，不是"先取最新 500 篇、再从中挑出 AI"；后者会让 limit 与主题
+    互相拉扯（越往后翻越挑不满），而且不报错。
+    """
     root = Path(source_root)
     if not root.exists():
         return []
@@ -123,6 +129,9 @@ def list_articles(source_root: str, limit: int, since: str = '', until: str = ''
         found = [item for item in found if item['published'] >= since]
     if until:
         found = [item for item in found if item['published'] <= until]
+    if topics:
+        wanted = {t.strip().casefold() for t in topics if str(t).strip()}
+        found = [item for item in found if str(item['topic']).strip().casefold() in wanted]
     found.sort(key=lambda item: item['published'], reverse=True)
     return found[:limit] if limit else found
 
@@ -232,6 +241,8 @@ def main():
     parser.add_argument('--out', default=OUTPUT_ROOT, help='卡片输出目录')
     parser.add_argument('--since', default='', help='只看这个日期之后的（YYYY-MM-DD）')
     parser.add_argument('--until', default='', help='只看这个日期之前的（YYYY-MM-DD）')
+    parser.add_argument('--topic', action='append', default=[],
+                        help='只做这些主题（可重复或逗号分隔，如 --topic AI）；不传=全部')
     parser.add_argument('--limit', type=int, default=DEFAULT_LIMIT,
                         help='最多处理几篇（默认 %d，按发布时间倒序）' % DEFAULT_LIMIT)
     parser.add_argument('--dry-run', action='store_true', help='只报要发多少给模型，不调用')
@@ -260,7 +271,11 @@ def main():
                 print('找不到来源或没有摘要小节，跳过 %d 张' % len(result['missing']), file=sys.stderr)
         return 0
 
-    articles = list_articles(args.source, args.limit, since=args.since, until=args.until)
+    # 主题可以写成 `--topic AI --topic 学术`，也可以 `--topic AI,学术`——两种都收
+    topics = [part.strip() for value in args.topic
+              for part in str(value).split(',') if part.strip()]
+    articles = list_articles(args.source, args.limit, since=args.since, until=args.until,
+                             topics=topics)
     if not articles:
         message = '在 %s 下没找到 .md 笔记' % args.source
         print(json.dumps({'success': False, 'error': message}) if args.json else message,
@@ -278,7 +293,7 @@ def main():
     if args.dry_run:
         preview = {
             'success': True, 'dryRun': True, 'action': 'article-notes',
-            'source': args.source, 'articles': len(runnable),
+            'source': args.source, 'topics': topics, 'articles': len(runnable),
             'chars': sum(len(a['body']) for a in runnable),
             'skipped': len(thin), 'skippedTitles': [a['title'][:24] for a in thin][:10],
             'alreadyCarded': len(existing),

@@ -5512,6 +5512,8 @@ program
     .option('--limit <n>', '最多处理几篇（按发布时间倒序）', '30')
     .option('--since <date>', '只看这个日期之后的（YYYY-MM-DD）—— 比 --limit 精确，例："9 月的都跑一遍"')
     .option('--until <date>', '只看这个日期之前的（YYYY-MM-DD）')
+    .option('--topic <name>', '只做这些主题，可重复或用逗号分隔（如 --topic AI）；不传=全部',
+            (value, previous: string[] = []) => [...previous, value], [])
     .option('--dry-run', '仅预览：几篇、多少字会发给生成模型（只读本地，零出境）')
     .option('--refresh-summaries', '只按原笔记重算已有卡片的摘要（本地，不调用模型、不必 --yes）')
     .option('--yes', '确认把文章发给生成模型')
@@ -5523,12 +5525,19 @@ program
       const pkgRoot = resolvePackageRoot()
       const script = join(pkgRoot, 'scripts', 'article_notes.py')
       const limit = parseCliInteger(opts.limit, 'limit', 1, 5000, opts.json)
+      // 主题筛选：这一步是**纯花钱的**（一篇一次调用），而实测主题分布是新闻 57% /
+      // AI 28% / 学术 13%，所以"只做 AI"是省掉一半以上花费的那个开关。它必须出现在
+      // 确认框里——不然用户看到的是"要花 1.6 万次调用"，而不是"要花 4 千次"。
+      const topics = (opts.topic as string[])
+        .flatMap(value => String(value).split(','))
+        .map(value => value.trim())
+        .filter(Boolean)
       // 与 `chat-notes`/`draft` 同一条纪律：**"确认过了"只用一个变量**，参数在确认之后才拼
       let confirmed = !!opts.yes
       if (!opts.dryRun && !opts.refreshSummaries && !confirmed) {
         const preview = {
           success: false, dryRun: false, action: 'article-notes',
-          code: 'CONFIRMATION_REQUIRED', source: opts.source, limit,
+          code: 'CONFIRMATION_REQUIRED', source: opts.source, limit, topics,
           readsLocalData: true, invokesAI: true, writesLocalFiles: true, sendsNothing: true,
         }
         if (opts.json) {
@@ -5550,6 +5559,7 @@ program
       const args = [script, '--source', String(opts.source), '--limit', String(limit),
                     ...(opts.since ? ['--since', String(opts.since)] : []),
                     ...(opts.until ? ['--until', String(opts.until)] : []),
+                    ...(topics.length ? ['--topic', topics.join(',')] : []),
                     ...(opts.refreshSummaries ? ['--refresh-summaries'] : []),
                     ...(confirmed ? ['--yes'] : []),
                     ...(opts.json ? ['--json'] : []),
