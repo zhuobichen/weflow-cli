@@ -22,6 +22,62 @@ const BIZ_DAILY_DIR = join(PKG_ROOT, 'output', 'biz-daily')
 const MSG_BODY_CHARS = 160
 const VAULT_WIKI_DIR = join(PKG_ROOT, 'output', 'wechat-vault', 'Wiki', 'Concepts')
 
+/**
+ * 概念名 → 文件名。**与 `compile_wiki` 是同一套规则**（非法字符换下划线、截到 60 字）。
+ *
+ * 这里必须消毒：邻居名是从**文件内容**里读出来的，直接拼进路径就能走出目录
+ * （`../../` 那类）。文件名规则两边不一致也会让"查得到"变成"查不到"。
+ */
+export function safeConceptFile(name: string): string {
+  return `${name.replace(/[\\/:*?"<>|]/g, '_').slice(0, 60)}.md`
+}
+
+/** 概念页正文的第一句（跳过 frontmatter、标题、引用、列表）——给"这个邻居是什么"。 */
+export function conceptBrief(text: string): string {
+  const body = text.startsWith('---') ? text.slice(text.indexOf('---', 3) + 3) : text
+  for (const raw of body.split('\n')) {
+    const line = raw.trim()
+    if (!line || /^[#>\-|`\[]/.test(line)) continue
+    return line.length > 60 ? `${line.slice(0, 60)}…` : line
+  }
+  return '(这页没写定义)'
+}
+
+/**
+ * 一个概念页在 `## 相关概念` 里连到的邻居——**图谱在 Agent 侧的落地**。
+ *
+ * 为什么要有：Obsidian 的关系图谱是人眼视图，助手那条路一直读不到"图"。但概念页里
+ * 本来就写着它的邻居，把它们一并给出去，"查一个概念"就变成"拿到一小块子图"。
+ * 实测：全部概念页都短于这个工具返回的 2,000 字上限，所以那段一直在返回内容里
+ * ——但**没人点明它可以顺着走**，也没人把邻居的一句话定义取出来。
+ *
+ * 有页的邻居连定义一起给；没有页的只报个数（`missing`），免得模型去追一个取不到的名字。
+ */
+export function conceptNeighbors(pageName: string, wikiDir: string = VAULT_WIKI_DIR): { linked: Array<{ name: string; brief: string }>; missing: number } {
+  const pagePath = join(wikiDir, safeConceptFile(pageName))
+  if (!existsSync(pagePath)) return { linked: [], missing: 0 }
+  const text = readFileSync(pagePath, 'utf8')
+  const start = text.indexOf('## 相关概念')
+  if (start < 0) return { linked: [], missing: 0 }
+  const rest = text.slice(start + 1)
+  const end = rest.indexOf('\n## ')
+  const section = end > 0 ? rest.slice(0, end) : rest
+
+  const linked: Array<{ name: string; brief: string }> = []
+  let missing = 0
+  for (const match of section.matchAll(/\[\[([^\]|]+)\]\]/g)) {
+    const name = match[1].replace(/\.md$/, '').trim()
+    if (!name) continue
+    const target = join(wikiDir, safeConceptFile(name))
+    if (!existsSync(target)) {
+      missing += 1
+      continue
+    }
+    linked.push({ name, brief: conceptBrief(readFileSync(target, 'utf8')) })
+  }
+  return { linked, missing }
+}
+
 export interface ToolDef {
   type: 'function'
   function: {
@@ -593,6 +649,8 @@ export const TOOL_DEFS: ToolDef[] = [
     function: {
       name: 'search_knowledge',
       description: '搜索**本地知识库**（从公众号文章沉淀的 Wiki 概念页与学习日报），适合查概念解释、找之前整理过的知识。'
+        + '**返回时会一并给出这一页连到的相关概念（每个一句定义）**——可以顺着它们再用本工具逐跳查下去，'
+        + '这样一次追问能走开一小块知识，而不是停在一个孤立页面上。'
         + '（聊天里说过什么用 search_chats；助手记得的关于你的事用 search_memory）',
       parameters: {
         type: 'object',
@@ -1338,8 +1396,18 @@ export async function executeTool(name: string, args: Record<string, any>, ctx: 
           if (!contentHits.length) return `(知识库未收录「${kw}」, 共 ${files.length} 个概念页)`
           return `正文提及「${kw}」的概念页:\n` + contentHits.map(f => `· ${f.replace('.md', '')}`).join('\n')
         }
+        const name = hits[0].replace('.md', '')
         const page = readFileSync(join(VAULT_WIKI_DIR, hits[0]), 'utf8')
-        return `「${hits[0].replace('.md', '')}」概念页:\n${page.slice(0, 2000)}`
+        // **顺带把邻居给出去**（见 `conceptNeighbors`）：一次调用拿到"这个概念 + 连着它的一小块子图"。
+        // 不点明"可以再用本工具查其中任意一个"的话，模型会把它当装饰性文字读过去。
+        const { linked, missing } = conceptNeighbors(name)
+        const out = [`「${name}」概念页:`, page.slice(0, 2000)]
+        if (linked.length) {
+          out.push('', '—— 它连到的概念（可以再用本工具查其中任意一个）——')
+          for (const nb of linked) out.push(`· ${nb.name} — ${nb.brief}`)
+        }
+        if (missing) out.push(`（另有 ${missing} 个相关概念尚未建页，查不到）`)
+        return out.join('\n')
       }
       case 'get_stats': {
         await ensureDb()

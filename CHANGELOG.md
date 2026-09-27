@@ -8,6 +8,22 @@ All notable user-facing changes are recorded here. This project follows [Semanti
 
 ### Added
 
+- **`search_knowledge` now returns a concept's neighbours, so the assistant can walk the graph.** The Obsidian
+  graph view is a human artefact - nothing on the assistant's side ever read "the graph", and the tool returned a
+  single page in isolation. But a concept page already lists its neighbours under `## 相关概念`, and **measured,
+  every page is shorter than the tool's 2,000-character slice** (median 730), so that list was already inside the
+  returned text - it was simply never pointed at, and the neighbour definitions were never resolved. The tool now
+  appends each neighbour that has a page **with its one-line definition**, plus a count of the ones that do not
+  (so the model does not chase a name it cannot fetch), and says in its own description that it can be called again
+  for any neighbour. One lookup becomes "this concept plus a small subgraph of what it connects to": verified
+  against the real vault - `提示工程` returns 上下文学习 / 思维链 / 工具调用 / 智能体, `Claude Code` returns
+  Codex / Vibe Coding / 生物信息分析, each with a definition.
+
+  Two details are pinned by test. **Neighbour names are sanitised before being joined into a path** - they come out
+  of file *content*, so `../../etc/passwd` has to stay a filename (same rule as `compile_wiki`; a mutation check
+  removing the sanitiser fails the traversal test). And the "no page" case reports a count rather than a name,
+  because a name the model cannot fetch is worse than no name.
+
 - **`backfill_articles --vault-copy / --vault-sync`: the raw articles reach the Vault's `Sources/` without their
   images.** The daily pipeline copies a whole day into `Sources/WeChat/<date>/` with `copytree`, images included -
   ~200 MB per day, which is why the historical import deliberately skipped it (165 days would have been ~33 GB).
