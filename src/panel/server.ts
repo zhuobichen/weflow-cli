@@ -58,6 +58,14 @@ const STATIC_FILES: Record<string, string> = {
   '/panel/panel.css': 'panel.css',
   // 悬浮球上那张图（项目吉祥物）。走白名单而不是挂目录，理由同上。
   '/panel/mascot.png': 'mascot.png',
+  // 被捏一下时换的那张（同一只猫，眯眼笑）。**必须一起进白名单**——漏了它，
+  // 球在按下的一瞬间会闪成一张空图（`PANEL_ASSET_MISSING` 只写在响应里，页面上看不到）。
+  '/panel/mascot-happy.png': 'mascot-happy.png',
+  // 三个真状态的脸（忙/连不上/额度用完）。与上面那张一样，**必须一起进白名单**——
+  // 漏一张，那个状态一出现球就闪成空图，而响应里的 PANEL_ASSET_MISSING 页面上看不到。
+  '/panel/mascot-focus.png': 'mascot-focus.png',
+  '/panel/mascot-sorry.png': 'mascot-sorry.png',
+  '/panel/mascot-tired.png': 'mascot-tired.png',
 }
 const CONTENT_TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',

@@ -10,7 +10,7 @@
   --err: #e5645f;
   /* 球多大。CSS 拿不到 JS 的值，所以这里是**第二份**——与 `ball-position.cjs` 的
      `BALL_SIZE`（main.cjs 也从那里取）必须一致，`test/panel-packaging.test.ts` 断言这一点。 */
-  --ball-size: 76px;
+  --ball-size: 96px;
   /* 气泡多大、离球多远、圆角多少。同样是 `ball-position.cjs`（`BUBBLE_SIZE` / `BUBBLE_GAP`）
      的第二份拷贝：JS 那边用它算窗口矩形，CSS 这边用它排版，两边必须一致——有测试钉住。 */
   --bubble-width: 420px;
@@ -117,12 +117,23 @@ header {
      页面收不到 click，球就点不开了（实测的故障就是这个）。拖动自己实现，见 renderer.js。 */
 
   /* 球本身**没有底色**：下面那层 `.glow` 才是"背景"，上面 `.face` 是吉祥物。
-     图上按内容包围盒裁过（源图 1024² 里内容只占 600x689），自带 12% 余量，铺满即可。 */
+     **换 `mascot.png` 时：内容必须全部落在内切圆里。** 球（连 `.face` 自己）都是
+     `border-radius: 50%`，图会被裁成圆的——而这张图的内容一向是**铺满画布**的
+     （2026-09-27 那版源图 1254²，内容占 98%），直接铺上去，角上的东西就没了：
+     实测绿气泡整块（10,368 个实心像素）落在圆外。所以出图时按
+     「实心像素到内容中心的最远距离 ≤ 0.98 × 半径」缩放，再居中贴到 256²：
+     现图 1226x1247 → 214x218，圆外实心像素 0，占画布 84%x85%。
+     **余量留 2%（不是 0）是有用的**：悬停时球放大到 1.02，那 2% 正好兜住，
+     实测 1.02 倍时圆外只剩 1 个像素；压到 0.98 以下就没地方放这个放大了。
+     （上一版源图 1024²、内容 600x689 时靠"裁到包围盒 + 12% 余量"就够，
+     那是因为它的内容本来只占 59%x67%——**余量是结果，不是规则**。） */
   background-color: transparent;
 
   /* 投影跟着猫的轮廓走（不是跟着那个不存在的圆），透明主体靠它跟浅色壁纸分开 */
   filter: drop-shadow(0 6px 12px rgba(0, 0, 0, .50));
-  transition: transform .12s ease, filter .12s ease;
+  /* 回弹曲线（不是 ease）：松手时从压扁弹回原状会**轻微过冲**一下，那就是"弹"的感觉。
+     窗口就是球这么大，过冲出来的那点边缘靠出图时留的 2% 余量兜住。 */
+  transition: transform .16s cubic-bezier(.34, 1.56, .64, 1), filter .16s ease;
 }
 
 body.shell #ball { display: grid; }
@@ -159,6 +170,24 @@ body.quota #ball .glow {
   background-size: 100%;
   background-position: center;
   background-repeat: no-repeat;
+}
+
+/* 三个**真状态**各有一张脸：忙的时候专注、连不上时委屈、额度用完时累。
+   接的全是现成的状态类（`setBallState` 早就挂 busy/offline/quota 了），**不新增状态机**；
+   光晕照旧画——它是"余光能看见"的环境灯，表情是盯着看才见的细节，两者说的是同一件事，
+   一个给余光一个给注视，不重复。
+   **这三条必须写在下面 `ball-happy` 之前**：CSS 同特异性时后写的赢，而"用户正捏着它"
+   比"助手在忙"更该被看见（你捏它的时候它就该笑）。 */
+body.busy #ball .face { background-image: url('/panel/mascot-focus.png'); }
+body.offline #ball .face { background-image: url('/panel/mascot-sorry.png'); }
+body.quota #ball .face { background-image: url('/panel/mascot-tired.png'); }
+
+/* 被捏一下时的脸：眯眼笑。**硬切，不做淡入** —— 换表情本来就是一帧的事，淡入反而像
+   "图片正在加载"。两张图是用**同一套裁剪与缩放参数**从同一张源图生成的（实测差异只有
+   3.5% 的像素，全部落在眼睛那一条上），所以切的时候脸不会跳、尺寸也不变。
+   改 `background-image` 只此一处，`.face` 的基础规则仍在上面那条里。 */
+body.ball-happy #ball .face {
+  background-image: url('/panel/mascot-happy.png');
 }
 
 /* 色相流动 —— 现在只在**忙碌**时跑（空闲时那一层根本不画）。
@@ -212,16 +241,23 @@ body.quota #ball .glow { animation: none; opacity: .85; }
   body.mode-chat #bubble { animation: none; }
   body.mode-chat.closing #bubble { animation: none; opacity: 0; }
   #ball { transition: none; }
+  /* 形变也要停。只关 transition 的话，悬停/按下会**瞬间**跳到放大/压扁的形状，
+     那看起来更像故障而不是"少动一点"。 */
+  #ball:hover, #ball:active { transform: none; }
 }
 
-#ball:hover { filter: drop-shadow(0 8px 16px rgba(0, 0, 0, .58)) brightness(1.08); }
-#ball:active { transform: scale(.95); }
+/* 悬停：微微放大 + 阴影加深 + 提亮 —— 三样一起才够"这里能点"。
+   **放大只敢到 1.02**：出图按"实心像素最远点 ≤ 0.98 × 半径"缩放（见 `.face` 那段），
+   1.02 倍时圆外只剩 1 个像素（实测），再大就开始削掉猫的外缘。 */
+#ball:hover { transform: scale(1.02); filter: drop-shadow(0 8px 16px rgba(0, 0, 0, .58)) brightness(1.08); }
+/* 按下：压扁。**只往小里做** —— 放大或位移会把内容顶出窗口、被窗口边裁掉。 */
+#ball:active { transform: scale(.92); }
 
-/* 球形态：把气泡整个藏掉，窗口缩回 76x76（主进程那边做）。
+/* 球形态：把气泡整个藏掉，窗口缩回球那么大（96x96，主进程那边做）。
    底色早就不是 body 的了（见上面 `body.shell` 那两条）——气泡自己画，窗口是透明的。 */
 body.mode-ball #bubble { display: none; }
 /* 球形态下不许出现滚动条：busy 的呼吸动画会 scale(1.08)，
-   溢出的那点内容会在 76x76 的窗口里长出滚动条（实测：右侧冒出上下箭头）。 */
+   溢出的那点内容会在球那 96x96 的窗口里长出滚动条（实测：右侧冒出上下箭头）。 */
 body.mode-ball { overflow: hidden; }
 
 /* 对话形态（有外壳时）才显示"收起" */
@@ -253,7 +289,7 @@ body.mode-chat.bubble-right.anchor-top #bubble { transform-origin: left 38px; }
 
 /* 收起：先把气泡淡掉（**窗口这会儿还是大的**，所以这 130ms 真看得见），主进程等这段时间
    过去再缩窗口，缩完才通知页面把气泡摘掉（`display: none`）。顺序不能反：提前摘掉就成了
-   "啪"地消失，晚摘掉就会在 76x76 的窗口里露出一条气泡的边。
+   "啪"地消失，晚摘掉就会在球那 96x96 的窗口里露出一条气泡的边。
    **这里用 animation 而不是 transition**：上面那条 `bubble-in` 带着 `both` 填充，而动画在
    层叠里**压过**过渡——写 `opacity: 0` 会被它一直覆盖着，收起时看着就像没反应。
    两条都是动画时，靠"更靠后的选择器 + 更高的特指度"（多一个 `.closing`）取胜。 */

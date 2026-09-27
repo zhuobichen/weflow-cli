@@ -235,6 +235,73 @@ All notable user-facing changes are recorded here. This project follows [Semanti
 
 ### Changed
 
+- **The three real states each have a face now.** The panel has always tracked `busy` / `offline` / `quota`
+  (that is what the coloured halo reads), so this adds three faces to classes that already existed - **no new
+  state machine**. Busy is a calm half-closed eye with a small mouth (focused), offline is a closed sad eye
+  with a squiggly mouth (apologetic), quota-out is a heavy-lidded eye with an oval sigh (tired). The halo stays:
+  it is the ambient light you catch peripherally, the face is the detail you only see by looking, and they say
+  the same thing at two distances rather than repeating each other.
+
+  **The order of two CSS rules is a contract here.** `ball-happy` must come *after* the three state rules,
+  because with equal specificity the later rule wins - otherwise poking the ball while the assistant happens to
+  be busy shows the focused face and the poke does nothing visible. That is asserted, not commented.
+
+  All three are generated through the same `/images/edits` + mask pipeline as the grin, with the mask widened to
+  a third hole over the mouth (a resigned face cannot keep grinning). Each was checked for the thing that
+  actually breaks a circular ball: **0 solid pixels outside the inscribed circle**. The busy face took two tries
+  - the first came back with angled slits that read as *suspicious* rather than *concentrated*.
+
+- **Poking the ball makes it grin.** Press it and it switches to a second face - the same cat with its eyes
+  closed in a happy arc - and it goes back to the normal face the instant you let go. The first version held
+  the grin for 900ms after release, on the theory that a click lasts a few tens of milliseconds and an
+  expression that short is one nobody sees; **the user tried it and said the delay felt stuck**, so there is
+  no hold at all now, and a test asserts the constant is gone rather than weakened. `pointercancel` also
+  reverts, so a pointer stolen by the system cannot leave the ball grinning forever.
+
+  The second face is a **generated** image, and both halves of that needed measuring. It was produced with the
+  same endpoint's `/images/edits` (image-in, not text-in - `/images/generations` would have drawn a *similar
+  cat* rather than *this* cat) with a mask whose transparent area was the two eyes and the eyelids. **The model
+  still repainted the whole canvas**: mean colour distance inside the hole 197.8, outside 10.9 - so the shipped
+  file takes the generated pixels **only inside the hole**, feathered at the edge, and keeps the original
+  everywhere else, which is also why switching faces cannot shift the colours of the face. It came back **RGB,
+  with the transparent background filled black** (the second time this endpoint has done that), so the alpha
+  channel is taken from the source art.
+
+  Both faces are cut and scaled from the same source with the same parameters, so they are pixel-aligned: the
+  two 256px assets differ by 3.5% of their pixels, all of them in the eye strip. Switching is a hard cut, not a
+  fade - an expression change is one frame long, and a fade reads as an image loading.
+
+  One gap this closed rather than stepped around: `resources/panel`'s file list was hand-written and nothing
+  checked it, so **a new asset could be added without a single test going red** (measured: deleting
+  `mascot-happy.png` from the list kept the whole file green). The list is now a constant, and a test
+  reconciles it against the actual directory in both directions.
+
+- **The ball is a quarter bigger and answers the mouse.** `BALL_SIZE` 76 -> 96 (the window grows with it;
+  the expanded window is now 528 wide instead of 508), and the artwork is re-derived with a 2% margin instead
+  of 4%, so the cat itself is ~28% larger than before.
+
+  The interactions existed but were too quiet to notice: hover only changed the shadow and brightness, and
+  pressing gave `scale(.95)` with an `ease` transition - a 5% squeeze that snaps back rather than bounces.
+  Now hover scales to 1.02, press squashes to 0.92, and the transition is `cubic-bezier(.34, 1.56, .64, 1)` so
+  releasing overshoots back. **The enlarged-on-hover factor is 1.02 and cannot be raised on its own**: it is
+  paired with the margin the asset is generated with (measured: at 1.02x, one solid pixel falls outside the
+  circle; at 1.03x, ten - the window clips the ball to a circle and would shave its edge). A test pins both
+  halves. Idle stays perfectly still, so "not moving" still means idle and the halo keeps being the only
+  status light - and `prefers-reduced-motion` now stops the **deformation** too, not just the keyframes:
+  disabling the transition alone made hover/press jump instantly to another shape, which reads as a glitch.
+
+- **The ball wears the mascot's illustrated version; the pixel version is gone.** Same character, drawn
+  rather than pixel-art. The new source is 1254x1254 with its content filling 98% of the canvas, which is the
+  part that needed care: the ball clips its image to a **circle** (`border-radius: 50%` on both `#ball` and the
+  face layer), so pasting it in as-is put the **green speech bubble entirely outside the circle** (10,368 solid
+  pixels) along with the paws. The shipped asset is therefore cropped to the alpha bounding box and scaled so
+  that the furthest solid pixel sits within 96% of the radius - 1226x1247 becomes 210x213 centred on a 256
+  canvas - which measures **0 solid pixels outside the circle**, at 41KB (the source is 813KB). For scale: the
+  previous asset filled 80% x 91% of its canvas, the new one 82% x 83%, so the character does not shrink.
+  `serveStatic` reads the file per request with `Cache-Control: no-store`, so a running panel only needs a
+  **page reload** - no restart. The tray icon (`tray.png`) is a separate image and still shows the old
+  pixel-art mascot on its disc.
+
 - **The two knowledge bases now live in one Vault, in two directories.** The chat line had grown to 1,519
   concept pages inside `Wiki/Concepts` alongside the article line's 2,115 - one graph, correctly, but the user
   asked for the two to be kept apart. `Chat/` now holds the chat side (`Chat/Concepts/`, `Chat/00-Overview.md`),

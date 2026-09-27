@@ -87,7 +87,7 @@ function workAreaAt(x, y) {
 }
 
 /** 把一个矩形挪进它所在那块屏的可见区域（不缩尺寸，只挪）。
- * 收回球形态时要用：气泡拖到屏幕角落，直接从那儿缩回 76x76 会有一半在屏幕外。 */
+ * 收回球形态时要用：气泡拖到屏幕角落，直接从那儿缩回球那么大（96x96）会有一半在屏幕外。 */
 function fitIntoWorkArea(x, y, width, height) {
   return clampInto(x, y, width, workAreaAt(x, y))
 }
@@ -194,7 +194,7 @@ async function buildWindow() {
   // **监听要在 `loadURL` 之前挂**：`ready-to-show` 在加载过程中就可能触发（透明窗口上确实会），
   // 而它**不会重放**——挂晚了窗口就永远不显示。第一版是 `await loadURL` 之后才挂的，
   // 于是"有时候看得到球、有时候看不到"，而窗口的尺寸与样式全都正常（实测 `vis=False`、
-  // 76x76、无边框、置顶），光看几何完全看不出来。
+  // 几何无一处可疑：无边框、置顶，尺寸就是**当时**那个 `BALL_SIZE`），光看几何看不出来。
   win.once('ready-to-show', () => { if (!win.isVisible()) win.show() })
 
   const endpoint = readEndpoint()
@@ -256,7 +256,7 @@ async function buildWindow() {
  *
  * **形态与方位由这里说了算**：页面只请求，照着 `panel:mode` 做。收起分两步
  * （`fade` → 页面开始淡出；`done` → 页面换成球形态），因为窗口要等淡完才能缩，而页面
- * 要等窗口缩完才能把气泡摘掉——晚一帧就会在 76x76 的窗口里看见一条气泡的边。
+ * 要等窗口缩完才能把气泡摘掉——晚一帧就会在球那 96x96 的窗口里看见一条气泡的边。
  */
 function setMode(mode, opts) {
   if (!win) return
@@ -365,7 +365,7 @@ if (!app.requestSingleInstanceLock()) {
   app.whenReady().then(async () => {
     ipcMain.handle('panel:setMode', (_event, mode, opts) => setMode(mode, opts))
 
-    // 右键"快速回复"。**用原生菜单**：它画在窗口外面，所以球那 76x76 的窗口不用先展开
+    // 右键"快速回复"。**用原生菜单**：它画在窗口外面，所以球那个小窗口不用先展开
     // （页内菜单做不到这一点——它会被窗口裁掉）。选中回一个名字，关掉没选回 null。
     ipcMain.handle('panel:quickMenu', (_event, labels) => new Promise((resolve) => {
       if (!win || win.isDestroyed()) { resolve(null); return }

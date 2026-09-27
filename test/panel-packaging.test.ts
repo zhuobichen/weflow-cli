@@ -12,11 +12,21 @@
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 
 const ROOT = process.cwd()
 const PANEL = join(ROOT, 'resources', 'panel')
+
+/**
+ * 面板要用的文件。**手写清单，所以必须与目录对账**——上一版只遍历这张单子，于是
+ * "新增了一张图、忘了登记"不会有任何东西红（变异检查实测：从单子里删掉
+ * `mascot-happy.png`，整个测试文件照样全绿）。下面那条对账测试补上这个缺口。
+ */
+const PANEL_FILES = ['index.html', 'renderer.js', 'panel.css', 'main.cjs', 'preload.cjs',
+  'ball-position.cjs', 'tray-menu.cjs', 'quick-menu.cjs',
+  'mascot.png', 'mascot-happy.png', 'mascot-focus.png', 'mascot-sorry.png',
+  'mascot-tired.png', 'tray.png', 'package.json']
 
 function read(name: string): string {
   return readFileSync(join(PANEL, name), 'utf8')
@@ -43,11 +53,19 @@ test('面板要用的文件都在（少一个用户装上就缺）', () => {
   // 那点尺寸里没有投影可依赖，得靠底色把轮廓撑出来。
   // 两个 `.cjs` 是纯模块（`ball-position` 位置算术、`tray-menu` 托盘菜单）：`main.cjs` 会
   // `require` 它们，所以**少一个面板根本起不来**——这条正是为这种漏检存在的。
-  for (const name of ['index.html', 'renderer.js', 'panel.css', 'main.cjs', 'preload.cjs',
-                      'ball-position.cjs', 'tray-menu.cjs', 'quick-menu.cjs',
-                      'mascot.png', 'tray.png', 'package.json']) {
+  for (const name of PANEL_FILES) {
     assert.ok(existsSync(join(PANEL, name)), `缺文件: resources/panel/${name}`)
   }
+})
+
+test('resources/panel 目录与清单对账 —— 新增文件忘了登记要红', () => {
+  // 这张单子是手写的，所以它自己也得有人看着：目录里冒出一个没登记的文件，
+  // 意味着"用户装上会不会缺东西"这个问题没人回答。
+  const onDisk = readdirSync(PANEL).filter((f) => !f.startsWith('.'))
+  const unlisted = onDisk.filter((f) => !PANEL_FILES.includes(f))
+  assert.deepEqual(unlisted, [], `目录里有、清单里没有：${unlisted.join(', ')}（加进 PANEL_FILES）`)
+  const ghost = PANEL_FILES.filter((f) => !onDisk.includes(f))
+  assert.deepEqual(ghost, [], `清单里有、目录里没有：${ghost.join(', ')}`)
 })
 
 test('resources/ 在 npm 包的 files 白名单里（否则发布包里不会有面板）', () => {
@@ -219,6 +237,71 @@ test('位置算术只有一份实现（在 ball-position.cjs 里），main.cjs �
   assert.doesNotMatch(main, /Math\.max\(area\.x/, '夹取的算术不该在这儿重复')
 })
 
+test('被捏一下换的那张脸：文件、白名单、CSS，以及**两张必须同尺寸**', () => {
+  // 用户要的是"一捏它就露出舒服的表情"。表情画在图里，所以这是第二张 PNG——
+  // 而**新增一张图不会有任何东西变红**（资源清单是手写列表，不是目录扫描），
+  // 所以下面每一条都得自己钉住。
+  assert.ok(existsSync(join(PANEL, 'mascot-happy.png')), '缺 mascot-happy.png')
+  const server = readFileSync(join(ROOT, 'src', 'panel', 'server.ts'), 'utf8')
+  assert.match(server, /'\/panel\/mascot-happy\.png': 'mascot-happy\.png'/,
+    '白名单里要有它——漏了就只在按下的一瞬间闪成空图，而 PANEL_ASSET_MISSING 只写在响应体里，页面上看不见')
+  const sheet = code('panel.css')
+  assert.match(sheet, /body\.ball-happy #ball \.face \{\s*background-image: url\('\/panel\/mascot-happy\.png'\)/,
+    '按下时要换成眯眼笑那张')
+  // 换的是 background-image：两张尺寸不同、或对齐不同，脸就会在切换时跳一下
+  const size = (name: string) => {
+    const buf = readFileSync(join(PANEL, name))
+    return [buf.readUInt32BE(16), buf.readUInt32BE(20)]
+  }
+  assert.deepEqual(size('mascot-happy.png'), size('mascot.png'), '两张球面图必须同尺寸')
+})
+
+test('三个真状态各有一张脸，而且"被捏"压得住它们', () => {
+  // 面板本来就用 busy / offline / quota 三个类表示助手状态（光晕在用），这里只是各给一张脸，
+  // **不新增状态机**。每加一张都要：CSS 指向它 + 静态白名单带着它（漏了那个状态一出现就闪空图）。
+  //
+  // **不写正则**：这个文件里的路径全是 `/panel/xxx.png`，正则里每层转义都在下一次编辑时会丢
+  // （实测：`\(` 传到 JS 里变成 `(`，正则的括号没转义，于是"永不匹配"而不是报错）。
+  // 改成定位到规则体再看里面有没有那个串——和上面几条同一个手法。
+  const sheet = code('panel.css')
+  const server = readFileSync(join(ROOT, 'src', 'panel', 'server.ts'), 'utf8')
+  const ruleBody = (selector: string): string => {
+    const at = sheet.indexOf(selector + ' {')
+    assert.ok(at !== -1, `panel.css 里要有 ${selector}`)
+    return sheet.slice(at, sheet.indexOf('}', at))
+  }
+  const FOR_STATE = [
+    ['busy', 'mascot-focus.png'],
+    ['offline', 'mascot-sorry.png'],
+    ['quota', 'mascot-tired.png'],
+  ] as const
+  for (const [state, file] of FOR_STATE) {
+    assert.ok(ruleBody(`body.${state} #ball .face`).includes(`/panel/${file}`), `${state} 要有自己的脸`)
+    assert.ok(server.includes(`'/panel/${file}': '${file}'`), `${file} 要在静态白名单里`)
+  }
+  // **顺序也是契约**：CSS 同特异性时后写的赢。`ball-happy` 必须排在三个状态**之后**——
+  // 否则你捏球的时候要是助手正好在忙，看到的是"忙"那张脸，等于捏了个寂寞。
+  const happyAt = sheet.indexOf('body.ball-happy #ball .face')
+  assert.ok(happyAt > 0, '要有 ball-happy 那条')
+  for (const [state] of FOR_STATE) {
+    assert.ok(sheet.indexOf(`body.${state} #ball .face`) < happyAt,
+      `${state} 的脸要写在 ball-happy 之前，否则捏球时被它盖掉`)
+  }
+})
+
+test('捏一下的表情走一个入口，按下变脸、松手就收', () => {
+  const renderer = code('renderer.js')
+  assert.match(renderer, /^\s*function setBallFace\(/m, '要有集中入口（散着写迟早有一条分支忘了收，球会一直笑）')
+  assert.match(renderer, /^\s+setBallFace\(true\)$/m, '按下时立刻变脸')
+  // **松手立刻恢复**（用户试过第一版的 900ms 延迟，说像卡住了）。所以这里断言两件：
+  // 松手那条路调的是 `setBallFace(false)`，而且**根本没有保留期这个概念**。
+  assert.match(renderer, /^\s+setBallFace\(false\)$/m, '松手就恢复')
+  assert.doesNotMatch(renderer, /HAPPY_HOLD_MS/, '不留延迟：松手后表情还挂着会像卡住')
+  assert.match(renderer, /pointercancel/, '指针被系统抢走时不走 pointerup，得自己把脸收回来')
+  const direct = renderer.match(/classList\.(?:add|remove|toggle)\([^)]*'ball-happy'/g) ?? []
+  assert.equal(direct.length, 1, `ball-happy 只该在 setBallFace 里被增删，实际 ${direct.length} 处`)
+})
+
 test('球面用吉祥物图，托盘用合成好的带盘图标', () => {
   // 两处各存一张图标，改了球忘了托盘是迟早的事——这张图是用户自己的吉祥物，本来就该一致。
   const css = code('panel.css')
@@ -335,6 +418,35 @@ test('"减少动态效果"要照办 —— 常驻小球不能对着系统设置�
   assert.match(css, /@media \(prefers-reduced-motion: reduce\)/)
   const block = css.slice(css.indexOf('@media (prefers-reduced-motion: reduce)'))
   assert.match(block.slice(0, 240), /animation:\s*none/, '那一段里要真的停掉动画')
+})
+
+test('球的交互反馈：悬停放大、按下压扁、松手回弹 —— reduced-motion 下全部停掉', () => {
+  // 用户要的是"点一下有反应"。按下压扁本来就有，但只有 5%（`scale(.95)`）且过渡是 ease，
+  // 松手是"嗖"地回去，不是弹回去；悬停则只改阴影和亮度，球本身不动。这次三样都做强。
+  //
+  // **取规则体，不在整个样式表里搜串。** 这个仓库在同一个位置吃过亏：`body.quota #ball .glow`
+  // 那条断言搜的是全表，而另有一条规则里也写着同样的串，于是"把 quota 从渐变选择器里删掉"
+  // 依然能过。所以这里按选择器定位到规则，再断言规则体。
+  const sheet = code('panel.css')
+  const rule = (selector: string): string => {
+    const at = sheet.indexOf('\n' + selector + ' {')
+    assert.ok(at !== -1, `panel.css 里要有一条顶格的 ${selector} 规则`)
+    const end = sheet.indexOf('}', at)
+    assert.ok(end !== -1, `${selector} 那条没有收尾`)
+    return sheet.slice(at, end)
+  }
+  // 放大**只能是 1.02**：这个数字和 `mascot.png` 出图时留的 2% 余量是配对的两半——
+  // 实测 1.02 倍时圆外只剩 1 个像素，1.03 倍就有 10 个。谁单独改一边，球悬停时就会被
+  // 窗口边削掉一圈（而且不报错）。
+  assert.match(rule('#ball:hover'), /transform:\s*scale\(1\.02\)/, '悬停要真的放大，不只是变亮')
+  assert.match(rule('#ball:active'), /transform:\s*scale\(\.92\)/, '按下要压扁得看得出来')
+  assert.match(rule('#ball'), /transition:[^;]*cubic-bezier/, '过渡要带回弹曲线，否则松手是"回去"不是"弹回去"')
+  // reduced-motion 要停的是**形变**，不只是关键帧动画：只关 transition 的话，悬停/按下会
+  // 瞬间跳到另一个形状，那看起来更像故障。
+  const reduce = sheet.slice(sheet.indexOf('@media (prefers-reduced-motion: reduce)'))
+  const block = reduce.slice(0, reduce.indexOf('\n' + '}'))
+  assert.match(block, /#ball:hover,\s#ball:active\s{ *transform:\s*none/,
+    'reduced-motion 下悬停/按下的形变也要停')
 })
 
 test('状态类只在一处改 —— 散着写迟早有一条分支忘了摘掉 busy', () => {

@@ -25,9 +25,11 @@ const LEFT = { x: -1920, y: 0, width: 1920, height: 1040 }
 
 test('默认位置是主屏工作区的右下角，且留了边距', () => {
   const p = defaultBallPosition(PRIMARY, BALL_SIZE, EDGE_MARGIN)
-  assert.deepEqual(p, { x: 1707 - 76 - 24, y: 912 - 76 - 24 })
-  // 真机实测就是 1607,812
-  assert.deepEqual(p, { x: 1607, y: 812 })
+  assert.deepEqual(p, { x: 1707 - 96 - 24, y: 912 - 96 - 24 })
+  // 这两个数是**按同一道算式手算**的（工作区 1707x912 − 球 96 − 边距 24）。
+  // 76px 那版在真机上实测过 1607,812；换成 96 之后真机复验没做（球现在停在哪由
+  // `panel_position.json` 决定，不是我算出来的默认角落）。
+  assert.deepEqual(p, { x: 1587, y: 792 })
 })
 
 test('工作区原点不是 0,0 时（副屏当主屏、或 Windows 把任务栏放左边）也对', () => {
@@ -53,7 +55,7 @@ test('要放的比工作区还大时，夹到左上角而不是算出负数', ()
 })
 
 test('可达性：中心在某块屏里就算可达，出界就不算', () => {
-  assert.equal(isReachable({ x: 1607, y: 812 }, [PRIMARY], 76), true, '默认角落')
+  assert.equal(isReachable({ x: 1587, y: 792 }, [PRIMARY], 76), true, '默认角落')
   assert.equal(isReachable({ x: 1631, y: 836 }, [PRIMARY], 76), true, '真机夹取后的位置（贴到右下边界）')
   // 注意 1700,900 与 1631,836 只差几十像素，但它的**中心**已经在工作区外了
   // （1700+38=1738 > 1707）——所以不算可达。（第一版我把这条写成了 true，是断言错，不是代码错。）
@@ -70,7 +72,7 @@ test('多显示器：球在左副屏上算可达', () => {
 test('副屏被拔掉：记住的负坐标位置回退到主屏右下角', () => {
   const saved = { x: -1000, y: 300 }        // 昨天还在左副屏上
   const onlyPrimary = resolveStartPosition(saved, [PRIMARY], PRIMARY, BALL_SIZE, EDGE_MARGIN)
-  assert.deepEqual(onlyPrimary, { x: 1607, y: 812 }, '回退，而不是把球丢在看不见的坐标上')
+  assert.deepEqual(onlyPrimary, { x: 1587, y: 792 }, '回退，而不是把球丢在看不见的坐标上')
   const withLeft = resolveStartPosition(saved, [PRIMARY, LEFT], PRIMARY, BALL_SIZE, EDGE_MARGIN)
   assert.deepEqual(withLeft, saved, '副屏还在就照用')
 })
@@ -78,19 +80,19 @@ test('副屏被拔掉：记住的负坐标位置回退到主屏右下角', () =>
 test('记住的位置是垃圾（缺字段/不是整数/没有）时一律回默认角落', () => {
   for (const bad of [null, undefined, {}, { x: 1 }, { x: 1.5, y: 2 }, { x: '3', y: '4' }]) {
     assert.deepEqual(resolveStartPosition(bad as any, [PRIMARY], PRIMARY, BALL_SIZE, EDGE_MARGIN),
-      { x: 1607, y: 812 }, `输入 ${JSON.stringify(bad)}`)
+      { x: 1587, y: 792 }, `输入 ${JSON.stringify(bad)}`)
   }
 })
 
 test('真机验过的那几条，用真机坐标钉住', () => {
   // 默认右下角
-  assert.deepEqual(resolveStartPosition(null, [PRIMARY], PRIMARY, BALL_SIZE, EDGE_MARGIN), { x: 1607, y: 812 })
+  assert.deepEqual(resolveStartPosition(null, [PRIMARY], PRIMARY, BALL_SIZE, EDGE_MARGIN), { x: 1587, y: 792 })
   // 拖到 400,300 之后重启还在 400,300
   assert.deepEqual(resolveStartPosition({ x: 400, y: 300 }, [PRIMARY], PRIMARY, BALL_SIZE, EDGE_MARGIN), { x: 400, y: 300 })
   // 写一个不可达的 9000,9000 → 回退
-  assert.deepEqual(resolveStartPosition({ x: 9000, y: 9000 }, [PRIMARY], PRIMARY, BALL_SIZE, EDGE_MARGIN), { x: 1607, y: 812 })
+  assert.deepEqual(resolveStartPosition({ x: 9000, y: 9000 }, [PRIMARY], PRIMARY, BALL_SIZE, EDGE_MARGIN), { x: 1587, y: 792 })
   // 对话窗拖到 1650,870 再收起 → 球夹到 1631,836
-  assert.deepEqual(clampInto(1650, 870, BALL_SIZE, PRIMARY), { x: 1631, y: 836 })
+  assert.deepEqual(clampInto(1650, 870, BALL_SIZE, PRIMARY), { x: 1611, y: 816 })
 })
 
 // ------------------------------------------------- 展开：球 + 空隙 + 气泡 的合成布局
@@ -118,10 +120,10 @@ test('气泡默认开在球的左边、底对齐，窗口 = 气泡 + 空隙 + �
     width: BUBBLE_SIZE.width + BUBBLE_GAP + BALL_SIZE,
     height: BUBBLE_SIZE.height,
   })
-  assert.equal(layout.window.width, 508)
+  assert.equal(layout.window.width, 528, "窗口宽 = 气泡 420 + 空隙 12 + 球 96")
   assert.equal(layout.window.height, 560)
-  assert.equal(layout.window.x, 1175, '真机上的落点')
-  assert.equal(layout.window.y, 328)
+  assert.equal(layout.window.x, 1175, '球在 1607 时的落点（1607 − 空隙 12 − 气泡 420）')
+  assert.equal(layout.window.y, 348, "812 + 球 96 − 气泡 560")
 })
 
 test('**球全程不动**：窗口的锚角与球的对应角重合（四种组合都要成立）', () => {
@@ -147,7 +149,7 @@ test('球贴屏幕左缘：气泡翻到右边', () => {
   const layout = bubbleLayout(ball, BUBBLE_SIZE, PRIMARY)
   assert.equal(layout.side, 'right')
   assert.equal(layout.window.x, 0, '球在窗口左边')
-  assert.equal(layout.window.width, 508)
+  assert.equal(layout.window.width, 528, "窗口宽 = 气泡 420 + 空隙 12 + 球 96")
   assert.ok(anchored(layout, ball).horizontal, '翻边之后球仍然钉在窗口边上')
 })
 
@@ -160,7 +162,8 @@ test('球贴屏幕顶边：气泡改成顶对齐（否则会顶到屏幕外）',
 })
 
 test('窄屏（两边都放不下）：挑空间大的一侧，并夹进工作区', () => {
-  // 工作区只有 600 宽，508 的窗口放不下——退化情况，球会被挪动，这里只钉住"不越界"
+  // 工作区只有 600 宽，窗口宽 528：球贴着右边时右边放不下——退化情况，球会被挪动，
+  // 这里只钉住"不越界"
   const NARROW = { x: 0, y: 0, width: 600, height: 912 }
   for (const x of [0, 200, 520]) {
     const layout = bubbleLayout(ballAt(x, 400), BUBBLE_SIZE, NARROW)
@@ -205,7 +208,7 @@ test('球在屏幕竖向中间：气泡改矮/改对齐，**球还是不动**（
   assert.equal(layout.side, 'left')
   assert.equal(layout.anchorY, 'top')
   assert.equal(layout.bubbleHeight, 560, '顶对齐能放下整块 560')
-  assert.deepEqual(layout.window, { x: 535, y: 302, width: 508, height: 560 })
+  assert.deepEqual(layout.window, { x: 535, y: 302, width: 528, height: 560 })
   assert.ok(anchored(layout, ball).horizontal && anchored(layout, ball).vertical, '球仍然在窗口的角上')
 })
 

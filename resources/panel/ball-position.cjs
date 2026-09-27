@@ -13,7 +13,7 @@
  */
 'use strict'
 
-const BALL_SIZE = 76
+const BALL_SIZE = 96
 /** 球离屏幕边缘留多少：贴死边缘在 Windows 上会跟任务栏/贴边功能打架 */
 const EDGE_MARGIN = 24
 /** 对话气泡多大（展开后那块圆角面板）。`panel.css` 里有一份 `--bubble-width`，有测试钉住两者相等。 */
@@ -68,7 +68,7 @@ function resolveStartPosition(savedPos, workAreas, primaryWorkArea, ballSize = B
  * 用户要的是"图标别撤起来，气泡在旁边长出来，像这个图标在说话"。这决定了三件事：
  *
  * 1. 展开后的窗口比气泡大一圈——多出来的就是球占的那条（外加空隙），窗口宽
- *    = 420 + 12 + 76 = 508；
+ *    = 420 + 12 + 96 = 528；
  * 2. **球必须正好坐在窗口的某个角上**。这是硬要求，不是审美：窗口是一整块，页面把球
  *    钉在角上（`position: fixed; right/bottom`），于是**窗口怎么改大小，球在屏幕上的位置
  *    都不变**——因为那个角没动。反过来，球要是不在角上（改成按坐标钉），窗口任意时刻改

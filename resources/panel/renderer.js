@@ -335,9 +335,21 @@ if (hasShell) {
   // 所以拖拽自己实现：按下时告诉主进程记住窗口与指针位置，移动时按差值挪窗口；
   // 松手时如果**指针几乎没动**，那就是一次点击。
   // 阈值 4 像素：手抖不会把点击变成拖动，而想拖的人自然会移过 4 像素。
+  /** 被捏一下的表情。**只有一个入口**（同 `setBallState` 的理由：散着写迟早有一条分支
+   *  忘了摘，球就一直是那张笑脸）。
+   *
+   *  **按住是笑脸，一松手立刻变回来。** 第一版松手后还留 900ms，想的是"一次点击只闪
+   *  十几毫秒，不留就看不见"——用户试过之后说那个延迟很别扭：手指松开了表情还挂着，
+   *  像是卡在那儿。所以不留了。
+   */
+  function setBallFace(happy) {
+    document.body.classList.toggle('ball-happy', happy)
+  }
+
   const DRAG_THRESHOLD_PX = 4
   ball.addEventListener('pointerdown', (event) => {
     if (event.button !== 0) return
+    setBallFace(true)
     const startX = event.screenX
     const startY = event.screenY
     let dragging = false
@@ -351,13 +363,18 @@ if (hasShell) {
     const onUp = () => {
       window.removeEventListener('pointermove', onMove)
       window.removeEventListener('pointerup', onUp)
+      window.removeEventListener('pointercancel', onCancel)
       void window.weflowPanel.dragEnd()
+      setBallFace(false)
       if (dragging) return                 // 拖过了就不算点击
       toggleMode()
     }
+    // 指针被系统抢走（触摸、原生菜单弹出）时不走 onUp，必须自己把脸收回来，否则球一直笑着
+    const onCancel = () => setBallFace(false)
     void window.weflowPanel.dragStart(startX, startY)
     window.addEventListener('pointermove', onMove)
     window.addEventListener('pointerup', onUp)
+    window.addEventListener('pointercancel', onCancel)
   })
   // 右键：快速回复。**只在有外壳时接管**——浏览器降级那条路的原生菜单里有"复制"，
   // 那是用户要用的，不该被我们抢掉。
