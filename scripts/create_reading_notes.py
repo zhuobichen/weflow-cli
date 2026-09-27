@@ -204,7 +204,13 @@ VAULT_DIRS = [
     '005_Reference/Tools',
     '005_Reference/Methods',
     '006_Projects',
-    '007_Wiki/Concepts',
+    # **这里原先写的是 `007_Wiki/Concepts`，2026-09-27 改成顶层的 `Wiki/Concepts`。**
+    # 概念页一直实际写在顶层（`compile_wiki.OUTPUT_ROOT`，另有 `vault_rag` / `vault_search` /
+    # `wiki_lint` / 助手的知识检索 / CLI 两个选项共 6 处读那里），模板却声明在 007_Wiki，
+    # 于是每次 init 都建出一个**永远空着**的 `007_Wiki/`——用户在 Obsidian 里看到它，
+    # 得到的结论是"知识库没更新"。一条路径写在两处就会这样：不报错，只是一个目录永远空着。
+    # `test/compile_wiki_test.py` 现在钉住两者必须一致。
+    'Wiki/Concepts',
     '008_MOC',
     '999_Archive',
     '_attachments',

@@ -3588,7 +3588,8 @@ program
             '005_Reference/Tools',
             '005_Reference/Methods',
             '006_Projects',
-            '007_Wiki/Concepts',
+            // 这里原先还有 `007_Wiki/Concepts`：概念页实际写在下面的顶层 `Wiki/Concepts`
+            // （`compile_wiki` 的 OUTPUT_ROOT）。两个都列，就建出一个永远空着的目录。
             '008_MOC',
             '999_Archive',
             '_attachments',

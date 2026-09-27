@@ -166,6 +166,59 @@ class TopicTests(unittest.TestCase):
         self.assertEqual(dirs, ['AI'])
 
 
+class VaultCopyTests(unittest.TestCase):
+    """把文章 md 补进 Vault 的 `Sources/WeChat`。
+
+    这一支盯的是**体积与不破坏**两件事，都不是正确性问题、也不会报错：
+    拷了图片就是 33 GB；整目录替换就会清掉用户 Vault 里那天别的东西。
+    """
+
+    def build(self, tmp, day='2026-05-20'):
+        root = Path(tmp) / 'biz-daily' / day
+        (root / 'AI').mkdir(parents=True)
+        (root / 'AI' / '甲-某篇.md').write_text('正文', encoding='utf-8')
+        (root / 'AI' / '配图.jpg').write_bytes(b'\x89PNG' + b'x' * 500)
+        (root / 'README.md').write_text('README', encoding='utf-8')
+        return str(Path(tmp) / 'biz-daily')
+
+    def test_只拷_md_不拷图片(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = self.build(tmp)
+            target = Path(tmp) / 'vault'
+            result = bf.copy_to_vault('2026-05-20', out, str(target))
+            files = sorted(p.name for p in (target / '2026-05-20').rglob('*') if p.is_file())
+            self.assertEqual(files, ['README.md', '甲-某篇.md'])
+            self.assertEqual(result['copied'], 2)
+            self.assertEqual(len(list((target / '2026-05-20').rglob('*.jpg'))), 0, '图片一张都不该进来')
+
+    def test_保留主题子目录(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = self.build(tmp)
+            target = Path(tmp) / 'vault'
+            bf.copy_to_vault('2026-05-20', out, str(target))
+            self.assertTrue((target / '2026-05-20' / 'AI' / '甲-某篇.md').exists())
+
+    def test_是补缺不是整目录替换(self):
+        """`copytree` 的语义是"删掉再放"。这里要的是补缺——Vault 是用户的东西。
+
+        先放一个**不在源里**的文件，拷完它必须还在。
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            out = self.build(tmp)
+            target = Path(tmp) / 'vault' / '2026-05-20'
+            target.mkdir(parents=True)
+            (target / '我自己写的.md').write_text('别动我', encoding='utf-8')
+            bf.copy_to_vault('2026-05-20', out, str(Path(tmp) / 'vault'))
+            self.assertEqual((target / '我自己写的.md').read_text(encoding='utf-8'), '别动我',
+                             '补拷不该清掉 Vault 里原有的东西')
+
+    def test_这一天没产出时说清原因不是静默零(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = bf.copy_to_vault('2026-01-01', str(Path(tmp) / 'nope'), str(Path(tmp) / 'v'))
+            self.assertEqual(result['copied'], 0)
+            self.assertTrue(result['reason'], '零要带原因，不能是个光秃秃的 0')
+
+
 class IncrementalTests(unittest.TestCase):
     def test_已回填的天被跳过(self):
         with tempfile.TemporaryDirectory() as tmp:

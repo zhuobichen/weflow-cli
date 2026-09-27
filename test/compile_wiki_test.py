@@ -394,5 +394,33 @@ class ParallelPageTests(unittest.TestCase):
         self.assertGreaterEqual(elapsed, 0.9, '两页串行至少要各等 0.5 秒，实测只用了 %.2fs' % elapsed)
 
 
+class VaultLayoutTests(unittest.TestCase):
+    """**同一条路径写在两处，就会有一处永远空着。**
+
+    2026-09-27 实测到的形状：`create_reading_notes.VAULT_DIRS` 声明概念页在
+    `007_Wiki/Concepts`，而 `compile_wiki.OUTPUT_ROOT` 写的是顶层的 `Wiki/Concepts`
+    （另有 `vault_rag`/`vault_search`/`wiki_lint`/助手的知识检索/CLI 两个选项共 6 处读它）。
+    结果：每次 init 都建出一个永远空的 `007_Wiki/`，而用户在 Obsidian 里看到它，
+    得到的结论是"知识库没更新"。
+    """
+
+    def test_模板里的概念目录必须就是实际写入的那个(self):
+        import importlib.util as _ilu
+        spec = _ilu.spec_from_file_location('create_reading_notes', SCRIPTS / 'create_reading_notes.py')
+        crn = _ilu.module_from_spec(spec)
+        spec.loader.exec_module(crn)
+
+        vault = Path('output/wechat-vault')
+        real = Path(cw.OUTPUT_ROOT).relative_to(vault).as_posix()
+        declared = [d for d in crn.VAULT_DIRS if d.endswith('Wiki/Concepts')]
+        self.assertEqual(declared, [real],
+                         '模板里声明的概念目录必须就是 compile_wiki 真正写入的那个；'
+                         '不一致会建出一个永远空着的目录（曾发生：007_Wiki/Concepts）')
+
+    def test_顶层_Wiki_才是概念页的家(self):
+        # 六处在读它，改这里要同时改那六处——这条只是把"家在哪"写死，好让改动时必须面对它
+        self.assertTrue(cw.OUTPUT_ROOT.endswith('wechat-vault/Wiki/Concepts'), cw.OUTPUT_ROOT)
+
+
 if __name__ == '__main__':
     unittest.main()

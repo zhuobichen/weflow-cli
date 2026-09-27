@@ -8,6 +8,20 @@ All notable user-facing changes are recorded here. This project follows [Semanti
 
 ### Added
 
+- **`backfill_articles --vault-copy / --vault-sync`: the raw articles reach the Vault's `Sources/` without their
+  images.** The daily pipeline copies a whole day into `Sources/WeChat/<date>/` with `copytree`, images included -
+  ~200 MB per day, which is why the historical import deliberately skipped it (165 days would have been ~33 GB).
+  But skipping it left the Vault **inconsistent in a way only the user could see**: `002_Literature/` held the
+  reading notes for all 175 days while `Sources/` held raw material for eleven, so the raw-material layer looked
+  stale and nothing in the vault said why. `copy_to_vault()` copies the `.md` files only (~14 KB per article,
+  ~24,500 files, ~400 MB for the 165 days) and copies them **file by file rather than replacing the directory** -
+  `copytree`'s semantics would have removed whatever else was in that day's folder, and this is the user's Vault.
+  `--vault-sync` runs the copy alone, without fetching and without calling a model, because the days were already
+  on disk from the earlier import; that is how the gap was closed.
+
+  The honest note on this one: I had flagged the omission **in conversation only**, and a caveat that lives only in
+  chat is not a caveat. Nothing in the vault or the docs recorded that `Sources/` was deliberately incomplete.
+
 - **The right-click menu gained a second section: eight one-click functions.** The first section is still the
   `quickReplyContacts` list (draft a reply for that person); below it now sit 谁在等我回话 / 我的待办 / 今日日报 /
   最近统计 / 阅读统计 / 最近会话 / 朋友圈 / 微信读书. The admission rule for that section is one thing only:
@@ -51,6 +65,19 @@ All notable user-facing changes are recorded here. This project follows [Semanti
   sends ~1,394 characters, so lowering it saves nothing; and the input is the larger half (803 of the ~945 tokens
   per call), so trimming what is sent is the only lever that could matter - which is what `--topic` does, by sending
   nothing at all for the articles that are not wanted.
+
+### Fixed
+
+- **The Vault declared its concept directory twice, and one of the two was never written to.** `VAULT_DIRS`
+  (created by `vault init` / `create_reading_notes`) listed `007_Wiki/Concepts`, while the pages are actually
+  written to the top-level `Wiki/Concepts` - which is also what `vault_rag`, `vault_search`, `wiki_lint`, the
+  assistant's knowledge search and two CLI options read: **six places versus two**. So every init created a
+  `007_Wiki/` folder that no code ever filled, and a user looking at their vault sees an empty directory in the
+  numbered series and concludes the knowledge base was not updated. That is exactly how it was reported. The
+  template now declares `Wiki/Concepts` (the real one), the CLI's init preview lists it once instead of twice, and
+  the empty directory is gone from the vault. `test/compile_wiki_test.py` pins that whatever the template declares
+  for concepts **must equal** where `compile_wiki` actually writes - verified by a mutation check (putting
+  `007_Wiki/Concepts` back fails the test).
 
 ### Changed
 

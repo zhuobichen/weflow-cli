@@ -47,6 +47,8 @@ from _utils import write_with_frontmatter  # noqa: E402
 
 TZ = timezone(timedelta(hours=8))
 OUTPUT_ROOT = 'output/biz-daily'
+# Vault 里"原始素材"那一层的落点，与 `pipeline.py` 用的是同一个（但那边整份拷含图片）
+VAULT_SOURCES = 'output/wechat-vault/Sources/WeChat'
 # 与 biz_daily 的 `内容过短` 闸门同一个阈值。换成别的数会让两条路对"哪些文章算有正文"
 # 给出不同答案——那正是本仓库不许再出现的分叉。
 MIN_BODY_CHARS = 100
@@ -210,6 +212,35 @@ def write_day(articles, day, out_root):
             'fallbackTopics': fallbacks, 'skipSample': skipped[:3]}
 
 
+def copy_to_vault(day: str, out_root: str, vault_root: str) -> dict:
+    """把这一天的文章 md 拷进 Vault 的 `Sources/WeChat/<日期>/`。**只拷 md，不下图片。**
+
+    `pipeline.py` 那条路是 `copytree` 整份拷（含图片）：一天约 200 MB，165 天约 33 GB。
+    知识库那条线**一张图都不读**（下游只读 md 的 frontmatter 与正文），所以这里只拷
+    `.md`，约 14 KB/篇、165 天约 0.4 GB。
+
+    **为什么非要补这一步**：`Sources/` 是"原始素材"那一层（见 `user_notes.py` 的说明），
+    而 `002_Literature/` 是读后笔记。只写后者的话，Vault 里"读过什么"是全的、"原文在哪"
+    却是残缺的——2026-09-27 用户就是这么发现的：165 天的 `Sources` 根本没有，
+    因为回填时我只在对话里说了一句"跳过了"，没在库里留下任何痕迹。
+
+    逐 md 拷而不是整目录替换：`copytree` 的语义是"删掉再放"，而这里要的是**补缺**——
+    Vault 是用户的东西，不能因为要补一天就把那天底下别的东西清掉。
+    """
+    source = Path(out_root) / day
+    target = Path(vault_root) / day
+    if not source.is_dir():
+        return {'copied': 0, 'reason': '没有这天的产出'}
+    copied = 0
+    for path in source.rglob('*.md'):
+        rel = path.relative_to(source)
+        dest = target / rel
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(path.read_bytes())
+        copied += 1
+    return {'copied': copied, 'reason': ''}
+
+
 def day_done(out_root, day) -> bool:
     """这一天已经回填过了吗（增量：免得重跑把同样的文章再抓一遍）。"""
     path = Path(out_root) / day / '.articles.json'
@@ -227,6 +258,11 @@ def main():
     parser.add_argument('--since', required=True, help='起始日期 YYYY-MM-DD（含）')
     parser.add_argument('--until', required=True, help='结束日期 YYYY-MM-DD（含）')
     parser.add_argument('--out', default=OUTPUT_ROOT, help='输出根目录')
+    parser.add_argument('--vault-root', default=VAULT_SOURCES, help='Vault 的 Sources/WeChat 目录')
+    parser.add_argument('--vault-copy', action='store_true',
+                        help='回填时顺带把文章 md 拷进 Vault 的 Sources（只拷 md，不下图片）')
+    parser.add_argument('--vault-sync', action='store_true',
+                        help='只做这件事：把已回填的天补拷进 Vault 的 Sources（本地，不抓取、不调模型）')
     parser.add_argument('--workers', type=int, default=8, help='抓正文的并发数（默认 8）')
     parser.add_argument('--limit-per-day', type=int, default=0, help='每天最多抓几篇（0=不限）')
     parser.add_argument('--refresh', action='store_true', help='已回填过的天也重做（默认跳过）')
@@ -247,6 +283,36 @@ def main():
         print('--until 不能早于 --since'); return 1
     if args.workers < 1:
         print('--workers 要 ≥ 1'); return 1
+
+    if args.vault_sync:
+        # **补拷模式**：不抓取、不调模型，只把已经躺在 biz-daily 的那几天补进 Vault。
+        # 为什么要有它：回填那天可以先不拷（省体积），后来想补就得能单独补——2026-09-27
+        # 就是这么补的，165 天早就在 biz-daily 里，只是 Vault 的 Sources 里没有。
+        root = Path(args.out)
+        days = []
+        for directory in sorted(root.iterdir()) if root.exists() else []:
+            state = directory / '.articles.json'
+            if not directory.is_dir() or not state.exists():
+                continue
+            try:
+                if json.loads(state.read_text(encoding='utf-8')).get('backfilled'):
+                    days.append(directory.name)
+            except Exception:
+                continue
+        if args.max_days:
+            days = days[:args.max_days]
+        copied_days = total = 0
+        for day in days:
+            result = copy_to_vault(day, args.out, args.vault_root)
+            if result['copied']:
+                copied_days += 1
+                total += result['copied']
+        payload = {'success': True, 'action': 'backfill-articles.vault-sync',
+                   'days': len(days), 'daysCopied': copied_days, 'files': total,
+                   'target': args.vault_root, 'invokesAI': False, 'downloadsImages': False}
+        print(json.dumps(payload, ensure_ascii=False, indent=2) if args.json
+              else '补拷 %d 天、共 %d 个 md → %s' % (copied_days, total, args.vault_root))
+        return 0
 
     days = []
     cursor_day = start
@@ -320,6 +386,9 @@ def main():
         result = write_day(articles, day, args.out)
         print('    写入 %d 篇，跳过 %d 篇（正文太短），主题兜底 %d 篇'
               % (result['written'], result['skipped'], result['fallbackTopics']))
+        if args.vault_copy:
+            sync = copy_to_vault(day, args.out, args.vault_root)
+            print('    入 Vault 的 Sources: %d 个 md' % sync['copied'])
         report.append({'date': day, 'inDb': len(articles), 'fetched': fetch['ok'],
                        'written': result['written'], 'skippedThin': result['skipped']})
     conn.close()
