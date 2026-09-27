@@ -51,8 +51,19 @@ import nt_decrypt  # noqa: E402
 TZ = timezone(timedelta(hours=8))
 OUTPUT_ROOT = 'output/chat-notes'
 DEFAULT_DAYS = 30
-# 每个会话取最近多少条**再按窗口过滤**（`get_messages` 只能给"最近 N 条"，没有时间区间参数）
-NOTE_MESSAGES = 120
+# 分页的**页大小**。以前这个值就是"每个会话取多少条"的上限（120），而那是错的：
+# 实测窗口内 138 个会话共 **8 万条**，而它只送了 **9,010 条（约 19%）**——每个会话
+# 无论多大都只看最新 120 条，`--days` 那个窗口因此几乎不起作用（先取 120 条再按天筛，
+# 那 120 条必然在窗口内）。现在按 offset **分页取到取完为止**。
+NOTE_MESSAGES = 2000
+# 单个会话的取数上限——只是个防跑飞的保险，不是常态。为什么敢开这么大：
+# **用户的要求是"同一个群聊必须在同一个上下文"**（切块会让模型看不到前因后果），
+# 而实测 API 接受 **1,000,006** token 的提示词；单个会话最大（3 万条）约 **78 万 token**。
+# 撞到它要**报出来**，不能静默截断。
+MAX_MESSAGES_PER_CONVERSATION = 60000
+# 每张卡最多出几话题/几人。**原来是 6**——那时每个会话只看 120 条，6 条勉强够；
+# 现在正文全进来了（一个群可能 3 万条、几百人），6 个明显是抽样。
+PER_CARD_ITEMS = 20
 # 每条消息进提示词的字数上限。这是**本功能自己的口径**（知识卡要的是内容，不是起草那种短句），
 # 与 `draft_reply.DRAFT_MSG_CHARS=160` 是两件事，别互相套用。
 NOTE_MSG_CHARS = 300
@@ -82,7 +93,7 @@ NOTE_PROMPT = """你在为一个人整理他和某个会话最近 {days} 天的�
 要求：
 1. **你是编译者，不是作者**。只写材料里有的：没提到的话题/人不要列；时间不许推断，
    材料里没有具体时间的事件就不进 timeline；**材料里相互矛盾的地方照实并列**，不要替它们调和成一句。
-2. topics 与 people 各不超过 6 条，**按重要度排序**；人名只收真实的人（不要把公众号、机构当人）。
+2. topics 与 people 各不超过 {per_card} 条，**按重要度排序**；人名只收真实的人（不要把公众号、机构当人）。
 3. 每条 desc 都要是**这句话/这段对话**关于它的说法，不要写成百科定义。
 4. 全部用中文，不要 markdown 语法（不要 #、*、-）。
    （第 1 条与"编译者不是作者"的措辞借自 Tencent/WeKnora 的 wiki 提示词，
@@ -133,8 +144,8 @@ def parse_note(raw):
     return {
         'summary': plain(data['summary']).strip(),
         'timeline': timeline[:20],
-        'topics': items('topics', 6),
-        'people': items('people', 6),
+        'topics': items('topics', PER_CARD_ITEMS),
+        'people': items('people', PER_CARD_ITEMS),
         'owed': plain(data.get('owed')).strip(),
     }
 
@@ -181,7 +192,8 @@ def render_note(note, name, days, updated, messages):
 
 
 def build_note_prompt(name, lines, days):
-    return NOTE_PROMPT.format(name=name, days=days, convo='\n'.join(lines))
+    return NOTE_PROMPT.format(name=name, days=days, convo='\n'.join(lines),
+                              per_card=PER_CARD_ITEMS)
 
 
 def worth_a_card(messages, chars, min_messages=MIN_MESSAGES_FOR_CARD,
@@ -203,6 +215,30 @@ def within_window(messages, cutoff):
     """
     return [m for m in messages
             if int(m.get('createTime') or 0) >= cutoff and m.get('isSend') is not None]
+
+
+def fetch_all_messages(conns, talker, name_map, own_wxid):
+    """**把一个会话的消息取完**（分页），返回 `(messages, truncated)`。
+
+    `get_messages` 是"最近 N 条 + offset"的形式，所以一页一页往回翻直到取空。
+    返回的 `truncated` 为真表示撞到了 `MAX_MESSAGES_PER_CONVERSATION`——那种情况要
+    **报出来**，不能装作读全了。
+
+    为什么非要取完：用户的要求是"同一个群聊必须在同一个上下文"。切块省事，但模型
+    看不到前因后果，写出来的时间线和人物关系会失真。
+    """
+    out, offset = [], 0
+    while len(out) < MAX_MESSAGES_PER_CONVERSATION:
+        page = nt_decrypt.get_messages(
+            conns, talker, NOTE_MESSAGES, offset=offset,
+            name_map=name_map, own_wxid=own_wxid).get('messages') or []
+        if not page:
+            break
+        out.extend(page)
+        offset += len(page)
+        if len(page) < NOTE_MESSAGES:
+            break
+    return out, len(out) >= MAX_MESSAGES_PER_CONVERSATION
 
 
 def collect(out_root, days, limit):
@@ -231,9 +267,8 @@ def collect(out_root, days, limit):
         cards = []
         thin = []
         for item in picked:
-            result = nt_decrypt.get_messages(conns, item['talker'], NOTE_MESSAGES,
-                                             name_map=name_map, own_wxid=config.get('wxid', ''))
-            messages = result.get('messages') or []
+            messages, truncated = fetch_all_messages(conns, item['talker'], name_map,
+                                                     config.get('wxid', ''))
             in_window = within_window(messages, cutoff)
             if not in_window:
                 continue
@@ -243,7 +278,8 @@ def collect(out_root, days, limit):
                 thin.append({'name': item['name'], 'messages': len(lines), 'chars': chars})
                 continue
             cards.append({'talker': item['talker'], 'name': item['name'],
-                          'messages': len(lines), 'chars': chars, 'lines': lines})
+                          'messages': len(lines), 'chars': chars, 'lines': lines,
+                          'truncated': truncated})
         return {'cards': cards, 'skipped': thin, 'outRoot': out_root}, None
     finally:
         for conn in conns:

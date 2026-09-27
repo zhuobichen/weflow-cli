@@ -170,5 +170,57 @@ class PromptTests(unittest.TestCase):
         self.assertIn('照实并列', prompt)
 
 
+class FetchAllTests(unittest.TestCase):
+    """**把一个会话取完**，而不是只取最近 120 条。
+
+    这条是真踩出来的：窗口内 138 个会话共 8 万条，而它只送了 9,010 条（约 19%），
+    因为每个会话无论多大都只看最新 120 条。用户的要求是"同一个群聊必须在同一个上下文"
+    ——切块会让模型看不到前因后果，所以取完是硬要求，而不是优化。
+    """
+
+    def setUp(self):
+        self.original = cn.nt_decrypt.get_messages
+        self.calls = []
+
+    def tearDown(self):
+        cn.nt_decrypt.get_messages = self.original
+
+    def fake(self, total, page=2000):
+        def get_messages(conns, talker, limit, offset=0, **kwargs):
+            self.calls.append((limit, offset))
+            start = offset
+            end = min(offset + limit, total)
+            return {'messages': [{'i': i} for i in range(start, end)]}
+        return get_messages
+
+    def test_分页取到取完为止(self):
+        cn.nt_decrypt.get_messages = self.fake(total=5000)
+        msgs, truncated = cn.fetch_all_messages(None, 't', {}, 'me')
+        self.assertEqual(len(msgs), 5000)
+        self.assertFalse(truncated)
+        self.assertEqual([c[1] for c in self.calls], [0, 2000, 4000], 'offset 要一页页往后推')
+
+    def test_最后一页不满就停(self):
+        cn.nt_decrypt.get_messages = self.fake(total=2500)
+        msgs, _ = cn.fetch_all_messages(None, 't', {}, 'me')
+        self.assertEqual(len(msgs), 2500)
+        self.assertEqual(len(self.calls), 2, '第二页只有 500 条 → 不该再翻第三页')
+
+    def test_空会话返回空(self):
+        cn.nt_decrypt.get_messages = self.fake(total=0)
+        self.assertEqual(cn.fetch_all_messages(None, 't', {}, 'me'), ([], False))
+
+    def test_撞到上限要报出来_不许静默截断(self):
+        original_cap = cn.MAX_MESSAGES_PER_CONVERSATION
+        cn.MAX_MESSAGES_PER_CONVERSATION = 3000
+        try:
+            cn.nt_decrypt.get_messages = self.fake(total=99999)
+            msgs, truncated = cn.fetch_all_messages(None, 't', {}, 'me')
+        finally:
+            cn.MAX_MESSAGES_PER_CONVERSATION = original_cap
+        self.assertTrue(truncated, '撞了上限就得说，不然读的是多少没人知道')
+        self.assertGreaterEqual(len(msgs), 3000)
+
+
 if __name__ == '__main__':
     unittest.main()
