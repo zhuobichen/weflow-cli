@@ -92,6 +92,26 @@ All notable user-facing changes are recorded here. This project follows [Semanti
   block, is idempotent, leaves notes without one alone (counted, not silently skipped), and reports the notes whose
   topic is empty separately rather than inventing one. Applied: 25,845 + 7 rewritten, 0 stale queries left.
 
+- **`vault_search --type note` searched a directory that has never existed in this repo.** It read `Vault/Notes/`,
+  while the notes live in `002_Literature` (25,676 reading notes), `001_Daily`, `003_Ideas` and `008_MOC`. The
+  failure mode is the quiet one: the directory simply does not exist, so the type returned nothing and the command
+  still reported "found N results" - **the largest layer of the vault was invisible to search**, which is the layer
+  an agent would most want. Now it reads the four real directories (4.6s for a query over 26k notes). Pinned by
+  `test/vault_search_test.py`, including a regression test for the empty result, verified by a mutation check that
+  puts `Notes/` back.
+
+  The article half of the same function keeps its `--days 90` default, which **now hides most of the corpus**: the
+  vault spans 175 days (March-September), so anything older than ~90 days is unreachable unless `--days` is raised.
+  Reported, not changed - it is a default, and changing it changes how long every search takes.
+
+- **The graph view drew 10,466 ghost nodes.** `.obsidian/graph.json` had `hideUnresolved: false`, so the concept
+  graph (`search: path:"Wiki/Concepts"`) rendered not only the 1,963 concept pages but every link target that has no
+  page - 10,466 of them, against 2,794 real concept-to-concept edges. Verified by screenshot after the change: the
+  graph now shows only real concepts (`Github Copilot`, `GPT-6`, `Claude Code Skills`, `MCP 权限边界`, …). It is
+  also **sparse** - 1.4 real edges per page, 498 pages with no concept-to-concept link at all - because most of each
+  page's "related concepts" are concepts that have no page yet. Building the remaining 3,725 candidate concepts
+  would densify it; that is a spend decision, not a defect.
+
 - **The generated MOCs and the concept pages' source links had defects that only show up in Obsidian.** The user's
   bar was "the knowledge base should present properly in Obsidian", so this pass looked at what renders rather than
   at what runs:

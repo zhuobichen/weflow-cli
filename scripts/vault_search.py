@@ -90,10 +90,17 @@ def collect_files(vault: str, biz_daily: str, search_type: str, days: int) -> li
                 files.append((md, 'concept', fm))
 
     if search_type in ('all', 'note'):
+        # **`Notes/` 这个目录在本仓库里从来不存。** 2026-09-27 实测：Vault 里没有它，
+        # 于是 `--type note` 一直搜的是空气——而它本该覆盖的阅读笔记有 25,676 篇，
+        # 是最大的一层。笔记实际住在下面这几个目录里。
         vault_path = Path(vault)
-        notes_dir = vault_path / 'Notes'
-        if notes_dir.is_dir():
+        for sub in ('002_Literature', '001_Daily', '003_Ideas', '008_MOC'):
+            notes_dir = vault_path / sub
+            if not notes_dir.is_dir():
+                continue
             for md in notes_dir.rglob('*.md'):
+                if md.name == 'README.md':
+                    continue
                 try:
                     fm = parse_fm(md.read_text(encoding='utf-8'))
                 except Exception:
