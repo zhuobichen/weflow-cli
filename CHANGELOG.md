@@ -8,6 +8,28 @@ All notable user-facing changes are recorded here. This project follows [Semanti
 
 ### Added
 
+- **The chat line is now part of the knowledge graph, and it arrives as a *people* graph.** `chat-notes` over a
+  400-day window produced **129 conversation cards** (~¥0.5, one call per conversation) and `wiki compile` turned
+  them into **812 concept pages** - `Wiki/Concepts` went from 2,115 to **2,927 pages**, and the graph from 4,162 to
+  **4,933 concept-to-concept edges**. The interesting part is what the chat corpus contains: **254 distinct people**
+  and 563 topics, and only **4 concepts overlap with the article line** - a conversation is a genuinely different
+  knowledge space from a feed of articles, and its natural nodes are people (龙老师 ×24, 闫学昊师兄 ×13,
+  耿哥 ×12, 常旺师兄 ×9 …). The pages carry `来源/聊天`, which the graph view already colours separately from
+  `来源/文章`, so the two sources are one graph and still tellable apart.
+
+- **`[[name]]` now carries which section it came from, because dropping it made the model overwrite the material
+  with its own prior.** A chat card separates `### 话题` from `### 人`, and aggregation used to treat every link
+  identically. Measured consequence: a contact whose nickname is **白马非马** got a page about 公孙龙's classical
+  paradox - and the material handed to the model said, verbatim, "对话对方，准备面试和申请博士，学生证在我这里".
+  The refs now carry `人物` / `话题` into the reference line (`- [白马非马]（人物 · 白马非马 · 聊天）：…`) and the
+  prompt says explicitly that a `人物` row means a **person** from the user's chats and must not be written as a
+  same-named thing, work or allusion. Rebuilt, that page now reads "白马非马是用户聊天记录中的一位联系人，正处
+  最后一学年，准备面试和申请博士", tagged 联系人 / 求职升学 / 私人对话. "Not annotated" and "annotated as a topic"
+  stay distinct - an article note has neither section, so it gets neither label.
+
+  This is a **contract change**: `scan_articles`' `wikilinks` went from `(name, desc)` to `(name, desc, kind)`.
+  The four downstream tests that read it as pairs were updated to the new shape rather than loosened.
+
 - **`search_knowledge` now returns a concept's neighbours, so the assistant can walk the graph.** The Obsidian
   graph view is a human artefact - nothing on the assistant's side ever read "the graph", and the tool returned a
   single page in isolation. But a concept page already lists its neighbours under `## 相关概念`, and **measured,

@@ -42,9 +42,11 @@ class ScanTests(unittest.TestCase):
         self.assertEqual(note['source'], '某号')
         self.assertEqual(note['tags'], ['a', 'b'])
         self.assertIn('摘要正文', note['summary'])
-        self.assertEqual(note['wikilinks'][0], ('词向量', '这篇文章里它是这么被讲的'),
+        # 三元组的第三位是**"它是人物还是话题"**（聊天卡分 `### 人` / `### 话题` 两节写），
+        # 文章笔记里没有那两个小节，所以是空串——"没标注"与"标为话题"分得开
+        self.assertEqual(note['wikilinks'][0], ('词向量', '这篇文章里它是这么被讲的', ''),
                          '破折号后面那句是"关于这个概念说的那句话"，必须留下来')
-        self.assertEqual(note['wikilinks'][1], ('老王', ''),
+        self.assertEqual(note['wikilinks'][1], ('老王', '', ''),
                          '没有描述的 wikilink 也要收（描述可以空）')
 
     def test_没有_wikilink_的材料被跳过(self):
@@ -159,7 +161,7 @@ class VaultNoteContractTests(unittest.TestCase):
         self.assertEqual(note['topic'], 'AI', 'hasTopic 要能读出来（Obsidian 的 dataview 靠这个字段）')
         self.assertIn('这篇文章讲了一个新工具', note['summary'], '📋 摘要 那一段要抽得出来')
         # **只有"概念"那节里那条算概念**：主题行（与 hasTopic 同名）和关联网络（路径）都不算
-        self.assertEqual([name for name, _ in note['wikilinks']], ['MCP 协议'])
+        self.assertEqual([item[0] for item in note['wikilinks']], ['MCP 协议'])
         refs = cw.aggregate_concepts(notes)['MCP 协议']
         line = cw.build_ref_lines(refs)[0]
         self.assertIn('它把时间线开放给 Agent 操作', line)
@@ -511,6 +513,45 @@ class FixSourceLinksTests(unittest.TestCase):
             again = cw.fix_source_links(str(pages), str(cards))
             self.assertEqual(next(pages.glob('*.md')).read_text(encoding='utf-8'), first)
             self.assertEqual(again['links'], 0, '第二次不该再改')
+
+
+class LinkKindTests(unittest.TestCase):
+    """`[[名字]]` 出现在哪个小节——**人物还是话题**。
+
+    聊天卡把这两类分开写（`### 话题` / `### 人`），而聚合时这个区分以前被丢掉了。
+    代价是实测出来的：一个昵称叫「白马非马」的联系人，被按字面写成了公孙龙那个哲学命题
+    ——材料里明明写着"对话对方，准备面试"。带上"这是个人"，那一页才会写成人。
+    """
+
+    def test_认得两个小节(self):
+        body = ('## 主题与人物\n\n### 话题\n\n- [[面试]] — 去实验室面试\n- [[学生证]] — 在我这里\n\n'
+                '### 人\n\n- [[白马非马]] — 对话对方，准备面试\n- [[詹哥]] — 提到他去年的二面\n')
+        kinds = cw.link_kinds(body)
+        self.assertEqual(kinds['面试'], '话题')
+        self.assertEqual(kinds['学生证'], '话题')
+        self.assertEqual(kinds['白马非马'], '人物')
+        self.assertEqual(kinds['詹哥'], '人物')
+
+    def test_小节之外的不给标注(self):
+        # "没标注"与"标为话题"是两件事：后者是**知道**它是话题
+        body = '## 摘要\n\n- [[别的东西]] — 这个不在那两节里\n'
+        self.assertEqual(cw.link_kinds(body), {})
+
+    def test_人物参考行会把身份写给模型(self):
+        refs = [{'title': '白马非马', 'source': '白马非马', 'topic': '聊天',
+                 'desc': '对话对方，准备面试和申请博士', 'kind': '人物', 'file': '白马非马'}]
+        line = cw.build_ref_lines(refs)[0]
+        self.assertIn('人物', line, '不写身份，模型会按名字把它写成同名典故')
+
+    def test_没有_kind_的参考行不受影响(self):
+        refs = [{'title': '甲', 'source': '某号', 'topic': 'AI',
+                 'desc': '讲了甲', 'file': 'a'}]
+        self.assertNotIn('人物', cw.build_ref_lines(refs)[0])
+
+    def test_提示词里写明了人物那一档该怎么写(self):
+        prompt = cw.CONCEPT_PROMPT.format(name='甲', references='- [甲]（人物 · 聊天）：材料')
+        self.assertIn('标注为「人物」', prompt)
+        self.assertIn('不要', prompt, '要明确说"不许当成同名的事物/典故"')
 
 
 class DanglingTests(unittest.TestCase):

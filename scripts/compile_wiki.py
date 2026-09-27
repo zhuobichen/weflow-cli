@@ -59,7 +59,12 @@ tag1, tag2, tag3
 【相关概念】
 概念A, 概念B, 概念C
 
-要求：定义精准，要点简洁（每条≤30字），标签2-3个，相关概念2-4个。"""
+要求：定义精准，要点简洁（每条≤30字），标签2-3个，相关概念2-4个。
+
+**若参考行标注为「人物」**：这一页写的是**人**——聊天里出现过的联系人、对话者或提到的人。
+按材料写他与用户的关系和往来，**不要**把它当成同名的事物、作品、名人或典故。
+（实测：一个昵称叫「白马非马」的联系人，曾被按字面写成公孙龙的那个哲学命题——
+材料里明明写着"对话对方，准备面试"，所以这里必须说清。）"""
 
 
 # 笔记里**不是概念**的那几节：它们是"笔记之间的关系"，而且链接的名字是**路径**
@@ -105,6 +110,38 @@ def concept_links(body: str, topic: str = '') -> list[tuple]:
             continue
         links.append((name, desc))
     return links
+
+
+# 聊天卡把这两类**分开写**（`### 话题` 与 `### 人`）。聚合时丢掉这个区分是有代价的，
+# 实测：`白马非马` 是个联系人的昵称，而模型拿到"对话对方，准备面试"这类材料之后，
+# 仍然按名字把它写成了公孙龙那个典故——**先验盖过了材料**。带上"这是个人"，
+# 那一页才会写成一个人。
+KIND_SECTIONS = (('### 人', '人物'), ('### 话题', '话题'))
+
+
+def link_kinds(body: str) -> dict:
+    """`[[名字]]` → 它出现在哪个小节里（`人物` / `话题`）。不在这些小节的就不给。
+
+    只认卡片实际用的那两个小节；别的来源线（文章卡）没有这个概念，返回空字典，
+    于是"没标注"与"标为话题"分得开——后者是**知道**它是话题。
+    """
+    kinds = {}
+    current = ''
+    for line in body.split('\n'):
+        stripped = line.strip()
+        matched = False
+        for marker, kind in KIND_SECTIONS:
+            if stripped.startswith(marker):
+                current = kind
+                matched = True
+                break
+        if not matched and (stripped.startswith('## ') or stripped.startswith('### ')):
+            current = ''
+        if not current:
+            continue
+        for name in re.findall(r'\[\[([^\]\|]+)\]\]', line):
+            kinds.setdefault(name, current)
+    return kinds
 
 
 def source_link_target(frontmatter: dict, card_path) -> str:
@@ -330,7 +367,9 @@ def scan_articles(source_dir: str) -> list[dict]:
         fm, body = parse_frontmatter(content)
 
         # Extract [[wikilinks]] with optional descriptions（过滤规则见 `concept_links`）
-        wikilinks = concept_links(body, article_topic(fm))
+        kinds = link_kinds(body)
+        wikilinks = [(name, desc, kinds.get(name, ''))
+                     for name, desc in concept_links(body, article_topic(fm))]
 
         if not wikilinks:
             continue
@@ -394,7 +433,10 @@ def aggregate_concepts(articles: list[dict]) -> dict[str, list[dict]]:
     concept_map = defaultdict(list)
     for art in articles:
         seen = set()
-        for name, desc in art['wikilinks']:
+        for item in art['wikilinks']:
+            name, desc = item[0], item[1]
+            # 兼容两种形状：老的两元组（没有 kind）与新的三元组
+            kind = item[2] if len(item) > 2 else ''
             if name in seen:
                 continue
             seen.add(name)
@@ -404,6 +446,7 @@ def aggregate_concepts(articles: list[dict]) -> dict[str, list[dict]]:
                 'topic': art.get('topic', ''),
                 'summary': art['summary'],
                 'desc': desc,
+                'kind': kind,
                 'file': art['file'],
             })
     return dict(concept_map)
@@ -425,6 +468,10 @@ def build_ref_lines(refs: list[dict], limit: int = 5) -> list[str]:
         # 主题也带上：**收集了就要用**。原来 `topic` 被收进文章字典之后一次都没被读过，
         # 于是"按主题分"这件事根本无从谈起；带上它，模型才知道这些来源属于同一个领域。
         where = f'{ref["source"]} · {ref["topic"]}' if ref.get('topic') else ref['source']
+        # **把"这是个人还是话题"带给模型**：不写的话，像 `白马非马` 这种与典故同名的联系人
+        # 会被写成一个哲学命题（实测发生过——材料明明写着"对话对方，准备面试"）。
+        if ref.get('kind'):
+            where = f'{ref["kind"]} · {where}'
         lines.append(f'- [{ref["title"]}]（{where}）：{detail[:150]}')
     return lines
 

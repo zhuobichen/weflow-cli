@@ -114,7 +114,7 @@ class RenderTests(unittest.TestCase):
         self.assertEqual(note['source'], '老王', 'frontmatter 的 source 是下游要用的键')
         self.assertEqual(note['tags'], ['聊天', '知识卡'])
         self.assertIn('在谈那份文件什么时候发', note['summary'], '## AI 摘要 那一段要能被抽出来')
-        links = dict(note['wikilinks'])
+        links = {w[0]: w[1] for w in note['wikilinks']}
         self.assertEqual(links.get('文件交付'), '一直在拖这件事')
         self.assertEqual(links.get('老王'), '09-20 说要把文件发我')
         # 参考行优先用 desc：人物页的时间线就是靠它

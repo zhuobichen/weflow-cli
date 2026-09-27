@@ -95,7 +95,7 @@ class CardTests(unittest.TestCase):
             notes = cw.scan_articles(tmp)
         self.assertEqual(len(notes), 1)
         self.assertIn('模型的理解', notes[0]['summary'])
-        self.assertEqual(dict(notes[0]['wikilinks']).get('知识库'), '我自己起的概念名')
+        self.assertEqual({w[0]: w[1] for w in notes[0]['wikilinks']}.get('知识库'), '我自己起的概念名')
 
     def test_wikilink_只出现在概念那节(self):
         _, body = un.build_card(NOTE, '摘要里不许有 [[链接]]。', [{'name': '甲', 'desc': 'd'}], '')

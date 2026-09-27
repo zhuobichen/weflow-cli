@@ -129,7 +129,7 @@ class CardTests(unittest.TestCase):
         self.assertEqual(len(notes), 1)
         self.assertEqual(notes[0]['source'], '搞AI的陈老斯')
         self.assertIn('这篇文章介绍了那本书的脉络', notes[0]['summary'])
-        self.assertEqual(dict(notes[0]['wikilinks']).get('全栈 AI 学习路径'), '从数学基础讲到 Agent')
+        self.assertEqual({w[0]: w[1] for w in notes[0]['wikilinks']}.get('全栈 AI 学习路径'), '从数学基础讲到 Agent')
 
     def test_wikilink_只出现在概念那一节(self):
         _, body = fn.build_card(ITEM, NOTE, 3000, '', '')

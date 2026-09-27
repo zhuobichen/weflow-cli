@@ -88,7 +88,7 @@ class CardTests(unittest.TestCase):
         self.assertEqual(notes[0]['topic'], 'AI')
         self.assertEqual(notes[0]['source'], '开源星探')
         self.assertIn('这篇文章讲了一个新工具', notes[0]['summary'])
-        self.assertEqual(dict(notes[0]['wikilinks']).get('MCP 协议'), '开放时间线')
+        self.assertEqual({w[0]: w[1] for w in notes[0]['wikilinks']}.get('MCP 协议'), '开放时间线')
 
     def test_没有概念时不写空标题(self):
         _, body = an.build_card(ARTICLE, [], '2026-09-26 15:00')
