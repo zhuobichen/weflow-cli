@@ -9,13 +9,25 @@ All notable user-facing changes are recorded here. This project follows [Semanti
 ### Added
 
 - **The chat line is now part of the knowledge graph, and it arrives as a *people* graph.** `chat-notes` over a
-  400-day window produced **129 conversation cards** (~¥0.5, one call per conversation) and `wiki compile` turned
-  them into **812 concept pages** - `Wiki/Concepts` went from 2,115 to **2,927 pages**, and the graph from 4,162 to
-  **4,933 concept-to-concept edges**. The interesting part is what the chat corpus contains: **254 distinct people**
-  and 563 topics, and only **4 concepts overlap with the article line** - a conversation is a genuinely different
-  knowledge space from a feed of articles, and its natural nodes are people (龙老师 ×24, 闫学昊师兄 ×13,
-  耿哥 ×12, 常旺师兄 ×9 …). The pages carry `来源/聊天`, which the graph view already colours separately from
-  `来源/文章`, so the two sources are one graph and still tellable apart.
+  400-day window produced **132 conversation cards** (one call per conversation) and `wiki compile` turned them
+  into **1,519 concept pages** - `Wiki/Concepts` went from 2,115 to **3,634 pages**, and the graph from 4,162 to
+  **5,538 concept-to-concept edges**. The chat corpus holds **572 distinct people** and **992 topics**, and only 4
+  concepts overlap with the article line - a conversation is a genuinely different knowledge space from a feed of
+  articles, and its natural nodes are people (龙老师 ×31, 耿哥 ×21, 闫学昊师兄 ×17, 董老师 ×15 …). The pages carry
+  `来源/聊天`, which the graph view already colours separately from `来源/文章`, so the two sources are one graph
+  and still tellable apart.
+
+  **The first attempt at this was wrong in a way worth recording: it read 19% of the text and said nothing.**
+  `NOTE_MESSAGES = 120` was a per-conversation cap, so across 138 conversations holding 80,246 messages only
+  **9,010** were ever sent - and `--days 400` did almost nothing, because fetching the newest 120 messages and then
+  filtering by date can only ever pass messages inside the window. That version produced 254 people; the corrected
+  one produces 572. Fixing it meant **paging through the whole conversation** (`get_messages` takes an `offset`),
+  against the measured ceiling: the user's requirement was that **one group chat stays in one context** (splitting
+  would hide cause and effect), so the question was whether it fits - and the API's own error answered it:
+  `maximum context length is 1048576 tokens. However, you requested 1052622`. Two fixes then: the per-card output
+  cap had to go from 2,000 to **16,000** tokens (34 conversations were failing with `finish_reason=length`, JSON
+  truncated mid-object, reported only as "the model did not return usable JSON") and the prompt is trimmed from the
+  **oldest** end against a character budget when it would not fit. The second run: **132/132, 0 failures.**
 
 - **`[[name]]` now carries which section it came from, because dropping it made the model overwrite the material
   with its own prior.** A chat card separates `### 话题` from `### 人`, and aggregation used to treat every link
