@@ -3593,9 +3593,11 @@ program
             '008_MOC',
             '999_Archive',
             '_attachments',
+            // `Wiki/Concepts` 是唯一真的有人写的 Wiki 子目录（`compile_wiki` 的
+            // OUTPUT_ROOT）。这里曾经还列着 `Wiki/Entities` 与 `Wiki/Topics`——没有任何
+            // 代码写它们，README 里那张表却把它们当成已有的介绍给用户。**声明了就要有东西
+            // 往里写**，否则就是又一个"永远空着的目录"（同 `007_Wiki`）。
             'Wiki/Concepts',
-            'Wiki/Entities',
-            'Wiki/Topics',
           ]
           const files = [
             {
@@ -3603,7 +3605,10 @@ program
               content: JSON.stringify({
                 newFileLocation: 'folder',
                 newFileFolderPath: 'Sources',
-                attachmentFolderPath: 'Assets',
+                // **`_attachments`，不是 `Assets`**：布局里建的就是 `_attachments`（这个
+                // 字面量以前只在这里出现一次，是个孤例），而 init 从不建 `Assets`——
+                // 于是附件会被 Obsidian 放进一个不存在的目录。
+                attachmentFolderPath: '_attachments',
                 showInlineTitle: false,
               }, null, 2),
             },
@@ -3649,11 +3654,16 @@ program
                 '',
                 '| 目录 | 说明 |',
                 '|------|------|',
-                '| `Sources/WeChat/` | 公众号文章（按日期+主题分类） |',
-                '| `Wiki/Concepts/` | 概念页（手动或 AI 生成） |',
-                '| `Wiki/Entities/` | 实体页（公众号、作者等） |',
-                '| `Wiki/Topics/` | 主题总览页 |',
+                '| `Sources/WeChat/<日期>/` | 原始文章（`daily` 与回填写入，连同正文图片） |',
+                '| `001_Daily/<日期>.md` | 每天一页日记 |',
+                '| `002_Literature/WeChat/<日期>/` | 阅读笔记（由 `Sources` 生成） |',
+                '| `Wiki/Concepts/`、`Wiki/00-Overview.md` | 概念页与索引（`wiki compile` 生成） |',
                 '| `Templates/` | 模板文件 |',
+                '| `_attachments/` | Obsidian 附件（`.obsidian/app.json` 的 `attachmentFolderPath` 指向这里） |',
+                '| `000_Inbox` `003_Ideas` `004_Permanent` `005_Reference` `006_Projects` `008_MOC` `999_Archive` | **给你自己写笔记用的层**：`vault promote` 才会往里放东西，空着是设计而不是没做完 |',
+                '',
+                '> 阅读笔记与日记里各有一段 `dataview` 查询，所以这个 Vault 需要 **Dataview 社区插件**',
+                '> （社区插件不进仓库，换机器要自己装一次）。',
                 '',
                 '## 快速查询',
                 '',

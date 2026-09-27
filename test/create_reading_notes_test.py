@@ -167,5 +167,44 @@ class RefreshTests(unittest.TestCase):
             self.assertEqual(len(result['rewritten']), 0)
 
 
+class VaultLayoutAgreementTests(unittest.TestCase):
+    """`vault init`（CLI 里的 `dirs`）与 `create_reading_notes.VAULT_DIRS` 必须对得上。
+
+    **这个形状在本仓库出现过两次。** 第一次是 `007_Wiki/Concepts`：模板声明了它、实际写在
+    顶层的 `Wiki/Concepts`，于是每次 init 都建出一个永远空着的目录。第二次是
+    `Wiki/Entities` 与 `Wiki/Topics`：CLI 声明了、README 还把它们当成已有的介绍给用户，
+    而没有任何代码写它们。两边的共同点是**声明与写入分居两处，而且不报错**。
+    """
+
+    ROOT = Path(__file__).resolve().parents[1]
+
+    def cli_dirs(self):
+        text = (self.ROOT / 'bin' / 'weflow-cli.ts').read_text(encoding='utf-8')
+        start = text.index('const dirs = [')
+        end = text.index(']', start)
+        import re as _re
+        return set(_re.findall(r"'([^']+)'", text[start:end]))
+
+    def test_模板里声明的目录_cli_都必须建(self):
+        missing = sorted(d for d in crn.VAULT_DIRS if d not in self.cli_dirs())
+        self.assertEqual(missing, [], 'CLI 的 init 必须把笔记写入方期望的目录都建出来')
+
+    def test_cli_不许声明没有人写的_Wiki_子目录(self):
+        extra = sorted(d for d in self.cli_dirs()
+                       if d.startswith('Wiki/') and d != 'Wiki/Concepts')
+        self.assertEqual(extra, [],
+                         '声明了就要有东西往里写；否则就是又一个永远空着的目录')
+
+    def test_附件目录只有一个名字(self):
+        # `app.json` 的 attachmentFolderPath 曾经写 `Assets`，而布局里建的是 `_attachments`
+        # ——附件会被放进一个不存在的目录。这个字面量当时只出现一次，是个孤例。
+        text = (self.ROOT / 'bin' / 'weflow-cli.ts').read_text(encoding='utf-8')
+        import re as _re
+        declared = _re.search(r"attachmentFolderPath:\s*'([^']+)'", text)
+        self.assertIsNotNone(declared, '读不到 attachmentFolderPath')
+        self.assertIn(declared.group(1), self.cli_dirs(),
+                      '附件目录必须是布局里真的会建出来的那个')
+
+
 if __name__ == '__main__':
     unittest.main()

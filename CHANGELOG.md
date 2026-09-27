@@ -92,6 +92,28 @@ All notable user-facing changes are recorded here. This project follows [Semanti
   block, is idempotent, leaves notes without one alone (counted, not silently skipped), and reports the notes whose
   topic is empty separately rather than inventing one. Applied: 25,845 + 7 rewritten, 0 stale queries left.
 
+- **Three more Vault directories were declared but never written to, and the existing Vault had never been
+  initialized at all.** Auditing the layout after the `007_Wiki` bug found the same shape twice more: `Wiki/Entities/`
+  and `Wiki/Topics/` are created by `vault init` **and described in the generated `README.md` as if they existed**
+  ("实体页（公众号、作者等）", "主题总览页"), while nothing in the codebase writes either; and `.obsidian/app.json`
+  set `attachmentFolderPath: 'Assets'` while the layout creates `_attachments` - so attachments would have gone to
+  a folder that is never created. That `Assets` literal appeared exactly **once** in the whole codebase, which is
+  the same tell as before: a name that exists in one place and contradicts the two places that matter. Both are
+  fixed, and the generated README's directory table now describes the real layout - including an explicit note that
+  the `000`-`008` series is for the user's own notes and stays empty until `vault promote`, because "empty by design"
+  and "empty because nobody built it" are indistinguishable to whoever is reading the vault.
+
+  The two layout lists live in different languages (the TS CLI and a Python script) so they cannot share a
+  constant; the agreement is pinned by test instead - the pattern this repo already uses for its four copies of
+  `TOPIC_ORDER`. `test/create_reading_notes_test.py` parses the CLI's `dirs` array and asserts that it creates
+  everything `VAULT_DIRS` expects, declares no `Wiki/*` subdirectory besides `Concepts`, and that
+  `attachmentFolderPath` names a directory the layout really creates. Three mutation checks.
+
+  **The Vault itself had never been initialized.** It had been built by `create_reading_notes`'s `mkdir` loop, so
+  `README.md`, `Templates/article.md`, `.gitignore` were missing and `.obsidian/app.json` was `{}`. One
+  `vault init --yes` fixed it - **with Obsidian closed first**, because Obsidian holds `app.json` in memory and
+  writes it back on exit, which would have silently reverted the corrected attachment path.
+
 - **The Vault declared its concept directory twice, and one of the two was never written to.** `VAULT_DIRS`
   (created by `vault init` / `create_reading_notes`) listed `007_Wiki/Concepts`, while the pages are actually
   written to the top-level `Wiki/Concepts` - which is also what `vault_rag`, `vault_search`, `wiki_lint`, the
