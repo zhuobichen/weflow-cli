@@ -92,6 +92,30 @@ All notable user-facing changes are recorded here. This project follows [Semanti
   block, is idempotent, leaves notes without one alone (counted, not silently skipped), and reports the notes whose
   topic is empty separately rather than inventing one. Applied: 25,845 + 7 rewritten, 0 stale queries left.
 
+- **The generated MOCs and the concept pages' source links had defects that only show up in Obsidian.** The user's
+  bar was "the knowledge base should present properly in Obsidian", so this pass looked at what renders rather than
+  at what runs:
+
+  - **`008_MOC` had a file called `MOC-.md`.** The 9 notes with an empty topic produced a malformed filename (and
+    the same guard was missing in the ideas generator, which would have written `想法-.md`). Empty-topic notes now
+    produce nothing on either path; "no topic" is not a topic.
+  - **MOC links were written as `[[<date>/<filename>.md|<title>]]`** while the notes' own links are
+    `[[<date>-<title>|<title>]]`. Neither full path nor bare filename - Obsidian resolves by shortest unique path,
+    so these were at best accidental. Links are now the file stem, which is what the rest of the vault uses; verified
+    against the filesystem: 4,497 links, 0 ambiguous stems, 0 pointing at a file that does not exist.
+  - **The MOC's own dataview query carried the same two faults fixed in the reading notes** (`SORT date` on a corpus
+    that has `published`; `contains(hasTopic, …)` on a nested list).
+  - **Concept pages linked their sources by the *card's* filename, not the reading note's.** Cards are named
+    `{date}-{full title}` and reading notes `{date}-{title truncated to 50}`, so for short titles (98%) they coincide
+    and the link resolved **by luck**; measured, **125 of 5,470 source links pointed at nothing**. The card already
+    records the right name in its `from` field - unused until now. `compile_wiki --fix-source-links` repairs the
+    existing pages locally (no model calls, ~20 lines, idempotent, only touches lines with the ` — ` form that the
+    source section uses, so the "related concepts" list is unaffected). Applied: **125 -> 17**, and the 17 remaining
+    point at the user's own notes, which are deliberately not copied into the Vault.
+  - Those same source links also carried a **`.md` extension** - the only place in the whole vault that does. Every
+    other link (note-to-note, daily notes, MOCs) omits it. Whether Obsidian tolerates the extension is not something
+    I verified, so the code now emits the form that is known to work and is used everywhere else.
+
 - **Three more Vault directories were declared but never written to, and the existing Vault had never been
   initialized at all.** Auditing the layout after the `007_Wiki` bug found the same shape twice more: `Wiki/Entities/`
   and `Wiki/Topics/` are created by `vault init` **and described in the generated `README.md` as if they existed**

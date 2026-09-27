@@ -36,10 +36,15 @@ TOPIC_ORDER = ['AI', '学术', '新闻', '文学', '投资', '政治']
 # - 加了 `file.name != this.file.name`：否则一篇笔记的"相关文章"里会列出它自己。
 # - 首列从 `rating` 改成 `published`：`rating` 是留给用户打分的，全库默认空；
 #   拿它当首列，表格十行全是空格。
+# - `contains(hasTopic, "…")` → **`contains(string(hasTopic), "…")`**：笔记里写的是
+#   `hasTopic: [[新闻]]`，而 YAML 把它解析成**嵌套列表** `[['新闻']]`——对它做
+#   `contains(…, "新闻")` 是在拿字符串比一个子列表。外面套一层 `string()` 对形状不敏感
+#   （字符串、列表、链接都成立），代价是万一有主题名互为子串会多匹配——本库的六个主题
+#   （AI/学术/新闻/文学/投资/政治）之间没有这种关系。
 RELATED_QUERY = '''```dataview
 TABLE published AS 日期, source AS 来源, rating
 FROM "002_Literature"
-WHERE contains(hasTopic, "{topic}") AND file.name != this.file.name
+WHERE contains(string(hasTopic), "{topic}") AND file.name != this.file.name
 SORT published DESC
 LIMIT 10
 ```'''
@@ -384,8 +389,19 @@ def refresh_dataview_blocks(vault: str) -> dict:
             continue
         if kind == 'note':
             frontmatter, _ = parse_frontmatter(content)
-            value = str(frontmatter.get('topic') or frontmatter.get('hasTopic') or '')
-            value = value.strip().strip('[]').strip()
+            # **必须先取 `raw[0]`**。笔记里写的是 `hasTopic: [[新闻]]`，YAML 把它解析成
+            # **嵌套列表** `[['新闻']]`；直接 `str()` 整个列表会得到 `"['[新闻]']"`，
+            # 剥掉方括号就成了 `"'[新闻]'"`——一个带着引号和方括号的主题值被塞进查询，
+            # 而且**不报错**，表格只是永远空着。2026-09-27 我第一版就是这么写的，
+            # 25,669 篇被写坏。
+            #
+            # 这段与 `compile_wiki.article_topic` 是同一条规则。**没有直接调它**，是因为
+            # `create_reading_notes` 刻意不引 `_utils`（本仓库记过：加了导入边会让命令能否
+            # 运行取决于调用方的工作目录），而 `compile_wiki` 会传递地引入它。
+            raw = frontmatter.get('topic') or frontmatter.get('hasTopic') or ''
+            if isinstance(raw, (list, tuple)):
+                raw = raw[0] if raw else ''
+            value = str(raw).strip().strip('[]').strip()
             # **主题为空也照改，只是单独计数**：那 7 篇（实测）本来就是空主题，
             # 它们的查询里写着 `hasTopic, ""`。跳过它们等于让它们继续留着
             # `SORT date` 那个排不出来的写法——而"语法对、结果如实为空"比

@@ -64,7 +64,7 @@ class GeneratedNoteTests(unittest.TestCase):
             note = next((vault / '002_Literature').rglob('*.md'))
             text = note.read_text(encoding='utf-8')
         self.assertNotIn('{topic}', text, 'str.format 不会回头扫替换进去的值，得先自己 format 好')
-        self.assertIn('contains(hasTopic, "AI")', dataview_block(text))
+        self.assertIn('contains(string(hasTopic), "AI")', dataview_block(text))
 
 
 class RefreshTests(unittest.TestCase):
@@ -102,6 +102,24 @@ class RefreshTests(unittest.TestCase):
             self.assertIn('published = date("2026-05-20")', daily)
             self.assertNotIn('created = date', daily,
                              'created 是生成日；一次回填会让全库都是同一天')
+
+    def test_hasTopic_是嵌套列表时_主题值不许带引号和方括号(self):
+        """**这条是补的，因为第一版漏了它。**
+
+        `hasTopic: [[AI]]` 被 YAML 解析成**嵌套列表** `[['AI']]`。第一版取值写的是
+        `str(整个列表).strip('[]')`，得到的主题值是 `"'[AI]'"`——带着引号和方括号被塞进
+        查询，**不报错**，表格永远空着。实测：25,669 / 25,676 篇被写坏。
+
+        当时的验收只查了"旧查询没了"（`SORT date` 不在），**没查新查询里的值对不对**。
+        这条就是那个缺口。
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            vault, note = self.build(tmp)
+            crn.refresh_dataview_blocks(str(vault))
+            text = note.read_text(encoding='utf-8')
+        self.assertIn('contains(string(hasTopic), "AI")', text)
+        for junk in ("'[", "]'", "[['", '"['):
+            self.assertNotIn(junk, text, '主题值里混进了 %r' % junk)
 
     def test_只动那个代码块_别的一个字不改(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -144,7 +162,7 @@ class RefreshTests(unittest.TestCase):
         self.assertIn('无主题.md', result['topicless'], '要单独报出来，让人看得见这几篇没有主题')
         self.assertIn('SORT published DESC', text, '查询本身要修好')
         self.assertNotIn('SORT date', text)
-        self.assertIn('contains(hasTopic, "")', text, '主题是空的，查询里就该是空的')
+        self.assertIn('contains(string(hasTopic), "")', text, '主题是空的，查询里就该是空的')
 
     def test_读不出来的文件不静默(self):
         # 读失败（编码/权限）要计数报出来，不能悄悄少一篇

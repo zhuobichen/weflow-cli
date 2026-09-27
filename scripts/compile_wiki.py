@@ -99,6 +99,80 @@ def concept_links(body: str, topic: str = '') -> list[tuple]:
     return links
 
 
+def source_link_target(frontmatter: dict, card_path) -> str:
+    """卡片 → 它在 Vault 里对应的**阅读笔记**的链接名。
+
+    **为什么不能直接用卡片自己的文件名**：卡片叫 `{日期}-{完整标题}.md`，而阅读笔记叫
+    `{日期}-{标题截到 50 字}.md`（`create_reading_notes.safe_filename`）。标题短的（实测
+    98%）两者恰好相同，于是链接**碰巧**能解析；标题一长就对不上——实测 5,470 条来源链接里
+    有 125 条因此指向一个不存在的名字。
+
+    卡片里本来就记着来源笔记的相对路径（`from`，由 `article_notes.build_card` 写入），
+    取它的文件名才是**正确的那一个**。没有 `from` 的老卡片退回卡片自己的名字（保持原行为）。
+    """
+    origin = str(frontmatter.get('from') or '').strip()
+    if origin:
+        return Path(origin).stem
+    return Path(card_path).stem
+
+
+def build_source_name_map(source_dir: str) -> dict:
+    """卡片文件名 → 它对应的阅读笔记文件名。**只收两者不同的那些。**
+
+    不同的原因只有一个：标题超过 50 字（`safe_filename` 会截断）。所以这张表很小，
+    而它就是"已生成的概念页里那些断链"需要的全部信息。
+    """
+    mapping = {}
+    for md_file in Path(source_dir).rglob('*.md'):
+        if md_file.name == 'README.md':
+            continue
+        try:
+            frontmatter, _ = parse_frontmatter(md_file.read_text(encoding='utf-8'))
+        except Exception:
+            continue
+        target = source_link_target(frontmatter, md_file)
+        if target != md_file.stem:
+            mapping[md_file.stem] = target
+    return mapping
+
+
+# "来源"段那一行的形状：`- [[名字]] — 标题`。**破折号是判据**——`## 相关概念` 那一段
+# 也是 `- [[名字]]`，但没有后面的 ` — `。
+SOURCE_LINK_RE = re.compile(r'^- \[\[([^\]]+)\]\] — ', re.M)
+
+
+def fix_source_links(pages_dir: str, source_dir: str) -> dict:
+    """把已有概念页"来源"段里对不上的链接改成正确的那一个。**本地，不调模型。**
+
+    为什么需要单独一趟：上面 `scan_articles` 的修只影响**以后**生成的概念页，而库里已经有
+    1,963 张带着旧链接——实测 125 条指不到任何文件。重跑 `wiki compile` 也能修，但那要
+    重花一遍模型的钱、还会把已经写好的页面随机重写一遍；这里只改那几行链接。
+    """
+    mapping = build_source_name_map(source_dir)
+    pages, links = [], 0
+    for page in sorted(Path(pages_dir).glob('*.md')):
+        text = page.read_text(encoding='utf-8')
+        hits = [0]
+
+        def replace(match):
+            raw = match.group(1)
+            # **后缀要去掉**：库里其他所有链接（笔记互链、日记、MOC）都是不带 `.md` 的写法，
+            # 而这里原来带。带后缀能不能解析我不确定，不带是确定的写法——所以统一成不带。
+            name = raw[:-3] if raw.lower().endswith('.md') else raw
+            # 卡片名与阅读笔记名在标题超长时不同，查表换成对的那个（见 `source_link_target`）
+            fixed = mapping.get(name, name)
+            if fixed != raw:
+                hits[0] += 1
+            return '- [[%s]] — ' % fixed
+
+        updated = SOURCE_LINK_RE.sub(replace, text)
+        if hits[0]:
+            page.write_text(updated, encoding='utf-8')
+            pages.append(page.name)
+            links += hits[0]
+    return {'pages': pages, 'links': links, 'names': len(mapping)}
+
+
 def scan_articles(source_dir: str) -> list[dict]:
     """Scan all .md files, extract frontmatter + wikilinks."""
     articles = []
@@ -120,7 +194,8 @@ def scan_articles(source_dir: str) -> list[dict]:
             continue
 
         articles.append({
-            'file': str(md_file.relative_to(source_dir)),
+            # **用阅读笔记的名字**，不是卡片的（见 `source_link_target`）
+            'file': source_link_target(fm, md_file),
             'title': fm.get('title', md_file.stem),
             'source': fm.get('source', ''),
             'topic': article_topic(fm),
@@ -430,6 +505,8 @@ def main():
     parser.add_argument('--limit', type=int, default=20, help='最多生成概念数 (默认20)')
     parser.add_argument('--relabel', action='store_true',
                         help='只给已有页面补标签与未核验标记（本地，不调用模型）')
+    parser.add_argument('--fix-source-links', action='store_true',
+                        help='只修已有页面"来源"段里指不到文件的链接（本地，不调用模型）')
     parser.add_argument('--min-refs', type=int, default=1,
                         help='至少被几篇材料提到才建页（默认 1；2 能滤掉新闻里的一次性实体）')
     parser.add_argument('--workers', type=int, default=CONCEPT_PAGES_WORKERS,
@@ -442,6 +519,13 @@ def main():
         # 本地重贴标签：不必有 key、不必调模型
         changed = relabel_pages(args.output)
         print('重贴标签：%d 张页面' % changed)
+        return
+
+    if getattr(args, 'fix_source_links', False):
+        # 本地修链接：同上，动的是本地就能算出来的东西，不必把 1,963 页重问一遍
+        result = fix_source_links(args.output, args.source)
+        print('修来源链接：%d 张页面、%d 条链接（可对照的名字 %d 个）'
+              % (len(result['pages']), result['links'], result['names']))
         return
 
     api_key = args.api_key or os.environ.get('DEEPSEEK_API_KEY', '')

@@ -422,5 +422,96 @@ class VaultLayoutTests(unittest.TestCase):
         self.assertTrue(cw.OUTPUT_ROOT.endswith('wechat-vault/Wiki/Concepts'), cw.OUTPUT_ROOT)
 
 
+class SourceLinkTests(unittest.TestCase):
+    """概念页"来源"段的链接必须指向**阅读笔记**，不是卡片。
+
+    实测：5,470 条来源链接里 125 条指不到任何文件。原因不是随机的——卡片名是
+    `{日期}-{完整标题}`，阅读笔记名是 `{日期}-{标题截到 50 字}`，标题短的（98%）两者
+    恰好相同**所以碰巧能解析**，长的就断。卡片里本来就记着正确的来源路径（`from`）。
+    """
+
+    def test_有_from_时用阅读笔记的文件名(self):
+        fm = {'from': 'WeChat/2026-03-03/2026-03-03-短标题.md'}
+        self.assertEqual(cw.source_link_target(fm, Path('2026-03-03-短标题.md')), '2026-03-03-短标题')
+
+    def test_超长标题时两者确实不同(self):
+        # 卡片名保留完整标题，阅读笔记名被 safe_filename 截到 50 字
+        long_title = '别等Seedance 2.0了！她一个人，48h干出了热搜AI漫剧以及很多很多别的东西' * 2
+        fm = {'from': f'WeChat/2026-03-03/2026-03-03-{long_title[:50]}.md'}
+        got = cw.source_link_target(fm, Path(f'2026-03-03-{long_title}.md'))
+        self.assertEqual(got, f'2026-03-03-{long_title[:50]}')
+        self.assertNotEqual(got, Path(f'2026-03-03-{long_title}.md').stem,
+                            '两者不同才是这个 bug 的来头')
+
+    def test_没有_from_的老卡片退回自己的文件名(self):
+        self.assertEqual(cw.source_link_target({}, Path('2026-01-01-老卡.md')), '2026-01-01-老卡')
+
+
+class FixSourceLinksTests(unittest.TestCase):
+    def build(self, tmp):
+        cards = Path(tmp) / 'cards'
+        (cards).mkdir(parents=True)
+        long_title = '很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长的标题' * 2
+        (cards / f'2026-03-03-{long_title}.md').write_text(
+            '---\ntitle: "x"\nfrom: "WeChat/2026-03-03/2026-03-03-%s.md"\n---\n\n'
+            '- [[某概念]] — 描述\n' % long_title[:50], encoding='utf-8')
+        (cards / '2026-03-04-短标题.md').write_text(
+            '---\ntitle: "y"\nfrom: "WeChat/2026-03-04/2026-03-04-短标题.md"\n---\n\n'
+            '- [[某概念]] — 描述\n', encoding='utf-8')
+        pages = Path(tmp) / 'pages'
+        pages.mkdir()
+        (pages / '某概念.md').write_text(
+            '## 相关概念\n\n- [[另一个概念]]\n\n## 来源\n\n'
+            f'- [[2026-03-03-{long_title}]] — 长标题那篇\n'
+            '- [[2026-03-04-短标题]] — 短标题那篇\n', encoding='utf-8')
+        return pages, cards, long_title
+
+    def test_只改对不上的那一条(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            pages, cards, long_title = self.build(tmp)
+            result = cw.fix_source_links(str(pages), str(cards))
+            text = next(pages.glob('*.md')).read_text(encoding='utf-8')
+        self.assertEqual(result['links'], 1, '只有超长标题那条该改')
+        # 断言**链接目标**：它应当变成截断后的那个名字，而标题显示那句原样保留
+        self.assertIn('- [[2026-03-03-%s]] — 长标题那篇' % long_title[:50], text)
+        self.assertNotIn('- [[2026-03-03-%s]] — ' % long_title, text,
+                         '完整标题那个（指不到文件的）该被换掉')
+        self.assertIn('- [[2026-03-04-短标题]] — 短标题那篇', text, '对得上的原样留着')
+
+    def test_相关概念那一段不受影响(self):
+        # 判据是行尾的 ` — `：`## 相关概念` 也是 `- [[名字]]`，但没有破折号
+        with tempfile.TemporaryDirectory() as tmp:
+            pages, cards, _ = self.build(tmp)
+            cw.fix_source_links(str(pages), str(cards))
+            text = next(pages.glob('*.md')).read_text(encoding='utf-8')
+        self.assertIn('- [[另一个概念]]\n', text)
+
+    def test_去掉_md_后缀(self):
+        """库里**其他所有**链接（笔记互链、日记、MOC）都不带 `.md`，只有这一处带。
+
+        带后缀能不能解析我没有把握，但不带是确定的写法——而且统一之后全库一个形态。
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            pages = Path(tmp) / 'pages'
+            pages.mkdir()
+            cards = Path(tmp) / 'cards'
+            cards.mkdir()
+            (pages / '甲.md').write_text('## 来源\n\n- [[某篇笔记.md]] — 标题\n', encoding='utf-8')
+            result = cw.fix_source_links(str(pages), str(cards))
+            text = (pages / '甲.md').read_text(encoding='utf-8')
+        self.assertEqual(result['links'], 1)
+        self.assertIn('- [[某篇笔记]] — 标题', text)
+        self.assertNotIn('.md]]', text)
+
+    def test_幂等(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            pages, cards, _ = self.build(tmp)
+            cw.fix_source_links(str(pages), str(cards))
+            first = next(pages.glob('*.md')).read_text(encoding='utf-8')
+            again = cw.fix_source_links(str(pages), str(cards))
+            self.assertEqual(next(pages.glob('*.md')).read_text(encoding='utf-8'), first)
+            self.assertEqual(again['links'], 0, '第二次不该再改')
+
+
 if __name__ == '__main__':
     unittest.main()

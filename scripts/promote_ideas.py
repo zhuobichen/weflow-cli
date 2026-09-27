@@ -86,6 +86,9 @@ def generate_ideas(articles: list[dict], api_key: str, vault_path: str) -> int:
     for topic, arts in by_topic.items():
         if len(arts) < 5:
             continue
+        if not str(topic).strip():
+            # 同上：空主题会写出 `想法-.md` 这种畸形文件名
+            continue
         # 取代表性文章（高概念数的）
         samples = sorted(arts, key=lambda a: len(a.get('concepts', [])), reverse=True)[:10]
         titles = '\n'.join(f'- {a["title"][:60]} (来源: {a["source"]})' for a in samples[:8])
@@ -178,6 +181,11 @@ def generate_moc(articles: list[dict], vault_path: str) -> int:
     for topic, arts in by_topic.items():
         if len(arts) < 5:
             continue
+        if not str(topic).strip():
+            # **主题为空的不生成 MOC。** 否则就是一个叫 `MOC-.md` 的文件——畸形名字，
+            # 在文件列表里看着就是个坏掉的条目；而"没有主题的文章"本来也无从做主题导航。
+            # （2026-09-27 实测：全库 9 篇无主题，它确实生成了 `MOC-.md`。）
+            continue
 
         # 按日期分组
         by_date = defaultdict(list)
@@ -213,7 +221,11 @@ article_count: {len(arts)}
             day_arts = by_date[date_str]
             content += f'\n### {date_str} ({len(day_arts)} 篇)\n'
             for a in day_arts[:8]:
-                content += f'- [[{a["date"]}/{a["path"].name}|{a["title"][:60]}]] — {a["source"]}\n'
+                # **链接用文件名（stem），不带目录、不带 `.md`。** 笔记自己的链接就是
+                # 这个形态（`create_reading_notes` 写 `[[{日期}-{标题}|{标题}]]`），
+                # Obsidian 按"最短唯一路径"解析得了；而原来的 `日期/文件名.md` 既不是
+                # 全路径、也不是文件名，很可能解析不了——链接会渲染成未解析的暗色条目。
+                content += f'- [[{a["path"].stem}|{a["title"][:60]}]] — {a["source"]}\n'
             if len(day_arts) > 8:
                 content += f'- ... 等 {len(day_arts)} 篇\n'
 
@@ -234,15 +246,18 @@ article_count: {len(arts)}
             if other != topic:
                 content += f'- [[MOC-{other}]]\n'
 
+        # 统计表这段查询与阅读笔记里那两处修的是同一对毛病：`SORT date` 排的字段在阅读
+        # 笔记里不存在（是 `published`），`contains(hasTopic, …)` 比的是嵌套列表
+        # （`hasTopic: [[AI]]` → `[['AI']]`）。见 `create_reading_notes.RELATED_QUERY` 的注释。
         content += f'''
 
 ## 📊 统计
 
 ```dataview
-TABLE date, source, rating
+TABLE published AS 日期, source AS 来源, rating
 FROM "002_Literature"
-WHERE contains(hasTopic, "{topic}")
-SORT date DESC
+WHERE contains(string(hasTopic), "{topic}")
+SORT published DESC
 ```
 '''
 
