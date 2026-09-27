@@ -64,6 +64,31 @@ MAX_MESSAGES_PER_CONVERSATION = 60000
 # 每张卡最多出几话题/几人。**原来是 6**——那时每个会话只看 120 条，6 条勉强够；
 # 现在正文全进来了（一个群可能 3 万条、几百人），6 个明显是抽样。
 PER_CARD_ITEMS = 20
+# 输出的 token 上限。**2000 太小了**：正文全进来之后，一个会话要产出的 JSON
+# （摘要 + 时间线 + 最多 20 个话题/人物）能到四千多 token——实测 34 个会话里绝大多数
+# 是 `finish_reason=length`，JSON 断在半路，而报出来的原因是"模型没返回可用 JSON"，
+# 看不出是被截断。实测 16000 被接受。
+MAX_OUTPUT_TOKENS = 16000
+# 输入的字数预算。实测该模型上下文 **1,048,576 token**，而最容易踩线的是那个 3 万条的群。
+# 按保守的 1.5 字符/token 换算，并给输出留出 MAX_OUTPUT_TOKENS，定在下面这个数。
+# **超了就从最旧的丢，并报出丢了几条**——不许静默截断。
+PROMPT_CHAR_BUDGET = 1450000
+
+
+def trim_to_budget(lines, budget=PROMPT_CHAR_BUDGET):
+    """超预算就从**最旧的**开始丢，返回 `(保留的 lines, 丢掉的条数)`。
+
+    丢最旧的而不是最新的：知识卡要回答的是"最近这段在聊什么"，而丢最新的会让时间线
+    断在中间——最近的对话也恰恰是用户最可能关心的。
+    """
+    total = len('\n'.join(lines))
+    if total <= budget:
+        return lines, 0
+    dropped = 0
+    while dropped < len(lines) and total > budget:
+        total -= len(lines[dropped]) + 1
+        dropped += 1
+    return lines[dropped:], dropped
 # 每条消息进提示词的字数上限。这是**本功能自己的口径**（知识卡要的是内容，不是起草那种短句），
 # 与 `draft_reply.DRAFT_MSG_CHARS=160` 是两件事，别互相套用。
 NOTE_MSG_CHARS = 300
@@ -273,13 +298,15 @@ def collect(out_root, days, limit):
             if not in_window:
                 continue
             lines = [format_line(m, NOTE_MSG_CHARS) for m in reversed(in_window)]
+            # 超上下文预算就从最旧的丢（见 `trim_to_budget`），丢了几条要写进卡里
+            lines, dropped = trim_to_budget(lines)
             chars = len('\n'.join(lines))
             if not worth_a_card(len(lines), chars):
                 thin.append({'name': item['name'], 'messages': len(lines), 'chars': chars})
                 continue
             cards.append({'talker': item['talker'], 'name': item['name'],
                           'messages': len(lines), 'chars': chars, 'lines': lines,
-                          'truncated': truncated})
+                          'truncated': truncated, 'dropped': dropped})
         return {'cards': cards, 'skipped': thin, 'outRoot': out_root}, None
     finally:
         for conn in conns:
@@ -370,7 +397,7 @@ def main():
         try:
             # 2000 而不是 1200：长对话要产出的 JSON（摘要+时间线+话题+人物）中文很吃 token，
             # 被截断的 JSON 解不出来，而失败清单只说「没返回可用 JSON」——查不出是哪种失败。
-            raw = call_deepseek(prompt, api_key, max_tokens=2000, timeout=120)
+            raw = call_deepseek(prompt, api_key, max_tokens=MAX_OUTPUT_TOKENS, timeout=600)
         except Exception as error:
             failed.append({'name': card['name'], 'reason': '调用失败：%s' % error})
             continue

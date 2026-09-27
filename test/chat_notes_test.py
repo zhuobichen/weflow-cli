@@ -222,5 +222,34 @@ class FetchAllTests(unittest.TestCase):
         self.assertGreaterEqual(len(msgs), 3000)
 
 
+class TrimTests(unittest.TestCase):
+    """超上下文预算时从**最旧的**丢，并把丢了几条报出来。
+
+    实测该模型上下文 1,048,576 token，而最容易踩线的是那个 3 万条的群——它一度
+    1,050,622 token，**超出 2,046**，被 API 400 拒绝；而那次失败报的是"调用失败"，
+    不是"太长了"。这里的选择是：宁可丢最旧的几条并把数目写出来，也不要静默截断。
+    """
+
+    def test_没超就一条不动(self):
+        lines = ['a' * 100, 'b' * 100]
+        kept, dropped = cn.trim_to_budget(lines, budget=10_000)
+        self.assertEqual(kept, lines)
+        self.assertEqual(dropped, 0)
+
+    def test_超了丢最旧的_且丢完确实在预算内(self):
+        lines = ['x' * 1000 for _ in range(10)]
+        kept, dropped = cn.trim_to_budget(lines, budget=3000)
+        # 10 条 × 1000 字 + 9 个换行 = 10009；丢 7 条剩 3 条是 3002 字，**仍超 3000**，
+        # 所以要到 8 条（剩 2001 字）。第一次我把期望写成 7，是算错了，不是代码错。
+        self.assertEqual(dropped, 8)
+        self.assertLessEqual(len('\n'.join(kept)), 3000)
+        self.assertEqual(kept, lines[-len(kept):], '丢的是最旧的，留的是最近的')
+
+    def test_全丢也不炸(self):
+        kept, dropped = cn.trim_to_budget(['x' * 5000], budget=10)
+        self.assertLessEqual(len('\n'.join(kept)), 10)
+        self.assertEqual(dropped, 1)
+
+
 if __name__ == '__main__':
     unittest.main()
