@@ -94,7 +94,10 @@ def collect_files(vault: str, biz_daily: str, search_type: str, days: int) -> li
         # 于是 `--type note` 一直搜的是空气——而它本该覆盖的阅读笔记有 25,676 篇，
         # 是最大的一层。笔记实际住在下面这几个目录里。
         vault_path = Path(vault)
-        for sub in ('002_Literature', '001_Daily', '003_Ideas', '008_MOC'):
+        # `Sources/Chat` 是聊天知识卡（`chat_notes --vault-copy` 放的）。它跟
+        # `Sources/WeChat`（两万六千篇原始文章，走 biz-daily 那条路）不是一回事：
+        # 这里面是一百多张**已经提炼过的**卡——会话里聊了什么、有哪些人、欠着什么。
+        for sub in ('002_Literature', '001_Daily', '003_Ideas', '008_MOC', 'Sources/Chat'):
             notes_dir = vault_path / sub
             if not notes_dir.is_dir():
                 continue

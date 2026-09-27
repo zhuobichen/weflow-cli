@@ -251,5 +251,41 @@ class TrimTests(unittest.TestCase):
         self.assertEqual(dropped, 1)
 
 
+class VaultCopyTests(unittest.TestCase):
+    """把聊天卡拷进 Vault —— **必须带前缀**。
+
+    卡名就是会话名（`白马非马`、`老表亲戚群`），而概念页也可能同名。两个文件同名时
+    `[[白马非马]]` 在 Obsidian 里是二义的，那会把**已经解析得了的链接弄坏**——
+    实测：概念页里有 30 条来源链接正指向自己。
+    """
+
+    def test_带前缀拷贝_且不改内容(self):
+        import tempfile
+        from pathlib import Path
+        CARD = '---\ntitle: "白马非马"\n---\n\n正文\n'
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / 'chat-notes'
+            out.mkdir()
+            (out / '白马非马.md').write_text(CARD, encoding='utf-8')
+            (out / 'README.md').write_text('说明', encoding='utf-8')
+            vault = Path(tmp) / 'vault'
+            r = cn.copy_to_vault(str(out), str(vault))
+            target = vault / 'Sources' / 'Chat' / (cn.CHAT_CARD_PREFIX + '白马非马.md')
+            got = target.read_text(encoding='utf-8')
+            exists = target.exists()
+        self.assertEqual(r['copied'], 1, 'README 不算卡')
+        self.assertTrue(exists, '落点要是 Sources/Chat/会话-白马非马.md')
+        self.assertEqual(got, CARD, '内容要原样')
+
+    def test_前缀与_compile_wiki_用的是同一个常量(self):
+        # 两处各写一份前缀，就会变成"卡在这边、链接指那边"
+        import importlib.util
+        from pathlib import Path
+        spec = importlib.util.spec_from_file_location(
+            'cw', Path(__file__).resolve().parents[1] / 'scripts' / 'compile_wiki.py')
+        cw = importlib.util.module_from_spec(spec); spec.loader.exec_module(cw)
+        self.assertEqual(cn.CHAT_CARD_PREFIX, cw.CHAT_CARD_PREFIX)
+
+
 if __name__ == '__main__':
     unittest.main()

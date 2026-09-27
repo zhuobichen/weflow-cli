@@ -8,6 +8,20 @@ All notable user-facing changes are recorded here. This project follows [Semanti
 
 ### Added
 
+- **The chat cards are now in the Vault, under `Sources/Chat/`, and the assistant can search them.** They were only
+  in `output/chat-notes/`, which meant a person browsing Obsidian could see the chat *concepts* but never the
+  conversation that produced them (the timeline, the people, what is owed) - and, measurably, **1,176 of the chat
+  concept pages' "source" links pointed at nothing** plus **30 pointed at the page itself**. Both numbers are now
+  zero (1,822 resolve).
+
+  **The cards had to be renamed on the way in**: a chat card is named after its conversation (`白马非马`,
+  `老表亲戚群`), and a concept page can carry the same name. Two files with the same stem make `[[白马非马]]`
+  ambiguous in Obsidian, which would have broken links that currently work - so the Vault copies carry a
+  `会话-` prefix, and both the copy step and the link fixer read that prefix **from one shared constant**
+  (`_utils.CHAT_CARD_PREFIX`), because two copies of it is exactly the "same fact written twice" failure this repo
+  keeps hitting. `compile_wiki --fix-source-links` rewrote 1,825 links across 1,520 pages; `vault_search
+  --type note` now reads `Sources/Chat` too, so "what did we talk about in that group" reaches the cards.
+
 - **The chat line is now part of the knowledge graph, and it arrives as a *people* graph.** `chat-notes` over a
   400-day window produced **132 conversation cards** (one call per conversation) and `wiki compile` turned them
   into **1,519 concept pages** - `Wiki/Concepts` went from 2,115 to **3,634 pages**, and the graph from 4,162 to

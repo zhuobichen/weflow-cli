@@ -42,7 +42,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _utils import (SEPARATOR, call_deepseek, decrypt_lock, get_api_key, load_config,  # noqa: E402
+from _utils import (CHAT_CARD_PREFIX, SEPARATOR, call_deepseek, decrypt_lock,  # noqa: E402
+                    get_api_key, load_config,
                     note_path as _shared_note_path, plain, write_with_frontmatter)
 from reply_debt import collect_conversations, format_line  # noqa: E402
 
@@ -266,6 +267,30 @@ def fetch_all_messages(conns, talker, name_map, own_wxid):
     return out, len(out) >= MAX_MESSAGES_PER_CONVERSATION
 
 
+def copy_to_vault(out_root, vault_root):
+    """把聊天卡拷进 Vault 的 `Sources/Chat/`，**文件名带 `会话-` 前缀**。
+
+    为什么要带前缀：聊天卡的**名字就是会话名**（`白马非马`、`老表亲戚群`），而概念页
+    也可能叫同一个名字。两个文件同名时 `[[白马非马]]` 在 Obsidian 里是二义的——
+    那会把**已经解析得了的链接弄坏**（实测：概念页里有 30 条来源链接正指向自己）。
+
+    为什么要拷进来：不拷的话，129 张卡（时间线、人物、"欠着什么"）在 Vault 里完全
+    看不见，而且概念页那 **1,176 条**来源链接全都指不到东西。人看知识库时只能看到
+    "概念"，看不到产生它的会话。
+    """
+    cards = sorted(Path(out_root).glob('*.md'))
+    target_dir = Path(vault_root) / 'Sources' / 'Chat'
+    target_dir.mkdir(parents=True, exist_ok=True)
+    copied = 0
+    for card in cards:
+        if card.name.startswith('README'):
+            continue
+        target = target_dir / (CHAT_CARD_PREFIX + card.name)
+        target.write_bytes(card.read_bytes())
+        copied += 1
+    return {'copied': copied, 'dir': str(target_dir)}
+
+
 def collect(out_root, days, limit):
     """读本地库：最近有动静的会话 + 每个会话窗口内的对话。**不调用任何模型。**"""
     config = load_config()
@@ -332,6 +357,10 @@ def main():
     parser.add_argument('--out', default=OUTPUT_ROOT, help='卡片输出目录')
     parser.add_argument('--dry-run', action='store_true', help='只报要发多少给模型，不调用')
     parser.add_argument('--yes', action='store_true', help='确认调用云端模型')
+    parser.add_argument('--vault-root', default='output/wechat-vault',
+                        help='Vault 根目录（--vault-copy 用）')
+    parser.add_argument('--vault-copy', action='store_true',
+                        help='把聊天卡拷进 Vault 的 Sources/Chat（本地，不调模型）')
     parser.add_argument('--json', action='store_true')
     args = parser.parse_args()
 
@@ -415,6 +444,10 @@ def main():
         write_with_frontmatter(str(path), frontmatter, body)
         written.append({'name': card['name'], 'file': str(path),
                         'topics': len(note['topics']), 'people': len(note['people'])})
+
+    if getattr(args, 'vault_copy', False):
+        sync = copy_to_vault(args.out, args.vault_root)
+        print('  入 Vault: %d 张卡 → %s' % (sync['copied'], sync['dir']))
 
     result = {'success': True, 'action': 'chat-notes', 'days': args.days,
               'model': 'DeepSeek（生成）', 'sendsNothing': True, 'writesNothingRemote': True,

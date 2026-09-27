@@ -23,8 +23,8 @@ from pathlib import Path
 from collections import defaultdict, Counter
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _utils import (call_deepseek, get_api_key, load_config,  # noqa: E402
-                    parse_frontmatter, write_with_frontmatter)
+from _utils import (CHAT_CARD_PREFIX, call_deepseek, get_api_key,  # noqa: E402
+                    load_config, parse_frontmatter, write_with_frontmatter)
 
 # Default paths
 SOURCE_ROOT = 'output/biz-daily'
@@ -179,6 +179,12 @@ def build_source_name_map(source_dir: str) -> dict:
         try:
             frontmatter, _ = parse_frontmatter(md_file.read_text(encoding='utf-8'))
         except Exception:
+            continue
+        # **聊天卡在 Vault 里带前缀**（`Sources/Chat/会话-<会话名>.md`）：卡名就是会话名，
+        # 而概念页可能同名，两个同名文件会让 `[[名字]]` 二义。所以这里也要跟着改，
+        # 否则概念页的"来源"链接永远指不到那张卡（实测 1,176 条）。
+        if Path(source_dir).name == 'chat-notes':
+            mapping[md_file.stem] = CHAT_CARD_PREFIX + md_file.stem
             continue
         target = source_link_target(frontmatter, md_file)
         if target != md_file.stem:

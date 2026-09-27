@@ -71,6 +71,20 @@ class CollectFilesTests(unittest.TestCase):
             old = vs.collect_files(vault, biz, 'article', 3650)
             self.assertIn('老文章.md', {p.name for p, _, _ in old}, '窗口放宽就该进来')
 
+    def test_聊天卡也在_笔记_这一类里(self):
+        """`Sources/Chat` 是 `chat_notes --vault-copy` 放的聊天知识卡。
+
+        不把它算进来的话，会话里聊了什么、有哪些人，对搜索完全不可见——而那些卡
+        正是聊天图谱的原料。
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            vault, biz = self.build(tmp)
+            (Path(vault) / 'Sources' / 'Chat').mkdir(parents=True)
+            (Path(vault) / 'Sources' / 'Chat' / '会话-某群.md').write_text(
+                '---\ntitle: "会话-某群"\n---\n\n## AI 摘要\n\n群里聊了什么。\n', encoding='utf-8')
+            got = vs.collect_files(vault, biz, 'note', 90)
+        self.assertIn('会话-某群.md', {p.name for p, _, _ in got})
+
     def test_all_把三层都收进来(self):
         with tempfile.TemporaryDirectory() as tmp:
             vault, biz = self.build(tmp)
