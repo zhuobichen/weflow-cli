@@ -25,9 +25,15 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _utils import parse_frontmatter  # noqa: E402
+from _utils import CONCEPT_DIRS, parse_frontmatter  # noqa: E402
 
 DEFAULT_PAGES_DIR = 'output/wechat-vault/Wiki/Concepts'
+VAULT_ROOT = 'output/wechat-vault'
+# 体检要看的**全部**概念页目录（Vault 相对路径那份清单在 `_utils.CONCEPT_DIRS`）。
+VAULT_CONCEPT_DIRS = tuple(str(Path(VAULT_ROOT) / d) for d in CONCEPT_DIRS)
+# 链接可能指向的「材料」层（与卡片目录一起参与可解析性判断）
+MATERIAL_DIRS = tuple(str(Path(VAULT_ROOT) / d) for d in
+                      ('002_Literature', '001_Daily', 'Sources/Chat', 'Sources/WeChat'))
 # 卡片在哪（`## 来源` 那节的 `[[<相对路径>.md]]` 要从这些目录里找）。
 # **用通配而不是写死目录名**：今天是文章线与对话线，明天再加一条来源（收藏线就是这么加的），
 # 写死的话体检会**静默漏算**那条线的入链——而漏算的表现是"每张新页都是孤儿"。
@@ -76,6 +82,16 @@ def links_by_section(body: str) -> list:
     return out
 
 
+def collect_card_stems(card_dirs) -> set:
+    """卡片文件名（不带 `.md`）。`## 来源` 那节的链接就是这些名字。"""
+    stems = set()
+    for directory in card_dirs:
+        root = Path(directory)
+        if root.exists():
+            stems |= {p.stem for p in root.rglob('*.md')}
+    return stems
+
+
 def collect_cards(card_dirs) -> list:
     """卡片里的链接——它们才是概念页**真正的**入链（每张卡都链着它提炼出的概念）。"""
     links = []
@@ -92,16 +108,24 @@ def collect_cards(card_dirs) -> list:
     return links
 
 
-def resolve(name: str, page_stems: set, card_dirs) -> bool:
+def resolve(name: str, page_stems: set, card_dirs, card_stems=None) -> bool:
     """这个链接指向的东西存在吗。
 
     - 带路径或以 `.md` 结尾的 → 是**来源卡片**，去卡片目录里找；
-    - 其余 → 是**概念**，看有没有同名页面。
+    - 否则 → ⚠️ **既可能是概念，也可能是卡片**。
+
+    这里原来写的是"裸名字就是概念"，而 `## 来源` 那节的链接**就是裸的卡片名**
+    （`compile_wiki --fix-source-links` 把 `.md` 去掉了，与全库其余链接统一）。
+    于是那条判据把 7,872 条**在 Obsidian 里解析得好好的**链接全报成了断链。
+
+    `card_stems` 为空时退回旧行为，好让调用方不必一次性全改。
     """
     if name.endswith('.md') or '/' in name:
         target = name if name.endswith('.md') else name + '.md'
         return any((Path(d) / target).exists() for d in card_dirs)
-    return name in page_stems
+    if name in page_stems:
+        return True
+    return name in (card_stems or set())
 
 
 RELATED_SECTIONS = ('相关概念', '相关主题', '相关')
@@ -233,22 +257,35 @@ def collect(pages_dir: str, card_dirs) -> list:
 def main():
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')
     parser = argparse.ArgumentParser(description='知识库体检（本地，不联网、不调用模型）')
-    parser.add_argument('--dir', default=DEFAULT_PAGES_DIR, help='概念页目录')
+    # **默认体检全部概念页目录**（文章一个、聊天一个，见 `_utils.CONCEPT_DIRS`）。
+    # 这条一旦只读一个，分出去的那一半就会"体检通过"——因为它根本没被看。
+    parser.add_argument('--dir', action='append', default=[],
+                        help='概念页目录（可重复；默认 %s）'
+                             % '、'.join(VAULT_CONCEPT_DIRS))
     parser.add_argument('--json', action='store_true')
     args = parser.parse_args()
 
-    pages_dir = Path(args.dir)
-    if not pages_dir.exists():
-        message = '没有概念页（%s 不存在）——先跑 article-notes / chat-notes，再跑 wiki compile' % args.dir
+    dirs = args.dir or VAULT_CONCEPT_DIRS
+    existing = [d for d in dirs if Path(d).exists()]
+    if not existing:
+        message = ('没有概念页（%s 都不存在）——先跑 article-notes / chat-notes，'
+                   '再跑 wiki compile' % '、'.join(dirs))
         print(json.dumps({'success': False, 'error': message}, ensure_ascii=False)
               if args.json else message)
         return 1
 
-    pages = collect(args.dir, CARD_DIRS)
+    pages = [page for d in existing for page in collect(d, CARD_DIRS)]
     card_links = collect_cards(CARD_DIRS)
-    report = inspect(pages, lambda name: resolve(name, {p['stem'] for p in pages}, CARD_DIRS), card_links)
+    # **链接可能指向材料，而不是卡片。** `## 来源` 指的是「这一页是从哪来的」：
+    # 文章线指向 `002_Literature` 里的阅读笔记，聊天线指向 `Sources/Chat` 里的卡。
+    # 只查卡片目录会把这类全报成断链——实测 1,950 条，而它们在 Obsidian 里都是好的
+    # （两边文件名本来就不同：卡片保留完整标题，阅读笔记截到 50 字）。
+    card_stems = collect_card_stems(tuple(CARD_DIRS) + MATERIAL_DIRS)
+    report = inspect(pages,
+                     lambda name: resolve(name, {p['stem'] for p in pages}, CARD_DIRS, card_stems),
+                     card_links)
     report['success'] = True
-    report['pagesDir'] = args.dir
+    report['pagesDir'] = existing
     report['cardLinks'] = len(card_links)
 
     if args.json:

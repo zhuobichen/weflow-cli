@@ -31,7 +31,7 @@ test('邻居连同各自的一句定义一起给出来', () => {
     '乙.md': page('乙', [], '乙是第一个邻居。'),
     '丙.md': page('丙', [], '丙是第二个邻居。'),
   })
-  const { linked, missing } = conceptNeighbors('甲', dir)
+  const { linked, missing } = conceptNeighbors('甲', [dir])
   assert.deepEqual(linked, [
     { name: '乙', brief: '乙是第一个邻居。' },
     { name: '丙', brief: '丙是第二个邻居。' },
@@ -45,7 +45,7 @@ test('没有页的邻居只报数_不返回一个取不到的名字', () => {
     '甲.md': page('甲', ['乙', '还没建页的概念', '另一个也没建']),
     '乙.md': page('乙', [], '乙的定义。'),
   })
-  const { linked, missing } = conceptNeighbors('甲', dir)
+  const { linked, missing } = conceptNeighbors('甲', [dir])
   assert.deepEqual(linked.map(l => l.name), ['乙'])
   assert.equal(missing, 2, '没页的要报出来，否则模型会去追一个取不到的名字')
   rmSync(dir, { recursive: true, force: true })
@@ -53,8 +53,8 @@ test('没有页的邻居只报数_不返回一个取不到的名字', () => {
 
 test('页里没有相关概念段时不炸', () => {
   const dir = vault({ '甲.md': '---\ntitle: "甲"\n---\n\n# 甲\n\n只有定义。\n' })
-  assert.deepEqual(conceptNeighbors('甲', dir), { linked: [], missing: 0 })
-  assert.deepEqual(conceptNeighbors('不存在', dir), { linked: [], missing: 0 })
+  assert.deepEqual(conceptNeighbors('甲', [dir]), { linked: [], missing: 0 })
+  assert.deepEqual(conceptNeighbors('不存在', [dir]), { linked: [], missing: 0 })
   rmSync(dir, { recursive: true, force: true })
 })
 
@@ -80,9 +80,20 @@ test('顺着图走一跳_能拿到邻居那一页的邻居', () => {
     '乙.md': page('乙', ['丙'], '乙的定义。'),
     '丙.md': page('丙', [], '丙的定义。'),
   })
-  const one = conceptNeighbors('甲', dir)
-  const two = conceptNeighbors(one.linked[0].name, dir)
+  const one = conceptNeighbors('甲', [dir])
+  const two = conceptNeighbors(one.linked[0].name, [dir])
   assert.equal(two.linked[0].name, '丙')
   assert.equal(two.linked[0].brief, '丙的定义。')
+  rmSync(dir, { recursive: true, force: true })
+})
+
+test('传单个目录字符串时直接报错_不要按字符遍历', () => {
+  // **这个坑真的踩过。** 参数从"一个目录"变成"目录数组"之后，测试里仍传字符串，
+  // 于是 `for (const dir of wikiDirs)` 逐个字符地遍历了路径，
+  // `join('D', '甲.md')` 自然不存在——函数安静地返回"没有邻居"。
+  // 类型能拦住 src 里的调用（`tsc` 覆盖 `src/**`），但测试不被类型检查，运行时也不再报错，
+  // 所以这里必须**响**，而不是继续给一个看起来正常的空结果。
+  const dir = vault({ '甲.md': page('甲', ['乙']), '乙.md': page('乙', [], '乙的定义。') })
+  assert.throws(() => conceptNeighbors('甲', dir as unknown as string[]), /数组/)
   rmSync(dir, { recursive: true, force: true })
 })

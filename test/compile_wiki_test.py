@@ -345,7 +345,7 @@ class ParallelPageTests(unittest.TestCase):
             (out / '甲.md').write_text('x', encoding='utf-8')      # 已存在
             concepts = [('甲', [{'desc': 'd'}]), ('乙', [{'desc': 'd'}]),
                         ('丙', [{'desc': 'd'}])]
-            jobs, skipped = cw.build_jobs(concepts, out)
+            jobs, skipped, _ = cw.build_jobs(concepts, out)
             self.assertEqual(skipped, 1)
             self.assertEqual([name for name, _, _ in jobs], ['乙', '丙'])
             cw.generate_concept = self.fake()
@@ -355,7 +355,7 @@ class ParallelPageTests(unittest.TestCase):
     def test_顺序与输入一致(self):
         with tempfile.TemporaryDirectory() as tmp:
             concepts = [('第一个', []), ('第二个', []), ('第三个', [])]
-            jobs, _ = cw.build_jobs(concepts, Path(tmp))
+            jobs, _, _ = cw.build_jobs(concepts, Path(tmp))
             cw.generate_concept = self.fake(delay=lambda name: 0.05 * ('第一个', '第二个', '第三个').index(name))
             got = [(job[0], result[0]['title'] if result else None)
                    for job, result in cw.iter_concept_pages(jobs, 'k', workers=4)]
@@ -364,7 +364,7 @@ class ParallelPageTests(unittest.TestCase):
 
     def test_一页失败不拖垮整批(self):
         with tempfile.TemporaryDirectory() as tmp:
-            jobs, _ = cw.build_jobs([('甲', []), ('乙', []), ('丙', [])], Path(tmp))
+            jobs, _, _ = cw.build_jobs([('甲', []), ('乙', []), ('丙', [])], Path(tmp))
             cw.generate_concept = self.fake(fail_for=('乙',))
             got = list(cw.iter_concept_pages(jobs, 'k', workers=4))
         self.assertEqual(len(got), 3, '失败的那一页占位仍在，不能少一项')
@@ -374,7 +374,7 @@ class ParallelPageTests(unittest.TestCase):
         import inspect
         import time as _t
         with tempfile.TemporaryDirectory() as tmp:
-            jobs, _ = cw.build_jobs([('甲', []), ('乙', []), ('丙', [])], Path(tmp))
+            jobs, _, _ = cw.build_jobs([('甲', []), ('乙', []), ('丙', [])], Path(tmp))
             cw.generate_concept = self.fake(delay=lambda name: 0.05 * ('甲', '乙', '丙').index(name))
             started = _t.time()
             stream = cw.iter_concept_pages(jobs, 'k', workers=4)
@@ -388,12 +388,72 @@ class ParallelPageTests(unittest.TestCase):
         # 假实现本身不睡，所以这里量到的就是节流那一份。
         import time as _t
         with tempfile.TemporaryDirectory() as tmp:
-            jobs, _ = cw.build_jobs([('甲', []), ('乙', [])], Path(tmp))
+            jobs, _, _ = cw.build_jobs([('甲', []), ('乙', [])], Path(tmp))
             cw.generate_concept = self.fake(delay=lambda name: 0)
             started = _t.time()
             list(cw.iter_concept_pages(jobs, 'k', workers=1))
             elapsed = _t.time() - started
         self.assertGreaterEqual(elapsed, 0.9, '两页串行至少要各等 0.5 秒，实测只用了 %.2fs' % elapsed)
+
+
+class SiblingConceptDirTests(unittest.TestCase):
+    """一个概念名在库里只能有**一张页** —— 两条线分开之后新出现的一条约束。
+
+    2026-09-27 把知识库分成 `Wiki/Concepts`（文章线）与 `Chat/Concepts`（聊天线）之后，
+    聊天线立刻为 11 个文章线已有的概念（`DeepSeek`、`智谱`…）各建了一张同名页。
+    两张同名页会让 `[[DeepSeek]]` 在 Obsidian 里变成二义的：它挑一张连上，另一张等同于断了，
+    **而两边都不报错**——`wiki lint` 是唯一会说出来的人（"同名页 11 组"）。
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name) / 'vault'
+        (self.root / 'Wiki' / 'Concepts').mkdir(parents=True)
+        (self.root / 'Chat' / 'Concepts').mkdir(parents=True)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_找得到另一条线(self):
+        self.assertEqual(cw.sibling_concept_dirs(self.root / 'Chat' / 'Concepts'),
+                         [self.root / 'Wiki' / 'Concepts'])
+        self.assertEqual(cw.sibling_concept_dirs(self.root / 'Wiki' / 'Concepts'),
+                         [self.root / 'Chat' / 'Concepts'])
+
+    def test_库外的目录没有另一条线(self):
+        # `--output` 指到库外时不该凭空猜一个兄弟目录出来
+        outside = Path(self.tmp.name) / 'elsewhere'
+        outside.mkdir()
+        self.assertEqual(cw.sibling_concept_dirs(outside), [])
+
+    def test_另一条线没有这个目录时不报错(self):
+        (self.root / 'Chat' / 'Concepts').rmdir()
+        self.assertEqual(cw.sibling_concept_dirs(self.root / 'Wiki' / 'Concepts'), [])
+
+    def test_另一条线已有同名页就不重复建_也不花钱(self):
+        (self.root / 'Wiki' / 'Concepts' / 'DeepSeek.md').write_text('已有', encoding='utf-8')
+        jobs, skipped, elsewhere = cw.build_jobs(
+            [('DeepSeek', ['r']), ('只有聊天线有的概念', ['r'])],
+            self.root / 'Chat' / 'Concepts',
+            cw.sibling_concept_dirs(self.root / 'Chat' / 'Concepts'))
+        self.assertEqual([j[0] for j in jobs], ['只有聊天线有的概念'],
+                         '同名的那张不许再建一张 —— 那就是 lint 报的"同名页"')
+        self.assertEqual(skipped, 0)
+        self.assertEqual(elsewhere, 1, '跳过要分类报出来：本目录已有 vs 另一条线已有，原因不同')
+
+    def test_报数要把两类原因分开(self):
+        # 合成一句"跳过 12 个"的话，读的人会以为全是重跑 —— 而另一类是新出现的
+        self.assertEqual(cw.skip_note(0, 0), '')
+        self.assertIn('跳过 3 个', cw.skip_note(3, 0))
+        self.assertNotIn('另一条线', cw.skip_note(3, 0))
+        self.assertIn('跳过 3 个', cw.skip_note(1, 2))
+        self.assertIn('2 个在另一条线', cw.skip_note(1, 2), '另一类必须说出来')
+
+    def test_不传另一条线时行为不变(self):
+        # 库外目录、或单目录的旧用法：外部目录为空就没有可跳过的
+        jobs, skipped, elsewhere = cw.build_jobs([('甲', ['r'])], self.root / 'Chat' / 'Concepts')
+        self.assertEqual([j[0] for j in jobs], ['甲'])
+        self.assertEqual((skipped, elsewhere), (0, 0))
 
 
 class VaultLayoutTests(unittest.TestCase):

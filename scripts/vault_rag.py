@@ -16,7 +16,7 @@ DEFAULT_VAULT = os.path.join(PROJECT_ROOT, 'output', 'wechat-vault')
 DEFAULT_BIZ = os.path.join(PROJECT_ROOT, 'output', 'biz-daily')
 
 sys.path.insert(0, SCRIPTS_DIR)
-from _utils import call_deepseek
+from _utils import CONCEPT_DIRS, call_deepseek
 
 
 def collect_context(vault: str, biz_daily: str, question: str, top_k: int) -> list[dict]:
@@ -24,9 +24,12 @@ def collect_context(vault: str, biz_daily: str, question: str, top_k: int) -> li
     results = []
     search_terms = question.lower().split()
 
-    # 1. 概念页（权重最高）
-    concepts_dir = Path(vault) / 'Wiki' / 'Concepts'
-    if concepts_dir.is_dir():
+    # 1. 概念页（权重最高）——**两个目录都要读**：文章知识库与聊天知识库是分开的
+    # （`_utils.CONCEPT_DIRS`），只读一个的话分出去的那一半会静默地搜不到。
+    for relative in CONCEPT_DIRS:
+        concepts_dir = Path(vault) / relative
+        if not concepts_dir.is_dir():
+            continue
         for md in concepts_dir.glob('*.md'):
             try:
                 text = md.read_text(encoding='utf-8')[:2000]
@@ -36,9 +39,12 @@ def collect_context(vault: str, biz_daily: str, question: str, top_k: int) -> li
             if score > 0:
                 results.append({'source': 'concept', 'title': md.stem, 'content': text, 'score': score})
 
-    # 2. 阅读笔记
-    notes_dir = Path(vault) / 'Notes'
-    if notes_dir.is_dir():
+    # 2. 阅读笔记 —— **`Notes/` 这个目录在本仓库里从来不存**（2026-09-27 实测：
+    # Vault 里没有它），所以这一段一直搜的是空气。笔记实际住在 `002_Literature`。
+    for relative in ('002_Literature', '003_Ideas', '008_MOC'):
+        notes_dir = Path(vault) / relative
+        if not notes_dir.is_dir():
+            continue
         for md in notes_dir.rglob('*.md'):
             try:
                 text = md.read_text(encoding='utf-8')[:1500]

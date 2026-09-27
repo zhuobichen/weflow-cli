@@ -12,6 +12,8 @@ from pathlib import Path
 from datetime import datetime, timedelta
 
 SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, SCRIPTS_DIR)
+from _utils import CONCEPT_DIRS  # noqa: E402
 PROJECT_ROOT = os.path.dirname(SCRIPTS_DIR)
 DEFAULT_VAULT = os.path.join(PROJECT_ROOT, 'output', 'wechat-vault')
 DEFAULT_BIZ = os.path.join(PROJECT_ROOT, 'output', 'biz-daily')
@@ -79,9 +81,14 @@ def collect_files(vault: str, biz_daily: str, search_type: str, days: int) -> li
                 files.append((md, 'article', fm))
 
     if search_type in ('all', 'concept'):
+        # **两个目录都要读**（`_utils.CONCEPT_DIRS`）：文章知识库与聊天知识库是分开的
+        # （用户 2026-09-27 明确要求），只读一个的话，分出去的那一半会**静默地搜不到**
+        # ——命令照样返回结果，只是少了一半。
         vault_path = Path(vault)
-        concepts_dir = vault_path / 'Wiki' / 'Concepts'
-        if concepts_dir.is_dir():
+        for relative in CONCEPT_DIRS:
+            concepts_dir = vault_path / relative
+            if not concepts_dir.is_dir():
+                continue
             for md in concepts_dir.glob('*.md'):
                 try:
                     fm = parse_fm(md.read_text(encoding='utf-8'))

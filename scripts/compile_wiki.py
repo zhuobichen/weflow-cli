@@ -23,8 +23,8 @@ from pathlib import Path
 from collections import defaultdict, Counter
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _utils import (CHAT_CARD_PREFIX, call_deepseek, get_api_key,  # noqa: E402
-                    load_config, parse_frontmatter, write_with_frontmatter)
+from _utils import (CHAT_CARD_PREFIX, CONCEPT_DIRS, call_deepseek,  # noqa: E402
+                    get_api_key, load_config, parse_frontmatter, write_with_frontmatter)
 
 # Default paths
 SOURCE_ROOT = 'output/biz-daily'
@@ -523,22 +523,64 @@ def origin_tag(source_dir: str) -> str:
 CONCEPT_PAGES_WORKERS = 6
 
 
-def build_jobs(top_concepts: list, out_dir) -> tuple:
+def sibling_concept_dirs(out_dir: Path) -> list:
+    """同一个库里**另一条线**的概念目录（有的话）。
+
+    **一个概念名在库里只能有一张页。** 两张同名页会让 `[[DeepSeek]]` 在 Obsidian 里变成二义的
+    ——它挑一张连上，另一张等同于断了，而**两边都不报错**。这正是聊天卡要加 `会话-` 前缀的原因；
+    概念页没有前缀可用，所以只能用「另一条线已有同名页就不再建」来保证名字唯一。2026-09-27 实测：
+    分开目录之后，聊天线立刻为 11 个文章线已有的概念各建了一张同名页，`wiki lint` 报"同名页 11 组"。
+
+    只在这个输出目录**确实落在一条已知的知识库线上**时才去找：`--output` 指到库外的任意目录时，
+    那里没有"另一条线"，也就没有什么可跳过的。
+    """
+    # **两级**：两条线都是 `<库>/<线>/Concepts`（`Wiki/Concepts`、`Chat/Concepts`），
+    # 库根是 `out_dir.parent.parent`。写成一级的话候选目录恒不存在（`<库>/Chat/Wiki/Concepts`），
+    # 于是这段静默失效、同名页照建 —— 2026-09-27 第一次就是这么写的，跑完那 11 张又回来了。
+    root = out_dir.parent.parent
+    mine = out_dir.resolve()
+    found = []
+    for relative in CONCEPT_DIRS:
+        candidate = root / relative
+        if candidate.resolve() == mine or not candidate.is_dir():
+            continue
+        found.append(candidate)
+    return found
+
+
+def skip_note(skipped: int, elsewhere: int) -> str:
+    """跳过多少、分别为什么 —— **两类原因要分开说**。
+
+    本目录已有 = 重跑（正常）；另一条线已有同名页 = 故意不重复建（`sibling_concept_dirs`）。
+    合成一句"跳过 N 个"的话，看到的人会以为全是重跑，而这 11 个正是分开目录之后新增的那一类。
+    写成函数是为了**能被测**：留在 `main()` 里的一句 f-string，改坏了不会有任何东西红。
+    """
+    if not skipped and not elsewhere:
+        return ''
+    where = f'（其中 {elsewhere} 个在另一条线已有同名页）' if elsewhere else ''
+    return f'  跳过 {skipped + elsewhere} 个已有概念{where}'
+
+
+def build_jobs(top_concepts: list, out_dir, other_dirs: list = ()) -> tuple:
     """滤掉**已经有页**的概念，返回 `([(name, refs, out_file)], 跳过数)`。
 
     这一步必须在**提交给线程池之前**做。原来那版是串行循环里 `if out_file.exists(): continue`，
     顺序上天然不会为已存在的页花钱；一旦改成并发，"先提交、拿到结果再丢"就变成了**为一个
     已存在的页付一次费**——而且不报错，只体现在账单上。
     """
-    jobs, skipped = [], 0
+    jobs, skipped, elsewhere = [], 0, 0
     for name, refs in top_concepts:
         safe_name = re.sub(r'[\\/:*?"<>|]', '_', name)[:60]
         out_file = out_dir / f'{safe_name}.md'
         if out_file.exists():
             skipped += 1
             continue
+        # 另一条线已经有同名页 —— 跳过，理由见 `sibling_concept_dirs`
+        if any((other / f'{safe_name}.md').exists() for other in other_dirs):
+            elsewhere += 1
+            continue
         jobs.append((name, refs, out_file))
-    return jobs, skipped
+    return jobs, skipped, elsewhere
 
 
 def iter_concept_pages(jobs: list, api_key: str, workers: int = CONCEPT_PAGES_WORKERS,
@@ -785,7 +827,8 @@ def main():
     generated = 0
 
     # 已有页在**花钱之前**滤掉（见 `build_jobs`：先提交再丢弃 = 为已存在的页付一次费）
-    jobs, skipped = build_jobs(top_concepts, out_dir)
+    # 另一条线的概念目录一起传进去：一个概念名在库里只能有一张页（见 `sibling_concept_dirs`）
+    jobs, skipped, elsewhere = build_jobs(top_concepts, out_dir, sibling_concept_dirs(out_dir))
     done = 0
     # 边收边写：生成器一有结果就落盘，不等整批（见 `iter_concept_pages`）
     for (name, refs, out_file), result in iter_concept_pages(
@@ -799,15 +842,18 @@ def main():
         write_with_frontmatter(str(out_file), fm, body)
         generated += 1
 
-    if skipped:
-        print(f'  跳过 {skipped} 个已有概念')
+    note = skip_note(skipped, elsewhere)
+    if note:
+        print(note)
     print(f'  生成 {generated} 个新概念')
 
     # Step 4: Index
     print(f'\n=== Step 4: 生成索引 ===')
     concept_files = sorted(out_dir.glob('*.md'))
+    # 这一页是**哪条线**的索引：写死 `Wiki/Concepts` 的话，聊天线生成的索引会把图谱筛选框指到文章线去
+    vault_relative = '/'.join(out_dir.parts[-2:])
     index_lines = [
-        '# 概念索引',
+        f'# 概念索引（{vault_relative}）',
         '',
         f'共 {len(concept_files)} 个概念 | 生成时间：{time.strftime("%Y-%m-%d %H:%M")}',
         '',
@@ -818,7 +864,7 @@ def main():
         '它们可以当线索用，别当成定论。',
         '',
         '**看关系图谱请带筛选**：这个库里有上万条材料，直接开全局图谱会卡住。'
-        '只想看知识页，把图谱左上角的筛选框填成 `path:"Wiki/Concepts"`；'
+        f'只想看知识页，把图谱左上角的筛选框填成 `path:"{vault_relative}"`；'
         '更顺手的日常用法是**局部图谱**（打开任意一页 → 右上角更多 →「局部图谱」），只加载邻接节点，秒开。',
         '',
         '| # | 概念 | 引用数 |',

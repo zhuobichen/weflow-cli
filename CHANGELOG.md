@@ -235,6 +235,34 @@ All notable user-facing changes are recorded here. This project follows [Semanti
 
 ### Changed
 
+- **The two knowledge bases now live in one Vault, in two directories.** The chat line had grown to 1,519
+  concept pages inside `Wiki/Concepts` alongside the article line's 2,115 - one graph, correctly, but the user
+  asked for the two to be kept apart. `Chat/` now holds the chat side (`Chat/Concepts/`, `Chat/00-Overview.md`),
+  `Wiki/` holds the article side, and no page mixes sources. `Sources/Chat/` (the conversation cards) sits next to
+  `Sources/WeChat/` by the same rule.
+
+  **The half that matters is not the move, it is that every reader had to learn about the second directory.**
+  Five places read concept pages - `vault_search`, `vault_rag`, the assistant's `search_knowledge` and
+  `conceptNeighbors`, and the MCP `wechat.get_concept` - and each of them reading one directory would have been
+  **silently wrong rather than broken**: half the hits missing, no error, the tool still looking like it works.
+  They now all read both, the CLI's `vault init` preview creates both, and the generated `README.md` describes
+  both. The list itself cannot be shared across the Python/TypeScript boundary (and the MCP package is separate
+  again), so `test/concept-dirs-agreement.test.ts` pins all five declarations to one; the two scripts that
+  `import` it instead are checked for still iterating it.
+
+  **A name still belongs to one page.** Splitting the directories immediately created 11 concepts that had a page
+  on *both* sides (`DeepSeek`, `智谱`, `Agent Skills` …) - and two files with the same stem make `[[DeepSeek]]`
+  ambiguous in Obsidian, which is the same failure the `会话-` prefix prevents for conversation cards. The
+  second line now skips a name the first already has, and says so ("跳过 1530 个已有概念（其中 11 个在另一条线
+  已有同名页）") instead of folding it into the re-run count. `wiki lint` reports **0** duplicate titles; those
+  11 concepts live on the article side and the chat pages link to them, so the overlap still shows up as edges.
+
+  Three things broke while doing it and were caught by running the suites rather than by reasoning:
+  `conceptNeighbors` took a directory and began taking a list, and a caller still passing a string made
+  `for (const dir of wikiDirs)` walk the path **one character at a time** and return "no neighbours" - a wrong
+  answer, not a crash, so it now throws on a string; and `wiki lint` went from 7,872 broken links to **0** once it
+  was told that a bare `[[name]]` may resolve to a card or a raw source as well as to a page.
+
 - **`compile_wiki` generates concept pages concurrently too, and filters existing pages before spending.** Same
   pattern as `article-notes` and for the same reason: 1,893 pages took minutes at 8 workers instead of the ~53
   minutes the serial loop would have needed (it deliberately slept 0.5s between calls - a per-article throttle that

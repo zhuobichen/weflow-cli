@@ -1400,6 +1400,56 @@ which is what the gate is for.
   semantics are not reliable here), as is any automatic labelling: there is no gold standard for "is this
   draft right", so the feature records what it judged and says so rather than claiming calibration.
 
+## D-051: One Vault, two knowledge bases - and a directory list that five readers have to agree on
+
+**Status:** Active
+
+**Decision.** The article line and the conversation line are kept **apart on disk and together in the graph**:
+`Wiki/Concepts` (+ `Wiki/00-Overview.md`) is the article knowledge base, `Chat/Concepts` (+ `Chat/00-Overview.md`)
+is the chat one, and the conversation cards live at `Sources/Chat/会话-<name>.md` next to `Sources/WeChat/`.
+Both are inside the same Obsidian vault, because the request was to keep the two knowledge bases apart, not to
+make the person browse two vaults - and the graph is the one place where their 4% overlap is information rather
+than noise. The split is the user's call (2026-09-27); the parts below are the consequences that had to be paid
+for it.
+
+**The list cannot be shared, so five declarations are pinned to one.** The set of concept directories is needed
+in Python (`_utils.CONCEPT_DIRS`), in `src/services/assistantTools.ts`, in `bin/weflow-cli.ts`'s `vault init`
+preview, and in the separately-packaged `mcp-server/index.ts` - four languages- and package-boundaries that a
+single constant cannot cross. Following the precedent already in this repo for the same situation
+(`config-keys.test.ts`, the `requiresConfirm` list), the declarations stay separate and
+`test/concept-dirs-agreement.test.ts` fails if any of them drifts. The two scripts that `import` the constant
+instead (`vault_search`, `vault_rag`) cannot drift, so what is asserted about them is the other failure -
+importing it and then not iterating it.
+
+**Why this deserved a decision rather than a commit message: reading one directory of two is silently wrong, not
+broken.** Every reader here degrades by *losing half its answers* - fewer search hits, fewer concepts for the
+assistant, "未找到概念" from MCP - while continuing to exit 0 and print a plausible result. Nothing in the repo
+would have gone red. That is the same failure class this project keeps recording (a path written in two places;
+a directory declared and never written), and it is the reason the agreement test exists rather than a comment.
+
+**A name belongs to exactly one page, and that had to be enforced in code.** Splitting the directories created
+11 concepts with a page on both sides on the very first run (`deepseek.md` in `Wiki/` and in `Chat/`). Two files
+with the same stem make a bare `[[DeepSeek]]` ambiguous: Obsidian silently picks one and the other is reachable
+only by its full path, which is the same failure the `会话-` prefix was introduced for on the cards - and, as
+there, **nothing errors**. So `build_jobs` skips a name that already has a page on the other line, and the run
+reports the two skip reasons separately (a re-run versus a deliberate non-duplicate), because a single "skipped
+N" line would read as if all of them were re-runs. The alternative - keeping both pages, one per line - was
+rejected: a browseable graph is the thing the user asked for, and an ambiguous link is not a link.
+
+**A migrated parameter is a silent failure too.** `conceptNeighbors(pageName, wikiDirs)` took one directory and
+now takes a list; a caller still passing a string is not a type error at runtime, and `for (const dir of
+wikiDirs)` walks the string **one character at a time**, so the function answers "no neighbours" with full
+confidence. `tsc` covers `src/**` but not `test/`, which is where the stale call was. It now throws on a string:
+a wrong answer that looks like an empty answer is worse than a crash, and the same reasoning already governs the
+"no data" cases elsewhere in this file.
+
+**What was NOT changed.** `output/wechat-vault` still holds both, and the chat side is still produced by
+`compile_wiki --source output/chat-notes --output output/wechat-vault/Chat/Concepts` **explicitly** rather than by
+teaching `compile_wiki` to iterate `CONCEPT_DIRS` - it produces one line's pages per run, and a default that
+writes both would mix the two corpora into whichever directory ran last. `user_notes` is unchanged: it reads a
+whitelist of the user's own layers, so the new `Chat/` directory is out of scope by construction rather than by
+an added exception.
+
 ## D-050: The WeChat channel's failures are classified, retried with backoff, and reported where the user looks
 
 **Status:** Active

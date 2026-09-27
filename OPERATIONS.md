@@ -396,9 +396,10 @@ weflow-cli search-index --days 3650 --article-days 365 --yes   # 要"整段历�
 素材                    卡片（每篇/每会话一次模型调用）      概念页（本地聚合+生成）        用
 ─────────────────────────────────────────────────────────────────────────────────────────
 文章笔记（Vault 1633 篇） ──article-notes──┐
-                                          ├─→ output/*-notes/ ──wiki compile──→ Wiki/Concepts/*.md
+                                          ├─→ output/*-notes/ ──wiki compile──→ Wiki/Concepts/*.md（文章线）
 你的聊天（最近 N 天）     ──chat-notes────┘        │                              ＋ Wiki/00-Overview.md
-                                                  │                                      │
+                                                  │  └─（聊天线要加 --output）──→ Chat/Concepts/*.md
+                                                  │                              ＋ Chat/00-Overview.md
                                         （卡里带 [[概念]] — 说明，这才是聚合的原料）      │
                                                                                          ↓
                                                      vault search / 助手的 search_knowledge
@@ -428,13 +429,16 @@ weflow-cli search-index --days 3650 --article-days 365 --yes   # 要"整段历�
 ```powershell
 weflow-cli chat-notes --dry-run          # 先看代价：几个会话、多少字符会发给生成模型（只读本地）
 weflow-cli chat-notes --days 30 --yes    # 每个会话一张知识卡 → output/chat-notes/
-weflow-cli wiki compile --source ./output/chat-notes --yes   # 聚成概念页（话题/人物）
+weflow-cli wiki compile --source ./output/chat-notes --output ./output/wechat-vault/Chat/Concepts --yes
 ```
 
 - **第一步会出境**：每个会话的对话会发给生成模型（一次调用一个会话）。所以有 `--dry-run`
   先报数、有 `--yes` 才真跑——与 `draft` 是同一条纪律。产出的卡**只写到本地**，
   不会发送任何消息。
 - **第二步不需要联网**（概念页是本地聚合 + 生成模型，走的是 `wiki compile` 原有的确认流程）。
+- **`--output` 要指到 `Chat/Concepts`**：文章线与聊天线在库里是**两个目录**（`Wiki/` 与 `Chat/`，
+  同一个 Obsidian 库）。`wiki compile` 一次只产一条线的页，默认写文章线——用默认值跑聊天线，
+  两边的页会混进同一个目录，而图谱里就再也分不出"我读到的"和"我们聊过的"。
 - 三种形状自然落下来：**按会话的知识卡**就是第一步入库的那些卡；**主题汇总**与
   **人物/时间线**是第二步把卡里的 `[[话题]]`/`[[人名]]` 聚出来的概念页。
 - **文章线要先用一道提炼**（2026-09-26 实测后补上）：
@@ -481,7 +485,7 @@ weflow-cli wiki compile --source ./output/user-notes --min-refs 1 --yes
 - **按类型筛**：每个概念页带嵌套标签 `知识/概念`，搜索 `tag:#知识/概念` 就是全部知识页
   （嵌套标签的写法借自一个现成的考公知识库）；
 - **看图谱要带筛选**：库里上万条材料，直接开全局图谱会卡。只想看知识页，把图谱左上角筛选框填
-  `path:"Wiki/Concepts"`；更顺手的是**局部图谱**（打开任意一页 → 右上角更多 →「局部图谱」），秒开；
+  `path:"Wiki/Concepts"` 或聊天线的 `path:"Chat/Concepts"`（两个一起：`path:"Wiki/Concepts" OR path:"Chat/Concepts"`）；更顺手的是**局部图谱**（打开任意一页 → 右上角更多 →「局部图谱」），秒开；
 - **别直接改这些笔记**：概念页与 `00-Overview.md` 都是生成的，重跑 `wiki compile` 会覆盖——
   要改就改上游的材料（卡片）再重跑；
 - **它们是线索不是定论**：每页 frontmatter 里 `verified: false`，表示**未经人工核验**。

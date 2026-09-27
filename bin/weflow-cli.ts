@@ -3597,7 +3597,9 @@ program
             // OUTPUT_ROOT）。这里曾经还列着 `Wiki/Entities` 与 `Wiki/Topics`——没有任何
             // 代码写它们，README 里那张表却把它们当成已有的介绍给用户。**声明了就要有东西
             // 往里写**，否则就是又一个"永远空着的目录"（同 `007_Wiki`）。
+            // 两个知识库各一个目录：`Wiki/Concepts` 是公众号文章线的，`Chat/Concepts` 是聊天线的
             'Wiki/Concepts',
+            'Chat/Concepts',
           ]
           const files = [
             {
@@ -3657,7 +3659,11 @@ program
                 '| `Sources/WeChat/<日期>/` | 原始文章（`daily` 与回填写入，连同正文图片） |',
                 '| `001_Daily/<日期>.md` | 每天一页日记 |',
                 '| `002_Literature/WeChat/<日期>/` | 阅读笔记（由 `Sources` 生成） |',
-                '| `Wiki/Concepts/`、`Wiki/00-Overview.md` | 概念页与索引（`wiki compile` 生成） |',
+                // **两个知识库各写一行**：文章线（`Wiki/`）与聊天线（`Chat/`）是分开的两套，
+                // 只列文章那套的话，用户在库里看到的说明与他实际拥有的东西对不上。
+                '| `Wiki/Concepts/`、`Wiki/00-Overview.md` | **文章知识库**的概念页与索引（`wiki compile` 生成） |',
+                '| `Chat/Concepts/`、`Chat/00-Overview.md` | **聊天知识库**的概念页与索引（`wiki compile --source output/chat-notes` 生成） |',
+                '| `Sources/Chat/会话-<名字>.md` | 每个会话一张知识卡（`chat` 生成：聊了什么、有哪些人、欠着什么） |',
                 '| `Templates/` | 模板文件 |',
                 '| `_attachments/` | Obsidian 附件（`.obsidian/app.json` 的 `attachmentFolderPath` 指向这里） |',
                 '| `000_Inbox` `003_Ideas` `004_Permanent` `005_Reference` `006_Projects` `008_MOC` `999_Archive` | **给你自己写笔记用的层**：`vault promote` 才会往里放东西，空着是设计而不是没做完 |',

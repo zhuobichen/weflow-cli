@@ -20,7 +20,13 @@ const PKG_ROOT = resolvePackageRoot(import.meta.url)
 const BIZ_DAILY_DIR = join(PKG_ROOT, 'output', 'biz-daily')
 /** 单条聊天消息进上下文的字数上限（见 get_messages：引用消息要放得下正文+被引原文） */
 const MSG_BODY_CHARS = 160
-const VAULT_WIKI_DIR = join(PKG_ROOT, 'output', 'wechat-vault', 'Wiki', 'Concepts')
+// 知识页住在哪几个目录。**两个是有意的**：文章知识库与聊天知识库分开（用户 2026-09-27
+// 要求），所以读的一方要把**两个都读**——只读一个，分出去的那一半就静默地搜不到。
+// 与 Python 的 `_utils.CONCEPT_DIRS` 是同一份清单，有测试钉住两者一致（跨语言没法共用常量）。
+const VAULT_WIKI_DIRS = [
+  join(PKG_ROOT, 'output', 'wechat-vault', 'Wiki', 'Concepts'),
+  join(PKG_ROOT, 'output', 'wechat-vault', 'Chat', 'Concepts'),
+]
 
 /**
  * 概念名 → 文件名。**与 `compile_wiki` 是同一套规则**（非法字符换下划线、截到 60 字）。
@@ -53,9 +59,24 @@ export function conceptBrief(text: string): string {
  *
  * 有页的邻居连定义一起给；没有页的只报个数（`missing`），免得模型去追一个取不到的名字。
  */
-export function conceptNeighbors(pageName: string, wikiDir: string = VAULT_WIKI_DIR): { linked: Array<{ name: string; brief: string }>; missing: number } {
-  const pagePath = join(wikiDir, safeConceptFile(pageName))
-  if (!existsSync(pagePath)) return { linked: [], missing: 0 }
+export function conceptNeighbors(pageName: string, wikiDirs: string[] = VAULT_WIKI_DIRS): { linked: Array<{ name: string; brief: string }>; missing: number } {
+  // **传字符串会静默地按字符遍历**（`for (const dir of 'D:\vault')` 挨个字符看过去），
+  // 于是 `join('D', '某概念.md')` 不存在，函数安静地回一句「没有邻居」。2026-09-27 把参数
+  // 从单个目录改成目录数组时，测试里正好踩到这个——类型拦得住 `src/`（`tsc` 覆盖它），
+  // 拦不住测试与将来的 JS 调用方。所以这里响，不猜。
+  if (typeof wikiDirs === 'string') {
+    throw new TypeError('conceptNeighbors 的 wikiDirs 要的是目录数组，不是单个字符串')
+  }
+  // **邻居可能住在另一个目录**（文章概念指向聊天概念、反之亦然），所以查找也是跨目录的
+  const find = (name: string): string | null => {
+    for (const dir of wikiDirs) {
+      const candidate = join(dir, safeConceptFile(name))
+      if (existsSync(candidate)) return candidate
+    }
+    return null
+  }
+  const pagePath = find(pageName)
+  if (!pagePath) return { linked: [], missing: 0 }
   const text = readFileSync(pagePath, 'utf8')
   const start = text.indexOf('## 相关概念')
   if (start < 0) return { linked: [], missing: 0 }
@@ -68,8 +89,8 @@ export function conceptNeighbors(pageName: string, wikiDir: string = VAULT_WIKI_
   for (const match of section.matchAll(/\[\[([^\]|]+)\]\]/g)) {
     const name = match[1].replace(/\.md$/, '').trim()
     if (!name) continue
-    const target = join(wikiDir, safeConceptFile(name))
-    if (!existsSync(target)) {
+    const target = find(name)
+    if (!target) {
       missing += 1
       continue
     }
@@ -1388,20 +1409,35 @@ export async function executeTool(name: string, args: Record<string, any>, ctx: 
       case 'search_knowledge': {
         const kw = String(args.keyword || '')
         if (!kw) return '(缺少 keyword 参数)'
-        if (!existsSync(VAULT_WIKI_DIR)) return '(知识库尚未生成, 先运行 weflow-cli wiki compile)'
-        const files = readdirSync(VAULT_WIKI_DIR).filter(f => f.endsWith('.md'))
-        const hits = files.filter(f => f.replace('.md', '').toLowerCase().includes(kw.toLowerCase()))
-        if (!hits.length) {
-          const contentHits = files.filter(f => readFileSync(join(VAULT_WIKI_DIR, f), 'utf8').toLowerCase().includes(kw.toLowerCase())).slice(0, 5)
-          if (!contentHits.length) return `(知识库未收录「${kw}」, 共 ${files.length} 个概念页)`
-          return `正文提及「${kw}」的概念页:\n` + contentHits.map(f => `· ${f.replace('.md', '')}`).join('\n')
+        const liveDirs = VAULT_WIKI_DIRS.filter(dir => existsSync(dir))
+        if (!liveDirs.length) return '(知识库尚未生成, 先运行 weflow-cli wiki compile)'
+        // **两个目录一起搜**（文章知识库 + 聊天知识库）。分开是用户要求的，但"分开"
+        // 不该变成"搜不到"——只读一个的话，另一半会静默缺席。
+        const entries: Array<{ dir: string; file: string; where: string }> = []
+        let total = 0
+        for (const dir of liveDirs) {
+          // 标注来源，好让模型（和读日志的人）知道这条来自哪个知识库
+          const where = /[\\/]Chat[\\/]/.test(dir) ? '聊天' : '文章'
+          for (const file of readdirSync(dir).filter(f => f.endsWith('.md'))) {
+            entries.push({ dir, file, where })
+            total += 1
+          }
         }
-        const name = hits[0].replace('.md', '')
-        const page = readFileSync(join(VAULT_WIKI_DIR, hits[0]), 'utf8')
+        const hits = entries.filter(e => e.file.replace('.md', '').toLowerCase().includes(kw.toLowerCase()))
+        if (!hits.length) {
+          const contentHits = entries.filter(e =>
+            readFileSync(join(e.dir, e.file), 'utf8').toLowerCase().includes(kw.toLowerCase())).slice(0, 5)
+          if (!contentHits.length) return `(知识库未收录「${kw}」, 共 ${total} 个概念页)`
+          return '正文提及「' + kw + '」的概念页:\n'
+            + contentHits.map(e => `· ${e.file.replace('.md', '')}（${e.where}）`).join('\n')
+        }
+        const hit = hits[0]
+        const name = hit.file.replace('.md', '')
+        const page = readFileSync(join(hit.dir, hit.file), 'utf8')
         // **顺带把邻居给出去**（见 `conceptNeighbors`）：一次调用拿到"这个概念 + 连着它的一小块子图"。
         // 不点明"可以再用本工具查其中任意一个"的话，模型会把它当装饰性文字读过去。
         const { linked, missing } = conceptNeighbors(name)
-        const out = [`「${name}」概念页:`, page.slice(0, 2000)]
+        const out = [`「${name}」概念页（${hit.where}知识库）:`, page.slice(0, 2000)]
         if (linked.length) {
           out.push('', '—— 它连到的概念（可以再用本工具查其中任意一个）——')
           for (const nb of linked) out.push(`· ${nb.name} — ${nb.brief}`)

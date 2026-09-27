@@ -113,14 +113,16 @@ TypeScript; `python -m unittest discover -s test -p '*_test.py'` covers these).
 
 The knowledge base is fed by "material that carries `[[wikilinks]]`": `compile_wiki` scans a source directory
 (`--source`, already a flag - no code change needed to add a source), aggregates every wikilink into concepts, and
-writes concept pages into the Vault. There are three producers today, all writing the same card shape into `output/*-notes/`: `article_notes.py`
-(concepts extracted from the Vault's article notes - it exists because those notes, measured over the whole corpus,
-carry **no** concept links), `chat_notes.py` (conversation cards) and `fav_notes.py` (WeChat favourites, whose
-article bodies come from the daily line's cached fetcher rather than a second downloader). Adding a fourth means
-writing one producer that satisfies the table below; the aggregator, the lint and the assistant-facing search do not
-change - the lint finds card directories with an `output/*-notes` glob for exactly that reason.
+writes concept pages into the Vault. There are four producers today, all writing the same card shape into
+`output/*-notes/`: `article_notes.py` (concepts extracted from the Vault's article notes - it exists because
+those notes, measured over the whole corpus, carry **no** concept links), `chat_notes.py` (conversation cards),
+`fav_notes.py` (WeChat favourites, whose article bodies come from the daily line's cached fetcher rather than a
+second downloader) and `user_notes.py` (the user's own hand-written notes, read-only, whose summaries are marked
+as the model's reading). Adding a fifth means writing one producer that satisfies the table below; the
+aggregator, the lint and the assistant-facing search do not change - the lint finds card directories with an
+`output/*-notes` glob for exactly that reason.
 
-To add a third, the producer must satisfy the consumer's contract exactly:
+To add another, the producer must satisfy the consumer's contract exactly:
 
 | The consumer (`scan_articles`) needs | Notes |
 | --- | --- |
@@ -133,6 +135,13 @@ the consumer collects *every* wikilink in a body and cannot tell who wrote it, s
 (this is why `chat_notes.plain()` strips `[[...]]` from model-authored free text). And a wikilink whose description
 is polluted - a trailing `（话题）`, a stray marker - silently degrades every concept page it feeds, because that
 description is the material for the page.
+
+**A new source also has to pick a line.** Since 2026-09-27 the concept pages live in two directories -
+`Wiki/Concepts` for the article line, `Chat/Concepts` for the conversation line - so a source that writes into a
+directory nobody reads is invisible, and `compile_wiki` writes whichever line you point `--output` at (one line per
+run, by design). If your source belongs to an existing line, you are done; if it deserves its own, it goes into
+`_utils.CONCEPT_DIRS` and into the four declarations that `test/concept-dirs-agreement.test.ts` pins - that test
+fails until every reader of concept pages knows about the new directory, which is the point.
 
 The guard to copy: `test/chat_notes_test.py` writes a card and then runs the **real consumer**
 (`compile_wiki.scan_articles`) over it, asserting the links and descriptions come back. That is the shape of every
@@ -151,6 +160,7 @@ producer/consumer pair in this project - do not assert on the markdown text, ass
 | Panel IPC surface is exactly the declared method list | `test/panel-packaging.test.ts` |
 | Interactive-menu entries match `switch` cases, and the commands they call exist | `test/cli-menu.test.ts` |
 | A knowledge source's output is readable by the wiki aggregator, links and descriptions intact | `test/chat_notes_test.py`, `test/compile_wiki_test.py` |
+| Every declaration of the concept directories agrees, and nothing that imports the constant stops iterating it | `test/concept-dirs-agreement.test.ts` |
 
 ## Red lines
 

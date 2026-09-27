@@ -233,7 +233,10 @@ VAULT_DIRS = [
     # 于是每次 init 都建出一个**永远空着**的 `007_Wiki/`——用户在 Obsidian 里看到它，
     # 得到的结论是"知识库没更新"。一条路径写在两处就会这样：不报错，只是一个目录永远空着。
     # `test/compile_wiki_test.py` 现在钉住两者必须一致。
+    # **两个知识库各一个目录**（用户 2026-09-27 要求分开）：`Wiki/Concepts` 是公众号文章线的，
+    # `Chat/Concepts` 是聊天线的。这里的清单要与 `_utils.CONCEPT_DIRS` 一致——有测试盯着。
     'Wiki/Concepts',
+    'Chat/Concepts',
     '008_MOC',
     '999_Archive',
     '_attachments',

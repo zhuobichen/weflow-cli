@@ -170,8 +170,17 @@ const ASSISTANT_TOOLS = MCP_TOOL_DEFS
 
 const PKG_ROOT = resolvePackageRoot(import.meta.url)
 const BIZ_DAILY = join(PKG_ROOT, 'output', 'biz-daily')
-const VAULT_WIKI = join(PKG_ROOT, 'output', 'wechat-vault', 'Wiki', 'Concepts')
+// **两个概念目录**：`Wiki/Concepts` 是公众号文章线的，`Chat/Concepts` 是聊天线的
+// （用户要求两条线分开）。这里必须两个都带上——只留一个的话，另一半概念页会**静默地查不到**，
+// 工具照样返回"未找到概念"。与 `src/services/assistantTools.ts` 的 `VAULT_WIKI_DIRS`、
+// 以及 `scripts/_utils.py` 的 `CONCEPT_DIRS` 是同一份清单，`test/concept-dirs-agreement.test.ts` 钉住。
+const VAULT_WIKI_DIRS = [
+  join(PKG_ROOT, 'output', 'wechat-vault', 'Wiki', 'Concepts'),
+  join(PKG_ROOT, 'output', 'wechat-vault', 'Chat', 'Concepts'),
+]
+const VAULT_WIKI = VAULT_WIKI_DIRS[0]
 const VAULT_INDEX = join(PKG_ROOT, 'output', 'wechat-vault', 'Wiki', '00-Overview.md')
+const VAULT_CHAT_INDEX = join(PKG_ROOT, 'output', 'wechat-vault', 'Chat', '00-Overview.md')
 const REVIEWS = join(PKG_ROOT, 'output', 'reviews', 'Daily')
 const MCP_MESSAGE_LIMIT_DEFAULT = 100
 const MCP_MESSAGE_LIMIT_MAX = 1000
@@ -428,8 +437,15 @@ async function main() {
         }
 
         case 'wechat.get_concepts': {
-          if (!existsSync(VAULT_INDEX)) return { content: [{ type: 'text', text: '概念索引尚未生成，请先运行 wiki compile' }] }
-          return { content: [{ type: 'text', text: readFileSync(VAULT_INDEX, 'utf-8') }] }
+          // 两条线各有一份索引：`Wiki/00-Overview.md`（文章）与 `Chat/00-Overview.md`（聊天）。
+          // 只回一份的话，另一个知识库对调用方就等于不存在——而索引本来就是"这里有什么"的清单。
+          const indexes: string[] = []
+          for (const [index, label] of [[VAULT_INDEX, '文章'], [VAULT_CHAT_INDEX, '聊天']] as const) {
+            if (!existsSync(index)) continue
+            indexes.push(`<!-- ${label}知识库 -->\n` + readFileSync(index, 'utf-8'))
+          }
+          if (!indexes.length) return { content: [{ type: 'text', text: '概念索引尚未生成，请先运行 wiki compile' }] }
+          return { content: [{ type: 'text', text: indexes.join('\n\n') }] }
         }
 
         case 'wechat.get_concept': {
@@ -437,17 +453,20 @@ async function main() {
           if (!name || name.includes('/') || name.includes('\\') || name.includes('..')) {
             return { content: [{ type: 'text', text: '概念名无效' }] }
           }
-          for (const ext of ['', '.md']) {
-            const path = safeChildPath(VAULT_WIKI, name + ext)
-            if (path && existsSync(path)) {
-              return { content: [{ type: 'text', text: readFileSync(path, 'utf-8') }] }
+          for (const dir of VAULT_WIKI_DIRS) {
+            for (const ext of ['', '.md']) {
+              const path = safeChildPath(dir, name + ext)
+              if (path && existsSync(path)) {
+                return { content: [{ type: 'text', text: readFileSync(path, 'utf-8') }] }
+              }
             }
           }
           // Fuzzy search
-          if (existsSync(VAULT_WIKI)) {
-            for (const f of readdirSync(VAULT_WIKI)) {
+          for (const dir of VAULT_WIKI_DIRS) {
+            if (!existsSync(dir)) continue
+            for (const f of readdirSync(dir)) {
               if (f.includes(name)) {
-                const path = safeChildPath(VAULT_WIKI, f)
+                const path = safeChildPath(dir, f)
                 if (path) return { content: [{ type: 'text', text: readFileSync(path, 'utf-8') }] }
               }
             }
