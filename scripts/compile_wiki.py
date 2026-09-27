@@ -23,11 +23,19 @@ from pathlib import Path
 from collections import defaultdict, Counter
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _utils import call_deepseek, parse_frontmatter, write_with_frontmatter
+from _utils import (call_deepseek, get_api_key, load_config,  # noqa: E402
+                    parse_frontmatter, write_with_frontmatter)
 
 # Default paths
 SOURCE_ROOT = 'output/biz-daily'
 OUTPUT_ROOT = 'output/wechat-vault/Wiki/Concepts'
+
+# 并发数。与 `article_notes.CONCEPT_WORKERS`、`biz_daily` 那三个取同一个值：
+# 量的都是同一个上游的同一个延迟。
+#
+# **必须定义在使用它的函数之前**：它被用作默认参数值，而默认参数在**定义时**求值——
+# 放在后面就是一个 import 期就炸的 NameError（2026-09-27 踩过）。
+CONCEPT_PAGES_WORKERS = 6
 
 CONCEPT_PROMPT = """为概念生成 Wiki 知识页。
 
@@ -171,6 +179,140 @@ def fix_source_links(pages_dir: str, source_dir: str) -> dict:
             pages.append(page.name)
             links += hits[0]
     return {'pages': pages, 'links': links, 'names': len(mapping)}
+
+
+def collect_dangling_targets(pages_dir: str) -> Counter:
+    """现有概念页提到、但**自己没有页**的概念 → 被多少张页提到。
+
+    这就是图谱里那些"悬空节点"的来源，也是 `## 相关概念` 那些线指向的另一端。
+    2026-09-27 实测：3,680 个名字、4,633 条链接，其中被 ≥2 张页提到的有 516 个。
+
+    **它们大多建不出来**：那些名字是模型写页面时自己引入的，卡片语料里根本没有
+    （`提示工程` 被 27 张页指向，而卡片语料里 0 条；`深度学习` 只有 1 条，低于
+    `--min-refs 2`）。所以降 `--min-refs` 解决不了——降到 1 会建 20,957 页，
+    而这批 0 引用的一个都还建不到。参考材料只能取自**提到它的那些页面**。
+    """
+    pages = Path(pages_dir)
+    # **大小写不敏感**：Windows 上 `[[Claude Code]]` 能解析到 `claude code.md`，
+    # 用大小写敏感的集合去判就会把 129 张页的 `Claude Code` 误报成"悬空"
+    # （2026-09-27 实测：那一版的第一名就是它，而它其实有页）。
+    have = {p.stem.lower() for p in pages.glob('*.md')}
+    counts = Counter()
+    for page in pages.glob('*.md'):
+        text = page.read_text(encoding='utf-8')
+        start = text.find('## 相关概念')
+        if start < 0:
+            continue
+        body = text[start:]
+        end = body.find('\n## ', 1)
+        if end > 0:
+            body = body[:end]
+        for target in re.findall(r'\[\[([^\]\|]+)\]', body):
+            name = target[:-3] if target.endswith('.md') else target
+            if name and name.lower() not in have:
+                counts[name] += 1
+    return counts
+
+
+def load_card_texts(card_dirs=None) -> list[dict]:
+    """把所有卡片读进内存：`[(名字, 主题, 标题, 正文)]`。
+
+    **卡片不大**（实测 7,119 张共约 12 MB），一次读完再按字面找，比"一个概念扫一遍
+    七千张卡"快得多。
+    """
+    import glob as _glob
+    dirs = card_dirs or sorted(p for p in _glob.glob('output/*-notes') if os.path.isdir(p))
+    cards = []
+    for directory in dirs:
+        for path in Path(directory).rglob('*.md'):
+            try:
+                frontmatter, body = parse_frontmatter(path.read_text(encoding='utf-8'))
+            except Exception:
+                continue
+            cards.append({'name': path.stem,
+                          'topic': str(frontmatter.get('topic') or frontmatter.get('hasTopic') or ''),
+                          'title': str(frontmatter.get('title') or path.stem),
+                          # `file` 是"来源"段那条链接的目标：**阅读笔记的名字**，
+                          # 不是卡片的（见 `source_link_target`）。`generate_concept`
+                          # 会读 `r['file']` 与 `r['title']`——少了它们就是 KeyError。
+                          'file': source_link_target(frontmatter, path),
+                          'source': str(frontmatter.get('source') or ''),
+                          'body': body})
+    return cards
+
+
+def mention_refs(cards: list, name: str, limit: int = 5, width: int = 160) -> list[dict]:
+    """按**字面**在卡片正文里找提到这个概念的地方，取它所在的句子当参考材料。
+
+    **为什么不能用"提到它的那些概念页的定义句"**：那些页面只写了 `- [[提示工程]]`
+    一个光名字，关于这个概念一个字都没说；拿它们的自我定义去生成 `提示工程` 的页，
+    等于让模型凭空编。2026-09-27 我第一版就是这么写的，写完发现材料完全对不上。
+
+    真实材料在**卡片正文**里：实测 `提示工程` 被 2 张卡、`知识蒸馏` 被 3 张卡在正文里
+    提到过——只是从没成为结构化的 `[[概念]] — desc` 引用，所以 `compile_wiki` 一直不
+    知道它们。这里把那句话连同前后半个窗口取出来，那才是"某篇材料关于它说了什么"。
+    """
+    refs = []
+    for card in cards:
+        # **只在摘要里认，不在全文里认。** 实测差别很大：全文按字面找会命中广告词、
+        # 图片 URL、结构碎片（`AI对齐` 取到"提升超多好礼！"，`大模型应用` 取到一段 URL），
+        # 而摘要讲什么、文章才是在讲什么。
+        summary = _extract_summary(card['body']) or ''
+        index = summary.find(name)
+        if index < 0:
+            continue
+        start = max(0, index - width // 2)
+        snippet = summary[start:index + len(name) + width // 2]
+        # 摘要本身是从微信正文抄来的，会夹着图片/链接的 markdown
+        snippet = re.sub(r'!\[[^\]]*\]\([^)]*\)', '', snippet)
+        snippet = re.sub(r'https?://\S+', '', snippet)
+        snippet = re.sub(r'\s+', ' ', snippet).strip()
+        if len(snippet) < 10:
+            continue
+        # `file`/`title` 必须一起给：`generate_concept` 拿它们写"来源"段，
+        # 缺了就是 KeyError，而那个异常会被并发包装层吞掉（表现为"生成 0 页、无报错"）。
+        refs.append({'desc': snippet, 'summary': '', 'topic': card['topic'].strip('[]'),
+                     'file': card['file'], 'title': card['title'],
+                     'source': card['source']})
+        if len(refs) >= limit:
+            break
+    return refs
+
+
+def build_dangling_pages(pages_dir: str, api_key: str, top: int,
+                         workers: int = CONCEPT_PAGES_WORKERS, origin: str = '') -> dict:
+    """给"被页面提到最多、却自己没有页"的概念建页。**这条通道的参考材料来自页面本身。**
+
+    为什么不能靠 `scan_articles`：那些名字是模型写页面时引入的，卡片语料里大多没有
+    （见 `collect_dangling_targets`）。所以这里直接用**提到它的那些页面的定义句**当参考行
+    ——与卡片那条 `[[概念]] — desc` 是同一个用途。
+    """
+    counts = collect_dangling_targets(pages_dir)
+    cards = load_card_texts()
+    jobs, skipped = [], 0
+    for name, _times in counts.most_common(top):
+        safe_name = re.sub(r'[\\/:*?"<>|]', '_', name)[:60]
+        out_file = Path(pages_dir) / f'{safe_name}.md'
+        if out_file.exists():
+            skipped += 1
+            continue
+        # **材料按字面从卡片正文里找**（见 `mention_refs`）；找不到就不建——
+        # 没有材料还建页，就是让模型编。
+        refs = mention_refs(cards, name)
+        if not refs:
+            skipped += 1
+            continue
+        jobs.append((name, refs, out_file))
+
+    generated = 0
+    for (name, refs, out_file), result in iter_concept_pages(jobs, api_key, workers, origin=origin):
+        if not result:
+            continue
+        fm, body = result
+        write_with_frontmatter(str(out_file), fm, body)
+        generated += 1
+    return {'dangling': len(counts), 'attempted': len(jobs),
+            'generated': generated, 'skipped': skipped}
 
 
 def scan_articles(source_dir: str) -> list[dict]:
@@ -356,7 +498,12 @@ def iter_concept_pages(jobs: list, api_key: str, workers: int = CONCEPT_PAGES_WO
         name, refs, _ = job
         try:
             return generate_concept(name, refs, api_key, origin=origin)
-        except Exception:
+        except Exception as error:
+            # **不许静默**。原来这里是 `except Exception: return None`，于是
+            # `reference_refs` 少给 `file`/`title` 造成的 KeyError 表现成
+            # "尝试 158 个、生成 0 页、**无任何报错**"（2026-09-27 实测，查了一阵子）。
+            # 一次调用失败不该拖垮整批，但必须留下痕迹。
+            print('  [ERR] %s: %s: %s' % (name, type(error).__name__, error), file=sys.stderr)
             return None
 
     if workers <= 1:
@@ -507,6 +654,8 @@ def main():
                         help='只给已有页面补标签与未核验标记（本地，不调用模型）')
     parser.add_argument('--fix-source-links', action='store_true',
                         help='只修已有页面"来源"段里指不到文件的链接（本地，不调用模型）')
+    parser.add_argument('--from-pages', type=int, default=0, metavar='N',
+                        help='给"被页面提到最多却没有页"的前 N 个概念建页（参考材料取自页面本身）')
     parser.add_argument('--min-refs', type=int, default=1,
                         help='至少被几篇材料提到才建页（默认 1；2 能滤掉新闻里的一次性实体）')
     parser.add_argument('--workers', type=int, default=CONCEPT_PAGES_WORKERS,
@@ -519,6 +668,21 @@ def main():
         # 本地重贴标签：不必有 key、不必调模型
         changed = relabel_pages(args.output)
         print('重贴标签：%d 张页面' % changed)
+        return
+
+    if getattr(args, 'from_pages', 0):
+        # 给图谱里那些"悬空节点"的另一端建页——它们不在卡片语料里，材料只能按字面从
+        # 卡片摘要里找（见 `mention_refs`）。
+        #
+        # 这里**不能引用 `api_key`**：它要到下面才被赋值，而这是同一个函数作用域——
+        # 引用一个尚未赋值的局部变量是 UnboundLocalError（2026-09-27 踩过）。
+        key = args.api_key or os.environ.get('DEEPSEEK_API_KEY', '') or get_api_key(load_config())
+        if not key:
+            print('这条通道要调模型，需要 key（--api-key 或 DEEPSEEK_API_KEY）', file=sys.stderr)
+            sys.exit(1)
+        result = build_dangling_pages(args.output, key, args.from_pages, args.workers)
+        print('悬空目标 %d 个；本次尝试 %d 个、生成 %d 页、跳过 %d 个'
+              % (result['dangling'], result['attempted'], result['generated'], result['skipped']))
         return
 
     if getattr(args, 'fix_source_links', False):

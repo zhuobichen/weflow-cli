@@ -513,5 +513,65 @@ class FixSourceLinksTests(unittest.TestCase):
             self.assertEqual(again['links'], 0, '第二次不该再改')
 
 
+class DanglingTests(unittest.TestCase):
+    """给"被页面指向、却没有页"的概念建页——图谱里那些断线的另一端。
+
+    这条通道的难点不是生成，是**材料从哪来**。第一版拿"提到它的那些概念页的定义句"
+    当材料，而那些页面只写了 `- [[提示工程]]` 一个光名字——等于让模型凭空编。
+    真实材料在**卡片摘要**里：实测 `提示工程` 被 2 张卡、`知识蒸馏` 被 3 张卡在摘要里提到过。
+    """
+
+    def page(self, root, name, related):
+        (root / f'{name}.md').write_text(
+            '---\ntitle: "%s"\n---\n\n# %s\n\n一句定义。\n\n## 相关概念\n\n%s\n'
+            % (name, name, '\n'.join(f'- [[{r}]]' for r in related)), encoding='utf-8')
+
+    def test_找的是被指向却没有页的概念(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            pages = Path(tmp) / 'Concepts'
+            pages.mkdir()
+            self.page(pages, '甲', ['乙', '丙', '丙'])
+            self.page(pages, '乙', ['甲'])
+            counts = cw.collect_dangling_targets(str(pages))
+        self.assertEqual(dict(counts), {'丙': 2}, '甲、乙都有页，只有丙是悬空的')
+
+    def test_大小写不同不算悬空(self):
+        """Windows 上 `[[Claude Code]]` 能解析到 `claude code.md`。
+
+        用大小写敏感的集合去判，`Claude Code` 会以 129 张页指向排在第一名——而它有页。
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            pages = Path(tmp) / 'Concepts'
+            pages.mkdir()
+            self.page(pages, 'claude code', ['甲'])
+            self.page(pages, '甲', ['Claude Code'])
+            counts = cw.collect_dangling_targets(str(pages))
+        self.assertEqual(dict(counts), {}, '大小写不同但有同名文件 → 不是悬空')
+
+    def test_材料只认摘要里提到的_且清掉_URL(self):
+        cards = [{'name': 'c1', 'topic': 'AI', 'title': 't', 'file': '笔记名', 'source': '某号',
+                  'body': '## AI 摘要\n\n讲的是提示工程这件事。![图](http://x/y.png) 后面还有话。\n'}]
+        refs = cw.mention_refs(cards, '提示工程')
+        self.assertEqual(len(refs), 1)
+        self.assertNotIn('http', refs[0]['desc'])
+        self.assertNotIn('![', refs[0]['desc'])
+
+    def test_只在正文提到_但摘要没提的不算材料(self):
+        # 实测差别很大：全文按字面找会命中广告词、图片 URL、结构碎片
+        cards = [{'name': 'c1', 'topic': 'AI', 'title': 't', 'file': '笔记名', 'source': '某号',
+                  'body': '## AI 摘要\n\n这段摘要里没有那个词。\n\n## 正文\n\n提示工程 出现在这里。\n'}]
+        self.assertEqual(cw.mention_refs(cards, '提示工程'), [], '摘要没提就不算材料')
+
+    def test_没材料就不建页(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            pages = Path(tmp) / 'Concepts'
+            pages.mkdir()
+            self.page(pages, '甲', ['无材料的概念'])
+            cw.load_card_texts = lambda *a, **k: []
+            result = cw.build_dangling_pages(str(pages), 'k', 10, workers=1)
+            self.assertEqual(result['generated'], 0)
+            self.assertFalse((pages / '无材料的概念.md').exists())
+
+
 if __name__ == '__main__':
     unittest.main()
