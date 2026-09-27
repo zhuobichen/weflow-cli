@@ -108,6 +108,11 @@ def concept_links(body: str, topic: str = '') -> list[tuple]:
         # 与自己的主题同名的一律不要：主题是分类，不是概念
         if topic and name == topic:
             continue
+        # **纯符号/表情/单字不算概念。** 实测聊天线提出来过 `🐊`、`🤓`、`🥬 + 🔴`、`: D`、`D`
+        # 这种——它们会各自长出一张页，在图上就是几个没有意义的孤立点。
+        # 判据是"至少两个汉字或字母数字"：`AI`/`MCP` 这类两字符的照收。
+        if len(re.findall(r'[一-鿿A-Za-z0-9]', name)) < 2:
+            continue
         links.append((name, desc))
     return links
 

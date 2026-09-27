@@ -515,6 +515,27 @@ class FixSourceLinksTests(unittest.TestCase):
             self.assertEqual(again['links'], 0, '第二次不该再改')
 
 
+class JunkConceptTests(unittest.TestCase):
+    """纯符号/表情/单字不该长出概念页。
+
+    实测聊天线提出来过 `🐊`、`🤓`、`🥬 + 🔴`、`: D`、`D` 这种——每张都会长成一页，
+    在图上就是几个没有意义的孤立点。
+    """
+
+    def links(self, names):
+        body = '## 概念\n\n' + '\n'.join(f'- [[{n}]] — 描述' for n in names) + '\n'
+        return [name for name, _ in cw.concept_links(body, '')]
+
+    def test_表情与单字被丢掉(self):
+        got = self.links(['🐊', 'D', ': D', '🤓', '🥬 + 🔴'])
+        self.assertEqual(got, [], '这些都不是概念')
+
+    def test_两字符的正常概念照收(self):
+        # 判据是"至少两个汉字或字母数字"，别把 AI / MCP 这种误伤
+        got = self.links(['AI', 'MCP 协议', '3 遍法', '知识蒸馏'])
+        self.assertEqual(got, ['AI', 'MCP 协议', '3 遍法', '知识蒸馏'])
+
+
 class LinkKindTests(unittest.TestCase):
     """`[[名字]]` 出现在哪个小节——**人物还是话题**。
 
