@@ -68,6 +68,30 @@ All notable user-facing changes are recorded here. This project follows [Semanti
 
 ### Fixed
 
+- **Every embedded Dataview query in the Vault was broken, for two independent reasons.** The reading-note and
+  daily-note templates embed `dataview` code blocks - **25,676 reading notes and 176 daily notes, 100% of both** -
+  and a user checking their vault found them rendering as raw code. Two separate faults, either of which alone
+  would have broken the feature:
+
+  - **The plugin was not installed.** `.obsidian/plugins/` did not exist and `community-plugins.json` was absent,
+    while five places in the code write `dataview` blocks and one CLI message tells the user to use "the Obsidian
+    Dataview plugin". Dataview 0.5.68 is now installed and enabled in this vault (it is a community plugin, so it
+    is per-machine and **not** covered by the repo - `output/` is gitignored, and the 2.4 MB `main.js` is
+    deliberately not committed).
+  - **The queries themselves were wrong**, which is the part that would have survived installing the plugin.
+    `SORT date DESC` sorts by a field **that does not exist** - the reading notes carry `published`, not `date`.
+    The daily note used `WHERE created = date(...)`, and `created` is the **generation** date: one backfill wrote
+    `created: 2026-09-26` into all 25,676 notes (measured), so 175 of the 176 daily notes listed nothing and the
+    one for the generation date would have listed twenty-five thousand. The related-articles table also listed the
+    note itself, and led with `rating` - a field that is empty across the whole corpus because it is the user's to
+    fill, so ten rows of blanks.
+
+  Both templates now use `published`, exclude `this.file`, and lead with `published`/`source`. **Fixing the
+  templates alone would have fixed nothing**: `create_reading_note()` skips a note that already exists, so the
+  25,852 existing files needed a rewrite pass - `create_reading_notes --refresh-queries` rewrites only the code
+  block, is idempotent, leaves notes without one alone (counted, not silently skipped), and reports the notes whose
+  topic is empty separately rather than inventing one. Applied: 25,845 + 7 rewritten, 0 stale queries left.
+
 - **The Vault declared its concept directory twice, and one of the two was never written to.** `VAULT_DIRS`
   (created by `vault init` / `create_reading_notes`) listed `007_Wiki/Concepts`, while the pages are actually
   written to the top-level `Wiki/Concepts` - which is also what `vault_rag`, `vault_search`, `wiki_lint`, the

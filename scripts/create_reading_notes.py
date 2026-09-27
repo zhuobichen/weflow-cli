@@ -26,6 +26,34 @@ TOPIC_ORDER = ['AI', '学术', '新闻', '文学', '投资', '政治']
 
 # ====== V2 模板 ======
 
+# 阅读笔记里"相关文章"那一段的查询。**单独抽出来，是因为它有两个使用方**：模板（写新笔记）
+# 与 `refresh_dataview_blocks()`（重写老笔记）。写成两份就会漂移，而漂移的表现是
+# "新笔记的查询是对的、老笔记的还是坏的"——不报错。
+#
+# 三处修正（2026-09-27，都是实测出来的坏查询）：
+# - `SORT date DESC` → `SORT published DESC`：笔记里**没有 `date` 这个字段**（是 `published`），
+#   原查询排不出来。
+# - 加了 `file.name != this.file.name`：否则一篇笔记的"相关文章"里会列出它自己。
+# - 首列从 `rating` 改成 `published`：`rating` 是留给用户打分的，全库默认空；
+#   拿它当首列，表格十行全是空格。
+RELATED_QUERY = '''```dataview
+TABLE published AS 日期, source AS 来源, rating
+FROM "002_Literature"
+WHERE contains(hasTopic, "{topic}") AND file.name != this.file.name
+SORT published DESC
+LIMIT 10
+```'''
+
+# 日记里"概念连接"那一段的查询。**判日期必须用 `published`（文章日期），不能用 `created`**：
+# `created` 是**生成这篇笔记的日期**，而一次回填会把几万篇的 `created` 全写成同一天
+# （实测：25,676 篇全是 2026-09-26）。用 `created` 判，结果是 175 天的日记全空、
+# 唯独生成那天把两万多篇一次性列出来。
+DAILY_QUERY = '''```dataview
+LIST
+FROM "002_Literature"
+WHERE published = date("{date}")
+```'''
+
 NOTE_TEMPLATE = '''---
 title: "{title}"
 aliases: [{aliases}]
@@ -120,13 +148,7 @@ reading-progress: 0
 
 ## 📊 相关文章
 
-```dataview
-TABLE rating, importance, reading-progress
-FROM "002_Literature"
-WHERE contains(hasTopic, "{topic}")
-SORT date DESC
-LIMIT 10
-```
+{related_query}
 
 ---
 
@@ -177,11 +199,7 @@ energy:
 
 ## 🔗 概念连接
 
-```dataview
-LIST
-FROM "002_Literature"
-WHERE created = date({date})
-```
+{daily_query}
 
 ---
 
@@ -322,19 +340,96 @@ def create_reading_note(article_path, vault_path, date_str):
         source=source, url=url, local_source=local_source, published=published,
         topic=topic, topic_tag=topic_tag,
         summary=summary, concepts=concepts,
+        # 查询要先自己 format 好再传进去：`str.format` **不会**回头再扫一遍替换进去的值，
+        # 直接传带 `{topic}` 的原文，那对大括号会原样留在笔记里。
+        related_query=RELATED_QUERY.format(topic=topic),
     )
     note_path.write_text(note_content, encoding='utf-8')
     return 'created', title
+
+
+DV_BLOCK_RE = re.compile(r'```dataview\b.*?```', re.DOTALL)
+
+
+def refresh_dataview_blocks(vault: str) -> dict:
+    """把**已有**笔记里的 dataview 查询重写成上面那两份当前模板。**本地重算，不调用模型。**
+
+    为什么非要有它：`create_reading_note()` 遇到已存在的笔记是 `skip`，所以改模板只影响
+    **以后**生成的笔记——库里已有的那批会永远停在旧查询上。2026-09-27 修那两处坏查询时，
+    库里已经有 25,852 个文件带着它们（阅读笔记 25,676 + 日记 176），光改模板一个都修不到。
+
+    用哪一份按笔记的位置定：
+    - `001_Daily/<日期>.md` → 日记那份，日期取自文件名；
+    - `002_Literature/**` → 阅读笔记那份，主题取自 frontmatter 的 `topic`/`hasTopic`。
+
+    **判不出来就不动**（没主题、没查询块），并分类计数报出来——不猜、不静默。
+    """
+    vault_path = Path(vault)
+    targets = []
+    daily_dir = vault_path / '001_Daily'
+    if daily_dir.is_dir():
+        targets += [('daily', p, p.stem) for p in sorted(daily_dir.glob('*.md'))]
+    literature = vault_path / '002_Literature'
+    if literature.is_dir():
+        targets += [('note', p, None) for p in sorted(literature.rglob('*.md'))]
+
+    rewritten, no_block, skipped, topicless = [], [], [], []
+    for kind, path, value in targets:
+        try:
+            content = path.read_text(encoding='utf-8')
+        except (OSError, UnicodeDecodeError):
+            # 读不出来就**不碰它**并计数。`UnicodeDecodeError` 要一起接住：它不是 OSError，
+            # 漏了它就会让一个坏文件把整趟重写打断——而这一趟要处理两万多个文件。
+            skipped.append(path.name)
+            continue
+        if kind == 'note':
+            frontmatter, _ = parse_frontmatter(content)
+            value = str(frontmatter.get('topic') or frontmatter.get('hasTopic') or '')
+            value = value.strip().strip('[]').strip()
+            # **主题为空也照改，只是单独计数**：那 7 篇（实测）本来就是空主题，
+            # 它们的查询里写着 `hasTopic, ""`。跳过它们等于让它们继续留着
+            # `SORT date` 那个排不出来的写法——而"语法对、结果如实为空"比
+            # "语法错、看不出为什么"要好。计数是给人看的：这 7 篇确实没有主题。
+            if not value:
+                topicless.append(path.name)
+            fresh = RELATED_QUERY.format(topic=value)
+        else:
+            fresh = DAILY_QUERY.format(date=value)
+        if not DV_BLOCK_RE.search(content):
+            no_block.append(path.name)
+            continue
+        updated = DV_BLOCK_RE.sub(lambda _match: fresh, content, count=1)
+        if updated != content:
+            path.write_text(updated, encoding='utf-8')
+            rewritten.append(path.name)
+    return {'rewritten': rewritten, 'noBlock': no_block,
+            'skipped': skipped, 'topicless': topicless}
 
 
 def main():
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')
     import argparse
     parser = argparse.ArgumentParser(description='创建 Obsidian 阅读笔记 V2')
-    parser.add_argument('--date', required=True, help='日期 YYYY-MM-DD')
+    parser.add_argument('--date', help='日期 YYYY-MM-DD（--refresh-queries 时不需要）')
     parser.add_argument('--source', default=DEFAULT_SOURCE, help='文章目录')
     parser.add_argument('--vault', default=DEFAULT_VAULT, help='Vault 目录')
+    parser.add_argument('--refresh-queries', action='store_true',
+                        help='只做这件事：把已有笔记里的 dataview 查询重写成当前模板（本地，不调模型）')
     args = parser.parse_args()
+
+    if args.refresh_queries:
+        result = refresh_dataview_blocks(args.vault)
+        print('重写 %d 篇；没有查询块、没动的 %d 篇；读不出来的 %d 篇'
+              % (len(result['rewritten']), len(result['noBlock']), len(result['skipped'])))
+        if result['topicless']:
+            print('   其中主题为空（照改，但表会是空的）: %d 篇' % len(result['topicless']))
+        for name in result['skipped'][:5]:
+            print('   跳过:', name[:70])
+        return
+
+    if not args.date:
+        print('[ERROR] 要 --date（或用 --refresh-queries 只重写查询）')
+        sys.exit(1)
 
     date_dir = os.path.join(args.source, args.date)
     if not os.path.isdir(date_dir):
@@ -372,6 +467,7 @@ def main():
         daily_content = DAILY_TEMPLATE.format(
             date=args.date, total=total, created=created,
             reading_list='\n'.join(titles[:20]) if titles else '(无)',
+            daily_query=DAILY_QUERY.format(date=args.date),
         )
         daily_path.write_text(daily_content, encoding='utf-8')
         print(f'  日记: {daily_path}')

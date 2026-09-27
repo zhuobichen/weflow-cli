@@ -1,0 +1,171 @@
+"""`create_reading_notes.py`：笔记模板里的 **dataview 查询**与它的重写。
+
+这一支盯的是一类**看不见的坏**：查询是写在笔记正文里的一段代码，它错了不会让任何
+代码报错——Obsidian 那边只是显示一块代码、或者显示一张空表。2026-09-27 实测到三处：
+
+1. 阅读笔记 `SORT date DESC`，而笔记里**没有 `date` 字段**（是 `published`）→ 排不出来；
+2. 阅读笔记的相关文章里**会列出它自己**（没有排除 this.file）；
+3. 日记 `WHERE created = date(...)`，而 `created` 是**生成日**——一次回填把 25,676 篇的
+   `created` 全写成 2026-09-26（实测），于是 175 天的日记查出来是空的、
+   唯独生成那天把两万多篇一次列出来。
+
+前两条影响 25,676 篇阅读笔记，第三条影响 176 篇日记，全部 100% 命中。
+"""
+import importlib.util
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+SCRIPTS = Path(__file__).resolve().parents[1] / 'scripts'
+sys.path.insert(0, str(SCRIPTS))
+
+spec = importlib.util.spec_from_file_location('create_reading_notes', SCRIPTS / 'create_reading_notes.py')
+crn = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(crn)
+
+ARTICLE = ('---\ntitle: "某篇"\nsource: "某号"\ndate: 2026-05-20\ntopic: AI\n'
+           'relevance: 中\ntags: [AI]\nurl: "http://x"\n---\n\n## AI 摘要\n\n一段摘要。\n')
+
+
+def dataview_block(text: str) -> str:
+    start = text.find('```dataview')
+    end = text.find('```', start + 3)
+    return text[start:end + 3] if start >= 0 else ''
+
+
+class GeneratedNoteTests(unittest.TestCase):
+    def make(self, tmp):
+        src = Path(tmp) / 'biz-daily' / '2026-05-20' / 'AI'
+        src.mkdir(parents=True)
+        (src / '某号-某篇.md').write_text(ARTICLE, encoding='utf-8')
+        vault = Path(tmp) / 'vault'
+        crn.create_reading_note(src / '某号-某篇.md', vault, '2026-05-20')
+        return vault
+
+    def test_相关文章按_published_排序_不引用不存在的_date(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = self.make(tmp)
+            note = next((vault / '002_Literature').rglob('*.md'))
+            block = dataview_block(note.read_text(encoding='utf-8'))
+        self.assertIn('SORT published DESC', block)
+        self.assertNotIn('SORT date', block, '笔记里没有 date 字段，按它排是排不出来的')
+
+    def test_相关文章不列出自己(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = self.make(tmp)
+            note = next((vault / '002_Literature').rglob('*.md'))
+            block = dataview_block(note.read_text(encoding='utf-8'))
+        self.assertIn('this.file.name', block, '不排除自己的话，每篇的相关文章第一条都是它自己')
+
+    def test_查询里的主题是替换过的_没有大括号残留(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = self.make(tmp)
+            note = next((vault / '002_Literature').rglob('*.md'))
+            text = note.read_text(encoding='utf-8')
+        self.assertNotIn('{topic}', text, 'str.format 不会回头扫替换进去的值，得先自己 format 好')
+        self.assertIn('contains(hasTopic, "AI")', dataview_block(text))
+
+
+class RefreshTests(unittest.TestCase):
+    """重写已有笔记：模板改了以后，老笔记不会自己更新（`create_reading_note` 遇到已存在就 skip）。"""
+
+    def build(self, tmp):
+        vault = Path(tmp) / 'vault'
+        (vault / '001_Daily').mkdir(parents=True)
+        (vault / '002_Literature' / 'WeChat' / '2026-05-20').mkdir(parents=True)
+        note = vault / '002_Literature' / 'WeChat' / '2026-05-20' / '2026-05-20-某篇.md'
+        note.write_text(
+            '---\ntitle: "某篇"\nhasTopic: [[AI]]\npublished: 2026-05-20\n---\n\n'
+            '## 正文\n\n这段是文章内容，重写查询不许动它。\n\n'
+            '## 📊 相关文章\n\n```dataview\nTABLE rating\nFROM "002_Literature"\n'
+            'WHERE contains(hasTopic, "AI")\nSORT date DESC\nLIMIT 10\n```\n',
+            encoding='utf-8')
+        (vault / '001_Daily' / '2026-05-20.md').write_text(
+            '---\ntitle: 日记\n---\n\n## 🔗 概念连接\n\n```dataview\nLIST\n'
+            'FROM "002_Literature"\nWHERE created = date(2026-05-20)\n```\n',
+            encoding='utf-8')
+        return vault, note
+
+    def test_把旧查询重写成当前那份(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            vault, note = self.build(tmp)
+            result = crn.refresh_dataview_blocks(str(vault))
+            self.assertEqual(len(result['rewritten']), 2, '阅读笔记与日记各一份')
+            self.assertIn('SORT published DESC', note.read_text(encoding='utf-8'))
+
+    def test_日记用_published_判日期_而不是生成日(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            vault, _ = self.build(tmp)
+            crn.refresh_dataview_blocks(str(vault))
+            daily = (vault / '001_Daily' / '2026-05-20.md').read_text(encoding='utf-8')
+            self.assertIn('published = date("2026-05-20")', daily)
+            self.assertNotIn('created = date', daily,
+                             'created 是生成日；一次回填会让全库都是同一天')
+
+    def test_只动那个代码块_别的一个字不改(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            vault, note = self.build(tmp)
+            before = note.read_text(encoding='utf-8')
+            crn.refresh_dataview_blocks(str(vault))
+            after = note.read_text(encoding='utf-8')
+            self.assertIn('这段是文章内容，重写查询不许动它。', after)
+            head_before = before.split('```dataview')[0]
+            head_after = after.split('```dataview')[0]
+            self.assertEqual(head_before, head_after, '代码块之前的内容必须逐字不变')
+
+    def test_没有查询块的不动_并且计数报出来(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            vault, _ = self.build(tmp)
+            orphan = vault / '002_Literature' / 'WeChat' / '2026-05-20' / '没有块.md'
+            orphan.write_text('---\nhasTopic: [[AI]]\npublished: 2026-05-20\n---\n\n正文\n',
+                              encoding='utf-8')
+            result = crn.refresh_dataview_blocks(str(vault))
+            self.assertIn('没有块.md', result['noBlock'])
+            self.assertNotIn('没有块.md', result['rewritten'])
+            self.assertNotIn('dataview', orphan.read_text(encoding='utf-8'))
+
+    def test_主题为空的也照改_只是单独计数(self):
+        """空主题**不是**"判不出来"——那 7 篇本来就空，查询里写着 `hasTopic, ""`。
+
+        跳过它们，等于让它们继续留着 `SORT date`（排不出来的那个写法）。
+        "语法对、结果如实为空"比"语法错、看不出为什么"要好。
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = Path(tmp) / 'vault'
+            (vault / '002_Literature').mkdir(parents=True)
+            odd = vault / '002_Literature' / '无主题.md'
+            odd.write_text(
+                '---\ntitle: 无主题\n---\n\n```dataview\nTABLE rating\n'
+                'FROM "002_Literature"\nWHERE contains(hasTopic, "")\nSORT date DESC\n```\n',
+                encoding='utf-8')
+            result = crn.refresh_dataview_blocks(str(vault))
+            text = odd.read_text(encoding='utf-8')
+        self.assertIn('无主题.md', result['topicless'], '要单独报出来，让人看得见这几篇没有主题')
+        self.assertIn('SORT published DESC', text, '查询本身要修好')
+        self.assertNotIn('SORT date', text)
+        self.assertIn('contains(hasTopic, "")', text, '主题是空的，查询里就该是空的')
+
+    def test_读不出来的文件不静默(self):
+        # 读失败（编码/权限）要计数报出来，不能悄悄少一篇
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = Path(tmp) / 'vault'
+            lit = vault / '002_Literature'
+            lit.mkdir(parents=True)
+            bad = lit / '坏文件.md'
+            bad.write_bytes(b'---\n\xff\xfe\ntitle: x\n---\n')
+            result = crn.refresh_dataview_blocks(str(vault))
+            self.assertEqual(len(result['skipped']) + len(result['rewritten']) + len(result['noBlock']), 1)
+
+    def test_再跑一次不会重复改(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            vault, note = self.build(tmp)
+            crn.refresh_dataview_blocks(str(vault))
+            first = note.read_text(encoding='utf-8')
+            result = crn.refresh_dataview_blocks(str(vault))
+            self.assertEqual(note.read_text(encoding='utf-8'), first, '幂等：第二次不该再动')
+            self.assertEqual(len(result['rewritten']), 0)
+
+
+if __name__ == '__main__':
+    unittest.main()
