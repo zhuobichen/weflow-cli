@@ -54,6 +54,18 @@ All notable user-facing changes are recorded here. This project follows [Semanti
 
 ### Changed
 
+- **`compile_wiki` generates concept pages concurrently too, and filters existing pages before spending.** Same
+  pattern as `article-notes` and for the same reason: 1,893 pages took minutes at 8 workers instead of the ~53
+  minutes the serial loop would have needed (it deliberately slept 0.5s between calls - a per-article throttle that
+  only makes sense when one request is in flight, so the concurrent path does not sleep). Writing stays serial and
+  **streams**: a page is written as soon as its answer arrives, so a killed run keeps what it already produced.
+
+  One trap belongs to this step specifically, and it is a money trap rather than a correctness one: the existing
+  pages were previously skipped inside the serial loop (`if out_file.exists(): continue`), which is safe by
+  construction. Handing that check to the thread pool - submit everything, discard the results you did not want -
+  would **pay for a page that already exists** and show up only on the bill. `build_jobs()` therefore filters
+  before submission, and the test asserts the skipped concept's name never reaches `generate_concept`.
+
 - **`article-notes` asks concurrently, which is 6.5x faster for the same money.** The loop was one blocking call
   per article; measured, that is 49 cards/minute against **319 cards/minute at 8 workers** - and the token count is
   unchanged, so the bill is identical (~¥11.5 for 6,409 articles). Only the *asking* is parallel: the writing stays

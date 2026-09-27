@@ -304,5 +304,95 @@ class RefLineTests(unittest.TestCase):
         self.assertLessEqual(len(line), 150 + len('- [t]（s）：'))
 
 
+class ParallelPageTests(unittest.TestCase):
+    """并发生成概念页：**省的是时间，不许改的是"花多少钱"**。
+
+    这一步是知识库线里第二处按页花钱的地方（第一处是 `article_notes`），所以两条纪律
+    和那边一样：边收边写（不然几千次调用期间磁盘上一页都没有），以及——**这里多一条**：
+    已存在的页要在提交给线程池**之前**滤掉。
+    """
+
+    def setUp(self):
+        self.original = cw.generate_concept
+        self.seen = []
+
+    def tearDown(self):
+        cw.generate_concept = self.original
+
+    def fake(self, delay=None, fail_for=()):
+        import time as _t
+        if delay is None:
+            delay = lambda name: 0.02 * (5 - len(name))   # noqa: E731
+        def call(name, refs, api_key, origin=''):
+            self.seen.append(name)
+            _t.sleep(delay(name))
+            if name in fail_for:
+                return None
+            return ({'title': name, 'verified': False}, '正文 %s' % name)
+        return call
+
+    def test_已有页在花钱之前就被滤掉(self):
+        """**这条是这一步唯一会多花钱的地方。**
+
+        串行版顺序上天然不会为已存在的页调用模型；改成"先提交、拿到结果再丢"之后，
+        那次调用**已经发生了**——钱花了，产出被丢掉，账单上看不出来。
+        所以这里断言的是：滤掉的那些名字，`generate_concept` **一次都没被叫到**。
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            (out / '甲.md').write_text('x', encoding='utf-8')      # 已存在
+            concepts = [('甲', [{'desc': 'd'}]), ('乙', [{'desc': 'd'}]),
+                        ('丙', [{'desc': 'd'}])]
+            jobs, skipped = cw.build_jobs(concepts, out)
+            self.assertEqual(skipped, 1)
+            self.assertEqual([name for name, _, _ in jobs], ['乙', '丙'])
+            cw.generate_concept = self.fake()
+            list(cw.iter_concept_pages(jobs, 'k', workers=4))
+            self.assertEqual(sorted(self.seen), ['丙', '乙'], '已存在的「甲」不该被问过一次')
+
+    def test_顺序与输入一致(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            concepts = [('第一个', []), ('第二个', []), ('第三个', [])]
+            jobs, _ = cw.build_jobs(concepts, Path(tmp))
+            cw.generate_concept = self.fake(delay=lambda name: 0.05 * ('第一个', '第二个', '第三个').index(name))
+            got = [(job[0], result[0]['title'] if result else None)
+                   for job, result in cw.iter_concept_pages(jobs, 'k', workers=4)]
+        self.assertEqual(got, [('第一个', '第一个'), ('第二个', '第二个'), ('第三个', '第三个')],
+                         '名字与内容必须成对——错位了页面照样生成、格式照样对')
+
+    def test_一页失败不拖垮整批(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            jobs, _ = cw.build_jobs([('甲', []), ('乙', []), ('丙', [])], Path(tmp))
+            cw.generate_concept = self.fake(fail_for=('乙',))
+            got = list(cw.iter_concept_pages(jobs, 'k', workers=4))
+        self.assertEqual(len(got), 3, '失败的那一页占位仍在，不能少一项')
+        self.assertEqual([j[0] for j, r in got if r is None], ['乙'])
+
+    def test_第一页出得来就不等整批(self):
+        import inspect
+        import time as _t
+        with tempfile.TemporaryDirectory() as tmp:
+            jobs, _ = cw.build_jobs([('甲', []), ('乙', []), ('丙', [])], Path(tmp))
+            cw.generate_concept = self.fake(delay=lambda name: 0.05 * ('甲', '乙', '丙').index(name))
+            started = _t.time()
+            stream = cw.iter_concept_pages(jobs, 'k', workers=4)
+            self.assertTrue(inspect.isgenerator(stream), '返回列表 = 整批跑完才有第一页')
+            next(stream)
+            self.assertLess(_t.time() - started, 0.15, '第一页等了太久，说明整批被物化了')
+            list(stream)
+
+    def test_串行那条路保留按篇节流(self):
+        # 只有一次一个请求时才需要按篇等待（0.5s）；并发那条不加，否则把并发收益吃回去。
+        # 假实现本身不睡，所以这里量到的就是节流那一份。
+        import time as _t
+        with tempfile.TemporaryDirectory() as tmp:
+            jobs, _ = cw.build_jobs([('甲', []), ('乙', [])], Path(tmp))
+            cw.generate_concept = self.fake(delay=lambda name: 0)
+            started = _t.time()
+            list(cw.iter_concept_pages(jobs, 'k', workers=1))
+            elapsed = _t.time() - started
+        self.assertGreaterEqual(elapsed, 0.9, '两页串行至少要各等 0.5 秒，实测只用了 %.2fs' % elapsed)
+
+
 if __name__ == '__main__':
     unittest.main()

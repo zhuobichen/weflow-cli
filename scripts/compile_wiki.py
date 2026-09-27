@@ -18,6 +18,7 @@
 `chat_notes.py` 产出的卡自带 `[[话题]]/[[人名]]`）。在那之前，本脚本只在对话线上有效。
 """
 import sys, os, json, re, time, hashlib
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from collections import defaultdict, Counter
 
@@ -242,6 +243,57 @@ def origin_tag(source_dir: str) -> str:
     return SOURCE_TAGS.get(name, '')
 
 
+# 并发数。与 `article_notes.CONCEPT_WORKERS`、`biz_daily` 那三个取同一个值：
+# 量的都是同一个上游的同一个延迟。
+CONCEPT_PAGES_WORKERS = 6
+
+
+def build_jobs(top_concepts: list, out_dir) -> tuple:
+    """滤掉**已经有页**的概念，返回 `([(name, refs, out_file)], 跳过数)`。
+
+    这一步必须在**提交给线程池之前**做。原来那版是串行循环里 `if out_file.exists(): continue`，
+    顺序上天然不会为已存在的页花钱；一旦改成并发，"先提交、拿到结果再丢"就变成了**为一个
+    已存在的页付一次费**——而且不报错，只体现在账单上。
+    """
+    jobs, skipped = [], 0
+    for name, refs in top_concepts:
+        safe_name = re.sub(r'[\\/:*?"<>|]', '_', name)[:60]
+        out_file = out_dir / f'{safe_name}.md'
+        if out_file.exists():
+            skipped += 1
+            continue
+        jobs.append((name, refs, out_file))
+    return jobs, skipped
+
+
+def iter_concept_pages(jobs: list, api_key: str, workers: int = CONCEPT_PAGES_WORKERS,
+                       origin: str = ''):
+    """并发生成概念页，**按输入顺序**逐个产出 `((name, refs, out_file), result)`。
+
+    生成器而不是列表，理由同 `article_notes.iter_concepts`：整批跑完才返回的话，
+    几千次调用期间磁盘上一页都没有，进程一死全部白花。调用方边收边写。
+
+    串行那条路保留原来的 `time.sleep(0.5)`：那是**按篇节流**，只有一次只有一个请求时才
+    有意义。并发那条路不再 sleep——同时有 `workers` 个请求在飞，本身就是另一种节奏，
+    再加一层按篇等待只会把并发收益吃回去。
+    """
+    def one(job):
+        name, refs, _ = job
+        try:
+            return generate_concept(name, refs, api_key, origin=origin)
+        except Exception:
+            return None
+
+    if workers <= 1:
+        for job in jobs:
+            yield job, one(job)
+            time.sleep(0.5)
+        return
+    with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
+        for job, result in zip(jobs, pool.map(one, jobs)):
+            yield job, result
+
+
 def generate_concept(name: str, refs: list[dict], api_key: str, origin: str = '') -> str | None:
     """Call DeepSeek to generate a concept Wiki page."""
     # Build references section
@@ -380,6 +432,8 @@ def main():
                         help='只给已有页面补标签与未核验标记（本地，不调用模型）')
     parser.add_argument('--min-refs', type=int, default=1,
                         help='至少被几篇材料提到才建页（默认 1；2 能滤掉新闻里的一次性实体）')
+    parser.add_argument('--workers', type=int, default=CONCEPT_PAGES_WORKERS,
+                        help='并发生成几页（默认 %d）；1 = 串行且按篇节流' % CONCEPT_PAGES_WORKERS)
     parser.add_argument('--source', default=SOURCE_ROOT, help='文章目录')
     parser.add_argument('--output', default=OUTPUT_ROOT, help='概念页输出目录')
     args = parser.parse_args()
@@ -424,24 +478,20 @@ def main():
     top_concepts = ranked[:args.limit]
     generated = 0
 
-    # Load existing concepts to skip
-    skipped = 0
-    for name, refs in top_concepts:
-        safe_name = re.sub(r'[\\/:*?"<>|]', '_', name)[:60]
-        out_file = out_dir / f'{safe_name}.md'
-
-        if out_file.exists():
-            skipped += 1
-            print(f'  [SKIP] {name} (已存在)')
+    # 已有页在**花钱之前**滤掉（见 `build_jobs`：先提交再丢弃 = 为已存在的页付一次费）
+    jobs, skipped = build_jobs(top_concepts, out_dir)
+    done = 0
+    # 边收边写：生成器一有结果就落盘，不等整批（见 `iter_concept_pages`）
+    for (name, refs, out_file), result in iter_concept_pages(
+            jobs, api_key, args.workers, origin=origin_tag(args.source)):
+        done += 1
+        if not result:
+            print(f'  [ERR] {name} 没生成出来（{done}/{len(jobs)}）', file=sys.stderr)
             continue
-
-        print(f'  [{generated+1}/{args.limit}] {name} ({len(refs)} 引用)...')
-        result = generate_concept(name, refs, api_key, origin=origin_tag(args.source))
-        if result:
-            fm, body = result
-            write_with_frontmatter(str(out_file), fm, body)
-            generated += 1
-            time.sleep(0.5)
+        print(f'  [{done}/{len(jobs)}] {name} ({len(refs)} 引用)')
+        fm, body = result
+        write_with_frontmatter(str(out_file), fm, body)
+        generated += 1
 
     if skipped:
         print(f'  跳过 {skipped} 个已有概念')
