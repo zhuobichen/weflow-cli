@@ -242,6 +242,16 @@ All notable user-facing changes are recorded here. This project follows [Semanti
 
 ### Changed
 
+- **Two more duplicate pairs merged by hand, out of the 741 Jev had proposed.** The loose "similar name" set
+was narrowed by rule to 27, and reading each one's actual definition left exactly **two** that are the same
+thing (`TRAE IDE Linux 版` / `TRAE IDE Linux 版本`; `100 万 token 上下文窗口` / `100万token上下文`). The
+other twenty-five were rejected on meaning rather than on spelling - "日均Token调用量" is a rate where
+"Token调用量" is a total, "2026世界人工智能大会" is one year's event against the series, "Token 节省" is a
+concept where "Token 节省技巧" is a set of methods. Merged with aliases; nothing linked to the dropped
+names, and the health check reports **0 broken links** across 22,374 pages.
+
+That is the useful form of this result: a decision model proposed 741 merges, a string rule then cut them to
+27, and a human reading the definitions kept 2. The graph's name-level duplication is now settled.
 - **`wiki lint` is fast again at the new scale - and the "similar names" count it prints is now mostly noise.**
   The near-duplicate check compared every page with every other (5,062 pages took 1-2 minutes; 22,445 is twenty
   times the pairs). It now builds a 5-gram inverted index and compares only within a bucket, which is **the same

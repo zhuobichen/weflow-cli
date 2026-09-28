@@ -1469,7 +1469,14 @@ concept", and sampling them (the most confident 25, then a random 12) showed ess
 counter-examples fixed those and broke the true ones in the same run (`AI skill` vs `AI skills` came back
 "related but different"). The question here is **literal** - same string modulo spacing, case, plurals - and
 Jev is a semantic model; the normal form was the right tool all along. Narrowing the 741 to "one name is an
-extension of the other" left 27, of which about three are genuinely the same. So the loose set stays
+"extension of the other" left 27, and inspecting each of them by its actual definition left **two** that
+are genuinely the same (`TRAE IDE Linux 版` / `TRAE IDE Linux 版本`, and
+`100 万 token 上下文窗口` / `100万token上下文`) - merged by hand, aliased, 0 broken links. The other
+twenty-five were rejected on meaning: "日均Token调用量" is a rate and "Token调用量" is a total;
+"2026世界人工智能大会" is one year's event and "世界人工智能大会" is the series; "Token 节省" is a
+concept and "Token 节省技巧" is a set of methods. So the loose set stays untouched, and that is a finding
+rather than a gap: the graph's name-level duplication was already nearly exhausted by the 74 groups the
+rule could settle, and the 741 Jev proposed contained two.
 untouched, and that is a finding rather than a gap: the graph's name-level duplication was already nearly
 exhausted by the 74 groups the rule could settle.
 
