@@ -770,6 +770,7 @@ def merge_duplicate_pages(pages_dir: str, dry_run: bool = False) -> dict:
         text = main.read_text(encoding='utf-8')
         fm, body = parse_frontmatter(text)
         aliases = [str(a) for a in (fm.get('aliases') or [])]
+        main_sources = [str(s) for s in (fm.get('sources') or [])]
         keep, have = [], set()
         for line in text.split('\n'):
             if line.startswith('- [[') and ']] ' + SEPARATOR + ' ' in line:
@@ -787,6 +788,16 @@ def merge_duplicate_pages(pages_dir: str, dry_run: bool = False) -> dict:
                         keep.append(line)
                         moved += 1
             other_fm, _ = parse_frontmatter(other_text)
+            # `sources:` 也要取并集。**这是 2026-09-28 补的**：此前它只从主页面带过去，
+            # 于是被并那张卡的名单整条消失 —— 实测合并的 315 组**每一组**都少了至少一条。
+            # 这个键不是装饰：`--relabel` 靠 `source_kinds_for(frontmatter['sources'])` 推
+            # `来源/文章|聊天|收藏` 标签，少一条就可能少一个标签。正文的来源行一直是对的
+            # （上面并过了），只有 frontmatter 这一侧漏。
+            # 同目录内各页的命名约定是一致的（`Wiki/Concepts` 一个知识库、`Chat/Concepts`
+            # 另一个），所以取并集不会把两套名字混进来。
+            for name in (other_fm.get('sources') or []):
+                if name not in main_sources:
+                    main_sources.append(str(name))
             for name in [other.stem] + [str(x) for x in (other_fm.get('aliases') or [])]:
                 if name != main.stem and name not in aliases:
                     aliases.append(name)
@@ -798,6 +809,8 @@ def merge_duplicate_pages(pages_dir: str, dry_run: bool = False) -> dict:
         examples.append({'main': main.stem, 'absorbed': [o.stem for o in others]})
         if not dry_run:
             fm['aliases'] = sorted(aliases)
+            if main_sources:
+                fm['sources'] = main_sources
             write_with_frontmatter(str(main), fm,
                                    replace_source_section(body, sorted(keep)) if keep else body)
     return {'groups': merged, 'removed': removed, 'aliased': aliased,

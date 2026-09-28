@@ -175,6 +175,23 @@ class NearDuplicateTests(unittest.TestCase):
         got = wl.near_duplicate_titles(self.pages(*titles))
         self.assertEqual(got['contained'], [], '枢纽不该和它的子话题成对')
 
+    def test_跨两条线的不算重复(self):
+        """两个概念目录是**两个知识库**，同名各一张是设计使然，而且
+        `--merge-duplicates` 按目录跑、永远动不了跨线的组。
+
+        2026-09-28 实测踩到：合并跑完后报告还剩 2 组（`AI 工具`、`GLORIA`），全是跨线的，
+        而报告写着"这些就是合并会合并的"。跨线同名由 `duplicateTitles` 那一节负责。
+        """
+        left, right = self.pages('AI 工具'), self.pages('AI工具')
+        left[0]['dir'], right[0]['dir'] = 'Wiki/Concepts', 'Chat/Concepts'
+        got = wl.near_duplicate_titles(left + right)
+        self.assertEqual(got['sameNode'], [], '跨目录的两种写法不该成组')
+        # 同一个目录里就该成组 —— 否则这条用例可能只是"什么都不报"而通过
+        for p in left + right:
+            p['dir'] = 'Wiki/Concepts'
+        self.assertEqual(wl.near_duplicate_titles(left + right)['sameNode'],
+                         [['AI 工具', 'AI工具']])
+
     def test_不相关的标题不会误报(self):
         got = wl.near_duplicate_titles(self.pages('椰子水全覆盖风险排查', '全国人大常委会会议'))
         self.assertEqual(got, {'sameNode': [], 'contained': []})

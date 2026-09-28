@@ -211,54 +211,63 @@ def near_duplicate_titles(pages: list) -> dict:
       一个个裹进去。这是**枢纽**（实测 `agent` 被 731 个名字包含、`模型` 643 个），不是重复。
       所以加了 `DUP_HUB_LIMIT`：短名字已经被 ≥5 个别名包含时，它当枢纽看待，不成对。
     """
-    names = sorted({p['title'] or p['stem'] for p in pages})
-    by_norm = {}
-    for name in names:
-        key = normalize_concept_name(name)
-        if key:
-            by_norm.setdefault(key, []).append(name)
+    # **按目录分开比。** 两个概念目录是**两个知识库**（D-051），同一个名字两边各有一张页是
+    # 设计使然、不是重复；`compile_wiki --merge-duplicates` 也是按目录跑的，永远动不了跨线的
+    # 组。2026-09-28 实测：合并跑完后还剩 2 组（`AI 工具`、`GLORIA`）全是跨线的 —— 而报告
+    # 写着"这些就是合并会合并的"，是句假话。跨线同名另有 `duplicateTitles` 那一节在报。
+    named = sorted({(p.get('dir', ''), p['title'] or p['stem']) for p in pages})
+    same, contained = [], []
+    for where in sorted({w for w, _ in named}):
+        by_norm = {}
+        for w, name in named:
+            if w != where:
+                continue
+            key = normalize_concept_name(name)
+            if key:
+                by_norm.setdefault(key, []).append(name)
 
-    # **按 8-gram 分桶，而不是两两比。** 两档判据都要求"共享一个 ≥8 字的子串"（同名是
-    # 全等，包含是共享短的那一个），所以只在共享 8-gram 的页之间比，**结果与全量两两比
-    # 逐组相同**，只是不再做那 2.5 亿次注定失败的比较。分桶宽度必须 ≤ 判据的最小长度，
-    # 改判据时这条要跟着改 —— `test/wiki_lint_test.py` 用随机数据对拍钉着它。
-    index = {}
-    for key in by_norm:
-        if len(key) < DUP_MIN_NAME:
-            continue
-        for gram in {key[i:i + DUP_MIN_NAME] for i in range(len(key) - DUP_MIN_NAME + 1)}:
-            index.setdefault(gram, []).append(key)
+        # **按 8-gram 分桶，而不是两两比。** 两档判据都要求"共享一个 ≥8 字的子串"（同名是
+        # 全等，包含是共享短的那一个），所以只在共享 8-gram 的页之间比，**结果与全量两两比
+        # 逐组相同**，只是不再做那 2.5 亿次注定失败的比较。分桶宽度必须 ≤ 判据的最小长度，
+        # 改判据时这条要跟着改 —— `test/wiki_lint_test.py` 用随机数据对拍钉着它。
+        index = {}
+        for key in by_norm:
+            if len(key) < DUP_MIN_NAME:
+                continue
+            for gram in {key[i:i + DUP_MIN_NAME] for i in range(len(key) - DUP_MIN_NAME + 1)}:
+                index.setdefault(gram, []).append(key)
 
-    # **枢纽计数**：某个规范化名字被多少个别的名字包含。用 8-gram 桶算，不是 O(n²)——
-    # `k` 被 `other` 包含时 `k` 的前 8 个字必然是 `other` 的一个 8-gram，所以只看那个桶就够。
-    hubs = {}
-    for key in by_norm:
-        if len(key) < DUP_MIN_NAME:
-            continue
-        head = key[:DUP_MIN_NAME]
-        hubs[key] = sum(1 for other in index.get(head, []) if other != key and key in other)
+        # **枢纽计数**：某名字被多少个**同目录**的别的名字包含。用 8-gram 桶算，不是 O(n²)——
+        # `k` 被 `other` 包含时 `k` 的前 8 个字必然是 `other` 的一个 8-gram，只看那个桶就够。
+        hubs = {}
+        for key in by_norm:
+            if len(key) < DUP_MIN_NAME:
+                continue
+            head = key[:DUP_MIN_NAME]
+            hubs[key] = sum(1 for other in index.get(head, [])
+                            if other != key and key in other)
 
-    # 第一档按**组**报，不按对：一个规范形可能有三四种写法
-    # （`Academic Research Skills` / `AcademicResearchSkills` / `academic-research-skills`），
-    # 报成两两配对会让人看不出它们是同一个节点。
-    same = [sorted(set(raws)) for _, raws in sorted(by_norm.items())
-            if len(set(raws)) > 1]
+        # 第一档按**组**报，不按对：一个规范形可能有三四种写法
+        # （`Academic Research Skills` / `AcademicResearchSkills` / `academic-research-skills`），
+        # 报成两两配对会让人看不出它们是同一个节点。
+        same += [sorted(set(raws)) for _, raws in sorted(by_norm.items())
+                 if len(set(raws)) > 1]
 
+        seen = set()
+        for bucket in index.values():
+            for i, left in enumerate(bucket):
+                for right in bucket[i + 1:]:
+                    pair = (left, right) if left <= right else (right, left)
+                    if pair in seen:
+                        continue      # 一对可能共享多个 8-gram，会落进多个桶
+                    seen.add(pair)
+                    short, long_ = pair
+                    if len(short) < DUP_MIN_NAME or len(short) < DUP_COVER_RATIO * len(long_):
+                        continue
+                    if short not in long_ or hubs.get(short, 0) >= DUP_HUB_LIMIT:
+                        continue
+                    contained.append([by_norm[short][0], by_norm[long_][0]])
     same.sort()                 # 按名字排，不按规范形 —— 报告是给人看的
-    contained, seen = [], set()
-    for bucket in index.values():
-        for i, left in enumerate(bucket):
-            for right in bucket[i + 1:]:
-                pair = (left, right) if left <= right else (right, left)
-                if pair in seen:
-                    continue          # 一对可能共享多个 8-gram，会落进多个桶
-                seen.add(pair)
-                short, long_ = pair
-                if len(short) < DUP_MIN_NAME or len(short) < DUP_COVER_RATIO * len(long_):
-                    continue
-                if short not in long_ or hubs.get(short, 0) >= DUP_HUB_LIMIT:
-                    continue
-                contained.append([by_norm[short][0], by_norm[long_][0]])
     contained.sort()
     return {'sameNode': same, 'contained': contained}
 
@@ -314,6 +323,8 @@ def collect(pages_dir: str, card_dirs) -> list:
         if isinstance(raw_aliases, str):
             raw_aliases = [x for x in raw_aliases.strip('[]').split(',')]
         pages.append({'stem': path.stem,
+                      # 判重按目录分开比（两个目录是两个知识库），所以要记住这张页住哪儿
+                      'dir': str(pages_dir),
                       'topic': compile_frontmatter_topic(frontmatter),
                       'title': str(frontmatter.get('title') or '').strip('"'),
                       # **别名也算"指向这一页的名字"**：`--merge-duplicates` 把

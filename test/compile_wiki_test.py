@@ -897,6 +897,29 @@ class MergeDuplicatePagesTests(unittest.TestCase):
             fm = (pages / 'GPT-5.6.md').read_text(encoding='utf-8').split('---')[1]
         self.assertIn('GPT 5.6', fm)
 
+    def test_frontmatter_的_sources_也要取并集(self):
+        """**2026-09-28 补的，因为实测漏了**：此前 `sources:` 只从主页面带过去，被并那张的
+        卡片名单整条消失 —— 在真库上量过，合并的 315 组**每一组**都少了至少一条。
+
+        这个键不是装饰：`--relabel` 靠 `source_kinds_for(frontmatter['sources'])` 推
+        `来源/文章|聊天|收藏` 标签。正文的来源行一直是对的（上面并过了），只有 frontmatter
+        这一侧漏 —— 而漏了不会报错，只是标签少一个。
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            pages = Path(tmp) / 'pages'
+            pages.mkdir()
+            # 主页面（来源多）带第一条 + 第三行来源；被并的那张带第二条
+            (pages / 'GPT-5.6.md').write_text(
+                '---\ntitle: "GPT-5.6"\nsources: [卡一, 卡三]\n---\n\n# GPT-5.6\n\n定义。\n\n'
+                '## 来源\n\n- [[2026-01-01-一]] — 一\n- [[2026-01-02-二]] — 二\n', encoding='utf-8')
+            (pages / 'GPT 5.6.md').write_text(
+                '---\ntitle: "GPT 5.6"\nsources: [卡二]\n---\n\n# GPT 5.6\n\n另一种写法。\n\n'
+                '## 来源\n\n- [[2026-01-03-三]] — 三\n', encoding='utf-8')
+            cw.merge_duplicate_pages(str(pages))
+            fm = (pages / 'GPT-5.6.md').read_text(encoding='utf-8').split('---')[1]
+        for card in ('卡一', '卡二', '卡三'):
+            self.assertIn(card, fm, '%s 这条来源不该因为合并而消失' % card)
+
     def test_幂等(self):
         with tempfile.TemporaryDirectory() as tmp:
             pages = self.build(tmp)

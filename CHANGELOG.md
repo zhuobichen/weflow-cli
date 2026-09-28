@@ -47,6 +47,26 @@ All notable user-facing changes are recorded here. This project follows [Semanti
   it now uses literal contract values. And **the hub filter's count is computed from the same 8-gram
   index** rather than an O(n²) scan, which keeps the whole pass at 0.1s.
 
+- **The two tiers compare within a directory, not across the whole vault.** The two concept
+  directories are two knowledge bases and `--merge-duplicates` runs per directory, so a group spanning
+  them can never be acted on by the tool the report points at. The first version compared across both
+  and, after the merge, was still listing `AI 工具` and `GLORIA` as "groups that tool will merge" -
+  which was simply false. Cross-line same names are a separate report (`duplicateTitles`).
+
+- **`--merge-duplicates` was silently dropping card names from the surviving page's `sources:`.** It
+  carried that key over from the main page only, so every merged group lost the absorbed page's
+  entries - measured on the real vault, **all 315 groups** lost at least one. The body's source lines
+  were always correct (those were unioned); only the frontmatter side was short, and that key is what
+  `--relabel` feeds to `source_kinds_for`, so a page could lose a `来源/文章|聊天|收藏` tag. It now
+  unions. The 315 pages were repaired from a pre-merge backup, and the `output/` vault is not under
+  version control, which is why that backup existed. **The loss turned out to have changed no tag**:
+  0 of 22,033 pages carry sources from more than one line, so this was a latent defect rather than a
+  live one - recorded that way rather than as a rescue.
+
+- **Merging was run on the 314 same-node groups**: 341 pages absorbed (338 article-line, 3 chat-line)
+  out of 22,374, leaving 0 groups in that tier. `wiki lint` still reports **0 broken links** - the
+  `aliases` written by the merge are what make that true, and it is why no other file had to change.
+
 ## 1.8.0
 
 ### Added
