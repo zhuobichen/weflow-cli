@@ -583,6 +583,152 @@ def build_jobs(top_concepts: list, out_dir, other_dirs: list = ()) -> tuple:
     return jobs, skipped, elsewhere
 
 
+def all_card_dirs(card_dirs=None) -> list:
+    """产卡目录。默认**所有** `output/*-notes` —— 与 `count_cards_per_concept` 同一口径。
+
+    **一个都没有就报错退出，不静默通过**：它用的是仓库相对路径，换个工作目录跑就匹配不到，
+    于是"每一页都没有目标" → 报告说"改了 0 页"，看起来像成功了。那个失败模式比不做更坏。
+    """
+    import glob as _glob
+    dirs = [str(d) for d in card_dirs] if card_dirs else sorted(
+        p for p in _glob.glob('output/*-notes') if os.path.isdir(p))
+    if not dirs:
+        raise SystemExit('没有找到任何产卡目录（output/*-notes）—— 请在仓库根目录下运行')
+    return dirs
+
+
+def iter_source_links(text: str) -> list:
+    """读出「来源」段里每一行的名字。**宽容读取**，因为 `SOURCE_LINK_RE` 读不全。
+
+    实测库里 7,061 条来源行里有 20 条它匹配不到，全是标题里带方括号的
+    （`- [[2026-03-05-[TGRS]利用…]] — …`）：那个正则的 `[^\]]+` 在第一个 `]`
+    就停下，再要求紧跟 `]] — ` 于是整条不匹配。拿它判"这一行已经有了"，结果是
+    **每次重跑都再追加一遍**，幂等性当场就破。
+
+    `- [[` 是**四个**字符：写成 `line[3:]` 会多读一个 `[`，于是每一条现有来源都
+    "匹配不上" —— 实测那一个小错造出过 6,721 条假缺口，把整份报告带偏（2026-09-28 踩的）。
+    """
+    names = []
+    for line in text.split('\n'):
+        if not line.startswith('- [['):
+            continue
+        sep = line.find(']] — ')
+        if sep != -1:
+            names.append(line[4:sep])
+    return names
+
+
+def merged_concept_refs(card_dirs=None) -> tuple:
+    """跨所有产卡目录合并出 `概念名 → refs`，以及 `卡片名 → 该写进链接的名字`。
+
+    **合并而不是只看一条线**，理由与 `count_cards_per_concept` 相同：收藏线与"我的笔记"线
+    同样往 `Wiki/Concepts` 写，只看一个目录会把它们的来源当成"找不到出处的旧行"。
+
+    映射表是**必需**的：聊天卡没有 `from` 字段，聚合出来的是裸会话名，而库里是
+    `Sources/Chat/会话-<名字>.md` —— 直接写 `r['file']` 会造出 129 条断链。
+    """
+    merged, mapping = {}, {}
+    for d in all_card_dirs(card_dirs):
+        mapping.update(build_source_name_map(d))
+        for name, refs in aggregate_concepts(scan_articles(d)).items():
+            merged.setdefault(name, []).extend(refs)
+    return merged, mapping
+
+
+SOURCE_SECTION = '## 来源'
+
+
+def replace_source_section(text: str, lines: list) -> str:
+    """只重写「## 来源」那一节，别的一个字不动。找不到那一节就原样返回。"""
+    head = text.find(SOURCE_SECTION)
+    if head == -1:
+        return text
+    start = text.find('\n''\n', head)
+    if start == -1:
+        return text
+    nxt = text.find('\n' + '## ', start)
+    tail = text[nxt:] if nxt != -1 else ''
+    return text[:head] + SOURCE_SECTION + '\n\n' + '\n'.join(lines) + '\n' + tail
+
+
+def refresh_sources(pages_dir: str, card_dirs=None, dry_run: bool = False) -> dict:
+    """把已有概念页的「来源」段补齐成**当前的全部来源**。本地，不调模型。
+
+    为什么要有这一趟：实测拉新文章后图谱只"长新节点"，**老页一个字节都不动** —— 新文章
+    再讲到 `DeepSeek`，那一页的来源也不会多一条。而 `OPERATIONS.md` 里写着"概念页是累积的、
+    卡是快照、概念是账本"。这一趟是让那句话成真。
+
+    **只改正文，不动 frontmatter。** `sources:` 与正文是**故意不一样**的两套名字：
+    正文要 Obsidian 能解析（聊天线写 `会话-<名字>`，指向 `Sources/Chat/` 里那张卡），
+    而 `sources:` 要 `source_kinds_for` 能在 `output/<线>/<卡名>.md` 找到（聊天线是
+    **不带**前缀的卡名）。同步任何一边都会让 `来源/聊天` 这类标签静默失效 —— 实测改
+    frontmatter 会让聊天线的可推断性从 100% 掉到 0，而标签只增不减，**看起来仍然是对的**。
+
+    只增不删：页里现有、而当前卡片里找不到出处的行照原样留着（可能是别的线来的），只报数。
+    顺序用 `sorted()` 定成**规范形式**（与历史无关、幂等；实测这样只多动 29 张页）。
+    """
+    merged, mapping = merged_concept_refs(card_dirs)
+    by_case = {}
+    for name in merged:
+        # 库里存在 `claude code.md` 而概念名是 `Claude Code`：精确匹配会让那 408 条无处可去，
+        # 而且没人会知道。`collect_dangling_targets` 在同一个坑上栽过一次。
+        by_case.setdefault(name.casefold(), name)
+
+    changed, added, old_unknown, bracketed, dotmd, reordered = [], 0, 0, 0, 0, 0
+    unmatched = []
+    for page in sorted(Path(pages_dir).glob('*.md')):
+        text = page.read_text(encoding='utf-8')
+        concept = by_case.get(page.stem.casefold())
+        refs = merged.get(concept) if concept else None
+        if not refs:
+            unmatched.append(page.name)
+            continue
+
+        # 现有行：**原样保留那一行的文本**（标题在内），只有新追加的才需要重新拼标题
+        keep = {}
+        for line in text.split('\n'):
+            if line.startswith('- [[') and ']] — ' in line:
+                keep.setdefault(line[4:line.find(']] — ')], line)
+
+        want, want_set, by_name = [], set(), {}
+        for r in refs:
+            name = mapping.get(r['file'], r['file'])
+            by_name.setdefault(name, r)
+            if name not in want_set:
+                want_set.add(name)
+                want.append(name)
+        old_unknown += sum(1 for n in keep if n not in want_set)
+
+        fresh = {}
+        for name in want:
+            if name in keep:
+                continue
+            if '[' in name or ']' in name:
+                # 连 Obsidian 都解析不了（名字里带方括号），写进去只会多一条断链
+                bracketed += 1
+                continue
+            if name.endswith('.md'):
+                # 标题**本身**以 `.md` 结尾（实测 1 条）。写进去会让 `wiki_lint.resolve` 把
+                # 它当成"完整文件名"直接去查（`wiki_lint.py:123`），而库里那张卡的真名是
+                # `….md.md` —— 于是体检从 0 断链变成 1 条。跳过它，只报数。
+                dotmd += 1
+                continue
+            fresh[name] = '- [[%s]] — %s' % (name, by_name[name]['title'])
+
+        final = [v for _, v in sorted({**keep, **fresh}.items())]
+        if final == list(keep.values()):
+            continue                                  # 已经是规范形态，一个字都不写
+        if not fresh:
+            reordered += 1
+        changed.append(page.name)
+        added += len(fresh)
+        if not dry_run:
+            page.write_text(replace_source_section(text, final), encoding='utf-8')
+    return {'pages': len(changed), 'added': added, 'reordered': reordered,
+            'oldUnknown': old_unknown, 'bracketed': bracketed, 'dotmd': dotmd,
+            'unmatched': len(unmatched), 'names': len(mapping), 'sample': changed[:5]}
+
+
 def iter_concept_pages(jobs: list, api_key: str, workers: int = CONCEPT_PAGES_WORKERS,
                        origin: str = ''):
     """并发生成概念页，**按输入顺序**逐个产出 `((name, refs, out_file), result)`。
@@ -754,6 +900,12 @@ def main():
                         help='只给已有页面补标签与未核验标记（本地，不调用模型）')
     parser.add_argument('--fix-source-links', action='store_true',
                         help='只修已有页面"来源"段里指不到文件的链接（本地，不调用模型）')
+    parser.add_argument('--refresh-sources', action='store_true',
+                        help='只把已有页面的"来源"段补齐成**当前全部来源**（本地，不调用模型）')
+    parser.add_argument('--cards', action='append', default=None, metavar='DIR',
+                        help='产卡目录，可重复；默认所有 output/*-notes（与索引的引用数同一口径）')
+    parser.add_argument('--dry-run', action='store_true',
+                        help='只报告会改什么，一个字都不写')
     parser.add_argument('--from-pages', type=int, default=0, metavar='N',
                         help='给"被页面提到最多却没有页"的前 N 个概念建页（参考材料取自页面本身）')
     parser.add_argument('--min-refs', type=int, default=1,
@@ -790,6 +942,25 @@ def main():
         result = fix_source_links(args.output, args.source)
         print('修来源链接：%d 张页面、%d 条链接（可对照的名字 %d 个）'
               % (len(result['pages']), result['links'], result['names']))
+        return
+
+    if getattr(args, 'refresh_sources', False):
+        # 本地补来源：让**已有页**也能长出新边（新文章提到老概念时，那一页的来源要多一条）。
+        # 与 `--fix-source-links` 同族：都不调模型，都只动来源段。区别是那个**只改行首**、
+        # 这个**会追加行**（并且把顺序规范化）。
+        result = refresh_sources(args.output, getattr(args, 'cards', None),
+                                 dry_run=getattr(args, 'dry_run', False))
+        head = '预览（一个字都没写）' if getattr(args, 'dry_run', False) else '已刷新'
+        print('%s：%d 张页面有变化（新增 %d 条来源，其中 %d 张只是顺序变了）'
+              % (head, result['pages'], result['added'], result['reordered']))
+        print('  产卡目录映射表 %d 条；找不到出处的旧来源行 %d 条（**保留不动**）'
+              % (result['names'], result['oldUnknown']))
+        print('  名字写不得因此没追加的 %d 条（带方括号 %d + 以 .md 结尾 %d）；'
+              '当前卡片里没有对应概念的页 %d 张'
+              % (result['bracketed'] + result['dotmd'], result['bracketed'],
+                 result['dotmd'], result['unmatched']))
+        if result['sample']:
+            print('  例:', '、'.join(result['sample'][:3]))
         return
 
     api_key = args.api_key or os.environ.get('DEEPSEEK_API_KEY', '')

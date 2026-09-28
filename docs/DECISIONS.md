@@ -1400,6 +1400,48 @@ which is what the gate is for.
   semantics are not reliable here), as is any automatic labelling: there is no gold standard for "is this
   draft right", so the feature records what it judged and says so rather than claiming calibration.
 
+## D-052: Concept pages accumulate on their own schedule, and the body's source list deliberately diverges from `sources:`
+
+**Status:** Active
+
+**Decision.** `wiki compile --refresh-sources` is a local, model-free step that rewrites the `## 来源` section
+of **existing** concept pages so they carry every source the cards currently support. It landed because the
+user asked how the graph grows when new articles arrive, and the honest answer turned out to be "only new
+nodes": `build_jobs` skips concepts that already have a page, so an article mentioning `DeepSeek` adds nothing
+to `DeepSeek.md`. `OPERATIONS.md` had been claiming the pages were "a ledger" while the implementation made
+them a snapshot; one run added 3,164 edges across 324 article-line pages and 148 across 34 chat-line pages.
+
+**Three things it does not do, each because the obvious version is silently wrong.**
+
+*It does not sync the frontmatter.* The body and `sources:` carry **deliberately different** names, and the
+live example is a chat page: `sources: [24环境专硕班]` (the card name, which is what `source_kinds_for`
+looks up under `output/chat-notes/`) versus `- [[会话-24环境专硕班]]` in the body (the Vault name, which is
+what Obsidian resolves under `Sources/Chat/`). Writing either name into the other place breaks something
+without erroring: put the body's name into `sources:` and 100% of chat-line tag inference stops (measured),
+while `relabel_pages` only ever *adds* `来源/*` tags - so the page keeps looking correct. This is a case of
+"the same fact in two places" where the two places have genuinely different consumers, so the rule is to say
+so out loud rather than to unify them.
+
+*It only adds.* 322 article-line source lines have no card behind them any more (the card was rewritten, or
+no longer mentions the concept). They stay. That makes the page's source count **larger** than the index's
+citation count on 195 concepts - and the earlier reading of that gap, that the two numbers *should* match,
+was wrong: the index says what the cards say now, the page holds every reference it ever had. When this was
+measured, all 195 differed in that one direction and every extra line resolved to a real file.
+
+*It skips names that cannot be written.* Six contain square brackets (Obsidian cannot resolve those either),
+and one has a title that itself ends in `.md`. That last one is worth remembering: `source_link_target` peels
+one suffix and yields `….md`, while `wiki_lint.resolve` sees the `.md` and looks for a *file* by that name -
+so the write would have turned the lint's "0 broken links" into 1. The card's real name is `….md.md`.
+
+**Ordering is a spec, not a history.** Sources are written `sorted()`. The first draft appended new lines after
+the existing ones, which makes the order a function of when each line arrived - so the diff never settles and
+an insert lands in a different place on every machine. Measured cost of normalising: 29 extra pages.
+
+**What was NOT changed.** `generate_concept` still truncates the model's *reference material* to five entries
+(`build_ref_lines`, a prompt-budget decision, tested), so a page may now list 301 sources while the model that
+wrote it saw 5. That is a real asymmetry and it is stated here rather than left to be discovered - the
+alternative, feeding 301 sources into the prompt, is a different change with its own cost.
+
 ## D-051: One Vault, two knowledge bases - and a directory list that five readers have to agree on
 
 **Status:** Active

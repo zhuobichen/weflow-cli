@@ -695,5 +695,164 @@ class DanglingTests(unittest.TestCase):
             self.assertFalse((pages / '无材料的概念.md').exists())
 
 
+class RefreshSourcesTests(unittest.TestCase):
+    """补来源：让**已有页**也能长出新边。纯本地、不调模型、可重跑。
+
+    场景是用户问出来的：拉新文章之后图谱只长新节点，**老页一个字节都不动** —— 新文章
+    再讲到 `DeepSeek`，那一页的来源也不会多一条。这一趟补的就是那些边。
+    """
+
+    def build(self, tmp):
+        cards = Path(tmp) / 'cards'
+        cards.mkdir()
+        (cards / '2026-03-04-一篇文章.md').write_text(
+            '---\ntitle: "一篇文章"\n---\n\n- [[某概念]] — 说了点什么\n', encoding='utf-8')
+        (cards / '2026-03-05-另一篇.md').write_text(
+            '---\ntitle: "另一篇"\n---\n\n- [[某概念]] — 也说了点\n', encoding='utf-8')
+        pages = Path(tmp) / 'pages'
+        pages.mkdir()
+        (pages / '某概念.md').write_text(
+            '---\ntitle: "某概念"\nverified: False\n---\n\n# 某概念\n\n一句定义。\n\n## 来源\n\n'
+            '- [[2026-03-04-一篇文章]] — 一篇文章\n', encoding='utf-8')
+        return pages, cards
+
+    def test_补齐缺的那条(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            pages, cards = self.build(tmp)
+            r = cw.refresh_sources(str(pages), [str(cards)])
+            text = (pages / '某概念.md').read_text(encoding='utf-8')
+        self.assertEqual(r['pages'], 1)
+        self.assertEqual(r['added'], 1)
+        self.assertIn('- [[2026-03-05-另一篇]] — 另一篇', text)
+        # 顺序是**规范形式**（按名字排）：3-04 在 3-05 前面
+        self.assertLess(text.index('2026-03-04'), text.index('2026-03-05'))
+
+    def test_幂等(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            pages, cards = self.build(tmp)
+            cw.refresh_sources(str(pages), [str(cards)])
+            first = (pages / '某概念.md').read_text(encoding='utf-8')
+            r2 = cw.refresh_sources(str(pages), [str(cards)])
+            second = (pages / '某概念.md').read_text(encoding='utf-8')
+        self.assertEqual(r2['pages'], 0, '第二次一个字都不该改')
+        self.assertEqual(first, second)
+
+    def test_页里多出来的旧行照原样留着(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            pages, cards = self.build(tmp)
+            p = pages / '某概念.md'
+            p.write_text(p.read_text(encoding='utf-8') + '- [[很久以前的一篇]] — 出处已不可考\n',
+                         encoding='utf-8')
+            r = cw.refresh_sources(str(pages), [str(cards)])
+            text = p.read_text(encoding='utf-8')
+        self.assertIn('很久以前的一篇', text, '只增不删')
+        self.assertEqual(r['oldUnknown'], 1, '但要报出来')
+
+    def test_不动_frontmatter(self):
+        """**这条是契约，不是顺手。**
+
+        正文与 `sources:` 是**故意不一样**的两套名字：正文要 Obsidian 能解析（聊天线写
+        `会话-<名字>`，指向 `Sources/Chat/` 里那张卡），而 `sources:` 要 `source_kinds_for`
+        能在 `output/<线>/<卡名>.md` 找到（聊天线是**不带**前缀的卡名）。同步任何一边都会让
+        `来源/聊天` 这类标签静默失效，而标签只增不减 —— 失效之后**看起来仍然是对的**。
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            pages, cards = self.build(tmp)
+            p = pages / '某概念.md'
+            before = p.read_text(encoding='utf-8').split('---')[1]
+            cw.refresh_sources(str(pages), [str(cards)])
+            after = p.read_text(encoding='utf-8').split('---')[1]
+        self.assertEqual(before, after, 'frontmatter 必须一个字不动')
+
+    def test_聊天线的卡要加会话前缀(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cards = Path(tmp) / 'chat-notes'
+            cards.mkdir()
+            (cards / '白马非马.md').write_text(
+                '---\ntitle: "白马非马"\n---\n\n- [[某话题]] — 聊到的\n', encoding='utf-8')
+            pages = Path(tmp) / 'pages'
+            pages.mkdir()
+            (pages / '某话题.md').write_text('---\ntitle: "某话题"\n---\n\n## 来源\n\n', encoding='utf-8')
+            cw.refresh_sources(str(pages), [str(cards)])
+            text = (pages / '某话题.md').read_text(encoding='utf-8')
+        # 前缀由 `build_source_name_map` 按**目录名**判定（chat-notes 才加），漏了这里
+        # Vault 里那张卡叫 `会话-白马非马`，写裸名就是一条断链（实测会有 129 条）
+        self.assertIn('[[会话-白马非马]]', text)
+
+    def test_页名大小写不同也要匹配上(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cards = Path(tmp) / 'cards'
+            cards.mkdir()
+            (cards / '2026-03-04-x.md').write_text(
+                '---\ntitle: "x"\n---\n\n- [[Claude Code]] — 说了\n', encoding='utf-8')
+            pages = Path(tmp) / 'pages'
+            pages.mkdir()
+            (pages / 'claude code.md').write_text('---\ntitle: "claude code"\n---\n\n## 来源\n\n',
+                                                  encoding='utf-8')
+            r = cw.refresh_sources(str(pages), [str(cards)])
+            text = (pages / 'claude code.md').read_text(encoding='utf-8')
+        # 库里真实存在这个形状：`claude code.md` 装着 `Claude Code` 的 408 条。
+        # 精确匹配会一条都匹配不上，而且**没人会知道**（`collect_dangling_targets` 栽过同一个坑）
+        self.assertEqual(r['pages'], 1)
+        self.assertIn('[[2026-03-04-x]]', text)
+
+    def test_名字带方括号的不追加只报数(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cards = Path(tmp) / 'cards'
+            cards.mkdir()
+            (cards / '2026-03-05-[TGRS]遥感那篇.md').write_text(
+                '---\ntitle: "t"\n---\n\n- [[某概念]] — 说了\n', encoding='utf-8')
+            pages = Path(tmp) / 'pages'
+            pages.mkdir()
+            (pages / '某概念.md').write_text('---\ntitle: "某概念"\n---\n\n## 来源\n\n', encoding='utf-8')
+            r = cw.refresh_sources(str(pages), [str(cards)])
+            text = (pages / '某概念.md').read_text(encoding='utf-8')
+        self.assertEqual(r['bracketed'], 1)
+        self.assertNotIn('TGRS', text, '写进去只会多一条断链：连 Obsidian 都解析不了这种名字')
+
+    def test_标题本身以_md_结尾的也不追加(self):
+        """标题**本身**以 `.md` 结尾（库里实测 1 条）时，`source_link_target` 剥掉一层后缀
+        给出 `….md`，而 `wiki_lint.resolve` 见到 `.md` 结尾就把它当**完整文件名**去查，
+        于是报一条断链 —— 体检本来是 0 条。写不得，只报数。
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            cards = Path(tmp) / 'cards'
+            cards.mkdir()
+            (cards / '2026-06-09-也许你该试试 Agents.md.md').write_text(
+                '---\ntitle: "t"\n---\n\n- [[某概念]] — 说了\n', encoding='utf-8')
+            pages = Path(tmp) / 'pages'
+            pages.mkdir()
+            (pages / '某概念.md').write_text(
+                '---\ntitle: "某概念"\n---\n\n## 来源\n\n', encoding='utf-8')
+            r = cw.refresh_sources(str(pages), [str(cards)])
+            text = (pages / '某概念.md').read_text(encoding='utf-8')
+        self.assertEqual(r['dotmd'], 1)
+        self.assertNotIn('Agents', text, '写进去只会让体检多一条断链')
+
+
+    def test_没有对应概念的页一个字不动(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            pages, cards = self.build(tmp)
+            orphan = pages / '没人提过的概念.md'
+            orphan.write_text('---\ntitle: "x"\n---\n\n## 来源\n\n- [[旧的一篇]] — 旧\n',
+                              encoding='utf-8')
+            before = orphan.read_text(encoding='utf-8')
+            r = cw.refresh_sources(str(pages), [str(cards)])
+            after = orphan.read_text(encoding='utf-8')      # 必须在 with 里读：出去目录就没了
+        self.assertEqual(after, before)
+        self.assertEqual(r['unmatched'], 1)
+
+    def test_预览时一个字都不写(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            pages, cards = self.build(tmp)
+            p = pages / '某概念.md'
+            before = p.read_text(encoding='utf-8')
+            r = cw.refresh_sources(str(pages), [str(cards)], dry_run=True)
+            after = p.read_text(encoding='utf-8')
+        self.assertEqual(r['pages'], 1, '预览也要报出"会改几张"')
+        self.assertEqual(r['added'], 1)
+        self.assertEqual(after, before, 'dry_run 不许写盘')
+
+
 if __name__ == '__main__':
     unittest.main()

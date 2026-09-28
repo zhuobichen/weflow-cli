@@ -235,6 +235,33 @@ All notable user-facing changes are recorded here. This project follows [Semanti
 
 ### Changed
 
+- **Old concept pages can grow new edges now** - `wiki compile --refresh-sources`, local, no model calls.
+  The gap it closes was measured: `wiki compile` only creates pages for concepts that do not have one yet, so
+  an existing page is never touched - a new article that mentions `DeepSeek` does not add a line to that page.
+  Meanwhile `OPERATIONS.md` claimed the concept pages were "a ledger". One run of the new flag rewrote the
+  source section of **324 article-line pages (+3,164 edges)** and **34 chat-line pages (+148)**.
+
+  Three things it deliberately does not do, each because the obvious version is silently wrong:
+
+  - **It does not touch the frontmatter.** The body and `sources:` carry *deliberately different* names: the
+    body needs what Obsidian can resolve (chat cards are `会话-<name>`, pointing at `Sources/Chat/`), while
+    `sources:` needs what `source_kinds_for` can find under `output/<line>/<card>.md` (chat cards there have
+    **no** prefix). Syncing either side breaks `来源/聊天` tag inference - and since tags only ever grow, the
+    page still *looks* right afterwards.
+  - **It only adds.** Source lines that no current card accounts for stay exactly as they are (322 of them on
+    the article line); they are counted, not deleted. So a page can legitimately hold more sources than the
+    index reports - the index says what the cards say *now*, the page holds every reference it ever had.
+  - **It skips names that cannot be written.** Six with square brackets (Obsidian itself cannot resolve them)
+    and one whose *title* ends in `.md` - that last one would have turned the lint's "0 broken links" into 1,
+    because `wiki_lint.resolve` treats a `.md`-suffixed name as a complete filename while the real card is
+    `….md.md`.
+
+  Ordering is normalised with `sorted()` (a spec, not a history - measured: that costs 29 extra pages). Two
+  mistakes were made and caught here rather than reasoned away: a lenient reader that was off by one character
+  (`line[3:]` instead of `line[4:]`) manufactured **6,721 phantom missing edges** and would have driven the
+  whole change, and the `.md`-suffix case above put a real broken link into `Codex.md`. The first was found by
+  printing one concrete page when the numbers looked wrong; the second by running the lint afterwards.
+
 - **The three real states each have a face now.** The panel has always tracked `busy` / `offline` / `quota`
   (that is what the coloured halo reads), so this adds three faces to classes that already existed - **no new
   state machine**. Busy is a calm half-closed eye with a small mouth (focused), offline is a closed sad eye

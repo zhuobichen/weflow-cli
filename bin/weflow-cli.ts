@@ -3790,12 +3790,32 @@ program
         .option('--source <dir>', '材料目录（**必须含 [[概念]] — 说明 形状的链接**，否则聚合不出任何概念）', './output/biz-daily')
         .option('-o, --output <dir>', '概念页输出目录', './output/wechat-vault/Wiki/Concepts')
         .option('--api-key <key>', 'DeepSeek API key')
+        .option('--refresh-sources',
+                '只把已有概念页的"来源"段补齐成当前全部来源（本地重写，**不调用模型**）')
+        .option('--cards <dir...>', '产卡目录，可写多个；默认所有 output/*-notes（与索引的引用数同一口径）')
         .option('--dry-run', '仅预览，不读取文章、调用 AI 或写入概念页')
         .option('--yes', '确认调用 AI 并生成概念页')
         .option('--json', '输出机器可读结果，不返回概念或本地路径')
         .action(async (opts) => {
           const pkgRoot = resolvePackageRoot()
           const script = join(pkgRoot, 'scripts', 'compile_wiki.py')
+
+          if (opts.refreshSources) {
+            // 本地补来源：**不调模型**，所以不传 apiKey、preview 里也不说"调用 AI"。
+            // 但它会把已有页重写一遍（实测会动 358 张），照样走"先预览、再确认"那两步。
+            await runConfirmedPythonMutation({
+              action: 'wiki.refreshSources',
+              script,
+              args: ['--refresh-sources', '--output', opts.output,
+                     ...(opts.cards ?? []).flatMap((c: string) => ['--cards', c])],
+              cliOptions: opts,
+              preview: { readsLocalCards: true, rewritesExistingPages: true, usesAi: false },
+              confirmationMessage: `确认把 ${opts.output} 里已有概念页的"来源"段补齐？（本地重写，不调用 AI）`,
+              apiKey: opts.apiKey,
+              timeout: 300_000,
+            })
+            return
+          }
 
           const limit = parseCliInteger(opts.limit, 'limit', 1, 1000, opts.json)
           const minRefs = parseCliInteger(opts.minRefs ?? '1', 'min-refs', 1, 50, opts.json)
