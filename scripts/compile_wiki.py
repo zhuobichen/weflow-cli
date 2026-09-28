@@ -693,7 +693,7 @@ def build_pages_from_cards(pages_dir: str, card_dirs=None, dry_run: bool = False
     existing = {p.stem.casefold() for p in Path(pages_dir).glob('*.md')}
     out_dir = Path(pages_dir)
     today = time.strftime('%Y-%m-%d')
-    built, skipped, unwritable, no_material = [], 0, 0, 0
+    built, skipped, unwritable, no_material, bad_source = [], 0, 0, 0, 0
     for name, refs in merged.items():
         safe = re.sub(r'[\/:*?"<>|]', '_', name)[:60]
         if safe.casefold() in existing:
@@ -705,6 +705,14 @@ def build_pages_from_cards(pages_dir: str, card_dirs=None, dry_run: bool = False
             unwritable += 1
             continue
         ref = refs[0]
+        source_name = str(ref.get('file') or '')
+        if '[' in source_name or ']' in source_name or source_name.endswith('.md'):
+            # **来源名也要过"写不得"这关**，不只是概念名。这一页**唯一**的来源就指不到东西
+            # （理由同 `--refresh-sources`：`wiki_lint.resolve` 见到 `.md` 会把它当完整文件名，
+            # 带方括号的连 Obsidian 也解析不了），建出来就是一条断链 —— 整页跳过。
+            # 第一版只检查了概念名，lint 抓出 5 条断链（2026-09-28）。
+            bad_source += 1
+            continue
         definition = str(ref.get('desc') or '').strip()
         if not definition:
             summary = str(ref.get('summary') or '').strip()
@@ -734,7 +742,7 @@ def build_pages_from_cards(pages_dir: str, card_dirs=None, dry_run: bool = False
         if limit and len(built) >= limit:
             break
     return {'built': len(built), 'skipped': skipped, 'unwritable': unwritable,
-            'noMaterial': no_material, 'sample': built[:6]}
+            'badSource': bad_source, 'noMaterial': no_material, 'sample': built[:6]}
 
 
 def merge_duplicate_pages(pages_dir: str, dry_run: bool = False) -> dict:
@@ -1126,9 +1134,9 @@ def main():
         result = build_pages_from_cards(args.output, cards,
                                         dry_run=getattr(args, 'dry_run', False))
         head = '预览（一个字都没写）' if getattr(args, 'dry_run', False) else '已建'
-        print('%s：%d 张（跳过已有 %d、名字写不得 %d、没材料 %d）'
+        print('%s：%d 张（跳过已有 %d、概念名写不得 %d、来源指不到 %d、没材料 %d）'
               % (head, result['built'], result['skipped'], result['unwritable'],
-                 result['noMaterial']))
+                 result['badSource'], result['noMaterial']))
         if result['sample']:
             print('  例:', '、'.join(result['sample'][:4]))
         return

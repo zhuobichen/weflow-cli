@@ -132,6 +132,13 @@ All notable user-facing changes are recorded here. This project follows [Semanti
 
 ### Fixed
 
+- **`--pages-from-cards` checked the wrong name and produced 5 broken links.** The guard that skips names the
+  linter cannot resolve (square brackets, or a title ending in `.md`) was applied to the **concept** name but not
+  to the **source** name - so `IPCC图件`, an ordinary-looking concept whose single card carries square brackets,
+  got a source line pointing at nothing. Caught by running the health check right after, not by reasoning: the
+  broken-link count went 0 -> 5. Fixed, the five pages removed, and a test pins it (with the mutation checked:
+  dropping the guard turns it red).
+
 - **Every embedded Dataview query in the Vault was broken, for two independent reasons.** The reading-note and
   daily-note templates embed `dataview` code blocks - **25,676 reading notes and 176 daily notes, 100% of both** -
   and a user checking their vault found them rendering as raw code. Two separate faults, either of which alone

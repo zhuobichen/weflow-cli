@@ -992,6 +992,25 @@ class BuildPagesFromCardsTests(unittest.TestCase):
         self.assertIn('手写的。', text)
         self.assertEqual(r['built'], 1, '只建缺的那一张')
 
+    def test_来源指不到东西的整页跳过(self):
+        """**这是 lint 抓出来的一个真 bug**（2026-09-28）。
+
+        第一版只检查了**概念名**是否「写不得」，没检查**来源名**。于是 `IPCC图件` 这种名字
+        本身没问题的概念，它唯一那张卡的名字带方括号，写进来源段就是一条断链（实测 5 条）。
+        来源指不到东西的页没有可解析的内容，整页跳过。
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            cards = Path(tmp) / 'cards'
+            cards.mkdir()
+            (cards / '2026-03-05-[TGRS]遥感那篇.md').write_text(
+                '---\ntitle: "t"\n---\n\n- [[某概念]] — 说了。\n', encoding='utf-8')
+            pages = Path(tmp) / 'pages'
+            pages.mkdir()
+            r = cw.build_pages_from_cards(str(pages), [str(cards)])
+            wrote = list(pages.glob('*.md'))
+        self.assertEqual(r['badSource'], 1)
+        self.assertEqual(wrote, [], '唯一来源指不到东西，建出来就是断链')
+
     def test_幂等(self):
         with tempfile.TemporaryDirectory() as tmp:
             pages, cards = self.build(tmp)
