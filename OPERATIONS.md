@@ -417,6 +417,7 @@ weflow-cli search-index --days 3650 --article-days 365 --yes   # 要"整段历�
 | `weflow-cli wiki compile --source … --min-refs 2 --yes` | 概念发给 DeepSeek（每个概念一次） | `--min-refs 2` 滤掉只被一篇提到的一次性实体 |
 | `weflow-cli wiki compile --refresh-sources --yes` | **不出境** | 只把**已有页**的「来源」段补齐成当前全部来源（本地重写）。**拉完新文章要跑这一条**，否则新文章提到老概念时，那一页不会多出这条边 |
 | `weflow-cli wiki compile --merge-duplicates --dry-run` | **不出境** | 把「规范化后同名」的多张页合并成一张（`GPT 5.6`/`GPT-5.6`/`GPT5.6`）。留来源最多的那张，其余名字进 `aliases`——**指向旧名字的链接一条都不断**，不必改别的文件。**它会删页**，先跑 `--dry-run` 看名单 |
+| `weflow-cli wiki compile --pages-from-cards --cards <线> --dry-run` | **不出境** | 给还没有页的概念建页：定义复用卡片里那句原话、相关概念取共现。**必须指定 `--cards`**（一条线一条线建，否则聊天线会被建进文章线） |
 | `weflow-cli wiki lint` | **不出境** | 断链 / 孤儿 / 空页 / 同名 / 近似重名 / 退化字段 |
 
 三条卡片来源产出的东西是**同一种形状**（带 frontmatter + `## AI 摘要` + `[[概念]] — 说明`），

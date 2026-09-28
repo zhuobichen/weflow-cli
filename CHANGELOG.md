@@ -235,6 +235,32 @@ All notable user-facing changes are recorded here. This project follows [Semanti
 
 ### Changed
 
+- **17,383 pages built without calling a model** - `wiki compile --pages-from-cards`. The candidate backlog was
+  priced at about **¥31** and the user's verdict was "that's a bit expensive", which is right: every candidate is
+  mentioned by exactly **one** article, so there is nothing to synthesise - a model would only be rewording a
+  single sentence. The definition is taken from the `desc` the card already carries, related concepts come from
+  **co-occurrence** (the other concepts in the same article, median 3), and the source is that article.
+
+  **The honest description is "reusing output already paid for", not "no model involved".** Those `desc` lines
+  were written by `article_notes` when it extracted concepts, so the quality is that line's quality: most read
+  like definitions (`招聘陷阱` - "job seekers should be wary of high-salary bait"), a few are meta-descriptions
+  (`免疫生态位` - "the other thing the article title splits out alongside cell types"). Pages carry
+  `summary_by: card` to say where the text came from, following the `summary_by: model` convention that
+  `user_notes` established.
+
+  Verified: **0 broken links** among the 17,319 new pages' source lines, only 40 ended up with an empty
+  "related concepts" section, and a re-run builds 0. Two of the four mutations that had to be caught were about
+  coverage, not correctness - and one guard was added after the first dry-run showed it building **18,885** pages
+  across every card directory at once, which would have put chat-line concepts into `Wiki/Concepts`. The flag now
+  requires explicit `--cards` and prints the exact commands when it is missing.
+
+- **A scale problem the new pages exposed: `wiki lint` no longer finishes in reasonable time.** Its
+  near-duplicate check compares every page with every other (5,062 pages took 1-2 minutes; 22,445 is **20x** the
+  pairs). The check is the one that produced the 13,367 "similar names" and, through that, the 74 duplicate
+  groups worth merging - so it cannot simply be dropped. It needs bucketing (compare only within a name-length
+  band or a normalised prefix) rather than all-pairs. Not fixed here; recorded so the next person does not
+  discover it by waiting.
+
 - **One concept, one node: 74 groups of duplicate pages merged** - `wiki compile --merge-duplicates`, local.
   The user's read was that the graph was piling up rather than getting better: "some of them are the same thing
   but drawn as different ones". Measured: 74 groups, 80 redundant pages, where the same concept had two or three

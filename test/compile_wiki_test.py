@@ -945,5 +945,68 @@ class MergeDuplicatePagesTests(unittest.TestCase):
         self.assertEqual(names, ['GPT 5.6', 'GPT-5.6'], 'dry_run 不许删')
 
 
+class BuildPagesFromCardsTests(unittest.TestCase):
+    """零模型建页：定义复用卡片里那句 `desc`，相关概念用共现。本地、免费。
+
+    为什么可以不要模型：候补概念**全部只被一篇文章提到**，"综合多篇来源"没有用武之地 ——
+    模型能做的只是把那一句改写通顺，而用户对那 ¥31 的评价是"有点贵"。相关概念用共现（同一
+    张卡里还出现了哪些概念），那是有据的边，不是模型想出来的。
+    """
+
+    def build(self, tmp):
+        cards = Path(tmp) / 'cards'
+        cards.mkdir()
+        (cards / '2026-03-04-一篇文章.md').write_text(
+            '---\ntitle: "一篇文章"\n---\n\n'
+            '- [[矢量风速预测]] — DUSTFN 面向精细网格短期矢量风速预测。\n'
+            '- [[双路径U型网络]] — 用来提取时空特征。\n\n', encoding='utf-8')
+        pages = Path(tmp) / 'pages'
+        pages.mkdir()
+        return pages, cards
+
+    def test_定义取那句_desc_相关概念取共现(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            pages, cards = self.build(tmp)
+            r = cw.build_pages_from_cards(str(pages), [str(cards)])
+            text = (pages / '矢量风速预测.md').read_text(encoding='utf-8')
+        self.assertEqual(r['built'], 2)
+        self.assertIn('DUSTFN 面向精细网格短期矢量风速预测。', text)
+        self.assertIn('[[双路径U型网络]]', text, '同一篇文章里的另一个概念，就是共现出来的边')
+
+    def test_标明定义来自卡片而不是模型现写的(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            pages, cards = self.build(tmp)
+            cw.build_pages_from_cards(str(pages), [str(cards)])
+            fm = (pages / '矢量风速预测.md').read_text(encoding='utf-8').split('---')[1]
+        # 与 `user_notes` 的 `summary_by: model` 同一个惯例：一段他处来的文字被当成
+        # "这里本来就有的说法"，正是这类页最该防的事
+        self.assertIn('summary_by: card', fm)
+
+    def test_已有的页一个字都不动(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            pages, cards = self.build(tmp)
+            (pages / '矢量风速预测.md').write_text(
+                '---\ntitle: "旧的"\n---\n\n手写的。\n', encoding='utf-8')
+            r = cw.build_pages_from_cards(str(pages), [str(cards)])
+            text = (pages / '矢量风速预测.md').read_text(encoding='utf-8')
+        self.assertIn('手写的。', text)
+        self.assertEqual(r['built'], 1, '只建缺的那一张')
+
+    def test_幂等(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            pages, cards = self.build(tmp)
+            cw.build_pages_from_cards(str(pages), [str(cards)])
+            r2 = cw.build_pages_from_cards(str(pages), [str(cards)])
+        self.assertEqual(r2['built'], 0)
+
+    def test_预览不写盘(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            pages, cards = self.build(tmp)
+            r = cw.build_pages_from_cards(str(pages), [str(cards)], dry_run=True)
+            wrote = list(pages.glob('*.md'))
+        self.assertEqual(r['built'], 2, '预览也要报出会建几张')
+        self.assertEqual(wrote, [], 'dry_run 不许写盘')
+
+
 if __name__ == '__main__':
     unittest.main()

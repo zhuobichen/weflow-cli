@@ -1400,6 +1400,36 @@ which is what the gate is for.
   semantics are not reliable here), as is any automatic labelling: there is no gold standard for "is this
   draft right", so the feature records what it judged and says so rather than claiming calibration.
 
+## D-054: A page can be assembled from material that was already paid for, and "no model call" is not the same as "no model wrote it"
+
+**Status:** Active
+
+**Decision.** `wiki compile --pages-from-cards` builds pages for concepts that have none, locally and without any
+API call: the definition is the `desc` the card already carries, related concepts are the other concepts from the
+same article (co-occurrence, median 3), the source is that article. 17,383 pages, ¥0. It was written after the
+model-based route was priced at **¥31** and the user called that expensive - which is the right call, because
+every one of those candidates is mentioned by exactly **one** article, so there is nothing to synthesise and a
+model would only be rewording a single sentence.
+
+**The honest description is "reusing output already paid for".** The `desc` lines were written by
+`article_notes` when it extracted concepts from articles, so calling this "no model involved" would be wrong:
+the quality is that line's quality. Most read like definitions, a few are meta-descriptions about where the term
+appeared in the article (`免疫生态位` - "the other thing the title splits out alongside cell types"). Pages carry
+`summary_by: card` for exactly this reason, following the `summary_by: model` convention `user_notes`
+established: text that came from somewhere else must not be readable as "this is what the page's subject is".
+
+**Why this is not the same trade as the earlier ¥32 rejection.** The 500 trial pages built with a model are
+better pages - they have a synthesised definition and a "key points" section - and they cost ¥0.9 for 500. The
+difference is not quality, it is what the money buys: with one source per concept, it buys prose polish that a
+reader cannot tell from the original sentence. That trade is worth making per page only when the user asks for it;
+it is not worth making 17,383 times by default.
+
+**A guard that had to be added, and why the first version was wrong.** `--refresh-sources` deliberately scans
+**all** card directories (it fills in edges on existing pages, so more is strictly better). Reusing that same
+default for page building would have put chat-line concepts into `Wiki/Concepts` - the two lines are two
+knowledge bases, which the user asked for explicitly on 2026-09-27. The flag now requires explicit `--cards` and
+prints the exact commands for each line when it is missing.
+
 ## D-053: One concept is one node, and duplicates are merged through `aliases` rather than by rewriting links
 
 **Status:** Active
@@ -1432,7 +1462,16 @@ built yet, run compile with a higher limit", which is not a warning but a wrong 
 **Not done, deliberately.** Nothing automatic: it is a flag, `--dry-run` shows the list first, and it is meant to
 be run when the user notices the graph getting noisy rather than on a schedule. Nor does it try to merge the
 looser "similar name" set - deciding whether `Claude Code` and `Claude 4.8` are one thing is a judgement, and
-that is where a decision model rather than a string rule would be needed.
+that is where a decision model rather than a string rule would be needed. **That last one was tried on
+2026-09-28, and Jev cannot do it either** ($0.17): of the 13,367 loose pairs, 741 came back "the same
+concept", and sampling them (the most confident 25, then a random 12) showed essentially all are wrong
+(`Token 节省` vs `Token计费`, `Agentic RAG` vs `Agent面试准备`). Rewriting the instructions with
+counter-examples fixed those and broke the true ones in the same run (`AI skill` vs `AI skills` came back
+"related but different"). The question here is **literal** - same string modulo spacing, case, plurals - and
+Jev is a semantic model; the normal form was the right tool all along. Narrowing the 741 to "one name is an
+extension of the other" left 27, of which about three are genuinely the same. So the loose set stays
+untouched, and that is a finding rather than a gap: the graph's name-level duplication was already nearly
+exhausted by the 74 groups the rule could settle.
 
 ## D-052: Concept pages accumulate on their own schedule, and the body's source list deliberately diverges from `sources:`
 

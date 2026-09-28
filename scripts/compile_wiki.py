@@ -668,6 +668,75 @@ def normalize_concept_name(name: str) -> str:
     return re.sub(r'(?<=[a-z])s$', '', stripped)
 
 
+def build_pages_from_cards(pages_dir: str, card_dirs=None, dry_run: bool = False,
+                           limit: int = 0) -> dict:
+    """**零模型**建页：定义直接用卡片里那句 `desc`，相关概念用共现。本地，不花钱。
+
+    为什么可以不要模型：候补概念**全部只被一篇文章提到**，所以"综合多篇来源"没有用武之地
+    —— 模型能做的只是把那一句改写通顺，而用户对那 ¥31 的评价是"有点贵"。`desc` 是**原文
+    摘的**，对只被提过一次的概念比改写更可靠。
+
+    相关概念用**共现**（同一张卡里还出现了哪些概念，实测中位 3 个）：那是有据的边 —— 同一
+    篇文章里一起出现 —— 不是模型想出来的。代价是页里少一节「关键要点」，而那一节本来就是
+    模型自己发挥的。
+
+    frontmatter 里写 `summary_by: card`：**标明定义是卡片里的原话，不是模型写的**（与
+    `user_notes` 那条 `summary_by: model` 是同一个惯例 —— 一段机器/他处来的文字被当成
+    "这里本来就有的说法"，是这类页最该防的事）。
+    """
+    merged, mapping = merged_concept_refs(card_dirs)
+    per_card = {}
+    for d in all_card_dirs(card_dirs):
+        for article in scan_articles(d):
+            per_card[article['file']] = [w[0] for w in article['wikilinks']]
+
+    existing = {p.stem.casefold() for p in Path(pages_dir).glob('*.md')}
+    out_dir = Path(pages_dir)
+    today = time.strftime('%Y-%m-%d')
+    built, skipped, unwritable, no_material = [], 0, 0, 0
+    for name, refs in merged.items():
+        safe = re.sub(r'[\/:*?"<>|]', '_', name)[:60]
+        if safe.casefold() in existing:
+            skipped += 1
+            continue
+        if '[' in name or ']' in name or name.endswith('.md'):
+            # 同 `--refresh-sources`：这两类名字体检会报断链（`wiki_lint.resolve` 见到 `.md`
+            # 就把它当完整文件名），写进去只是多一批假断链
+            unwritable += 1
+            continue
+        ref = refs[0]
+        definition = str(ref.get('desc') or '').strip()
+        if not definition:
+            summary = str(ref.get('summary') or '').strip()
+            definition = (summary.split('。')[0] + '。') if summary else ''
+        if not definition:
+            no_material += 1
+            continue
+        others = [x for x in per_card.get(ref['file'], []) if x != name][:5]
+        body = '# %s\n\n%s\n' % (name, definition)
+        if others:
+            body += '\n## 相关概念\n\n' + ''.join('- [[%s]]\n' % o for o in others)
+        body += '\n## 来源\n\n- [[%s]] %s %s\n' % (ref['file'], SEPARATOR, ref['title'])
+        fm = {
+            'title': '"%s"' % name,
+            'type': 'concept',
+            'tags': ['知识/概念'] + list(source_kinds_for([ref['file']], card_dirs)),
+            'verified': False,
+            'created': today,
+            'topics': sorted({str(x['topic']) for x in refs if x.get('topic')}),
+            'sources': [ref['file']],
+            'summary_by': 'card',
+        }
+        if not dry_run:
+            out_dir.mkdir(parents=True, exist_ok=True)
+            write_with_frontmatter(str(out_dir / ('%s.md' % safe)), fm, body)
+        built.append(name)
+        if limit and len(built) >= limit:
+            break
+    return {'built': len(built), 'skipped': skipped, 'unwritable': unwritable,
+            'noMaterial': no_material, 'sample': built[:6]}
+
+
 def merge_duplicate_pages(pages_dir: str, dry_run: bool = False) -> dict:
     """把「规范化后同名」的多张概念页合并成一张。本地，不调模型，可重跑。
 
@@ -994,6 +1063,8 @@ def main():
                         help='只修已有页面"来源"段里指不到文件的链接（本地，不调用模型）')
     parser.add_argument('--refresh-sources', action='store_true',
                         help='只把已有页面的"来源"段补齐成**当前全部来源**（本地，不调用模型）')
+    parser.add_argument('--pages-from-cards', action='store_true',
+                        help='**零模型**给还没有页的概念建页：定义取卡片里那句原话（本地，不花钱）')
     parser.add_argument('--merge-duplicates', action='store_true',
                         help='把"规范化后同名"的多张页合并成一张（本地，不调模型；**会删页**）')
     parser.add_argument('--cards', action='append', default=None, metavar='DIR',
@@ -1036,6 +1107,30 @@ def main():
         result = fix_source_links(args.output, args.source)
         print('修来源链接：%d 张页面、%d 条链接（可对照的名字 %d 个）'
               % (len(result['pages']), result['links'], result['names']))
+        return
+
+    if getattr(args, 'pages_from_cards', False):
+        # 零模型建页：定义是卡片里的原话、相关概念是共现，都不经过模型。本地、免费、可重跑。
+        #
+        # **必须显式给 `--cards`**：`--refresh-sources` 是跨全部产卡目录的（它补的是已有页的边，
+        # 越全越好），但**建页不一样** —— 不指定的话聊天线的概念会被建进 `Wiki/Concepts`，
+        # 而两条线是两个知识库（用户 2026-09-27 明确要求分开）。一条线一条线地建。
+        cards = getattr(args, 'cards', None)
+        if not cards:
+            print('这条通道要指定 --cards（一条线一条线地建），例如：', file=sys.stderr)
+            print('  文章线：--cards output/article-notes --cards output/fav-notes '
+                  '--cards output/user-notes', file=sys.stderr)
+            print('  聊天线：--cards output/chat-notes --output '
+                  'output/wechat-vault/Chat/Concepts', file=sys.stderr)
+            sys.exit(1)
+        result = build_pages_from_cards(args.output, cards,
+                                        dry_run=getattr(args, 'dry_run', False))
+        head = '预览（一个字都没写）' if getattr(args, 'dry_run', False) else '已建'
+        print('%s：%d 张（跳过已有 %d、名字写不得 %d、没材料 %d）'
+              % (head, result['built'], result['skipped'], result['unwritable'],
+                 result['noMaterial']))
+        if result['sample']:
+            print('  例:', '、'.join(result['sample'][:4]))
         return
 
     if getattr(args, 'merge_duplicates', False):
