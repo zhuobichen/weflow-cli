@@ -252,6 +252,12 @@ export const EVAL_CASES: EvalCase[] = [
               answerMatches: /(项目负责人|协调|ABaCAS)/ },
   },
   {
+    // **这里本来有一条 `knowledge-fallback-not-body`（问 `Grok-4`），删掉了** ——
+    // 它想钉住"降级路径只搜正文、不搜来源段"（那确实是真问题：实测 `Grok-4` 命中 4 张页、
+    // 3 张是假的）。但断言做不可靠：那三张"假阳性"页的名字**本身就出现在真页 `AdsMind` 的
+    // 正文里**（它的「相关概念」段），所以模型提到它们是**对的**，任何基于页名的 `answerForbids`
+    // 都会误判。这个精度问题改在单元层钉（`pageBody` 是纯函数，见
+    // `test/knowledge-neighbors.test.ts`），评测层不测它 —— 这不是"漏了"，是**放对了层**。
     id: 'knowledge-absent',
     // **测"不编"**：库里没有这个概念（实测 `胶子凝聚` 零命中）。该做的是去查、查不到、
     // 然后如实说。用 `toolEmpty` 而不是"答复里必须出现某个词"——老实说的措辞是无穷的，

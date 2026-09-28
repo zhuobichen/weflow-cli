@@ -12,7 +12,7 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { conceptNeighbors, conceptBrief, safeConceptFile } from '../src/services/assistantTools.js'
+import { conceptNeighbors, conceptBrief, safeConceptFile, pageBody } from '../src/services/assistantTools.js'
 
 function vault(files: Record<string, string>): string {
   const dir = mkdtempSync(join(tmpdir(), 'wiki-'))
@@ -97,3 +97,25 @@ test('传单个目录字符串时直接报错_不要按字符遍历', () => {
   assert.throws(() => conceptNeighbors('甲', dir as unknown as string[]), /数组/)
   rmSync(dir, { recursive: true, force: true })
 })
+
+test('pageBody 只给正文：来源段不算', () => {
+  // **这条钉的是一个真问题**：`search_knowledge` 先按文件名找，找不到才退到"全文包含"，
+  // 而页面的「来源」段可能列 300+ 条文章标题（2026-09-27 那批改动之后就是这样）—— 于是
+  // "某篇来源的**标题**里含这个词"会被报成「**正文**提及」。实测 `Grok-4` 命中 4 张页、
+  // 其中 3 张的正文里根本没有它。
+  //
+  // 这个精度问题**只能在单元层钉**：评测层试过（一条问 `Grok-4` 的场景），但断言站不住 ——
+  // 那 3 张"假阳性"页的名字本身就出现在真页 `AdsMind` 的正文里（它的「相关概念」段），
+  // 所以模型提到它们是对的，任何基于页名的禁词都会误判。
+  const page = '---\ntitle: "某概念"\n---\n\n# 某概念\n\n这是定义。\n\n'
+    + '## 来源\n\n- [[某篇]] — 一篇标题里提到 Grok-4 的文章\n'
+  const body = pageBody(page)
+  assert.ok(body.includes('这是定义。'))
+  assert.ok(!body.includes('Grok-4'), '来源段里的词不算"正文提及"')
+  assert.ok(!body.includes('## 来源'), '整段来源都不该出现在"正文"里')
+})
+
+test('pageBody 对没有来源段的页给全文', () => {
+  assert.equal(pageBody('只有正文，没有来源段。'), '只有正文，没有来源段。')
+})
+

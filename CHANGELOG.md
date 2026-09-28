@@ -132,6 +132,24 @@ All notable user-facing changes are recorded here. This project follows [Semanti
 
 ### Fixed
 
+- **`search_knowledge`'s fallback reported source titles as body text.** When no page *name* matches, the tool
+  falls back to "the file contains this word" - and since pages can now list 300+ article titles in their `## 来源`
+  section (the 2026-09-27 change), a word appearing in some *source title* was reported as "concept pages whose
+  **body** mentions it". Measured with `Grok-4`: 4 pages hit, **3 of them do not contain it anywhere in the body**
+  (only `AdsMind` does). The fallback now searches the body only (`pageBody` cuts at `## 来源`), and returns the
+  matching **sentence** rather than just the page name - the assistant had been filling the gap itself, answering
+  "Grok-4 was one of the models under test" from its own knowledge rather than from the page.
+
+  **This was caught by a scenario that then had to be deleted, and the deletion is the interesting part.** The
+  natural assertion - forbid the false-positive page names - does not hold: those three names appear **inside the
+  real page's own body** (its 「相关概念」 section), so a model mentioning them is *right*, and any page-name
+  blacklist misfires. The accuracy question therefore moved down a layer: `pageBody` is a pure function, and it is
+  pinned in `test/knowledge-neighbors.test.ts` (mutation-checked: returning the full text turns it red). That is
+  "put the test where it can hold", not "skipped".
+
+  Verified end to end: before the fix the answer listed four pages and invented detail; after it, it says there is
+  **one** place and quotes the sentence. The eval re-run after the change is **22/22**.
+
 - **`--pages-from-cards` checked the wrong name and produced 5 broken links.** The guard that skips names the
   linter cannot resolve (square brackets, or a title ending in `.md`) was applied to the **concept** name but not
   to the **source** name - so `IPCC图件`, an ordinary-looking concept whose single card carries square brackets,

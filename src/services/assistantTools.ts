@@ -39,6 +39,16 @@ export function safeConceptFile(name: string): string {
 }
 
 /** 概念页正文的第一句（跳过 frontmatter、标题、引用、列表）——给"这个邻居是什么"。 */
+/**
+ * 页面里「正文」的那一部分：`## 来源` 之前。
+ *
+ * **来源段不算正文** —— 它列的是文章标题（可能 300+ 条），拿它做「这个词在这页里吗」的判断，
+ * 会把「某篇来源的标题里含这个词」报成「正文提及」。
+ */
+export function pageBody(text: string): string {
+  const at = text.indexOf('## 来源')
+  return at === -1 ? text : text.slice(0, at)
+}
 export function conceptBrief(text: string): string {
   const body = text.startsWith('---') ? text.slice(text.indexOf('---', 3) + 3) : text
   for (const raw of body.split('\n')) {
@@ -1425,11 +1435,25 @@ export async function executeTool(name: string, args: Record<string, any>, ctx: 
         }
         const hits = entries.filter(e => e.file.replace('.md', '').toLowerCase().includes(kw.toLowerCase()))
         if (!hits.length) {
-          const contentHits = entries.filter(e =>
-            readFileSync(join(e.dir, e.file), 'utf8').toLowerCase().includes(kw.toLowerCase())).slice(0, 5)
+          // **只搜正文，不搜「来源」段。** 页面的来源段可能列 300+ 条文章标题（2026-09-27 那批
+          // 改动之后就是这样），拿整个文件做包含判断，会把「某篇来源的**标题**里含这个词」报成
+          // 「**正文**提及」—— 实测 `Grok-4` 命中 4 张页、其中 3 张的正文里根本没有它。
+          // `assistant-eval` 的 `knowledge-fallback-not-body` 钉住这件事。
+          //
+          // 顺带把**那一句**给出去：只给页名的话模型会自己补内容（实测它补出过「Grok-4 是作为
+          // 被测试的模型之一出现的」，那是它从别处知道的，不是这一页里写的）。
+          const contentHits = entries.map(e => {
+            const text = pageBody(readFileSync(join(e.dir, e.file), 'utf8'))
+            const at = text.toLowerCase().indexOf(kw.toLowerCase())
+            if (at === -1) return null
+            const line = text.slice(Math.max(0, at - 80), at + 160)
+              .split('\n').find(l => l.includes(kw)) || ''
+            return { ...e, snippet: line.trim().slice(0, 180) }
+          }).filter((e): e is { dir: string; file: string; where: string; snippet: string } => e !== null)
+            .slice(0, 5)
           if (!contentHits.length) return `(知识库未收录「${kw}」, 共 ${total} 个概念页)`
-          return '正文提及「' + kw + '」的概念页:\n'
-            + contentHits.map(e => `· ${e.file.replace('.md', '')}（${e.where}）`).join('\n')
+          return '正文提及「' + kw + '」的概念页:' + '\n'
+            + contentHits.map(e => `· ${e.file.replace('.md', '')}（${e.where}）: ${e.snippet}`).join('\n')
         }
         const hit = hits[0]
         const name = hit.file.replace('.md', '')
