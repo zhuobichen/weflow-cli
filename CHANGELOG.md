@@ -4,7 +4,7 @@ The npm package is published separately from GitHub. It may lag behind the `mast
 
 All notable user-facing changes are recorded here. This project follows [Semantic Versioning](https://semver.org/).
 
-## Unreleased
+## 1.8.0
 
 ### Added
 
@@ -1553,6 +1553,57 @@ That is the useful form of this result: a decision model proposed 741 merges, a 
   its quoted text reduced to seven or eight characters - carried, but useless - and any long message
   was cut mid-sentence with nothing to show it had been cut. The limit is now 160, with a trailing `…`.
   Worst case stays bounded: 50 messages × ~180 characters ≈ 9k.
+
+- **The Vault's copy of an article now has the WeChat interface phrases stripped; the file it was copied
+  from does not.** `Sources/WeChat/` is the layer a person reads and searches, and "继续滑动看下一个",
+  "轻触阅读原文" and the `在小说阅读器中沉浸阅读` family (eight phrases) are page furniture rather than
+  article text - searching the vault used to surface them. `output/biz-daily/` keeps the fetched text
+  byte-for-byte, because it is the only copy of the bodies and a cleaner with a bug there would destroy
+  material that cannot be re-derived. Measured after the pass: 15,731 of 35,463 files carried a phrase
+  before, **0 after**.
+
+  **The cleaning lives inside `copy_to_vault`, and that placement is the fix.** It is not a one-off: this
+  step re-runs, so a cleaner sitting anywhere else gets undone by the next sync - which is exactly what
+  happened during development, when a plain `--vault-sync` restored the residue on 15,731 files because an
+  earlier pass had cleaned the Vault copies while the copy function was still a dumb `write_bytes`.
+
+  Two things are deliberately untouched. **The frontmatter**, because these are short words: `去阅读`
+  occurs inside `如何去阅读一本书`, and the title is the only alignment key between a reading note and its
+  source - measured, 0 of 35,060 files currently need it, so the guard is for the future and is written
+  down as such rather than dressed up as a fix. **Fenced code blocks**, because `strip_wx_ads` also
+  normalises whitespace, which is harmless for the summaries it was written for and eats indentation in
+  code: 20 files carry fences and **10 of them would have been altered**.
+
+  **What it actually deletes, measured instead of assumed.** It is `strip_wx_ads`, the same function the
+  notes already use, so it does more than the eight phrases: `______` runs, `javascript:void(0)` links,
+  the `原创 <账号名>` byline that WeChat pastes several times over, and repetitions of the same token.
+  The byline rule alone fires on **9,334 of 35,463 files**. It never rewords prose - sampled 300 articles
+  and classified every diff - but this *is* text removal, and an earlier draft of this entry claimed the
+  pass only touched phrases and whitespace, which measurement did not support. The byline is page
+  furniture and the account name survives in `source:` in the frontmatter, so the trade is defensible;
+  the original is in `output/biz-daily/` either way.
+
+- **`--vault-sync` had been deciding which days to copy by a marker only one writer sets.** The gate was
+  `backfilled` in `.articles.json`, but that key is written by the backfill path only - so the 12 days
+  produced by the `daily` path were never copied **and were never reported as skipped**, including two days
+  (08-24, 08-25) with no directory in the Vault at all. The gate is now "the day has at least one `.md`
+  besides `README.md`", which is what the flag always meant: 187 → 199 days, 33,232 → 35,463 files. The
+  1,755 files still carrying residue after the first cleaning pass were exactly this population. The
+  reading notes were never affected - every one of them points at `output/biz-daily/...` through
+  `local_source`, not at the Vault copy (verified across five months, 1,144 of 1,144), so `wiki lint`
+  reports the same result before and after.
+
+- **`wiki lint`'s "similar titles" report now says out loud that its own threshold has stopped
+  discriminating.** The rule (a common substring of ≥5 characters covering ≥40% of the shorter title) was
+  set when there were 5,062 pages with long Chinese news headlines. At 22,374 pages full of short names it
+  fires on coincidences - `AI Agent开发框架` against `生物信息学LLM Agent综述` - and reports **424,697**
+  groups. A 20-pair sample confirms the rule itself holds, so this is the threshold and not the
+  implementation; the printed line now carries that caveat rather than letting the number read as a
+  finding. The same investigation turned up a second, older problem: the rule **cannot catch the case it
+  was written for** - `打虎！陈勇被查` and `中建集团副总经理陈勇被查` are the same event with different
+  headlines, and their longest common substring is 4 characters, so only 2 of the 4 motivating titles ever
+  matched. The misleading claim in the docstring is gone; tightening the threshold is left as a decision
+  because every variant trades one kind of miss for another.
 
 
 ## 1.7.0
