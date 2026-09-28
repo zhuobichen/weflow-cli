@@ -4781,8 +4781,10 @@ program
   }
 
   async function getWereadService() {
-    const key = process.env.WEREAD_API_KEY || ''
+    // key 的两个来源与优先级见 `resolveWereadApiKey`（抽出去是为了能被测到 ——
+    // 只读环境变量那版害得用户配好配置项之后 `weread shelf` 仍然报"未设置"）。
     const mod = await import('../src/services/wereadService.js')
+    const key = mod.resolveWereadApiKey(process.env.WEREAD_API_KEY, configService.get('wereadApiKey'))
     return new mod.WereadService(key)
   }
 

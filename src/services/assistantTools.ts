@@ -1224,8 +1224,14 @@ export async function executeTool(name: string, args: Record<string, any>, ctx: 
           if (mode === 'notebooks') {
             const r = await wereadService.notebooks(20)
             if (!r.ok || !r.data?.books?.length) return `(暂无读书笔记: ${r.error || ''})`
+            // `/user/notebooks` 把书名与作者**嵌在 `book` 里**，条目顶层没有这两个字段 ——
+            // 实测（2026-09-28）：直接读 `b.title` 会得到 `undefined`，而输出照样成立，
+            // 只是每本书都没名字。顶层那两个是兜底，网关换版本时用得上。
+            const titleOf = (b: any) => b?.book?.title || b?.title || '(未给书名)'
+            const authorOf = (b: any) => b?.book?.author || b?.author || ''
             return `有笔记的书 ${r.data.books.length} 本:\n` +
-              r.data.books.slice(0, 15).map((b: any) => `· ${b.title} (${b.author}) — ${b.noteCount || 0} 条笔记`).join('\n')
+              r.data.books.slice(0, 15).map((b: any) =>
+                `· ${titleOf(b)} (${authorOf(b)}) — ${b.noteCount || 0} 条笔记`).join('\n')
           }
           if (mode === 'search') {
             const kw = String(args.keyword || '')

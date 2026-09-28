@@ -971,6 +971,35 @@ weflow-cli config set assistantFastRoute off   # 关（默认）
 缺了就不出现在工具表里——摆一个跑不了的工具，模型会去试、拿一个错回来（实测出现过答复里带着
 "两个检索工具都跑不通"）。这只挡"跑不了"，不挡"暂时没数据"：后者工具自己会说该运行什么。
 
+**副作用要知道**：工具被藏起来之后，模型**看不见它存在**，所以问"你在读什么书"时它只会答
+"我没有这个工具"。2026-09-28 实测就是这么一轮对话——用户以为功能没做，其实做了、只是没配 key。
+所以缺 key 时它给的那句"没有"要按"没配"，不是"没有这功能"来读。
+
+### 微信读书的 key 从哪来
+
+登录 **https://weread.qq.com/r/weread-skills**，点「快速配置」，页面上会给出你的 `api-key`
+（形如 `wrk-…`）。它调的是官方网关 `https://i.weread.qq.com/api/agent/gateway`。
+
+拿到之后两种存法**都认**：
+
+```powershell
+weflow-cli config set-env wereadApiKey WEREAD_API_KEY   # 从环境变量读，秘密不进命令参数
+weflow-cli config set wereadApiKey wrk-xxxx             # 或者直接给值
+```
+
+- 本机的配置项是**密文落盘**（`lock:` 开头），与其它密钥一样；
+- 环境变量 `WEREAD_API_KEY` **优先于**配置项——官方文档建议不要把 key 直接交给 AI；
+- 两条路都认是有原因的：助手的 `get_weread` 判据读**配置项**，而 `weflow-cli weread …` 早先
+  只读**环境变量**。2026-09-28 之前只认一个，用户按 CLI 的提示配好配置项，助手能用了、
+  CLI 却回"未设置"。
+
+**改了配置要重启守护进程**：`configService` 在构造时读一次盘，跑着的助手不会自己发现新 key。
+
+```powershell
+weflow-cli assistant stop
+weflow-cli assistant start
+```
+
 ### 看助手"刚才怎么想的"（决策轨迹）
 
 助手对外只吐一句答复，中间的判断过程默认看不见。要看得两条路：

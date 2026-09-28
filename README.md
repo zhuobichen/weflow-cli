@@ -273,7 +273,7 @@ weflow-cli config set assistantGroupRequireMention true
 | 公众号日报与阅读器 | `weflow-cli daily` · `weflow-cli daily-server` · `weflow-cli review` |
 | 朋友圈缓存 | `weflow-cli sns timeline` · `weflow-cli sns users` · `weflow-cli sns stats` |
 | 微信收藏 | `weflow-cli fav list` · `weflow-cli fav export markdown` · `weflow-cli fav set-key` |
-| 微信读书 | `weflow-cli weread shelf` · `notes` · `search` · `stats` |
+| 微信读书 | `weflow-cli weread shelf` · `notes` · `search` · `stats`（key 从 https://weread.qq.com/r/weread-skills 拿，见 [OPERATIONS.md](./OPERATIONS.md)） |
 | 知识库 | `weflow-cli vault` · `weflow-cli wiki` · `weflow-cli search <query>` · `weflow-cli chat`（语义检索需先 `config set dashscopeApiKey`）|
 | 总结与任务 | `weflow-cli report` · `annual-report` · `todos` |
 | 第二大脑助手 | `weflow-cli assistant start` · `status` · `log` · `stop` |

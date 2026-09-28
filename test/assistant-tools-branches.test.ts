@@ -379,6 +379,27 @@ test('get_weread 书架区分在读与全部', async () => {
   }
 })
 
+test('get_weread 笔记本要读嵌套的 book.title（顶层没有书名）', async () => {
+  // **这是实测的形状**（2026-09-28，`/user/notebooks` 的真实响应）：条目只有 bookId /
+  // noteCount / bookmarkCount 等，书名与作者在 `item.book` 里。第一版按 `item.title` 读，
+  // 每本书都显示 undefined —— 而输出照样"长得对"，所以只有拿真实形状打桩才测得出来。
+  const { configService } = await import('../src/services/configService.js')
+  const realGet = configService.get.bind(configService)
+  ;(configService as any).get = (key: string) => key === 'wereadApiKey' ? 'fake-key' : realGet(key)
+  try {
+    weread.notebooks = async () => ({
+      ok: true,
+      data: { books: [{ bookId: 'b1', noteCount: 22931, bookmarkCount: 5,
+                        book: { title: '三体全集', author: '刘慈欣' } }] },
+    })
+    const out = await run('get_weread', { mode: 'notebooks' })
+    assert.match(out, /三体全集 \(刘慈欣\) — 22931 条笔记/)
+    assert.ok(!out.includes('undefined'), '顶层没有书名，不该读成 undefined')
+  } finally {
+    ;(configService as any).get = realGet
+  }
+})
+
 test('get_weread search 模式缺关键词时明确要求关键词', async () => {
   const { configService } = await import('../src/services/configService.js')
   const realGet = configService.get.bind(configService)

@@ -279,7 +279,7 @@ Management: `weflow-cli assistant status` / `log` / `stop`; send "帮助" in WeC
 | Digest & reader | `weflow-cli daily` · `weflow-cli daily-server` · `weflow-cli review` |
 | Moments cache | `weflow-cli sns timeline` · `weflow-cli sns users` · `weflow-cli sns stats` |
 | WeChat favorites | `weflow-cli fav list` · `weflow-cli fav export markdown` · `weflow-cli fav set-key` |
-| WeRead | `weflow-cli weread shelf` · `notes` · `search` · `stats` |
+| WeRead | `weflow-cli weread shelf` · `notes` · `search` · `stats` (get the key from https://weread.qq.com/r/weread-skills; see [OPERATIONS.md](./OPERATIONS.md)) |
 | Knowledge base | `weflow-cli vault` · `weflow-cli wiki` · `weflow-cli search <query>` · `weflow-cli chat` (semantic search needs `config set dashscopeApiKey` first) |
 | Reports & tasks | `weflow-cli report` · `annual-report` · `todos` |
 | Second-brain assistant | `weflow-cli assistant start` · `status` · `log` · `stop` |

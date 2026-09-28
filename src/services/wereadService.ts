@@ -1,14 +1,34 @@
 /**
  * 微信读书 Agent API Gateway 封装
  *
- * 接口文档: ~/.claude/skills/weread-skills/
+ * 接口文档: https://weread.qq.com/r/weread-skills —— 登录后点「快速配置」，页面上给出
+ *          `api-key`，并提供一个官方 skill 包（`https://cdn.weread.qq.com/skills/weread-skills.zip`）。
+ *          **原来的注释指的是 `~/.claude/skills/weread-skills/`，那个目录在本机已不存在**
+ *          （2026-09-28 核实），照它去找是找不到的。
  * Gateway:  https://i.weread.qq.com/api/agent/gateway
  */
 
 import https from 'node:https'
+import { configService } from './configService.js'
 
 const GATEWAY = 'https://i.weread.qq.com/api/agent/gateway'
 const SKILL_VERSION = '1.0.3'
+
+/**
+ * 从两个来源里挑出可用的 key（环境变量优先，配置项兜底）。
+ *
+ * **为什么是两个来源**：助手的 `get_weread` 判据读**配置项** `wereadApiKey`
+ * （`assistantTools.ts` 的 `TOOL_REQUIREMENTS`），而 CLI 的 `weread` 命令一直只读
+ * **环境变量** `WEREAD_API_KEY`（官方那篇配置文档给的写法就是 export 环境变量）。
+ * 只认一个的后果是：用户按 CLI 的提示配好配置项，助手能用、`weread shelf` 却回你
+ * "未设置 WEREAD_API_KEY" —— 2026-09-28 实测踩到。
+ *
+ * 环境变量优先，因为官方文档明确建议"出于安全考虑，最好不要把 api-key 直接扔给 AI"。
+ * 两边都空白时返回空串，调用方按"没配"处理（`config set` 允许把值清空）。
+ */
+export function resolveWereadApiKey(fromEnv?: string | null, fromConfig?: string | null): string {
+  return String(fromEnv || '').trim() || String(fromConfig || '').trim()
+}
 
 // weread.qq.com 服务端不支持 TLS 1.3，需要强制使用 TLS 1.2
 const httpsAgent = new https.Agent({ maxVersion: 'TLSv1.2' })
@@ -64,13 +84,20 @@ export interface ReadDetail {
 
 export interface NotebookItem {
   bookId: string
-  title: string
-  author: string
-  cover: string
-  highlightCount: number
+  /**
+   * **书名与作者嵌在这里，条目顶层没有。** 实测（2026-09-28，`/user/notebooks` 的真实响应）：
+   * 条目只有 `bookId` / `noteCount` / `bookmarkCount` / `readingProgress` / `sort` / `markedStatus`
+   * 等，读 `item.title` 会安静地拿到 `undefined` —— 工具照常输出，只是每本书都没名字。
+   */
+  book?: { title?: string; author?: string; cover?: string }
+  /** 顶层这两个字段**不是**接口给的，留作兜底：网关换版本时形状可能不同。 */
+  title?: string
+  author?: string
+  cover?: string
   noteCount: number
   bookmarkCount: number
-  updateTime: number
+  readingProgress?: number
+  sort?: number
 }
 
 export interface NoteDetail {
@@ -165,7 +192,16 @@ export class WereadService {
   private apiKey: string
 
   constructor(apiKey?: string) {
-    this.apiKey = apiKey || process.env.WEREAD_API_KEY || ''
+    // 不传 key 时按 `resolveWereadApiKey` 的顺序自己找：环境变量 → 配置项。
+    //
+    // **配置项这一路是 2026-09-28 补的，而且是端到端才发现的。** 助手的 `get_weread`：
+    // 可用性判据读配置项（所以配好之后工具会出现在工具表里），执行时用的却是模块单例
+    // `new WereadService()` —— 那个单例只读环境变量。于是工具"看得见、调不动"，回一句
+    // "未设置 WEREAD_API_KEY"。只改 CLI 那处是不够的：同一个密钥在当时有**三种读法**。
+    this.apiKey = apiKey || resolveWereadApiKey(
+      process.env.WEREAD_API_KEY,
+      String(configService.get('wereadApiKey') || ''),
+    )
   }
 
   private async call<T>(apiName: string, params: Record<string, any> = {}): Promise<WereadResult<T>> {

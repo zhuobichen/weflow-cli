@@ -8,6 +8,45 @@ All notable user-facing changes are recorded here. This project follows [Semanti
 
 ### Fixed
 
+- **`weflow-cli weread ...` read the key from a different place than the assistant did, so
+  configuring it satisfied one and not the other.** The CLI read `WEREAD_API_KEY` from the
+  environment (which is what WeRead's own setup page tells you to export); the assistant's
+  `get_weread` availability check reads the **config key** `wereadApiKey`. Configure the config key -
+  as the CLI's own error message invites you to - and `weread shelf` still answers "not configured".
+  Both are accepted now, environment variable first because the official guidance is not to hand the
+  key to an AI. The resolution is a pure exported function with a test, rather than a line inside the
+  CLI's closure where the last change to it could not be tested.
+
+  The same session turned up two smaller things. **A tool hidden for a missing key is invisible to
+  the model, so the user gets "I don't have that tool"** - which is what happened here: the answer
+  said the capability did not exist when it did, unconfigured. That is now written into
+  `OPERATIONS.md` next to the filtering rule it belongs to, because "no key" and "no such feature"
+  read the same from the outside. And **`wereadService`'s header pointed at
+  `~/.claude/skills/weread-skills/`, which does not exist on this machine** (checked, 2026-09-28);
+  it now points at `https://weread.qq.com/r/weread-skills`, the page that actually issues the key -
+  the key's origin had been recorded nowhere in the repo, which is why finding it took reading a
+  stored article from May. `OPERATIONS.md` gained the setup steps, including that **`configService`
+  reads the file once at construction, so a running assistant needs a restart** to see a new key.
+
+- **Fixing the CLI was not enough, and only an end-to-end run showed that.** With the key configured
+  and the assistant restarted, asking "what am I reading" still produced "WEREAD_API_KEY is not set".
+  The assistant tool was reading the secret a **third** way: its availability check loads the config
+  key - which is why the tool appeared in the table at all - and then calls the module singleton
+  `new WereadService()`, whose constructor read only the environment variable. A tool that is visible
+  but cannot run is the worst of both designs. The no-argument constructor now resolves both sources
+  through the same `resolveWereadApiKey`, which fixes every user of the singleton at once.
+
+- **`get_weread`'s notebooks mode printed `undefined` for every book title.** `/user/notebooks` nests
+  the title and author inside `item.book`; the item itself carries only `bookId`, `noteCount`,
+  `bookmarkCount` and friends. The code read `item.title`, so the output was still well-formed - it
+  just had no names in it, which is why nothing failed. Verified against the gateway's real response
+  and pinned with a test that stubs **that** shape: the previous test for this branch stubbed an
+  empty list, so it could not have caught it.
+
+  All three of these were found in one session by configuring the key and then actually asking the
+  assistant a question, not by reading the code. Two of the three were invisible from any single
+  file: the secret had three readers and they disagreed.
+
 - **`wiki lint`'s duplicate-title report was rebuilt rather than re-tuned, and the two tiers now
   differ by an order of magnitude in how much you should trust them.** The old rule - a common
   substring of ≥5 characters covering ≥40% of the shorter title - was reasonable at 5,062 pages of
