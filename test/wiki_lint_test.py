@@ -174,5 +174,42 @@ class DegenerateFieldTests(unittest.TestCase):
         self.assertIn('GPT 5.6', names)
         self.assertNotIn('GPT5.6', names, '没写在 aliases 里的名字不在里面')
 
+    def test_分桶与全量两两比结果逐组一致(self):
+        """分桶是**等价**的优化，不是"大概一样"。
+
+        判据是「最长公共子串 ≥ DUP_RUN_CHARS」，那等价于「两者共享一个这么长的子串」——
+        所以按 5-gram 建倒排索引、只在桶内两两比，结果与全量两两比**逐组相同**。这条用
+        随机数据对拍，防的是将来有人改判据却忘了分桶的前提（那时它会**静默漏报**：
+        报告还是照常出，只是少了一批）。
+        """
+        import random
+        random.seed(9)
+        words = ['Agent', 'Claude', 'Code', '工具', '模型', '上下文', '窗口',
+                 'Token', '计费', '节省', 'RAG', '检索']
+        pages = []
+        for i in range(300):
+            name = ''.join(random.choice(words) for _ in range(random.randint(1, 4)))
+            pages.append({'title': name + str(i % 7), 'stem': name + str(i % 7)})
+
+        def brute(rows):
+            out = []
+            for i, left in enumerate(rows):
+                for right in rows[i + 1:]:
+                    a, b = left['title'] or left['stem'], right['title'] or right['stem']
+                    run = wl.longest_common_run(a, b)
+                    if run >= wl.DUP_RUN_CHARS and run >= wl.DUP_COVER_RATIO * min(len(a), len(b)):
+                        out.append([a, b])
+            return out
+
+        norm = lambda groups: sorted(tuple(sorted(g)) for g in groups)
+        self.assertTrue(len(brute(pages)) > 100, '这组随机数据要真的产出足够多的组，否则对拍没意义')
+        self.assertEqual(norm(wl.near_duplicate_titles(pages)), norm(brute(pages)))
+
+    def test_比5字符还短的名字不参与(self):
+        """子串不可能比名字本身长，所以短于 5 字符的名字永远满足不了「公共子串 ≥5」。
+        分桶时跳过它们是对的 —— 但要说得出为什么。"""
+        pages = [{'title': '短', 'stem': '短'}, {'title': '短A', 'stem': '短A'}]
+        self.assertEqual(wl.near_duplicate_titles(pages), [])
+
 if __name__ == '__main__':
     unittest.main()

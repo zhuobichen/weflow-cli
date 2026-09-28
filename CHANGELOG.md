@@ -235,6 +235,22 @@ All notable user-facing changes are recorded here. This project follows [Semanti
 
 ### Changed
 
+- **`wiki lint` is fast again at the new scale - and the "similar names" count it prints is now mostly noise.**
+  The near-duplicate check compared every page with every other (5,062 pages took 1-2 minutes; 22,445 is twenty
+  times the pairs). It now builds a 5-gram inverted index and compares only within a bucket, which is **the same
+  result by construction**: the criterion is "longest common substring >= 5 characters", and that is equivalent
+  to "shares a 5-character substring", so a pair that shares none cannot pass. Verified two ways - brute-force
+  comparison on random data (2,258 groups either way, identical as sets) and the real vault: **22,381 pages in
+  4.2 seconds**.
+
+  The fix also made something visible that the slowness had been hiding: at this size the check reports
+  **425,187 pairs**, up from 13,367. Pages grew 4.4x, pairs grow quadratically, and the new pages are
+  single-article fragments whose names overlap heavily (`Agent…`, `Token…`). That number is no longer a signal -
+  the one time it was investigated properly, roughly three pairs out of 741 candidates were genuinely the same.
+  The report still prints only the first ten, so it stays readable. Loosening or tightening the criterion would be
+  a change of meaning, and there is no evidence yet for what it should become, so it is recorded rather than
+  adjusted.
+
 - **17,383 pages built without calling a model** - `wiki compile --pages-from-cards`. The candidate backlog was
   priced at about **¥31** and the user's verdict was "that's a bit expensive", which is right: every candidate is
   mentioned by exactly **one** article, so there is nothing to synthesise - a model would only be rewording a

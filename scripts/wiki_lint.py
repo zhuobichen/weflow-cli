@@ -203,13 +203,31 @@ def near_duplicate_titles(pages: list) -> list:
     引用数被灌到榜首（`sources` 那栏能直接看到）。这只是**报告**，不自动去重：
     不同公众号对同一件事的写法可能确实各有信息，删哪张该由人定。
     """
-    groups = []
-    for i, left in enumerate(pages):
-        for right in pages[i + 1:]:
-            a, b = left['title'] or left['stem'], right['title'] or right['stem']
-            run = longest_common_run(a, b)
-            if run >= DUP_RUN_CHARS and run >= DUP_COVER_RATIO * min(len(a), len(b)):
-                groups.append([a, b])
+    # **按 5-gram 分桶，而不是两两比。** 判据是"最长公共子串 ≥ DUP_RUN_CHARS"，那**等价于**
+    # "两者共享一个这么长的子串" —— 所以只把共享某个 5-gram 的页放进同一个桶里两两比，
+    # **结果与全量两两比完全一样**，只是不再做那 2.5 亿次注定失败的比较。
+    # 实测：5,062 张页全量要 1-2 分钟；22,445 张是 20 倍的对数（几十分钟），分桶后几秒。
+    index = {}
+    for page in pages:
+        name = page['title'] or page['stem']
+        if len(name) < DUP_RUN_CHARS:
+            # 比 5 字符还短的名字不可能满足"公共子串 ≥5"（子串不可能比它自己长），
+            # 原判据对它们也从不命中
+            continue
+        for gram in {name[i:i + DUP_RUN_CHARS] for i in range(len(name) - DUP_RUN_CHARS + 1)}:
+            index.setdefault(gram, []).append(page)
+    groups, seen = [], set()
+    for bucket in index.values():
+        for i, left in enumerate(bucket):
+            for right in bucket[i + 1:]:
+                pair = (id(left), id(right))
+                if pair in seen:
+                    continue          # 一对可能共享多个 5-gram，会落进多个桶
+                seen.add(pair)
+                a, b = left['title'] or left['stem'], right['title'] or right['stem']
+                run = longest_common_run(a, b)
+                if run >= DUP_RUN_CHARS and run >= DUP_COVER_RATIO * min(len(a), len(b)):
+                    groups.append([a, b])
     return groups
 
 
