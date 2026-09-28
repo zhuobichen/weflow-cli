@@ -242,6 +242,30 @@ All notable user-facing changes are recorded here. This project follows [Semanti
 
 ### Changed
 
+- **The assistant eval now actually exercises the knowledge base.** Of its 19 scenarios, the only
+  knowledge-related one was `which-store-knowledge` - "does it know *which* store to search" - and none made it
+  read a page. That was fine when the vault held 5,062 pages; it now holds **22,374**, and the knowledge line is
+  the part of the assistant that grew most. Three scenarios added: a concept from the article line, one from the
+  chat line (whose answer - "project lead / coordinator / ABaCAS" - is **only** in the page, so the assertion
+  cannot be satisfied from general knowledge), and one concept the vault does not contain at all.
+
+  **The third is the valuable one**: it asks about something with zero matches, and the point is not that it
+  answers, but that it **does not invent**. It calls `search_knowledge` twice, finds nothing, and says so -
+  asserted with `toolEmpty` rather than "the answer must contain one of these words", because the wording of an
+  honest "I don't have that" is unbounded. That reasoning was already written next to `EvalCase`; this is the
+  first scenario to use it for its intended purpose.
+
+  **The eval immediately caught something, and it was my scenario, not the assistant.** The first version asked
+  "who is 龙老师?" - and the model reasonably read that as a question about a person *in the chats* and went to
+  `search_chats` (it made no claims about the failure, which is the `tool-failure-honesty` behaviour working).
+  The question now names the store ("in the concept pages I organised, who is 龙老师?") because that is the path
+  the scenario exists to measure. All three pass three runs in a row (9/9) and the full suite is **22/22** - the
+  first baseline this line has had.
+
+  Note these three **depend on this machine's vault** (the pages are real files, not synthesised like the
+  sessions and favourites), so they will fail elsewhere or after a rebuild - and that would not be an assistant
+  problem.
+
 - **The WeChat reader residue in note summaries is cleaned up - 1,484 of them, and the scope mistake is recorded
   too.** The cleaner runs *at read time* (`create_reading_notes` calls `strip_wx_ads` while writing a summary), so
   notes written before that logic existed were never cleaned: 1,484 of 25,676 carried page-button text inside their

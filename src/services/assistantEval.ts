@@ -226,7 +226,40 @@ export const EVAL_CASES: EvalCase[] = [
     // 另一类库：整理过的概念页，不是聊天
     question: '关于扩散模型，我整理过哪些概念页？',
     expect: { mustCall: ['search_knowledge'], maxTools: 6, toolBudget: 3 },
+  },
+  // ------------------------------------------------------------- 知识库（**本机真实数据**）
+  //
+  // 这三条与别的不一样：会话、消息、收藏都能合成，**概念页不能** —— `search_knowledge`
+  // 读的是 `output/wechat-vault/` 里的真实文件（实测 22,374 张）。所以换一台机器、或者库
+  // 被重建过，它们会失败，而那**不是**助手的问题。放在这里的理由：知识库刚从 5 千涨到两万
+  // 多张页，而 19 个场景里此前只有"知道该用哪个工具"，没有一条真的让它去查。
+  {
+    id: 'knowledge-article-answer',
+    question: '「矢量风速预测」是什么？',
+    expect: { mustCall: ['search_knowledge'], maxTools: 6, toolBudget: 3, answerMatches: /(风速|矢量)/ },
   },
+  {
+    id: 'knowledge-chat-answer',
+    // 这一条要的是**只有库里才有**的信息：`龙老师` 是谁，常识答不出来（那是他自己聊天里的
+    // 人物）。所以断言盯的是页里的说法（项目负责人/协调/ABaCAS），不是"答得像不像"。
+    //
+    // **问法必须点明"概念页"**：第一版问的是"龙老师是谁？"，模型于是走了 `search_chats`
+    // —— 那在"问一个聊天里的人物"这个读法下是**对的**，是我把场景写歧义了（实测那次它调了
+    // search_chats + search_memory，没碰知识库）。这条通路要测的是"聊天线的概念页也能搜到、
+    // 而且拿得到内容"，那就得把问法收窄到知识库。
+    question: '我整理的概念页里，「龙老师」是谁？',
+    expect: { mustCall: ['search_knowledge'], maxTools: 6, toolBudget: 3,
+              answerMatches: /(项目负责人|协调|ABaCAS)/ },
+  },
+  {
+    id: 'knowledge-absent',
+    // **测"不编"**：库里没有这个概念（实测 `胶子凝聚` 零命中）。该做的是去查、查不到、
+    // 然后如实说。用 `toolEmpty` 而不是"答复里必须出现某个词"——老实说的措辞是无穷的，
+    // 那条理由就写在 `EvalCase` 的定义里。
+    question: '胶子凝聚是什么？',
+    expect: { mustCall: ['search_knowledge'], maxTools: 6, toolBudget: 3, toolEmpty: true },
+  },
+
   {
     id: 'which-store-memory',
     // 第三类：助手自己记得的事，不是聊天记录
