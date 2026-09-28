@@ -24,8 +24,8 @@ from collections import defaultdict, Counter
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _utils import (CHAT_CARD_PREFIX, CONCEPT_DIRS, call_deepseek,  # noqa: E402
-                    SEPARATOR, get_api_key, load_config, parse_frontmatter,
-                    write_with_frontmatter)
+                    normalize_concept_name, SEPARATOR, get_api_key, load_config,
+                    parse_frontmatter, write_with_frontmatter)
 
 # Default paths
 SOURCE_ROOT = 'output/biz-daily'
@@ -652,20 +652,8 @@ def replace_source_section(text: str, lines: list) -> str:
     return text[:head] + SOURCE_SECTION + '\n\n' + '\n'.join(lines) + '\n' + tail
 
 
-NORM_STRIP_RE = re.compile(r'[\s\-_·、，.。:：/\\（）()\[\]【】"\’]+')
-
-
-def normalize_concept_name(name: str) -> str:
-    """判「这两个名字是不是同一个概念」用的规范形。
-
-    去空格、连字符、下划线、标点，转小写，再去掉英文复数尾 —— 实测这样能把
-    `GPT 5.6`/`GPT-5.6`/`GPT5.6`、`AI 工具`/`AI工具`、`AI skill`/`AI skills` 收到一起。
-
-    **它也会把 `news`/`new` 收到一起**，所以它只用来**提议**合并；真正的裁决是
-    "留来源最多的那张页"，而且删之前还有 `--dry-run` 可以看名单。
-    """
-    stripped = NORM_STRIP_RE.sub('', name.casefold().strip())
-    return re.sub(r'(?<=[a-z])s$', '', stripped)
+# `normalize_concept_name`（以及它用的 `NORM_STRIP_RE`）现在住在 `_utils`，与 `wiki_lint`
+# 共用一份 —— 见那里的说明。留这句是为了下次有人在这里找它时不用翻。
 
 
 def build_pages_from_cards(pages_dir: str, card_dirs=None, dry_run: bool = False,

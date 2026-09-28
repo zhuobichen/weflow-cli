@@ -25,7 +25,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _utils import CONCEPT_DIRS, parse_frontmatter  # noqa: E402
+from _utils import CONCEPT_DIRS, normalize_concept_name, parse_frontmatter  # noqa: E402
 
 DEFAULT_PAGES_DIR = 'output/wechat-vault/Wiki/Concepts'
 VAULT_ROOT = 'output/wechat-vault'
@@ -138,7 +138,9 @@ def inspect(pages: list, exists, card_links=()) -> dict:
     - `aspirational`：`## 相关概念` 那节里指向"还没建页"的概念——**扩张候选，不是错误**；
     - `orphans`：连卡片都没提到过它的页面（卡片链接也算入链，否则每张页都会被误报成孤儿）；
     - `empty`：没有定义也没有要点；
-    - `duplicateTitles`：同名页。
+    - `duplicateTitles`：同名页；
+    - `nearDuplicates`：`{'sameNode': [...], 'contained': [...]}` 两档，可信度差一个量级
+      —— 见 `near_duplicate_titles`。
     """
     stems = {page['stem'] for page in pages}
     inbound = {stem: 0 for stem in stems}
@@ -175,72 +177,90 @@ DEGENERATE_MIN_PAGES = 5
 DEGENERATE_RATIO = 0.8
 
 
-def longest_common_run(left: str, right: str) -> int:
-    """两串的最长公共子串长度（中文里"同一件事被转发多次"的信号）。"""
-    if not left or not right:
-        return 0
-    previous = [0] * (len(right) + 1)
-    best = 0
-    for i in range(1, len(left) + 1):
-        current = [0] * (len(right) + 1)
-        for j in range(1, len(right) + 1):
-            if left[i - 1] == right[j - 1]:
-                current[j] = previous[j - 1] + 1
-                best = max(best, current[j])
-        previous = current
-    return best
+DUP_MIN_NAME = 8           # 规范化后短于这个长度的名字不参与判重
+DUP_COVER_RATIO = 0.6      # 「一个包含另一个」时，短的那个至少要占长的这个比例
+DUP_HUB_LIMIT = 5          # 短名字已经被这么多别的名字包含 → 它是枢纽，不是重复
 
 
-DUP_RUN_CHARS = 5          # 公共子串至少这么长
-DUP_COVER_RATIO = 0.4      # 而且占较短标题的这么一大部分
+def near_duplicate_titles(pages: list) -> dict:
+    """同一件事被写成两个概念名的候选。**只报告，不自动去重。**
 
+    返回两档，因为这两档的**可信度差一个量级**，混在一起报就是把判断推给读的人：
 
-def near_duplicate_titles(pages: list) -> list:
-    """标题高度相似的页——**同一件事被多个公众号转发**的痕迹。只报告，不自动去重。
+    - `sameNode`：**规范化之后同名**，也就是只差空格/连字符/大小写/英文复数尾
+      （`GLM 5.1` vs `GLM-5.1`、`AI 编程` vs `AI编程`）。抽 24 组人工看过，24 组都是同一
+      个节点。判据就是 `_utils.normalize_concept_name` —— 与 `compile_wiki
+      --merge-duplicates` **同一份实现**，所以这份名单是那个工具真会合并的那些。
+    - `contained`：一个名字是另一个**加了限定**（`Agent Harness` ⊂ `Agent Harness研讨会`）。
+      人工抽样的精度大约一半：另有相当一部分是"主概念 vs 它的子话题"
+      （`国家自然科学基金` / `国家自然科学基金申请书`），**不该合并**。清单给人看，别自动执行。
 
-    这条判据**有两处已知的失效，都是 2026-09-28 量出来的**，改判据前先看这里：
+    ## 判据换过一次，旧的那条是被量掉的
 
-    1. **它抓不住它自己当初的动机用例**。写这个函数是因为《打虎！陈勇被查》与
-       《中建集团副总经理陈勇被查》是同一件事 —— 但那是"同一人、换了标题"，两串的最长公共
-       子串只有 4 字（"陈勇被查"），**任何子串判据都抓不到**。当年那段注释把这条写成了
-       "实测那批里有一组四条"，是**不成立的**：实测那四个人两两之间只有 2 对满足判据。
-    2. **它在今天的规模上退化成了噪音**。判据（公共子串 ≥5 字、且占较短标题 ≥40%）是
-       5,062 张页、长中文新闻标题时定的；现在 22,374 张页里有很多**短名字**
-       （`AI Agent开发框架` 与 `生物信息学LLM Agent综述` 共享 "Agent"），于是报出
-       **424,697 组**，前几条全是这类巧合。这个数不是"转发灌水"，是判据失去了分辨力。
+    2026-09-28 之前用的是"最长公共子串 ≥5 字且占较短标题 ≥40%"。它在 5,062 张页、长中文
+    新闻标题时是合理的，到 22,374 张页时**报出 424,697 组**：`AI Agent开发框架` 与
+    `生物信息学LLM Agent综述` 共享 "Agent" 就算一对。抽 20 组复核，判据本身条条成立 ——
+    也就是说问题在门槛，不在实现，而这个门槛已经分辨不出任何东西了。
 
-    抽 20 组复核判据本身都成立（没有假阳性），所以问题在**门槛**不在实现。要收紧的话，
-    "规范化后一个标题包含另一个（短的 ≥8 字）"实测 1,234 组、看着都是真的相似
-    （`世界人工智能大会` / `2026世界人工智能大会`），代价是**换一类漏检**（同样抓不到第 1 条
-    那种换标题的写法）。哪个更合用于"关系图谱该不该合并"，得由人定 —— 所以这里不动，
-    只把失效写在看得见的地方。
+    同一批抽样还否掉了另外两个方向，记在这里免得有人重走：
+
+    - **继续用"长公共子串"**：`Claude Code 上下文窗口` 与 `Claude Code 联网能力` 共享
+      "Claude Code" 六个字，可它们是同一个产品的**不同概念**。共享产品名不等于同一件事，
+      这一类占了误报的大头，靠调比例参数分不开。
+    - **"一个包含另一个"不加限制**：`DeepSeek` 被 `DeepSeek 融资`、`DeepSeek-V4 涨价`……
+      一个个裹进去。这是**枢纽**（实测 `agent` 被 731 个名字包含、`模型` 643 个），不是重复。
+      所以加了 `DUP_HUB_LIMIT`：短名字已经被 ≥5 个别名包含时，它当枢纽看待，不成对。
     """
-    # **按 5-gram 分桶，而不是两两比。** 判据是"最长公共子串 ≥ DUP_RUN_CHARS"，那**等价于**
-    # "两者共享一个这么长的子串" —— 所以只把共享某个 5-gram 的页放进同一个桶里两两比，
-    # **结果与全量两两比完全一样**，只是不再做那 2.5 亿次注定失败的比较。
-    # 实测：5,062 张页全量要 1-2 分钟；22,445 张是 20 倍的对数（几十分钟），分桶后几秒。
+    names = sorted({p['title'] or p['stem'] for p in pages})
+    by_norm = {}
+    for name in names:
+        key = normalize_concept_name(name)
+        if key:
+            by_norm.setdefault(key, []).append(name)
+
+    # **按 8-gram 分桶，而不是两两比。** 两档判据都要求"共享一个 ≥8 字的子串"（同名是
+    # 全等，包含是共享短的那一个），所以只在共享 8-gram 的页之间比，**结果与全量两两比
+    # 逐组相同**，只是不再做那 2.5 亿次注定失败的比较。分桶宽度必须 ≤ 判据的最小长度，
+    # 改判据时这条要跟着改 —— `test/wiki_lint_test.py` 用随机数据对拍钉着它。
     index = {}
-    for page in pages:
-        name = page['title'] or page['stem']
-        if len(name) < DUP_RUN_CHARS:
-            # 比 5 字符还短的名字不可能满足"公共子串 ≥5"（子串不可能比它自己长），
-            # 原判据对它们也从不命中
+    for key in by_norm:
+        if len(key) < DUP_MIN_NAME:
             continue
-        for gram in {name[i:i + DUP_RUN_CHARS] for i in range(len(name) - DUP_RUN_CHARS + 1)}:
-            index.setdefault(gram, []).append(page)
-    groups, seen = [], set()
+        for gram in {key[i:i + DUP_MIN_NAME] for i in range(len(key) - DUP_MIN_NAME + 1)}:
+            index.setdefault(gram, []).append(key)
+
+    # **枢纽计数**：某个规范化名字被多少个别的名字包含。用 8-gram 桶算，不是 O(n²)——
+    # `k` 被 `other` 包含时 `k` 的前 8 个字必然是 `other` 的一个 8-gram，所以只看那个桶就够。
+    hubs = {}
+    for key in by_norm:
+        if len(key) < DUP_MIN_NAME:
+            continue
+        head = key[:DUP_MIN_NAME]
+        hubs[key] = sum(1 for other in index.get(head, []) if other != key and key in other)
+
+    # 第一档按**组**报，不按对：一个规范形可能有三四种写法
+    # （`Academic Research Skills` / `AcademicResearchSkills` / `academic-research-skills`），
+    # 报成两两配对会让人看不出它们是同一个节点。
+    same = [sorted(set(raws)) for _, raws in sorted(by_norm.items())
+            if len(set(raws)) > 1]
+
+    same.sort()                 # 按名字排，不按规范形 —— 报告是给人看的
+    contained, seen = [], set()
     for bucket in index.values():
         for i, left in enumerate(bucket):
             for right in bucket[i + 1:]:
-                pair = (id(left), id(right))
+                pair = (left, right) if left <= right else (right, left)
                 if pair in seen:
-                    continue          # 一对可能共享多个 5-gram，会落进多个桶
+                    continue          # 一对可能共享多个 8-gram，会落进多个桶
                 seen.add(pair)
-                a, b = left['title'] or left['stem'], right['title'] or right['stem']
-                run = longest_common_run(a, b)
-                if run >= DUP_RUN_CHARS and run >= DUP_COVER_RATIO * min(len(a), len(b)):
-                    groups.append([a, b])
-    return groups
+                short, long_ = pair
+                if len(short) < DUP_MIN_NAME or len(short) < DUP_COVER_RATIO * len(long_):
+                    continue
+                if short not in long_ or hubs.get(short, 0) >= DUP_HUB_LIMIT:
+                    continue
+                contained.append([by_norm[short][0], by_norm[long_][0]])
+    contained.sort()
+    return {'sameNode': same, 'contained': contained}
 
 
 def degenerate_fields(pages: list) -> dict:
@@ -369,20 +389,21 @@ def main():
         print('\n还没建页的相关概念 %d 个（**扩张候选，不是错误**）：%s'
               % (len(names), '、'.join(names[:12])))
         print('  想要它们就再跑 wiki compile（提高 --limit），或把它们当下一步的线索')
-    if report.get('nearDuplicates'):
-        count = len(report['nearDuplicates'])
-        # 这行必须带劝阻：判据在今天的规模上几乎对谁都成立（2026-09-28 实测 424,697 组，
-        # 前几条是 `AI Agent开发框架` / `生物信息学LLM Agent综述` 这种共享 "Agent" 的巧合）。
-        # 不写清楚，这个数会被当成"有 42 万对重复该合并"。
-        print('\n标题高度相似的页 %d 组（**判据偏松，规模一大就失去分辨力，当成线索别当结论**）：'
-              % count)
-        for pair in report['nearDuplicates'][:4]:
-            print('  %s ／ %s' % (pair[0][:28], pair[1][:28]))
-        if count > 10000:
-            print('  判据是"公共子串 ≥5 字且占较短标题 ≥40%"，短名字一多就会互相命中；'
-                  '真要按它去重，先把门槛收紧（见 wiki_lint.near_duplicate_titles 的说明）')
-        else:
-            print('  只报告不去重：不同公众号的写法可能各有信息，删哪张该由人定')
+    near = report.get('nearDuplicates') or {}
+    if near.get('sameNode'):
+        # 这一档是**可以直接执行的**：判据与 `compile_wiki --merge-duplicates` 是同一份实现，
+        # 所以名单上的每一组都是那个工具真会合并的。
+        print('\n同一个节点的不同写法 %d 组（规范化后同名，`wiki compile --merge-duplicates` '
+              '会合并的就是这些）：' % len(near['sameNode']))
+        for group in near['sameNode'][:5]:
+            print('  %s' % ' ／ '.join(n[:30] for n in group))
+        print('  想合并就跑 `wiki compile --merge-duplicates`（先 `--dry-run` 看名单）')
+    if near.get('contained'):
+        print('\n一个名字是另一个加了限定 %d 组（**线索，不是结论**）：' % len(near['contained']))
+        for pair in near['contained'][:5]:
+            print('  %s ／ %s' % (pair[0][:30], pair[1][:30]))
+        print('  人工抽样大约一半是真重复，另一半是"主概念 vs 它的子话题"'
+              '（`国家自然科学基金` / `国家自然科学基金申请书`）——那些不该合并，删哪张由人定')
     if report.get('degenerateFields'):
         print('\n退化字段（整列几乎同一个值，等于没携带信息）：')
         for field, info in report['degenerateFields'].items():

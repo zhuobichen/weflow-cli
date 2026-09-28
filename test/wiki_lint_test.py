@@ -102,28 +102,159 @@ class InspectTests(unittest.TestCase):
 
 
 class NearDuplicateTests(unittest.TestCase):
-    """同一件事被多个来源写成两个概念名——**孤儿检查抓不到它**（两个名字都有入链）。
+    """同一个节点被写成两个概念名——**孤儿检查抓不到它**（两个名字都有入链）。
 
-    实测抓到的一组：`尼泊尔热索瓦泥石流` 与 `热索瓦泥石流灾害`。只报告不去重：
-    不同来源的写法可能各有信息，删哪个该由人定。
+    2026-09-28 换过一次判据，测试跟着重写。旧的那条（"最长公共子串 ≥5 字且占较短标题
+    ≥40%"）在 22,374 张页上报出 424,697 组、失去了分辨力，量测与抽样记录在
+    `near_duplicate_titles` 的 docstring 里。现在分两档，两档各有用例，另外两条钉的是
+    **分桶等价性**与**枢纽过滤**——那两处错了都不会报错，只会安静地少给或多给。
     """
 
     def pages(self, *titles):
         body = '# x' + chr(10) + chr(10) + '够长的正文，写满八十个字以上免得被当空页，这里再补几个字。' * 3
         return [dict(page(t, body, title=t)) for t in titles]
 
-    def test_同一件事的两种写法会被认出来(self):
-        got = wl.near_duplicate_titles(self.pages('尼泊尔热索瓦泥石流', '热索瓦泥石流灾害'))
-        self.assertEqual(len(got), 1)
+    def test_只是写法不同归到同一个节点(self):
+        got = wl.near_duplicate_titles(
+            self.pages('GLM 5.1', 'GLM-5.1', 'AI 编程', 'AI编程'))['sameNode']
+        self.assertEqual(sorted(got), [['AI 编程', 'AI编程'], ['GLM 5.1', 'GLM-5.1']])
+
+    def test_一个规范形有多种写法时报成一组而不是两对(self):
+        """报成两两配对会让人看不出它们是同一个节点——实测有 3 种写法的
+        （`Academic Research Skills` 一族）。"""
+        got = wl.near_duplicate_titles(
+            self.pages('Grok 4.1', 'Grok-4.1', 'Grok4.1'))['sameNode']
+        self.assertEqual(got, [['Grok 4.1', 'Grok-4.1', 'Grok4.1']])
+
+    def test_规范形一致但名字完全相同的不算(self):
+        """同名是另一条检查（`duplicateTitles`）的事，这里不该重复报。"""
+        got = wl.near_duplicate_titles(self.pages('甲概念', '甲概念'))['sameNode']
+        self.assertEqual(got, [])
+
+    def test_同口径与合并工具一致(self):
+        """这一档的价值就在于**可执行**：名单上的每一组都是
+        `compile_wiki --merge-duplicates` 真会合并的。两处口径不同的话，报出来的一半
+        是那个工具不会动的 —— 2026-09-28 之前正是如此（lint 把所有非字母数字都去掉，
+        于是 `DeepSeek++` 等于 `DeepSeek`，而合并工具不这么认为）。
+        """
+        cases = [('GLM 5.1', 'GLM-5.1'), ('AI skills', 'AI skill'), ('GPT 5.6', 'GPT-5.6')]
+        for a, b in cases:
+            self.assertEqual(wl.normalize_concept_name(a), wl.normalize_concept_name(b),
+                             '%s / %s 应当同口径' % (a, b))
+
+    def test_归一化只有一份实现(self):
+        """两份"写得一样"的实现迟早会分叉，所以钉的是**同一个函数对象**。
+
+        实测（2026-09-28，22,374 张页）：lint 报出的每一组都在合并工具的分组里
+        （`only_lint = 0`）；反过来的 14 组是"两个文件撞了同一个名字"，那一类 lint 在
+        `duplicateTitles` 里另有报告。这个包含关系是上面那句"名单可执行"的依据。
+        """
+        spec = importlib.util.spec_from_file_location('compile_wiki', SCRIPTS / 'compile_wiki.py')
+        cw = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cw)
+        utils = sys.modules['_utils']
+        self.assertIs(wl.normalize_concept_name, cw.normalize_concept_name,
+                      'lint 与合并工具必须是同一份实现')
+        self.assertIs(wl.normalize_concept_name, utils.normalize_concept_name,
+                      '规范形住在 _utils，两边都从那里取')
+
+    def test_加了限定的算线索不算同名(self):
+        got = wl.near_duplicate_titles(
+            self.pages('Agent Harness', 'Agent Harness研讨会'))
+        self.assertEqual(got['sameNode'], [])
+        self.assertEqual(got['contained'], [['Agent Harness', 'Agent Harness研讨会']])
+
+    def test_枢纽不当重复(self):
+        """`DeepSeek` 被 `DeepSeek 融资`、`DeepSeek-V4 涨价`……一个个裹进去。
+
+        这是**枢纽**（实测 `agent` 被 731 个名字包含、`模型` 643 个），不是重复。判据是
+        "短名字已经被 ≥ DUP_HUB_LIMIT 个别的名字包含"。
+        """
+        titles = ['DeepSeek'] + ['DeepSeek %s' % s for s in
+                                ('融资', '涨价', '开源', '招聘', '封号', '算力')]
+        got = wl.near_duplicate_titles(self.pages(*titles))
+        self.assertEqual(got['contained'], [], '枢纽不该和它的子话题成对')
 
     def test_不相关的标题不会误报(self):
         got = wl.near_duplicate_titles(self.pages('椰子水全覆盖风险排查', '全国人大常委会会议'))
-        self.assertEqual(got, [])
+        self.assertEqual(got, {'sameNode': [], 'contained': []})
 
-    def test_公共子串长度(self):
-        self.assertEqual(wl.longest_common_run('热索瓦泥石流灾害', '尼泊尔热索瓦泥石流'), 6)
-        self.assertEqual(wl.longest_common_run('甲', '乙'), 0)
-        self.assertEqual(wl.longest_common_run('', '乙'), 0)
+    def test_分桶与全量两两比结果逐组一致(self):
+        """分桶是**等价**的优化，不是"大概一样"。
+
+        两档判据都要求共享一个 ≥8 字的子串（同名是全等、包含是共享短的那一个），所以按
+        8-gram 建倒排索引、只在桶内两两比，结果与全量两两比**逐组相同**。这条用随机数据
+        对拍，防的是将来有人改判据却忘了分桶的前提（那时它会**静默漏报**：报告还是照常出，
+        只是少了一批）。
+
+        **参考实现用字面量，不读模块里的常量** —— 这是这条用例的要害。第一版读的是
+        `wl.DUP_MIN_NAME`，于是"把分桶宽度从 8 改成 10"这种改动两边一起变，对拍全绿而
+        报告少给一半（变异测试实测：那条变异**没被抓到**）。门槛一旦被改成字面量契约，
+        它就会红。
+        """
+        import random
+        random.seed(9)
+        words = ['Agent', 'Claude', 'Code', '工具', '模型', '上下文', '窗口',
+                 'Token', '计费', '节省', 'RAG', '检索']
+        pages = []
+
+        def add(name):
+            pages.append({'title': name, 'stem': name})
+
+        # 数据要**同时喂到两档**，否则对拍只证明了一条路径：一半的名字配一个只差写法的
+        # 孪生（sameNode），一半配一个加限定的变体（contained），再掺入短文噪声。
+        for i in range(120):
+            base = ''.join(random.choice(words) for _ in range(random.randint(3, 6)))
+            add(base)
+            style = i % 4
+            if style == 0:
+                add(' '.join(base))                                  # 只差空格
+            elif style == 1:
+                add(base + random.choice(['版', '报告', '整理', '纪要']))   # 加限定
+            elif style == 2:
+                add(''.join(random.choice(words) for _ in range(2)))  # 与谁都无关
+            else:
+                add(base.upper() if base != base.upper() else base + 'x')  # 只差大小写
+
+        # 判据的**契约值**（与 docstring 里写的一致）。实现改了这些数而这里没改，就该红。
+        MIN_SHARED, COVER, HUB_LIMIT = 8, 0.6, 5
+        self.assertEqual((wl.DUP_MIN_NAME, wl.DUP_COVER_RATIO, wl.DUP_HUB_LIMIT),
+                         (MIN_SHARED, COVER, HUB_LIMIT),
+                         '改了门槛就要同时改这条断言与下面的参考实现，别只改实现')
+
+        # 全量口径的参考实现：规范化后按名字排序（与实现同序，这样"取哪个写法"也一致）
+        raw, buckets = {}, {}
+        for name in sorted({p['title'] or p['stem'] for p in pages}):
+            key = wl.normalize_concept_name(name)
+            if not key:
+                continue
+            raw.setdefault(key, name)
+            buckets.setdefault(key, set()).add(name)
+        keys = sorted(raw)
+        hubs = {k: sum(1 for other in keys if other != k and k in other) for k in keys}
+
+        ref_same = sorted(sorted(v) for v in buckets.values() if len(v) > 1)
+        ref_cont = []
+        for i in range(len(keys)):
+            for j in range(i + 1, len(keys)):
+                short, long_ = sorted((keys[i], keys[j]), key=len)
+                if len(short) < MIN_SHARED or len(short) < COVER * len(long_):
+                    continue
+                if short in long_ and hubs[short] < HUB_LIMIT:
+                    ref_cont.append([raw[short], raw[long_]])
+        ref_cont.sort()
+
+        got = wl.near_duplicate_titles(pages)
+        self.assertTrue(len(ref_same) + len(ref_cont) > 50,
+                        '这组随机数据要真的产出足够多的组，否则对拍没意义')
+        self.assertEqual(got['sameNode'], ref_same)
+        self.assertEqual(got['contained'], ref_cont)
+
+    def test_比门槛还短的名字不参与(self):
+        """子串不可能比名字本身长，所以短于 `DUP_MIN_NAME` 的名字永远满足不了判据。
+        分桶时跳过它们是对的 —— 但要说得出为什么。"""
+        pages = [{'title': '短', 'stem': '短'}, {'title': '短A', 'stem': '短A'}]
+        self.assertEqual(wl.near_duplicate_titles(pages), {'sameNode': [], 'contained': []})
 
 
 class DegenerateFieldTests(unittest.TestCase):
@@ -174,42 +305,6 @@ class DegenerateFieldTests(unittest.TestCase):
         self.assertIn('GPT 5.6', names)
         self.assertNotIn('GPT5.6', names, '没写在 aliases 里的名字不在里面')
 
-    def test_分桶与全量两两比结果逐组一致(self):
-        """分桶是**等价**的优化，不是"大概一样"。
-
-        判据是「最长公共子串 ≥ DUP_RUN_CHARS」，那等价于「两者共享一个这么长的子串」——
-        所以按 5-gram 建倒排索引、只在桶内两两比，结果与全量两两比**逐组相同**。这条用
-        随机数据对拍，防的是将来有人改判据却忘了分桶的前提（那时它会**静默漏报**：
-        报告还是照常出，只是少了一批）。
-        """
-        import random
-        random.seed(9)
-        words = ['Agent', 'Claude', 'Code', '工具', '模型', '上下文', '窗口',
-                 'Token', '计费', '节省', 'RAG', '检索']
-        pages = []
-        for i in range(300):
-            name = ''.join(random.choice(words) for _ in range(random.randint(1, 4)))
-            pages.append({'title': name + str(i % 7), 'stem': name + str(i % 7)})
-
-        def brute(rows):
-            out = []
-            for i, left in enumerate(rows):
-                for right in rows[i + 1:]:
-                    a, b = left['title'] or left['stem'], right['title'] or right['stem']
-                    run = wl.longest_common_run(a, b)
-                    if run >= wl.DUP_RUN_CHARS and run >= wl.DUP_COVER_RATIO * min(len(a), len(b)):
-                        out.append([a, b])
-            return out
-
-        norm = lambda groups: sorted(tuple(sorted(g)) for g in groups)
-        self.assertTrue(len(brute(pages)) > 100, '这组随机数据要真的产出足够多的组，否则对拍没意义')
-        self.assertEqual(norm(wl.near_duplicate_titles(pages)), norm(brute(pages)))
-
-    def test_比5字符还短的名字不参与(self):
-        """子串不可能比名字本身长，所以短于 5 字符的名字永远满足不了「公共子串 ≥5」。
-        分桶时跳过它们是对的 —— 但要说得出为什么。"""
-        pages = [{'title': '短', 'stem': '短'}, {'title': '短A', 'stem': '短A'}]
-        self.assertEqual(wl.near_duplicate_titles(pages), [])
 
 if __name__ == '__main__':
     unittest.main()

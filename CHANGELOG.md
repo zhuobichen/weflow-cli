@@ -4,6 +4,49 @@ The npm package is published separately from GitHub. It may lag behind the `mast
 
 All notable user-facing changes are recorded here. This project follows [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+### Fixed
+
+- **`wiki lint`'s duplicate-title report was rebuilt rather than re-tuned, and the two tiers now
+  differ by an order of magnitude in how much you should trust them.** The old rule - a common
+  substring of ≥5 characters covering ≥40% of the shorter title - was reasonable at 5,062 pages of
+  long Chinese headlines and had become useless at 22,374: it reported **424,697 groups**, starting
+  with coincidences like `AI Agent开发框架` against `生物信息学LLM Agent综述` (both contain "Agent").
+  A 20-pair sample showed the rule firing correctly on every pair, which is the point: the threshold
+  had stopped discriminating, so the implementation was never the problem.
+
+  Two directions were measured and rejected before settling. **Keeping the long-common-substring
+  rule** fails because `Claude Code 上下文窗口` and `Claude Code 联网能力` share six characters and are
+  nonetheless different concepts - sharing a product name is not the same as being the same thing,
+  and that class dominated the false positives, so no ratio value separates them. **Containment
+  without a guard** fails because `DeepSeek` is swallowed by `DeepSeek 融资`, `DeepSeek-V4 涨价` and so
+  on; that is a *hub*, not a duplicate (measured: `agent` is contained in 731 names, `模型` in 643).
+
+  What it reports now: **314 groups that differ only in spacing, hyphens, case or an English plural**
+  (`GLM 5.1` / `GLM-5.1`, `AI 编程` / `AI编程`), scored by hand at 24 of 24 being the same node - and
+  these use `_utils.normalize_concept_name`, the **same function** `wiki compile --merge-duplicates`
+  uses, so the list is directly executable. Measured on the real vault, every group the lint reports
+  is one that tool would merge (the extra 14 groups it would act on are same-filename collisions,
+  which the lint reports separately). Plus **379 groups where one name is the other plus a qualifier**,
+  explicitly labelled a lead rather than a conclusion because hand-sampling puts its precision near
+  half - the other half being "hub vs its own subtopic" (`国家自然科学基金` /
+  `国家自然科学基金申请书`), which should not be merged.
+
+  The normaliser moved to `_utils` so the two readers cannot drift apart, and a test now pins the
+  **function object** rather than "two copies that look alike". The old caveat that the rule could not
+  catch the case it was written for still stands and is still written down: `打虎！陈勇被查` and
+  `中建集团副总经理陈勇被查` are the same event with different headlines and share only four characters,
+  so no substring rule reaches them - the tier-1 rule replaces "wrong and noisy" with "narrow and
+  right", not with "complete".
+
+  Two silent-failure traps were caught by mutation testing rather than by reading. **The bucketing
+  width must stay at or below the shortest shared substring the rule can accept**, or the report
+  quietly loses pairs; the first version of the equivalence test read the module constant for both, so
+  changing the bucketing width moved the reference implementation with it and the test stayed green -
+  it now uses literal contract values. And **the hub filter's count is computed from the same 8-gram
+  index** rather than an O(n²) scan, which keeps the whole pass at 0.1s.
+
 ## 1.8.0
 
 ### Added

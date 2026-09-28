@@ -1,7 +1,7 @@
 """
 weflow-cli 公共工具函数 — 供 biz_daily / classify_daily / chat_report 等共用。
 """
-import os, json, base64, socket, urllib.request, hashlib
+import os, json, re, base64, socket, urllib.request, hashlib
 from functools import wraps
 
 
@@ -704,6 +704,28 @@ def parse_frontmatter(content: str) -> tuple[dict, str]:
         else:
             result[key] = val
     return result, body
+
+
+NORM_STRIP_RE = re.compile(r'[\s\-_·、，.。:：/\\（）()\[\]【】"\’]+')
+
+
+def normalize_concept_name(name: str) -> str:
+    """判「这两个名字是不是同一个概念」用的规范形。
+
+    去空格、连字符、下划线、标点，转小写，再去掉英文复数尾 —— 实测这样能把
+    `GPT 5.6`/`GPT-5.6`/`GPT5.6`、`AI 工具`/`AI工具`、`AI skill`/`AI skills` 收到一起。
+
+    **它也会把 `news`/`new` 收到一起**，所以它只用来**提议**合并；真正的裁决是
+    "留来源最多的那张页"，而且删之前还有 `--dry-run` 可以看名单。
+
+    住在这里（而不是 `compile_wiki`）是因为**两个读者必须用同一个口径**：`compile_wiki
+    --merge-duplicates` 拿它决定合并谁，`wiki_lint` 拿它报告"还有哪些是同一个节点的两种写法"。
+    两边各写一份的话，体检报出来的名单就会有一半是合并工具不会动的 —— 2026-09-28 之前正是
+    如此：lint 用的是另一套（把所有非字母数字都去掉），于是 `DeepSeek++` 在它眼里等于
+    `DeepSeek`，而合并工具并不这么认为。
+    """
+    stripped = NORM_STRIP_RE.sub('', name.casefold().strip())
+    return re.sub(r'(?<=[a-z])s$', '', stripped)
 
 
 def format_wikilinks(concepts: list[tuple[str, str]]) -> str:
