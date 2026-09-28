@@ -11,7 +11,7 @@
 > Bring your chat history, official-account reading, and personal knowledge workflows back to your own computer.
 
 [![npm](https://img.shields.io/npm/v/weflow-cli)](https://www.npmjs.com/package/weflow-cli)
-[![Node.js](https://img.shields.io/badge/Node.js-18%2B-339933)](https://nodejs.org/)
+[![Node.js](https://img.shields.io/badge/Node.js-22.13%2B-339933)](https://nodejs.org/)
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB)](https://www.python.org/)
 [![WeChat](https://img.shields.io/badge/WeChat-4.x%20tested-07C160?logo=wechat&logoColor=white)](https://github.com/zhuobichen/weflow-cli/releases)
 [![Local-first](https://img.shields.io/badge/local--first-zero%20telemetry-8A2BE2)](./SECURITY.md)
@@ -60,6 +60,34 @@ weflow-cli chat "How does RAG work?"   # knowledge-base RAG Q&A
 weflow-cli mcp-config                  # one-shot MCP client integration
 ```
 
+## Platform Support
+
+| Capability | Windows | macOS | Linux |
+| --- | --- | --- | --- |
+| Data-directory discovery | ✅ | ✅ | ✅ |
+| Local data initialization | ✅ auto-discover/verify | ❌ credentials must be supplied manually | ⚠️ depends on distro and permissions |
+| Chat history query (NT / local databases) | ✅ | ✅ | ✅ |
+| WCDB data service (contact nicknames, etc.) | ✅ | ⚠️ needs the native library | ⚠️ needs the native library |
+| Official-account digest / knowledge base / MCP | ✅ | ✅ | ✅ |
+
+macOS: there is no automatic initialization today. If you already have local data access through official or otherwise authorized means, follow the help of `weflow-cli init --path` and `config` to finish setup.
+
+### Linux Quick Start (native WeChat 4.x for Linux)
+
+```bash
+# 1. sqlcipher development libraries (needed to build sqlcipher3)
+sudo apt install libsqlcipher-dev
+
+# 2. Python dependencies
+pip3 install --user sqlcipher3 cryptography html2text zstandard
+
+# 3. Install the CLI and initialize
+npm install -g weflow-cli
+weflow-cli init    # follow the prompts
+```
+
+Automatic initialization on Linux depends on the WeChat distribution, the Python dependencies, and your user's permissions. Run `weflow-cli check` first and configure within your system's security policy; do not lower machine-wide permissions just to troubleshoot.
+
 ## What You Can Do
 
 | Scenario | Capability |
@@ -77,6 +105,8 @@ weflow-cli mcp-config                  # one-shot MCP client integration
 ## Quick Start in Three Minutes
 
 ### 1. Install and Check
+
+> npm packages and GitHub releases are published separately; if you need the newest fixes, check the npm package version first, or use the GitHub `master` branch directly.
 
 Requires Node.js 22.13+, Python 3.10+, and a signed-in Windows WeChat. After installation, check your environment first:
 
@@ -139,6 +169,29 @@ weflow-cli daily --date 2026-08-12 --dry-run
 # Generate without any AI calls; fetching, HTML, and local indexes remain enabled
 weflow-cli daily --date 2026-08-12 --no-ai
 
+# Push and digest-processing frequency per official account over the last 30 days
+weflow-cli daily-stats --days 30 --limit 30
+
+# Only include the given official accounts (repeatable, or comma-separated)
+weflow-cli daily --source "AccountA" --source "AccountB"
+weflow-cli daily --source "AccountA,AccountB"
+
+# Persist digest sources; leave empty to restore "all accounts"
+weflow-cli config set dailySources "AccountA,AccountB"
+
+# Persist AI off for digests; set it back to true to re-enable
+weflow-cli config set dailyAiEnabled false
+weflow-cli config set dailyAiEnabled true
+
+# Topics kept out of the digest (a display-layer switch: they are still fetched and
+# archived, just not shown, so changing your mind needs no re-crawl). Focus topics
+# cannot be excluded, and unknown topic names are ignored with a WARN.
+weflow-cli config set dailyExcludeTopics "news,investing,academic"
+
+# Pin a category for a source; a categorized source gets a summary only, and its tags
+# come from the category you set rather than from the article.
+weflow-cli config set dailySourceCategories '<JSON: source name or gh_ ID -> category>'
+
 # Optional: decide article topic and relevance with TypeSafe's Jev decision model
 # instead of parsing it out of generated text. Without the key the previous
 # LLM-parse path is used unchanged.
@@ -163,7 +216,7 @@ weflow-cli mcp-config > .mcp.json
 
 Place the generated configuration wherever your MCP client expects it and restart the client. See `weflow-cli mcp-config` output for the tool list and configuration details.
 
-Beyond the knowledge-base tools, the MCP server also exposes selected local WeChat data capabilities (sessions, chat history, favorites, Moments, digests, WeRead, todos, knowledge base, and assistant memory). See the [MCP Integration Guide](./docs/MCP.md) for the current inventory and security boundaries.
+Beyond the knowledge-base tools, the MCP server also exposes selected local WeChat data capabilities (sessions, chat history, favorites, Moments, digests, WeRead, todos, knowledge base, and assistant memory). By default MCP sends no messages, publishes no articles, and modifies no todos, memory, or configuration. See the [MCP Integration Guide](./docs/MCP.md) for the current inventory and security boundaries.
 
 **Host a local AI assistant in WeChat (second brain)**
 
@@ -171,7 +224,12 @@ Beyond the knowledge-base tools, the MCP server also exposes selected local WeCh
 weflow-cli config set deepseekApiKey "sk-..."   # or any OpenAI-compatible endpoint: aiBaseUrl + aiModel
 weflow-cli login-wechat        # scan the QR code to bind the messaging channel (a ClawBot contact appears in WeChat)
 weflow-cli assistant start     # run the agent as a background daemon
+weflow-cli panel               # open the on-device panel window (usable without scanning a QR code)
 ```
+
+`weflow-cli panel` opens a small always-on window that talks to **the same brain as the WeChat side** — the same memory, the same daily quota. **No WeChat login is required**: the messaging channel is optional. The window is only a client; its messages go to the daemon's entry point on `127.0.0.1`, so the two entry points never keep separate copies of memory.
+
+The floating ball needs Electron (`npm i -g electron`); without it the panel degrades to an Edge/Chrome `--app` window — same UI, but no frameless always-on-top ball, no tray, no global shortcut. With the ball (a 96px mascot): **click it and the chat bubble opens beside it (the ball itself stays put; click again to collapse)**. The bubble opens to the left of the ball by default, flips to the right when there is no room on the left, and top-aligns when vertical space runs short; drag the ball to move it, and the position is remembered. The ball doubles as a status light — busy, offline, and quota-exhausted are three real states, each with its own face and glow colour, while an idle ball shows no glow at all. **Right-click anywhere in the panel** to draft a reply for someone on your list (`weflow-cli config set quickReplyContacts "Alice,Bob"` — a click sends that conversation to two cloud models and returns text only, never sending for you). The last item in that menu tucks the ball away; the tray icon brings it back.
 
 Then just talk to ClawBot on your phone. The assistant queries local chats and favorites to answer, with memory that survives across sessions:
 
@@ -184,15 +242,25 @@ Then just talk to ClawBot on your phone. The assistant queries local chats and f
 - "What am I reading?" / "My notes on XX" — WeRead shelf and notebooks
 - "Any pending todos? Anything urgent?" — todo list sorted by urgency
 - "How does my knowledge base explain RAG?" — concept-wiki lookup
+- "Draft a reply to Lao Wang" — first judges what the other side wants, the risk, and whether substance should be given, then offers a few candidates. **Text only, never sent for you**; when money or high risk is involved it withholds drafts and only says what to confirm first
 - "Remember: my project is called weflow-cli" — writes to long-term memory
 
-How it works: the daemon long-polls WeChat's official bot channel (iLink); the agent loop, three-tier memory (working window / rolling summary / long-term facts), and all database queries run on your machine. Only the final question and reply texts go to the configured LLM; phone numbers, emails, and links in tool output are redacted by default (`config set assistantPrivacy strict` for stronger masking; a local `ollama` engine keeps everything offline). Sessions expire after 24h of inactivity, and proactive replies per window are capped by official limits.
+How it works: the daemon long-polls WeChat's official bot channel (iLink); the agent loop, three-tier memory (working window / rolling summary / long-term facts), and all database queries run on your machine. Only the final question and reply texts go to the configured LLM; the shipped default is `assistantPrivacy=strict`: phone numbers, emails, and links in tool output are redacted, and third-party chat bodies never leave the machine (`balanced` lets bodies out but still masks PII, `open` masks nothing; a local `ollama` engine keeps everything offline). Sessions expire after 24h of inactivity, and proactive replies per window are capped by official limits.
 
 Cost guardrails: a built-in daily cap of 100 processed messages (send "记忆" in WeChat to check usage). The assistant denies all incoming users by default; configure an explicit whitelist before AI calls are enabled:
 
 ```powershell
 weflow-cli config set assistantWhitelist "your-@im.wechat-ID"   # unset = deny everyone
 ```
+
+Group chat currently depends on whether WeChat's official bot channel actually delivers explicit group events; this project never joins groups through client automation or unofficial protocols. Should upstream ever provide group IDs, sender IDs, and @-mention fields, group messages still default to deny — you must set the group whitelist, keep the member whitelist, and leave the @ requirement on:
+
+```powershell
+weflow-cli config set assistantGroupWhitelist "group-id"
+weflow-cli config set assistantGroupRequireMention true
+```
+
+This only takes effect once the official channel really delivers group events; ClawBot direct messages are unaffected today.
 
 Management: `weflow-cli assistant status` / `log` / `stop`; send "帮助" in WeChat for in-chat commands.
 
@@ -204,6 +272,7 @@ Management: `weflow-cli assistant status` / `log` / `stop`; send "帮助" in WeC
 | Initialize or specify paths | `weflow-cli init [--path <dir>]` |
 | Browse chat data | `weflow-cli sessions` · `weflow-cli messages <contact>` · `weflow-cli contacts` |
 | Who is waiting on a reply | `weflow-cli awaiting --dry-run` · `weflow-cli awaiting --yes` |
+| Draft a reply (text only, never sent) | `weflow-cli draft <contact> --dry-run` · `--yes` |
 | Local judgement primitive | `weflow-cli decide --request <file> --dry-run` · `--yes` |
 | Export chat history | `weflow-cli export <contact> <json\|txt\|html\|excel>` |
 | Sync checkpoint | `weflow-cli sync run <contact> --since <date>` · `sync status` · `sync verify` |
@@ -211,9 +280,10 @@ Management: `weflow-cli assistant status` / `log` / `stop`; send "帮助" in WeC
 | Moments cache | `weflow-cli sns timeline` · `weflow-cli sns users` · `weflow-cli sns stats` |
 | WeChat favorites | `weflow-cli fav list` · `weflow-cli fav export markdown` · `weflow-cli fav set-key` |
 | WeRead | `weflow-cli weread shelf` · `notes` · `search` · `stats` |
-| Knowledge base | `weflow-cli vault` · `weflow-cli wiki` · `weflow-cli search <query>` · `weflow-cli chat` |
+| Knowledge base | `weflow-cli vault` · `weflow-cli wiki` · `weflow-cli search <query>` · `weflow-cli chat` (semantic search needs `config set dashscopeApiKey` first) |
 | Reports & tasks | `weflow-cli report` · `annual-report` · `todos` |
 | Second-brain assistant | `weflow-cli assistant start` · `status` · `log` · `stop` |
+| On-device panel | `weflow-cli panel` — floating window; `--status` reads state only, `--ask "…"` asks from the command line |
 | AI editor integration | `weflow-cli mcp-config` |
 
 Run `weflow-cli <command> --help` for the full options of any command. For example:
@@ -250,7 +320,7 @@ python scripts/fav_server.py --date YYYY-MM-DD
 
 ![WeFlow CLI architecture](./docs/images/weflow-architecture-gpt-image-2.png)
 
-The project is split into four clearly bounded parts:
+The project is split into five clearly bounded parts:
 
 | Directory | Responsibility |
 | --- | --- |
@@ -268,6 +338,9 @@ For a more complete view of modules and data flow, read [ARCHITECTURE.md](./ARCH
 - Network requests involving DeepSeek, article crawling, WeRead, or MCP happen only when you run the corresponding workflow.
 - Use `whitelist`, `blacklist`, and `audit` to manage or audit message sending; always confirm the target contact and content before sending.
 - After upgrading WeChat, switching accounts, or migrating computers, you may need to re-initialize or re-scan NT keys.
+- `init` validates existing local configuration first and does not re-capture keys when that validation passes. Use `weflow-cli init --refresh` only after a migration, an account switch, or an access failure.
+- To test a first-time initialization or a failed key, prefer `weflow-cli init --test-missing-keys`; it simulates missing keys for that run only and leaves the saved configuration untouched. When keys really have failed, `weflow-cli config forget-keys` clears the database access keys only and asks for confirmation.
+- Running `weflow-cli daily` without a date checks yesterday's artifacts first: if yesterday's `README.md`, article index, or `index.html` is missing, it backfills yesterday and only generates today once that succeeds. Passing `--date` or `--dry-run` skips the backfill.
 
 ## Documentation & Feedback
 
@@ -277,6 +350,11 @@ For a more complete view of modules and data flow, read [ARCHITECTURE.md](./ARCH
 - [Detailed Architecture](./ARCHITECTURE.md): modules, data flow, implementation boundaries.
 - [Project State](./docs/PROJECT_STATE.md): current capabilities, constraints, priorities, and handoff entry point.
 - [Technical Decisions](./docs/DECISIONS.md): durable design rationale for long-term maintenance.
+- [Extending Guide](./docs/EXTENDING.md): what to touch to add a tool, config key, command, MCP tool, or Python script — and which test will stop you. **There is no plugin loader today**; this document says why, and how to extend anyway.
+- [Branches & Merges](./docs/BRANCHES.md): branch purposes, merge timeline, and conventions for parallel work.
+- [Release Checklist](./docs/RELEASING.md): version numbers, packaging checks for sensitive content, npm credentials, and mirror sync.
+- [npm Publish FAQ](./docs/NPM-PUBLISH.md): whether 404 / 409 / ETARGET means failure or propagation — look it up by symptom.
+- [Scheduled Health Check](./docs/HEALTH-CHECK.md): one command for version drift, missed shards, stale sessions, and failed exports.
 - [Electronic Evidence Guide](./docs/EVIDENCE_GUIDE.md): preservation workflow, legal boundaries, and usage notes.
 - [Contributing Guide](./CONTRIBUTING.md) and [Security Policy](./SECURITY.md): development, feedback, and sensitive issues.
 - [Changelog](./CHANGELOG.md): release summaries.

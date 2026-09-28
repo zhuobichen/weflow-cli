@@ -7,9 +7,14 @@
  * - 本地推理引擎 (Ollama 等) 不出境, 跳过脱敏以保留完整能力
  *
  * 模式 (config: assistantPrivacy):
- * - open    不脱敏 (自担风险)
- * - balanced 默认; 工具输出中的 PII (电话/证件/邮箱/密钥/链接) 打码
+ * - open     不脱敏 (自担风险)
+ * - balanced 工具输出中的 PII (电话/证件/邮箱/密钥/链接) 打码
  * - strict   balanced 基础上, 第三方聊天正文不出境 (仅保留时间/方向/类型)
+ *
+ * **实测（2026-09-28）：新装用户的默认是 `strict`，不是 `balanced`。** 这个键由
+ * `configService` 出厂就写成 `'strict'`（`configService.ts` 的默认表与迁移那行都是），
+ * 下面 `mode()` 里的 `balanced` 只是**值缺失或不认识时**的兜底。原注释写成「balanced 默认」，
+ * 与出厂值矛盾——README 两版跟着写成「strict 可加强」，读起来像默认更弱。两处都已按实际改写。
  */
 import { join } from 'path'
 import { existsSync, mkdirSync, appendFileSync } from 'fs'

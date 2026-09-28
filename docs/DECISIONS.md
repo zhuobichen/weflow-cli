@@ -1400,6 +1400,53 @@ which is what the gate is for.
   semantics are not reliable here), as is any automatic labelling: there is no gold standard for "is this
   draft right", so the feature records what it judged and says so rather than claiming calibration.
 
+## D-055: The Vault's copy of an article is cleaned, the fetched original is not - and "which days does the copy run cover" was being decided by a marker that only one writer sets
+
+**Status:** Active
+
+**Decision.** `copy_to_vault` now writes the Vault's `Sources/WeChat/<day>/` copy through
+`strip_wx_ads_document`, which removes the known WeChat interface phrases (`继续滑动看下一个`, `轻触阅读原文`, the
+`在小说阅读器中沉浸阅读` family, eight in total) while leaving **two things untouched**: the frontmatter and any
+fenced code block. `output/biz-daily/` keeps the fetched text byte-for-byte.
+
+**Where the cleaning lives is the whole point, not an implementation detail.** Cleaning in the fetch step would
+have been simpler and would have made the two copies identical - but `biz-daily` is the only copy of the fetched
+bodies, so a cleaner with a bug there destroys material that cannot be re-derived. Cleaning only inside the copy
+function keeps the original recoverable, at the cost of the two trees no longer matching - and that cost has to be
+paid **inside the copy**, because this step is re-runnable. It is not hypothetical: on 2026-09-28 a plain re-sync
+silently restored the residue on 15,731 files, because an earlier one-off pass had cleaned the Vault copies while
+the copy function was still dumb. Any future path that writes article text into the Vault must go through this
+function or it will undo the cleaning again.
+
+**Two protections, each because the obvious version is silently wrong.** The phrases are short words:
+`去阅读` appears inside the title `如何去阅读一本书`, and the title is the only alignment key between a reading note
+and its source, so the frontmatter is never cleaned (measured: 0 of 35,060 files currently need it - the guard is
+for the future, and is written down as such rather than presented as a fix). `strip_wx_ads` also normalises
+whitespace, which is harmless for the summaries it was written for and destroys indentation in code blocks:
+20 files carry fences and **10 of them would have been altered** (HTML/JS samples).
+
+**What it deletes is more than the phrases, and that has to be stated rather than glossed.** It is
+`strip_wx_ads`, the function the reading notes already use, so it also drops `______` runs, `javascript:void(0)`
+links, the `原创 <账号名>` byline WeChat repeats several times, and repetitions of the same token. The byline rule
+alone fires on **9,334 of 35,463 files**. Classifying every diff over a 300-article sample found no reworded prose
+- that is the part that was verified, and it is the reason it was defensible to point the cleaner at a whole
+article body. An earlier draft of this entry said the pass touched only phrases and whitespace; measuring the
+corpus disproved it, and the correction is recorded here rather than quietly edited away. The byline is page
+furniture and `source:` in the frontmatter still carries the account name, so the trade is acceptable - but it is
+text removal, and the pristine copy lives in `output/biz-daily/`.
+
+**A gate that had been wrong from the start.** `--vault-sync` selected days by the `backfilled` marker in
+`.articles.json`. That key is written by the backfill path only, so the 12 days produced by the `daily` path (which
+writes `articles` but not `backfilled`) were never copied **and were never reported as skipped** - including two
+days, 08-24 and 08-25, with no directory in the Vault at all. The gate is now "the day has at least one `.md`
+besides `README.md`", which is the condition the flag was always meant to express. Measured: 187 → 199 days,
+33,232 → 35,463 files. The 1,755 files that kept their residue after the first cleaning pass were exactly this
+population.
+
+**Why the notes were never affected.** Every reading note points at `output/biz-daily/...` through `local_source`,
+not at the Vault copy - verified across five months, 1,144 of 1,144. So none of this created a broken link, and
+`wiki lint` reports the same result before and after.
+
 ## D-054: A page can be assembled from material that was already paid for, and "no model call" is not the same as "no model wrote it"
 
 **Status:** Active
