@@ -212,6 +212,61 @@ class VaultCopyTests(unittest.TestCase):
             self.assertEqual((target / '我自己写的.md').read_text(encoding='utf-8'), '别动我',
                              '补拷不该清掉 Vault 里原有的东西')
 
+    def build_dirty(self, tmp):
+        """一篇带界面残留的原文：标题里有短语、正文里有短语、还有一段缩进的代码。"""
+        root = Path(tmp) / 'biz-daily' / '2026-05-20' / 'AI'
+        root.mkdir(parents=True)
+        (root / '甲-某篇.md').write_text(
+            '---\n'
+            'title: "如何去阅读一本书"\n'
+            'date: 2026-05-20\n'
+            '---\n'
+            '\n'
+            '# 正文标题\n'
+            '继续滑动看下一个 这句是界面残留。\n'
+            '```html\n'
+            '    <div class="a">\n'
+            '        <span>x</span>\n'
+            '    </div>\n'
+            '```\n'
+            '轻触阅读原文\n', encoding='utf-8')
+        return str(Path(tmp) / 'biz-daily')
+
+    def test_拷过去的是洗过的正文(self):
+        """用户 2026-09-28 定的口径是"原文与笔记都清"。
+
+        为什么清洗必须落在**拷贝函数**里而不是 fetch 那一步：`biz-daily` 是原始存档，
+        洗了就再拿不回原文；而 `Sources/` 是给人读的那一层。落在拷贝里，任何一次补拷
+        的结果才一致 —— 落别处的话，一次补拷就会把洗过的又覆盖回去（2026-09-28 实测发生过）。
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            out = self.build_dirty(tmp)
+            target = Path(tmp) / 'vault'
+            bf.copy_to_vault('2026-05-20', out, str(target))
+            wrote = (target / '2026-05-20' / 'AI' / '甲-某篇.md').read_text(encoding='utf-8')
+            source = (Path(out) / '2026-05-20' / 'AI' / '甲-某篇.md').read_text(encoding='utf-8')
+        self.assertNotIn('继续滑动看下一个', wrote, '正文里的界面残留要洗掉')
+        self.assertNotIn('轻触阅读原文', wrote)
+        self.assertIn('继续滑动看下一个', source, '**原始存档一个字都不能动**')
+
+    def test_清洗不碰标题也不碰代码块(self):
+        """两处防护，改了都不会报错，所以必须钉住。
+
+        - `去阅读` 是**短词**，标题里出现（"如何去阅读一本书"）就会被 `strip_wx_ads` 误删，
+          而标题是笔记与原文之间唯一的对齐键；
+        - `strip_wx_ads` 末尾的空白规整会吃掉代码块缩进（实测全库 20 篇带围栏、10 篇受损），
+          而原文是素材，缩进就是内容。
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            out = self.build_dirty(tmp)
+            target = Path(tmp) / 'vault'
+            bf.copy_to_vault('2026-05-20', out, str(target))
+            wrote = (target / '2026-05-20' / 'AI' / '甲-某篇.md').read_text(encoding='utf-8')
+        self.assertIn('如何去阅读一本书', wrote, '标题里的"去阅读"不能被当成界面残留')
+        self.assertIn('    <div class="a">', wrote, '代码块缩进是内容')
+        self.assertIn('        <span>x</span>', wrote)
+        self.assertIn('---\n\n# 正文标题', wrote, 'frontmatter 与正文之间的空行要留着')
+
     def test_这一天没产出时说清原因不是静默零(self):
         with tempfile.TemporaryDirectory() as tmp:
             result = bf.copy_to_vault('2026-01-01', str(Path(tmp) / 'nope'), str(Path(tmp) / 'v'))
@@ -231,6 +286,38 @@ class IncrementalTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             bf.write_day([article(fetched_md='短')], '2026-03-05', tmp)
             self.assertFalse(bf.day_done(tmp, '2026-03-05'))
+
+
+class VaultSyncSelectionTests(unittest.TestCase):
+    """补拷要挑哪些天。判据错了不会报错，只会**安静地少补几天**。
+
+    2026-09-28 实测踩到：原来的判据是 `.articles.json` 里的 `backfilled` 标记，而那个键
+    只有回填那条路会写。199 天里有 12 天有文章却没这个键（08-24/08-25 库里根本没有目录），
+    于是它们既不会被补、也不会被报出来 —— 残留就是这么在库里活下来的 1,755 篇。
+    """
+
+    def test_有文章的天就算数_不看_backfilled_标记(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / 'biz-daily'
+            day = root / '2026-08-24' / 'AI'
+            day.mkdir(parents=True)
+            (day / '甲-某篇.md').write_text('正文', encoding='utf-8')
+            # `daily` 那条路写出来的 `.articles.json` 里**没有** `backfilled` 这个键
+            (root / '2026-08-24' / '.articles.json').write_text(
+                json.dumps({'articles': [{'title': '甲'}]}, ensure_ascii=False), encoding='utf-8')
+            self.assertEqual(bf.days_with_articles(str(root)), ['2026-08-24'])
+
+    def test_只有_README_的天不算数(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / 'biz-daily'
+            (root / '2026-08-24').mkdir(parents=True)
+            (root / '2026-08-24' / 'README.md').write_text('占位', encoding='utf-8')
+            (root / '2026-08-25').mkdir(parents=True)
+            self.assertEqual(bf.days_with_articles(str(root)), [])
+
+    def test_目录不存在时给空表而不是炸(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(bf.days_with_articles(str(Path(tmp) / 'nope')), [])
 
 
 if __name__ == '__main__':

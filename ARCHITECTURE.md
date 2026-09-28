@@ -72,8 +72,9 @@ CLI 入口 bin/weflow-cli.ts  ----  mcp-server/index.ts
 ### 知识库与报告
 
 ```text
-日报 / 收藏 / 微信读书笔记
-  -> Vault 文件与 Wiki 概念页
+日报 / 收藏 / 微信读书笔记 / 聊天卡 / 你自己的笔记
+  -> Vault（Sources/ 原始素材 + 001_Daily + 002_Literature 阅读笔记）
+  -> 两个概念页目录：Wiki/Concepts（文章线）、Chat/Concepts（聊天线）
   -> 本地搜索或可选 AI RAG
   -> review、report、annual-report、todos 等报告
 ```

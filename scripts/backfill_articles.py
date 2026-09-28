@@ -43,7 +43,7 @@ from biz_daily import (DEFAULT_RELEVANCE, DEFAULT_TOPIC, TOPICS,  # noqa: E402
                        _group_by_topic, _guess_topic, _serializable_article,
                        _tags_for_write, extract_article_info, fetch_article,
                        get_db_keys, sanitize_filename, summary_section)
-from _utils import write_with_frontmatter  # noqa: E402
+from _utils import strip_wx_ads_document, write_with_frontmatter  # noqa: E402
 
 TZ = timezone(timedelta(hours=8))
 OUTPUT_ROOT = 'output/biz-daily'
@@ -226,6 +226,10 @@ def copy_to_vault(day: str, out_root: str, vault_root: str) -> dict:
 
     逐 md 拷而不是整目录替换：`copytree` 的语义是"删掉再放"，而这里要的是**补缺**——
     Vault 是用户的东西，不能因为要补一天就把那天底下别的东西清掉。
+
+    拷过去的是**洗过的正文**（`strip_wx_ads_document`：删微信界面短语，frontmatter 与代码块
+    不动）。用户 2026-09-28 定的就是"原文与笔记都清"——`Sources/` 是给人读的那一层，
+    "继续滑动看下一个"这种按钮文字搜出来只会添乱。清洗落在这里的理由与代价写在循环那段。
     """
     source = Path(out_root) / day
     target = Path(vault_root) / day
@@ -236,9 +240,41 @@ def copy_to_vault(day: str, out_root: str, vault_root: str) -> dict:
         rel = path.relative_to(source)
         dest = target / rel
         dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_bytes(path.read_bytes())
+        try:
+            with open(path, encoding='utf-8', newline='') as handle:
+                text = handle.read()
+        except (OSError, UnicodeDecodeError):
+            # 读不成文本就照原样拷：宁可库里有几篇没洗的，也不要因为一篇读不了就整天不补。
+            dest.write_bytes(path.read_bytes())
+            copied += 1
+            continue
+        # **在这里洗，而不是在 fetch 那一步**：`biz-daily` 是**原始存档**（洗了就再也拿不回
+        # 原文），`Sources/` 才是给人读的那一层。代价是两边不再逐字节相同 —— 所以这一步必须
+        # 落在拷贝函数里，否则任何一次补拷都会把洗过的又覆盖回去（2026-09-28 就这么发生过一次）。
+        with open(dest, 'w', encoding='utf-8', newline='') as handle:
+            handle.write(strip_wx_ads_document(text))
         copied += 1
     return {'copied': copied, 'reason': ''}
+
+
+def days_with_articles(out_root) -> list:
+    """`biz-daily` 下**真的有文章**的那些天（升序）。
+
+    判据是"那天底下有 md"，**不是** `.articles.json` 里的 `backfilled` 标记。这两个判据
+    实测不等价：2026-09-28 量过，199 天里有 12 天有文章却没有那个标记（`.articles.json`
+    是 `daily` 那条路写的，不写这个键），其中 08-24/08-25 两天在 Vault 里**根本没有**对应
+    目录 —— 拿标记当判据，这两天既不会被补也不会被报出来。
+
+    只在**扫到的目录里**判断，不去查库、不联网：补拷要能在离线时跑。
+    """
+    root = Path(out_root)
+    days = []
+    for directory in sorted(root.iterdir()) if root.exists() else []:
+        if not directory.is_dir():
+            continue
+        if any(p.name != 'README.md' for p in directory.rglob('*.md')):
+            days.append(directory.name)
+    return days
 
 
 def day_done(out_root, day) -> bool:
@@ -288,17 +324,11 @@ def main():
         # **补拷模式**：不抓取、不调模型，只把已经躺在 biz-daily 的那几天补进 Vault。
         # 为什么要有它：回填那天可以先不拷（省体积），后来想补就得能单独补——2026-09-27
         # 就是这么补的，165 天早就在 biz-daily 里，只是 Vault 的 Sources 里没有。
-        root = Path(args.out)
-        days = []
-        for directory in sorted(root.iterdir()) if root.exists() else []:
-            state = directory / '.articles.json'
-            if not directory.is_dir() or not state.exists():
-                continue
-            try:
-                if json.loads(state.read_text(encoding='utf-8')).get('backfilled'):
-                    days.append(directory.name)
-            except Exception:
-                continue
+        #
+        # 重复跑是**安全**的：`copy_to_vault` 逐 md 覆盖、不删别的东西，而它现在还会洗残留，
+        # 所以"再补一次"同时也是"把库里那一层重新洗一遍"（2026-09-28 就是这么把 1,755 篇
+        # 漏网的补上的 —— 那天被 `backfilled` 标记挡在门外的 12 天）。
+        days = days_with_articles(args.out)
         if args.max_days:
             days = days[:args.max_days]
         copied_days = total = 0

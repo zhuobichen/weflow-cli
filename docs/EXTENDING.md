@@ -71,8 +71,8 @@ interactive menu - `showInteractiveMenu()` plus the `switch (action)` that maps 
 
 `test/cli-menu.test.ts` keeps those in sync: menu entries and `switch` cases must match **in both directions**, and
 every `runCmd('x')` / `runSubCmd('p','c')` the menu calls must name a command that actually exists (that test asks the
-CLI's own `--help`, because the source cannot tell top-level commands from subcommands - 64 `.command('...')` call sites
-against 44 real commands). This matters because both failure modes are silent: a menu entry with no `case` does nothing
+CLI's own `--help`, because the source cannot tell top-level commands from subcommands - 99 `.command('...')` call sites
+as of 2026-09-28, against however many real commands `--help` reports). This matters because both failure modes are silent: a menu entry with no `case` does nothing
 when picked, and `runCmd` is written as `if (cmd) await ...`, so a renamed command makes the entry do nothing too.
 
 Two conventions that hold across the command surface: every command that a script or an AI might drive has a `--json`
@@ -96,7 +96,7 @@ prints JSON). Three rules that this project has been bitten by:
   `PYTHONIOENCODING=utf-8` (`src/utils/pythonProcessEnv.ts`), so stdout is UTF-8 there and `json.dumps(...,
   ensure_ascii=False)` - what the scripts use - round-trips correctly. Running the same script by hand on this machine
   gives a **GBK** stdout: Chinese comes out as GBK bytes (mojibake if you were expecting UTF-8) and a character
-  outside GBK (`✓`, an emoji) raises `UnicodeEncodeError` and kills the run. 28 of the 49 scripts call
+  outside GBK (`✓`, an emoji) raises `UnicodeEncodeError` and kills the run. 34 of the 55 scripts call
   `sys.stdout.reconfigure(encoding='utf-8', errors='replace')` in `main()` so both paths behave the same; if you add a
   script you intend to run by hand, do the same. A probe that forgets to set that env var will show you a decoding bug
   that does not exist in the real path.
@@ -140,7 +140,8 @@ description is the material for the page.
 `Wiki/Concepts` for the article line, `Chat/Concepts` for the conversation line - so a source that writes into a
 directory nobody reads is invisible, and `compile_wiki` writes whichever line you point `--output` at (one line per
 run, by design). If your source belongs to an existing line, you are done; if it deserves its own, it goes into
-`_utils.CONCEPT_DIRS` and into the four declarations that `test/concept-dirs-agreement.test.ts` pins - that test
+`_utils.CONCEPT_DIRS` and into every other declaration that `test/concept-dirs-agreement.test.ts` pins (that test
+counts the sites itself rather than trusting a number written here) - that test
 fails until every reader of concept pages knows about the new directory, which is the point.
 
 The guard to copy: `test/chat_notes_test.py` writes a card and then runs the **real consumer**

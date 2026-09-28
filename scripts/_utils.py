@@ -861,3 +861,49 @@ def strip_wx_ads(text: str) -> str:
     # 短语被删掉之后可能留下孤零零的空白或行首标点
     out = _re.sub(r'[ \t]+([，。、；：！？])', r'\1', out)
     return out.strip()
+
+
+_FENCED_BLOCK = None
+
+
+def strip_wx_ads_document(text: str) -> str:
+    """整篇原文用的清洗：**frontmatter 与围栏代码块一个字不动**，其余同 `strip_wx_ads`。
+
+    删短语的规则**完全复用** `strip_wx_ads`，不另写一套 —— 两处各写一份，迟早会对
+    "什么算残留"给出不同答案（本仓库因为这类分叉吃过亏）。
+
+    两处防护各有实测理由：
+
+    - **frontmatter**：`去阅读` 是**短词**，完全可能出现在标题里（"如何去阅读一本书"）。
+      标题被改就等于改文件名对齐关系 —— 笔记靠 `日期-标题` 找原文，改了就对不上了。
+      实测当前 35,060 篇里 0 篇的 frontmatter 含短语，所以这一条是**防未来**，不是修现在。
+    - **围栏代码块**：`strip_wx_ads` 末尾那几条空白规整（`[ \\t]{2,}` → ' '、`\\n{3,}` → `\\n\\n`）
+      对摘要是无损的，对**原文**却会吃掉代码缩进 —— 实测 20 篇带围栏、其中 10 篇围栏内容会变
+      （HTML/JS 示例）。原文是素材，缩进就是内容。
+    """
+    if text.startswith('---'):
+        end = text.find('\n---', 3)
+        front, body = (text[:end + 4], text[end + 4:]) if end != -1 else ('', text)
+    else:
+        front, body = '', text
+    # `strip_wx_ads` 末尾带 `.strip()`，会把正文首尾空白吃掉。frontmatter 与正文之间那两行
+    # 空行是正文的一部分，所以这里把首尾空白单独摘出来、洗完再放回去。
+    lead = body[:len(body) - len(body.lstrip())]
+    tail = body[len(body.rstrip()):]
+    core = body.strip()
+    global _FENCED_BLOCK
+    if _FENCED_BLOCK is None:
+        import re as _re
+        _FENCED_BLOCK = _re.compile(r'^```.*?^```', _re.S | _re.M)
+    # 占位符用 chr(0) 拼，不写字面反斜杠：本仓有"JSON 层吃掉转义"的前科，能避开就避开。
+    mark = chr(0) + 'FENCE' + chr(0)
+    blocks = []
+
+    def stash(match):
+        blocks.append(match.group(0))
+        return mark + str(len(blocks) - 1) + mark
+
+    cleaned = strip_wx_ads(_FENCED_BLOCK.sub(stash, core))
+    for index, block in enumerate(blocks):
+        cleaned = cleaned.replace(mark + str(index) + mark, block)
+    return front + lead + cleaned + tail
