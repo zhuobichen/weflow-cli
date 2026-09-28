@@ -49,6 +49,86 @@ export function pageBody(text: string): string {
   const at = text.indexOf('## 来源')
   return at === -1 ? text : text.slice(0, at)
 }
+/** 概念页里「相关概念」那一节指向的名字（按出现顺序）。 */
+function relatedNames(pagePath: string): string[] {
+  const text = readFileSync(pagePath, 'utf8')
+  const start = text.indexOf('## 相关概念')
+  if (start < 0) return []
+  const rest = text.slice(start + 1)
+  const end = rest.indexOf('\n## ')
+  const section = end > 0 ? rest.slice(0, end) : rest
+  return [...section.matchAll(/\[\[([^\]|]+)\]\]/g)]
+    .map(match => match[1].replace(/\.md$/, '').trim())
+    .filter(Boolean)
+}
+
+/**
+ * 从一页出发，**沿着图走若干跳**，逐层返回 `{名字, 一句定义, 从谁连过来}`。
+ *
+ * 与 `conceptNeighbors` 的分工：那个给"一跳"（本页 + 直接邻居），这个给"一片"。助手此前只能
+ * 一跳一跳地查（工具说明里写着"可以顺着它们再用本工具逐跳查下去"），但那要**模型自己决定**
+ * 下一跳查谁。一次给两跳，它就能直接看到"这个概念周围的生态"。
+ *
+ * 三条规矩：
+ * - **去重**：一个概念在图上有多条路径时只留**最先到达**的那条（BFS 保证它跳数最少），
+ *   否则同一个名字会在好几层里重复出现，读的人分不清；
+ * - **封顶**（`maxNodes`）：4 个邻居乘 4 乘 4 就是 64 —— 不封顶第三跳能把输出撑爆，而模型
+ *   读不完的图等于没给。截断了要**说出来**（`truncated`），不能默默少给；
+ * - **没建页的邻居照旧报数**（`missing`），不静默吞掉。
+ */
+export function conceptSubgraph(pageName: string, depth = 2, maxNodes = 30,
+                                wikiDirs: string[] = VAULT_WIKI_DIRS): {
+  levels: Array<Array<{ name: string; brief: string; via: string }>>
+  truncated: boolean
+  missing: number
+} {
+  // 同 `conceptNeighbors`：传字符串会静默地按字符遍历，所以这里响，不猜。
+  if (typeof wikiDirs === 'string') {
+    throw new TypeError('conceptSubgraph 的 wikiDirs 要的是目录数组，不是单个字符串')
+  }
+  // 邻居可能住在另一个目录（文章概念指向聊天概念、反之亦然），所以查找跨目录
+  const find = (name: string): string | null => {
+    for (const dir of wikiDirs) {
+      const candidate = join(dir, safeConceptFile(name))
+      if (existsSync(candidate)) return candidate
+    }
+    return null
+  }
+  if (!find(pageName)) return { levels: [], truncated: false, missing: 0 }
+
+  const seen = new Set<string>([pageName])
+  const levels: Array<Array<{ name: string; brief: string; via: string }>> = []
+  let frontier = [pageName]
+  let truncated = false
+  let missing = 0
+  for (let hop = 0; hop < depth && frontier.length; hop += 1) {
+    const level: Array<{ name: string; brief: string; via: string }> = []
+    const next: string[] = []
+    for (const from of frontier) {
+      const fromPath = find(from)
+      if (!fromPath) continue
+      for (const name of relatedNames(fromPath)) {
+        if (seen.has(name)) continue
+        const target = find(name)
+        if (!target) {
+          missing += 1
+          continue
+        }
+        if (seen.size >= maxNodes) {
+          truncated = true
+          continue
+        }
+        seen.add(name)
+        level.push({ name, brief: conceptBrief(readFileSync(target, 'utf8')), via: from })
+        next.push(name)
+      }
+    }
+    if (level.length) levels.push(level)
+    frontier = next
+  }
+  return { levels, truncated, missing }
+}
+
 export function conceptBrief(text: string): string {
   const body = text.startsWith('---') ? text.slice(text.indexOf('---', 3) + 3) : text
   for (const raw of body.split('\n')) {
@@ -687,6 +767,7 @@ export const TOOL_DEFS: ToolDef[] = [
         type: 'object',
         properties: {
           keyword: { type: 'string', description: '概念名或关键词, 如 RAG、Agent' },
+          depth: { type: 'integer', description: '沿「相关概念」走几跳：默认 1 只给直接邻居，2 能一次看到这个概念周围的生态（最多 3）' },
         },
         required: ['keyword'],
       },
@@ -1460,11 +1541,22 @@ export async function executeTool(name: string, args: Record<string, any>, ctx: 
         const page = readFileSync(join(hit.dir, hit.file), 'utf8')
         // **顺带把邻居给出去**（见 `conceptNeighbors`）：一次调用拿到"这个概念 + 连着它的一小块子图"。
         // 不点明"可以再用本工具查其中任意一个"的话，模型会把它当装饰性文字读过去。
-        const { linked, missing } = conceptNeighbors(name)
+        const depth = boundedToolInteger(args.depth, 1, 3, 'depth')
+        const { levels, truncated, missing } = conceptSubgraph(name, depth)
         const out = [`「${name}」概念页（${hit.where}知识库）:`, page.slice(0, 2000)]
-        if (linked.length) {
-          out.push('', '—— 它连到的概念（可以再用本工具查其中任意一个）——')
-          for (const nb of linked) out.push(`· ${nb.name} — ${nb.brief}`)
+        if (levels.length) {
+          out.push('', depth > 1
+            ? `—— 它周围的概念（${depth} 跳；「←」标出是从哪个概念连过来的）——`
+            : '—— 它连到的概念（可以再用本工具查其中任意一个，或者加 depth 参数一次多看几跳）——')
+          levels.forEach((level, index) => {
+            if (levels.length > 1) out.push(`第 ${index + 1} 跳：`)
+            for (const nb of level) {
+              out.push(depth > 1 ? `· ${nb.name} ← ${nb.via} — ${nb.brief}` : `· ${nb.name} — ${nb.brief}`)
+            }
+          })
+          // 封顶了要**说出来**：默默少给的话，模型会以为这就是全部
+          if (truncated) out.push(`（图太大，只给了前 ${levels.flat().length} 个概念；
+想看某个分支可以单独查它）`)
         }
         if (missing) out.push(`（另有 ${missing} 个相关概念尚未建页，查不到）`)
         return out.join('\n')

@@ -258,6 +258,24 @@ export const EVAL_CASES: EvalCase[] = [
     // 正文里**（它的「相关概念」段），所以模型提到它们是**对的**，任何基于页名的 `answerForbids`
     // 都会误判。这个精度问题改在单元层钉（`pageBody` 是纯函数，见
     // `test/knowledge-neighbors.test.ts`），评测层不测它 —— 这不是"漏了"，是**放对了层**。
+    id: 'knowledge-two-hops',
+    // **测多跳真的被用上。** 从 `RAG` 出发，一跳是「向量化模型 / LangChain / 大语言模型 /
+    // 上下文窗口」，而「向量数据库 / Milvus / 语义搜索」这些**只有走到第二跳才够得着**（实测
+    // 它们都在一跳邻居的邻居里）。工具说明里原本写着"可以顺着它们再用本工具逐跳查下去"——
+    // 那要模型**自己决定**下一跳查谁，这条测的就是它会不会直接要两跳。
+    //
+    // `argsMatch` 盯的是**参数**而不是工具名：调用 `search_knowledge` 与"带着 `depth: 2` 调它"
+    // 是两件事 —— 那正是 `argsMatch` 存在的理由（`time-window` 那条当初就是为区分"带没带 since"
+    // 而加的）。`answerShouldMatch` 是软的：`向量数据库` 这种词模型自己也知道，所以"答复里提到它"
+    // 证明不了什么；硬的那条是 `argsMatch`。
+    question: '我想了解一下 RAG 的上下文——把跟它相关的概念也一起给我看看',
+    expect: { mustCall: ['search_knowledge'], maxTools: 6, toolBudget: 3,
+              argsMatch: /depth=2/,          // 轨迹里的参数是 key=value（见 time-window 的 /since=/）
+              // 软的那条**不点名具体概念**：问 `RAG` 命中的其实是 `2-Step RAG`（文件名匹配取
+              // 第一个），所以第二跳给到什么不可预测。这里测的是「**分层给出来了**」这件事本身。
+              answerShouldMatch: /(第一跳|第二跳|一跳|二跳|再往外|邻居的邻居)/ },
+  },
+  {
     id: 'knowledge-absent',
     // **测"不编"**：库里没有这个概念（实测 `胶子凝聚` 零命中）。该做的是去查、查不到、
     // 然后如实说。用 `toolEmpty` 而不是"答复里必须出现某个词"——老实说的措辞是无穷的，

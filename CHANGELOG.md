@@ -8,6 +8,27 @@ All notable user-facing changes are recorded here. This project follows [Semanti
 
 ### Added
 
+- **The assistant can walk the knowledge graph more than one hop at a time.** `search_knowledge` used to return
+  the page plus its **direct** neighbours, and the tool description told the model it could "walk them one at a
+  time" - which meant deciding, on its own, which neighbour to look up next. It now takes a `depth` (default 1,
+  max 3) and returns the layers: from `RAG`, one hop is `向量化模型` / `LangChain` / `大语言模型` /
+  `上下文窗口`, and two hops reaches `向量数据库` / `Milvus` / `语义搜索`. Measured on the real vault: `RAG` has 4
+  one-hop neighbours and the second layer is reachable only through them.
+
+  Three rules, each because the obvious version misbehaves: **deduplicate** (a concept reachable by several paths
+  keeps only the first arrival, since BFS guarantees that is the shortest - otherwise the same name shows up at
+  several depths), **cap the nodes** (4 neighbours × 4 × 4 is 64; an uncapped third hop drowns the output, and a
+  graph the model cannot finish reading is worthless - and when it truncates it **says so**), and keep counting
+  neighbours that have no page yet rather than swallowing them.
+
+  Pinned by a scenario that asserts the **arguments**, not the tool name: `argsMatch: /depth=2/` - because
+  "called `search_knowledge`" and "called it with two hops" are different things. That is what the field is for,
+  and its format is `key=value` (the existing `time-window` uses `/since=/`), not JSON - my first attempt wrote
+  `/"depth"\s*:\s*2/` and the scenario duly failed while the assistant was doing exactly the right thing. The
+  soft assertion deliberately does not name a specific concept: asking about `RAG` actually matches `2-Step RAG`
+  (the name match takes the first hit), so what the second hop returns is not predictable - it checks that the
+  layers were laid out at all. Full evaluation **23/23**.
+
 - **The chat cards are now in the Vault, under `Sources/Chat/`, and the assistant can search them.** They were only
   in `output/chat-notes/`, which meant a person browsing Obsidian could see the chat *concepts* but never the
   conversation that produced them (the timeline, the people, what is owed) - and, measurably, **1,176 of the chat

@@ -12,7 +12,7 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { conceptNeighbors, conceptBrief, safeConceptFile, pageBody } from '../src/services/assistantTools.js'
+import { conceptNeighbors, conceptBrief, safeConceptFile, pageBody, conceptSubgraph } from '../src/services/assistantTools.js'
 
 function vault(files: Record<string, string>): string {
   const dir = mkdtempSync(join(tmpdir(), 'wiki-'))
@@ -117,5 +117,63 @@ test('pageBody 只给正文：来源段不算', () => {
 
 test('pageBody 对没有来源段的页给全文', () => {
   assert.equal(pageBody('只有正文，没有来源段。'), '只有正文，没有来源段。')
+})
+
+test('沿着图走两跳，逐层给出去，并说清是从谁连过来的', () => {
+  // 助手此前只能一跳一跳地查（工具说明里写着"顺着它们再用本工具逐跳查下去"），那要**模型
+  // 自己决定**下一跳查谁。一次给两跳，它就能看到"这个概念周围的生态"。
+  const dir = vault({
+    '甲.md': page('甲', ['乙', '丙']),
+    '乙.md': page('乙', ['丁'], '乙的定义。'),
+    '丙.md': page('丙', [], '丙的定义。'),
+    '丁.md': page('丁', [], '丁的定义。'),
+  })
+  const { levels, truncated, missing } = conceptSubgraph('甲', 2, 30, [dir])
+  assert.equal(levels.length, 2)
+  assert.deepEqual(levels[0].map(x => x.name), ['乙', '丙'])
+  assert.deepEqual(levels[1].map(x => x.name), ['丁'])
+  assert.equal(levels[1][0].via, '乙', '要说清这一层是从谁连过来的')
+  assert.equal(levels[1][0].brief, '丁的定义。')
+  assert.equal(truncated, false)
+  assert.equal(missing, 0)
+})
+
+test('同一个概念有多条路径时只留最先到达的那条', () => {
+  const dir = vault({
+    '甲.md': page('甲', ['乙', '丙']),
+    '乙.md': page('乙', ['丁']),
+    '丙.md': page('丙', ['丁']),        // 丁 有两条进来的路
+    '丁.md': page('丁', []),
+  })
+  const { levels } = conceptSubgraph('甲', 2, 30, [dir])
+  const flat = levels.flat()
+  assert.equal(flat.filter(x => x.name === '丁').length, 1, '丁 只该出现一次')
+  assert.equal(flat.find(x => x.name === '丁')!.via, '乙', 'BFS 给的是跳数最少的那条')
+})
+
+test('节点封顶时要明说，不许默默少给', () => {
+  // 4 个邻居乘 4 乘 4 就是 64：不封顶第三跳能把输出撑爆，而模型读不完的图等于没给。
+  const files: Record<string, string> = { '甲.md': page('甲', ['子0', '子1', '子2', '子3', '子4', '子5']) }
+  for (let i = 0; i < 6; i += 1) files['子' + i + '.md'] = page('子' + i, [])
+  const { levels, truncated } = conceptSubgraph('甲', 2, 4, [vault(files)])
+  assert.equal(truncated, true, '截断了要说出来')
+  assert.ok(levels.flat().length <= 4)
+})
+
+test('没有页的邻居照旧报数，不静默吞掉', () => {
+  // 只放一个没建页的邻居：写 `['乙', '还没建页的概念']` 而库里连 `乙` 也没有时，缺的是**两个**
+  const dir = vault({ '甲.md': page('甲', ['还没建页的概念']) })
+  const { missing } = conceptSubgraph('甲', 2, 30, [dir])
+  assert.equal(missing, 1)
+})
+
+test('起始页不存在时给空结果', () => {
+  const dir = vault({ '甲.md': page('甲', []) })
+  assert.deepEqual(conceptSubgraph('不存在', 2, 30, [dir]),
+    { levels: [], truncated: false, missing: 0 })
+})
+
+test('传字符串照样抛（同 conceptNeighbors）', () => {
+  assert.throws(() => conceptSubgraph('甲', 2, 30, 'x' as unknown as string[]), /数组/)
 })
 
