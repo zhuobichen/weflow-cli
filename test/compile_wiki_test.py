@@ -854,5 +854,96 @@ class RefreshSourcesTests(unittest.TestCase):
         self.assertEqual(after, before, 'dry_run 不许写盘')
 
 
+class MergeDuplicatePagesTests(unittest.TestCase):
+    """把"同一个概念的多个写法"合并成一张。**改的是图谱的形状**，不调模型。
+
+    用户的判断是"有的本质上是一样的，但弄成不一样…… 我要确保图谱的有效性，
+    而不是像垃圾那样越堆越多"。实测库里 74 组、80 张冗余页。
+    """
+
+    def build(self, tmp):
+        pages = Path(tmp) / 'pages'
+        pages.mkdir()
+        # **按名字排 `GPT 5.6` 在前**（空格 0x20 < 连字符 0x2D），所以把两条来源放在
+        # `GPT-5.6` 上："留来源最多的"与"留名字排前的"于是是两个不同答案，测试才真的
+        # 在钉前者。第一版把两条来源放在 `GPT 5.6` 上，两种策略给出同一个结果 ——
+        # 变异检查（改成按名字选主）溜了过去。
+        (pages / 'GPT 5.6.md').write_text(
+            '---\ntitle: "GPT 5.6"\n---\n\n# GPT 5.6\n\n定义。\n\n## 相关概念\n\n- [[甲]]\n\n'
+            '## 来源\n\n- [[2026-01-01-一]] — 一\n', encoding='utf-8')
+        (pages / 'GPT-5.6.md').write_text(
+            '---\ntitle: "GPT-5.6"\n---\n\n# GPT-5.6\n\n另一种写法。\n\n## 来源\n\n'
+            '- [[2026-01-02-二]] — 二\n- [[2026-01-03-三]] — 三\n', encoding='utf-8')
+        return pages
+
+    def test_留来源多的那张_其余的删掉(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            pages = self.build(tmp)
+            r = cw.merge_duplicate_pages(str(pages))
+            names = sorted(p.stem for p in pages.glob('*.md'))
+            text = (pages / 'GPT-5.6.md').read_text(encoding='utf-8')
+        self.assertEqual(r['groups'], 1)
+        self.assertEqual(names, ['GPT-5.6'], '留**来源最多**的那张，不是名字排前的那个')
+        for src in ('2026-01-01-一', '2026-01-02-二', '2026-01-03-三'):
+            self.assertIn(src, text, '被合并那张的来源要并进来')
+        self.assertEqual(len([l for l in text.split('\n') if l.startswith('- [[') and ']] — ' in l]), 3)
+
+    def test_旧名字进别名_否则那批链接就断了(self):
+        """**这是整个方案能这么便宜的原因**：库里 98 条链接指向被合并掉的名字，
+        写进 aliases 之后 Obsidian 照旧解析，一条都不用改。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            pages = self.build(tmp)
+            cw.merge_duplicate_pages(str(pages))
+            fm = (pages / 'GPT-5.6.md').read_text(encoding='utf-8').split('---')[1]
+        self.assertIn('GPT 5.6', fm)
+
+    def test_幂等(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            pages = self.build(tmp)
+            cw.merge_duplicate_pages(str(pages))
+            first = (pages / 'GPT-5.6.md').read_text(encoding='utf-8')
+            r2 = cw.merge_duplicate_pages(str(pages))
+            second = (pages / 'GPT-5.6.md').read_text(encoding='utf-8')
+        self.assertEqual(r2['groups'], 0, '第二次没有可合并的了')
+        self.assertEqual(first, second, '第二次一个字都不该改')
+
+    def test_英文单复数要合并(self):
+        """`AI skill` 与 `AI skills` 是同一件事。
+
+        第一版没测这条 —— 变异检查（把"去英文复数"那一步删掉）溜了过去，说明测试没钉住它。
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            pages = Path(tmp) / 'pages'
+            pages.mkdir()
+            for n in ('AI skill', 'AI skills'):
+                (pages / (n + '.md')).write_text(
+                    '---\ntitle: "%s"\n---\n\n## 来源\n\n- [[2026-01-01-一]] — 一\n' % n,
+                    encoding='utf-8')
+            r = cw.merge_duplicate_pages(str(pages))
+            names = sorted(p.stem for p in pages.glob('*.md'))
+        self.assertEqual(r['groups'], 1, '只差一个复数尾 s，是同一个概念')
+        self.assertEqual(len(names), 1)
+
+    def test_只是名字像的不合并(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            pages = Path(tmp) / 'pages'
+            pages.mkdir()
+            for n in ('Claude Code', 'Claude 4.8'):
+                (pages / (n + '.md')).write_text('---\ntitle: "%s"\n---\n\n## 来源\n\n' % n,
+                                                 encoding='utf-8')
+            r = cw.merge_duplicate_pages(str(pages))
+        # 规范形是 `claudecode` 与 `claude48`，不同 —— lint 那个"公共子串 ≥5 字符"的宽判据
+        # 会把这两个报成一组，合并**不认**那个判据。
+        self.assertEqual(r['groups'], 0)
+
+    def test_预览不删页(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            pages = self.build(tmp)
+            r = cw.merge_duplicate_pages(str(pages), dry_run=True)
+            names = sorted(p.stem for p in pages.glob('*.md'))
+        self.assertEqual(r['groups'], 1, '预览也要报出会合并几组')
+        self.assertEqual(names, ['GPT 5.6', 'GPT-5.6'], 'dry_run 不许删')
+
+
 if __name__ == '__main__':
     unittest.main()

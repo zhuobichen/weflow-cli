@@ -160,5 +160,19 @@ class DegenerateFieldTests(unittest.TestCase):
                          '样本太小不下结论')
 
 
+    def test_别名也算指向这一页(self):
+        """`--merge-duplicates` 把 `GPT-5.6` 并进 `GPT 5.6` 时靠的就是 aliases。
+
+        体检不认别名的话，会把它报成"还没建页、建议再跑 compile"——而它已经有页了。
+        """
+        pages = [
+            {'stem': 'GPT 5.6', 'aliases': ['GPT-5.6'], 'title': '', 'links': [], 'body': ''},
+            {'stem': '甲', 'aliases': [], 'title': '', 'links': [], 'body': ''},
+        ]
+        names = wl.resolvable_names(pages)
+        self.assertIn('GPT-5.6', names)
+        self.assertIn('GPT 5.6', names)
+        self.assertNotIn('GPT5.6', names, '没写在 aliases 里的名字不在里面')
+
 if __name__ == '__main__':
     unittest.main()

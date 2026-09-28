@@ -24,7 +24,8 @@ from collections import defaultdict, Counter
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _utils import (CHAT_CARD_PREFIX, CONCEPT_DIRS, call_deepseek,  # noqa: E402
-                    get_api_key, load_config, parse_frontmatter, write_with_frontmatter)
+                    SEPARATOR, get_api_key, load_config, parse_frontmatter,
+                    write_with_frontmatter)
 
 # Default paths
 SOURCE_ROOT = 'output/biz-daily'
@@ -651,6 +652,93 @@ def replace_source_section(text: str, lines: list) -> str:
     return text[:head] + SOURCE_SECTION + '\n\n' + '\n'.join(lines) + '\n' + tail
 
 
+NORM_STRIP_RE = re.compile(r'[\s\-_·、，.。:：/\\（）()\[\]【】"\’]+')
+
+
+def normalize_concept_name(name: str) -> str:
+    """判「这两个名字是不是同一个概念」用的规范形。
+
+    去空格、连字符、下划线、标点，转小写，再去掉英文复数尾 —— 实测这样能把
+    `GPT 5.6`/`GPT-5.6`/`GPT5.6`、`AI 工具`/`AI工具`、`AI skill`/`AI skills` 收到一起。
+
+    **它也会把 `news`/`new` 收到一起**，所以它只用来**提议**合并；真正的裁决是
+    "留来源最多的那张页"，而且删之前还有 `--dry-run` 可以看名单。
+    """
+    stripped = NORM_STRIP_RE.sub('', name.casefold().strip())
+    return re.sub(r'(?<=[a-z])s$', '', stripped)
+
+
+def merge_duplicate_pages(pages_dir: str, dry_run: bool = False) -> dict:
+    """把「规范化后同名」的多张概念页合并成一张。本地，不调模型，可重跑。
+
+    改的是**图谱的形状**：`GPT 5.6` / `GPT-5.6` / `GPT5.6` 在图谱上是三个节点，而它们讲的
+    是同一件事。用户的原话是"有的本质上是一样的，但弄成不一样…… 我要确保图谱的有效性，
+    而不是像垃圾那样越堆越多"。实测库里 75 组、156 张页（合并后 75 张）。
+
+    顺序重要：
+
+    1. 留**来源最多**的那张当主（`claude code` 411 条 vs `ClaudeCode` 7 条）；
+    2. 其余的名字写进主页的 `aliases` —— 那 **233 条指向旧名字的链接因此一条都不断**，
+       不必去改别的任何文件（这是整个方案能这么便宜的原因）；
+    3. 其余页的来源行并进主页（按名字判重）；
+    4. 删掉其余那几张。
+
+    第 2 步要写 frontmatter，而 `--refresh-sources` 刻意不写 —— 两件事不冲突：这里只加
+    `aliases` 一个键，`sources` 由 `parse_frontmatter` 原样带过去。
+    """
+    groups = {}
+    for page in sorted(Path(pages_dir).glob('*.md')):
+        groups.setdefault(normalize_concept_name(page.stem), []).append(page)
+
+    def source_count(page):
+        return len(iter_source_links(page.read_text(encoding='utf-8')))
+
+    merged, removed, aliased, moved = 0, [], 0, 0
+    examples = []
+    for _key, group in sorted(groups.items()):
+        if len(group) < 2:
+            continue
+        # 留来源最多的当主；平手按名字排——**别让文件系统的顺序决定谁活下来**
+        group.sort(key=lambda p: (-source_count(p), p.stem))
+        main, others = group[0], group[1:]
+
+        text = main.read_text(encoding='utf-8')
+        fm, body = parse_frontmatter(text)
+        aliases = [str(a) for a in (fm.get('aliases') or [])]
+        keep, have = [], set()
+        for line in text.split('\n'):
+            if line.startswith('- [[') and ']] ' + SEPARATOR + ' ' in line:
+                name = line[4:line.find(']] ' + SEPARATOR + ' ')]
+                if name not in have:
+                    have.add(name)
+                    keep.append(line)
+        for other in others:
+            other_text = other.read_text(encoding='utf-8')
+            for line in other_text.split('\n'):
+                if line.startswith('- [[') and ']] ' + SEPARATOR + ' ' in line:
+                    name = line[4:line.find(']] ' + SEPARATOR + ' ')]
+                    if name not in have:
+                        have.add(name)
+                        keep.append(line)
+                        moved += 1
+            other_fm, _ = parse_frontmatter(other_text)
+            for name in [other.stem] + [str(x) for x in (other_fm.get('aliases') or [])]:
+                if name != main.stem and name not in aliases:
+                    aliases.append(name)
+                    aliased += 1
+            removed.append(other.name)
+            if not dry_run:
+                other.unlink()
+        merged += 1
+        examples.append({'main': main.stem, 'absorbed': [o.stem for o in others]})
+        if not dry_run:
+            fm['aliases'] = sorted(aliases)
+            write_with_frontmatter(str(main), fm,
+                                   replace_source_section(body, sorted(keep)) if keep else body)
+    return {'groups': merged, 'removed': removed, 'aliased': aliased,
+            'movedSources': moved, 'examples': examples[:8]}
+
+
 def refresh_sources(pages_dir: str, card_dirs=None, dry_run: bool = False) -> dict:
     """把已有概念页的「来源」段补齐成**当前的全部来源**。本地，不调模型。
 
@@ -799,11 +887,15 @@ def generate_concept(name: str, refs: list[dict], api_key: str, origin: str = ''
             body_parts.append(f'- [[{rc}]]\n')
         body_parts.append('\n')
     body_parts.append('## 来源\n\n')
-    for r in refs[:5]:
+    # **这一节不截断。** 截断是给**喂模型的参考行**留的预算（`build_ref_lines` 的 limit），
+    # 而「来源」这一节是账本：`--refresh-sources` 会把已有页补成全量，新页若不跟着写全，
+    # 两种页就是两个口径 —— 那正是当初"页里最多 5 条、索引里写着 301"那个缺口的来源。
+    for r in refs:
         body_parts.append(f'- [[{r["file"]}]] — {r["title"]}\n')
 
     # Frontmatter
-    source_files = [r['file'] for r in refs[:5]]
+    # 与正文同源同序：`--refresh-sources` 判"要不要写盘"就是看这两者一致不一致
+    source_files = [r['file'] for r in refs]
     today = time.strftime('%Y-%m-%d')
     fm = {
         'title': f'"{name}"',
@@ -816,7 +908,7 @@ def generate_concept(name: str, refs: list[dict], api_key: str, origin: str = ''
         'verified': False,
         'created': today,
         # 这个概念的来源都来自哪些主题——按主题翻知识库时用得上
-        'topics': sorted({r['topic'] for r in refs[:5] if r.get('topic')}),
+        'topics': sorted({r['topic'] for r in refs if r.get('topic')}),
         'sources': source_files,
     }
 
@@ -902,6 +994,8 @@ def main():
                         help='只修已有页面"来源"段里指不到文件的链接（本地，不调用模型）')
     parser.add_argument('--refresh-sources', action='store_true',
                         help='只把已有页面的"来源"段补齐成**当前全部来源**（本地，不调用模型）')
+    parser.add_argument('--merge-duplicates', action='store_true',
+                        help='把"规范化后同名"的多张页合并成一张（本地，不调模型；**会删页**）')
     parser.add_argument('--cards', action='append', default=None, metavar='DIR',
                         help='产卡目录，可重复；默认所有 output/*-notes（与索引的引用数同一口径）')
     parser.add_argument('--dry-run', action='store_true',
@@ -942,6 +1036,18 @@ def main():
         result = fix_source_links(args.output, args.source)
         print('修来源链接：%d 张页面、%d 条链接（可对照的名字 %d 个）'
               % (len(result['pages']), result['links'], result['names']))
+        return
+
+    if getattr(args, 'merge_duplicates', False):
+        # 合并"同一个概念的多个写法"：改的是图谱的形状（少几个节点），不调模型。
+        # **它会删页**，所以 `--dry-run` 在这里尤其该用（名单先看一遍）。
+        result = merge_duplicate_pages(args.output, dry_run=getattr(args, 'dry_run', False))
+        head = '预览（一个字都没写）' if getattr(args, 'dry_run', False) else '已合并'
+        print('%s：%d 组（删掉 %d 张页、并入 %d 条来源、写了 %d 个别名让旧链接不断）'
+              % (head, result['groups'], len(result['removed']), result['movedSources'],
+                 result['aliased']))
+        for ex in result['examples'][:6]:
+            print('   %s  ←  %s' % (ex['main'], '、'.join(ex['absorbed'])))
         return
 
     if getattr(args, 'refresh_sources', False):

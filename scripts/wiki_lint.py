@@ -240,15 +240,37 @@ def degenerate_fields(pages: list) -> dict:
     return out
 
 
+def resolvable_names(pages: list) -> set:
+    """体检认为"指向它就算解析成功"的所有名字：页的 stem **加上别名**。
+
+    `--merge-duplicates` 把 `GPT-5.6` 并进 `GPT 5.6` 时，就是靠 aliases 让旧链接不断的
+    （实测库里 98 条），Obsidian 认它。体检要是不认，会把这些名字报成"还没建页、
+    建议再跑 compile 提高 --limit" —— 而它们已经有页了，那是**误导**。
+    """
+    names = set()
+    for page in pages:
+        names.add(page['stem'])
+        names |= set(page.get('aliases') or [])
+    return names
+
+
 def collect(pages_dir: str, card_dirs) -> list:
     pages = []
     for path in sorted(Path(pages_dir).glob('*.md')):
         if path.name == '00-Overview.md':      # 索引页不是概念，它引用的东西另算
             continue
         frontmatter, body = parse_frontmatter(path.read_text(encoding='utf-8'))
+        raw_aliases = frontmatter.get('aliases') or []
+        if isinstance(raw_aliases, str):
+            raw_aliases = [x for x in raw_aliases.strip('[]').split(',')]
         pages.append({'stem': path.stem,
                       'topic': compile_frontmatter_topic(frontmatter),
                       'title': str(frontmatter.get('title') or '').strip('"'),
+                      # **别名也算"指向这一页的名字"**：`--merge-duplicates` 把
+                      # `GPT-5.6` 并进 `GPT 5.6` 时就是靠 aliases 让旧链接不断的，
+                      # Obsidian 认它。体检不认的话，会把这些名字报成"还没建页、
+                      # 建议再跑 compile" —— 而它们已经有页了。
+                      'aliases': [str(a).strip().strip('"').strip("'") for a in raw_aliases],
                       'links': extract_links(body),
                       'body': body})
     return pages
@@ -282,7 +304,7 @@ def main():
     # （两边文件名本来就不同：卡片保留完整标题，阅读笔记截到 50 字）。
     card_stems = collect_card_stems(tuple(CARD_DIRS) + MATERIAL_DIRS)
     report = inspect(pages,
-                     lambda name: resolve(name, {p['stem'] for p in pages}, CARD_DIRS, card_stems),
+                     lambda name: resolve(name, resolvable_names(pages), CARD_DIRS, card_stems),
                      card_links)
     report['success'] = True
     report['pagesDir'] = existing

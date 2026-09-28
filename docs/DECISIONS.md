@@ -1400,6 +1400,40 @@ which is what the gate is for.
   semantics are not reliable here), as is any automatic labelling: there is no gold standard for "is this
   draft right", so the feature records what it judged and says so rather than claiming calibration.
 
+## D-053: One concept is one node, and duplicates are merged through `aliases` rather than by rewriting links
+
+**Status:** Active
+
+**Decision.** `wiki compile --merge-duplicates` finds concept pages whose names are the same under a normal form
+(strip spaces, hyphens and punctuation; lowercase; drop an English plural tail) and merges each group into one
+page. It was prompted by the user's own reading of the graph - "some of them are the same thing but drawn as
+different ones ... I want the graph to be effective, not piled up like garbage" - and the measurement backed it:
+74 groups, 80 redundant pages, in shapes like `GPT 5.6` / `GPT-5.6` / `GPT5.6`, `AI skill` / `AI skills`, and
+`AI 工具` / `AI工具`.
+
+**The other names become `aliases`, and that is the whole reason this is cheap.** 98 links in the vault pointed
+at names that would be deleted. Writing those names into the surviving page's `aliases` means Obsidian resolves
+every one of them - so **nothing else in the vault has to be rewritten**. Doing it the obvious way, by rewriting
+every referencing page, would have touched files across both knowledge bases for a graph-shape change, and the
+next merge would touch them again. Verified both directions: all 80 dropped names are aliases somewhere, and all
+98 links are covered.
+
+**Which page survives is decided by source count, not by name.** `claude code` (411 sources) absorbs `ClaudeCode`
+(7). Sorting by name instead would keep the emptier page - and a test now pins this specifically, because the
+first version of the fixture happened to make both rules agree, so the mutation "sort by name" passed.
+
+**The criterion is not the lint's.** `wiki_lint` calls two titles near-duplicates when they share a 5-character
+run covering 40% of the shorter one, which reports `Claude Code` and `Claude 4.8` as a pair. The merge does not
+use that rule and does not merge them: a false merge destroys a real concept, a missed merge just leaves a
+duplicate. `wiki_lint` now reads `aliases` as well - otherwise it would report the merged-away names as "not
+built yet, run compile with a higher limit", which is not a warning but a wrong instruction (that count fell
+9,421 -> 9,384).
+
+**Not done, deliberately.** Nothing automatic: it is a flag, `--dry-run` shows the list first, and it is meant to
+be run when the user notices the graph getting noisy rather than on a schedule. Nor does it try to merge the
+looser "similar name" set - deciding whether `Claude Code` and `Claude 4.8` are one thing is a judgement, and
+that is where a decision model rather than a string rule would be needed.
+
 ## D-052: Concept pages accumulate on their own schedule, and the body's source list deliberately diverges from `sources:`
 
 **Status:** Active

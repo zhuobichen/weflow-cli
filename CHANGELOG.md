@@ -235,6 +235,34 @@ All notable user-facing changes are recorded here. This project follows [Semanti
 
 ### Changed
 
+- **One concept, one node: 74 groups of duplicate pages merged** - `wiki compile --merge-duplicates`, local.
+  The user's read was that the graph was piling up rather than getting better: "some of them are the same thing
+  but drawn as different ones". Measured: 74 groups, 80 redundant pages, where the same concept had two or three
+  nodes because of a hyphen, a space, or a plural (`GPT 5.6` / `GPT-5.6` / `GPT5.6`, `AI skill` / `AI skills`,
+  `AI 工具` / `AI工具`).
+
+  **The trick that makes it cheap is `aliases`.** The group keeps the page with the most sources (`claude code`
+  has 411, `ClaudeCode` has 7), the other names go into that page's `aliases`, their source lines are merged in,
+  and the extras are deleted. **98 links pointed at the names that were deleted and every one of them still
+  resolves** - because Obsidian honours aliases, nothing else in the vault had to change. Verified by listing
+  all 80 dropped names and checking each is an alias on some page: 80/80, and 98/98 links covered.
+
+  The criterion is a normal form (strip spaces/hyphens/punctuation, lowercase, drop an English plural tail), not
+  the lint's "5-character common substring" rule - that one calls `Claude Code` and `Claude 4.8` a pair, and the
+  merge deliberately does not. The lint now reads `aliases` too, so those names stop being reported as "not built
+  yet, run compile with a higher limit" (that count fell 9,421 -> 9,384).
+
+- **500 pages built from the 17,774-candidate backlog, as a trial.** The candidates are all "mentioned by exactly
+  one article", which is why the earlier `--min-refs`/`--limit` filters had left them alone. Sampling them: the
+  definitions are specific and readable (`TRAE SOLO 模式` - "AI-driven development mode that plans and runs the
+  whole flow from requirements to preview"), each links 3-4 related concepts, and each has exactly one source.
+  The other 17,274 were left alone pending a look.
+
+  With them came a fix that was written down but not implemented: `generate_concept` truncated the page's source
+  list to five (`for r in refs[:5]`), which is the *prompt* budget's job (`build_ref_lines`), not the page's. A
+  page that lists 5 sources while the index says 301 is exactly the gap `--refresh-sources` was written to close,
+  so new pages would have been born needing it.
+
 - **Old concept pages can grow new edges now** - `wiki compile --refresh-sources`, local, no model calls.
   The gap it closes was measured: `wiki compile` only creates pages for concepts that do not have one yet, so
   an existing page is never touched - a new article that mentions `DeepSeek` does not add a line to that page.
