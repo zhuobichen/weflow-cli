@@ -425,6 +425,54 @@ def refresh_dataview_blocks(vault: str) -> dict:
             'skipped': skipped, 'topicless': topicless}
 
 
+SUMMARY_BLOCK_RE = re.compile(r'(##\s*[^\n]*摘要\s*\n)(.*?)(?=\n##\s|\Z)', re.DOTALL)
+
+
+def clean_summaries(vault: str) -> dict:
+    """把已有笔记**摘要段**里的微信界面残留洗掉。本地，不调模型。
+
+    为什么需要单独一趟：清洗是**读时做**的（`create_reading_notes` 生成摘要时才调
+    `strip_wx_ads`），所以**那条逻辑生效之前写好的笔记永远不会被清** —— 实测 25,676 篇
+    里有 1,484 篇的摘要带着 `继续滑动看下一个`、`去阅读`、`轻触阅读原文` 这些**页面按钮
+    文字**（不是文章内容）。改生成逻辑只影响以后写的笔记，与 `--refresh-queries` 同一个
+    道理。好消息是不会有新的：新写的本来就干净。
+
+    **只动摘要段，正文一个字不碰。** 正文是原文，清它等于改素材 —— 而残留对正文的害处
+    只是"翻原文时看着乱"，不值这个代价。
+    """
+    from _utils import _AD_PHRASES, strip_wx_ads
+    # **只扫阅读笔记那一层**（`002_Literature`），与 `refresh_dataview_blocks` 同一套目录。
+    # 第一版写的是 `Path(vault).rglob('*.md')` —— 那会扫**整个库**，实测把 `Sources/` 的
+    # 10,949 篇**原文**也洗了（2026-09-28）。那些原文是素材，清洗它们不是这条命令的职责：
+    # 下游生成读的是笔记（`create_reading_notes` 已经读过原文并清过摘要），所以动素材
+    # 只有"翻原文时看着干净"这一个好处，却要付"改素材"的代价。
+    cleaned, untouched, skipped = [], [], []
+    root = Path(vault) / '002_Literature'
+    for path in sorted(root.rglob('*.md')):
+        try:
+            text = path.read_text(encoding='utf-8')
+        except (OSError, UnicodeDecodeError):
+            skipped.append(path.name)
+            continue
+        match = SUMMARY_BLOCK_RE.search(text)
+        if not match:
+            continue
+        segment = match.group(2)
+        # **判据必须是"真的含界面短语"，不能是"文本变了"**：`strip_wx_ads` 末尾还有空白
+        # 规整与 `.strip()`，任何首尾带空白的段落都会"变"，拿它当判据会全量重写（2026-09-28
+        # 我在测量时正好踩过这一脚：判据恒真，于是报出 25,676 篇全部命中）。
+        if not any(phrase in segment for phrase in _AD_PHRASES):
+            untouched.append(path.name)
+            continue
+        fresh = strip_wx_ads(segment)
+        if fresh == segment:
+            untouched.append(path.name)
+            continue
+        path.write_text(text[:match.start(2)] + fresh + text[match.end(2):], encoding='utf-8')
+        cleaned.append(path.name)
+    return {'cleaned': cleaned, 'untouched': untouched, 'skipped': skipped}
+
+
 def main():
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')
     import argparse
@@ -432,9 +480,20 @@ def main():
     parser.add_argument('--date', help='日期 YYYY-MM-DD（--refresh-queries 时不需要）')
     parser.add_argument('--source', default=DEFAULT_SOURCE, help='文章目录')
     parser.add_argument('--vault', default=DEFAULT_VAULT, help='Vault 目录')
+    parser.add_argument('--clean-summaries', action='store_true',
+                        help='只把已有笔记摘要段里的微信界面残留洗掉（本地，不调模型）')
     parser.add_argument('--refresh-queries', action='store_true',
                         help='只做这件事：把已有笔记里的 dataview 查询重写成当前模板（本地，不调模型）')
     args = parser.parse_args()
+
+    if args.clean_summaries:
+        # 本地清洗：动的是本地就能算出来的东西，不必把两万多篇重问一遍
+        result = clean_summaries(args.vault)
+        print('清洗摘要：%d 篇；本来就干净、没动的 %d 篇；读不出来的 %d 篇'
+              % (len(result['cleaned']), len(result['untouched']), len(result['skipped'])))
+        for name in result['skipped'][:5]:
+            print('   跳过:', name[:70])
+        return
 
     if args.refresh_queries:
         result = refresh_dataview_blocks(args.vault)

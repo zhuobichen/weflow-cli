@@ -242,6 +242,27 @@ All notable user-facing changes are recorded here. This project follows [Semanti
 
 ### Changed
 
+- **The WeChat reader residue in note summaries is cleaned up - 1,484 of them, and the scope mistake is recorded
+  too.** The cleaner runs *at read time* (`create_reading_notes` calls `strip_wx_ads` while writing a summary), so
+  notes written before that logic existed were never cleaned: 1,484 of 25,676 carried page-button text inside their
+  summary (`继续滑动看下一个`, `去阅读`, `轻触阅读原文`). New notes are already clean, so this is a one-off
+  backfill: `create_reading_notes --clean-summaries`, local and idempotent. Re-measured afterwards: **0 notes left
+  with residue in the summary**.
+
+  **The first version swept the whole vault** (`Path(vault).rglob('*.md')` instead of the notes layer) and cleaned
+  **10,949 raw articles under `Sources/WeChat`** as well - material, which this command has no business touching.
+  The damage was checked with a diff rather than assumed: what was removed is the page-button phrases and
+  underscore rules, plus 167 lines of whitespace normalisation; **no article content was lost**. `Sources/` has no
+  backup, but it can be re-copied from `output/biz-daily`, so it is reversible - and it was left as is, because
+  reverting would put the interface noise back while leaving the 4,809 articles that have no summary section
+  uncleaned, i.e. a larger inconsistency. The scope is now pinned by a test (the "sweep the whole vault" mutation
+  fails).
+
+  One more criterion worth recording: the check is "this summary section **contains** one of the eight known
+  phrases", **not** "the text changed" - `strip_wx_ads` also normalises whitespace and strips, so any paragraph
+  with a trailing newline "changes", and using that as the trigger rewrites everything (measured while
+  investigating: the criterion was always true and reported all 25,676, against a true answer of 1,484).
+
 - **Two more duplicate pairs merged by hand, out of the 741 Jev had proposed.** The loose "similar name" set
 was narrowed by rule to 27, and reading each one's actual definition left exactly **two** that are the same
 thing (`TRAE IDE Linux 版` / `TRAE IDE Linux 版本`; `100 万 token 上下文窗口` / `100万token上下文`). The

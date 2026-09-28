@@ -224,5 +224,67 @@ class VaultLayoutAgreementTests(unittest.TestCase):
                       '附件目录必须是布局里真的会建出来的那个')
 
 
+class CleanSummariesTests(unittest.TestCase):
+    """清洗已有笔记摘要里的微信界面残留。本地，不调模型。"""
+
+    RESIDUE = '在小说阅读器读本章'
+
+    def build(self, tmp):
+        vault = Path(tmp)
+        (vault / '002_Literature' / 'WeChat').mkdir(parents=True)
+        (vault / 'Sources' / 'WeChat').mkdir(parents=True)
+        note = '---\ntitle: "a"\n---\n\n## 📋 摘要\n\n正文。%s\n\n## 💡 核心观点\n\n- 别的。\n' % self.RESIDUE
+        raw = '---\ntitle: "b"\n---\n\n## 📋 摘要\n\n原文。%s\n\n## 正文\n\n- 别的。\n' % self.RESIDUE
+        (vault / '002_Literature' / 'WeChat' / 'a.md').write_text(note, encoding='utf-8')
+        (vault / 'Sources' / 'WeChat' / 'b.md').write_text(raw, encoding='utf-8')
+        return vault, note, raw
+
+    def test_只扫阅读笔记那一层_素材一个字都不动(self):
+        """**这是踩过的坑**：第一版写的是 `Path(vault).rglob('*.md')`，那会扫**整个库** ——
+        实测把 `Sources/` 的 10,949 篇**原文**也洗了，而那些是素材，不是这条命令的职责。
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            vault, _, _ = self.build(tmp)
+            result = crn.clean_summaries(str(vault))
+            note = (vault / '002_Literature' / 'WeChat' / 'a.md').read_text(encoding='utf-8')
+            raw = (vault / 'Sources' / 'WeChat' / 'b.md').read_text(encoding='utf-8')
+        self.assertEqual(len(result['cleaned']), 1, '只有笔记那一篇该被清')
+        self.assertNotIn(self.RESIDUE, note, '笔记摘要里的残留要清掉')
+        self.assertIn(self.RESIDUE, raw, '**素材一个字都不能动**')
+
+    def test_只动摘要段_后面的章节不受影响(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            vault, _, _ = self.build(tmp)
+            crn.clean_summaries(str(vault))
+            note = (vault / '002_Literature' / 'WeChat' / 'a.md').read_text(encoding='utf-8')
+        self.assertIn('## 💡 核心观点', note, '摘要段之后的章节要原样留着')
+        self.assertIn('- 别的。', note)
+        self.assertIn('---', note, 'frontmatter 的分隔线不能被吃掉')
+
+    def test_判据是含界面短语而不是文本变了(self):
+        """`strip_wx_ads` 末尾还有空白规整与 `.strip()`，所以**它几乎总会改点什么** ——
+        拿"文本变了"当判据会把全库重写一遍（我测量时正好踩过：报出 25,676 篇全部命中）。
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = Path(tmp)
+            (vault / '002_Literature').mkdir(parents=True)
+            (vault / '002_Literature' / 'clean.md').write_text(
+                '---\ntitle: "c"\n---\n\n## 📋 摘要\n\n\n干净的一段。\n\n## 别的\n\n- x\n',
+                encoding='utf-8')
+            result = crn.clean_summaries(str(vault))
+        self.assertEqual(result['cleaned'], [], '本来就干净的不许动')
+        self.assertEqual(len(result['untouched']), 1)
+
+    def test_幂等(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            vault, _, _ = self.build(tmp)
+            crn.clean_summaries(str(vault))
+            first = (vault / '002_Literature' / 'WeChat' / 'a.md').read_text(encoding='utf-8')
+            again = crn.clean_summaries(str(vault))
+            second = (vault / '002_Literature' / 'WeChat' / 'a.md').read_text(encoding='utf-8')
+        self.assertEqual(again['cleaned'], [], '第二遍没有可清的了')
+        self.assertEqual(first, second)
+
+
 if __name__ == '__main__':
     unittest.main()
