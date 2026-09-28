@@ -151,6 +151,26 @@ function readEndpoint() {
   }
 }
 
+/**
+ * 把端点文件里的 token 种成 HttpOnly cookie。开窗时用一次，**凭据失效时也用它**。
+ *
+ * 为什么需要"再用一次"：token 是**每次守护进程启动新生成**的（`server.ts` 的
+ * `generateToken()`），而窗口的 cookie 是打开那一刻种下的。所以 `assistant stop/start`
+ * 之后，一个还开着的窗口手里是**死凭据**：`/api/status` 回 401、静态资源（球的脸图，
+ * `Cache-Control: no-store`）也回 401 —— 表现是**球变成空白**，而窗口本身看着还在。
+ * 2026-09-28 实测：窗口比守护进程早 25 小时，图标就是这么没的。
+ */
+async function applyEndpointCookie(endpoint) {
+  await session.defaultSession.cookies.set({
+    url: `http://127.0.0.1:${endpoint.port}`,
+    name: COOKIE_NAME,
+    value: endpoint.token,
+    httpOnly: true,
+    sameSite: 'strict',
+  })
+}
+
+
 function errorPage(message, hint) {
   const html = `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8">
 <style>body{margin:0;height:100vh;display:flex;flex-direction:column;justify-content:center;
@@ -202,13 +222,7 @@ async function buildWindow() {
     await win.loadURL(errorPage('助手没在运行', '先在终端跑一次 weflow-cli assistant start，再打开本机面板。'))
   } else {
     // token → HttpOnly cookie → 然后才 loadURL。**token 不进 URL、不进 argv、不进渲染进程。**
-    await session.defaultSession.cookies.set({
-      url: `http://127.0.0.1:${endpoint.port}`,
-      name: COOKIE_NAME,
-      value: endpoint.token,
-      httpOnly: true,
-      sameSite: 'strict',
-    })
+    await applyEndpointCookie(endpoint)
     await win.loadURL(`http://127.0.0.1:${endpoint.port}/panel`)
   }
 
@@ -422,6 +436,28 @@ if (!app.requestSingleInstanceLock()) {
     })
     ipcMain.handle('panel:dragEnd', () => { dragOrigin = null; return null })
     ipcMain.handle('panel:info', () => ({ daemonRunning: !!readEndpoint(), endpointFile: ENDPOINT_FILE }))
+    /**
+     * 凭据失效时自愈：重读端点文件（守护进程每次启动都换 token），刷新 cookie 并重载。
+     *
+     * 触发者是页面（它先看到 401）。**两种"不修"要说清**，否则会把故障换成另一种故障：
+     * - 端点文件里的 token 与现有 cookie **一样** → 401 不是凭据过期引起的，别重载（否则
+     *   页面在别的原因 401 上无限重载）；
+     * - 端点文件读不出来（守护进程没跑）→ 也别重载，那会把"助手没在运行"的提示刷掉。
+     * 再加一道 5 秒节流兜底：**重载风暴比空白球更难排查**。
+     */
+    let lastRepairAt = 0
+    ipcMain.handle('panel:repair', async () => {
+      if (Date.now() - lastRepairAt < 5000) return { ok: false, code: 'TOO_SOON' }
+      lastRepairAt = Date.now()
+      const fresh = readEndpoint()
+      if (!fresh) return { ok: false, code: 'DAEMON_DOWN' }
+      const url = `http://127.0.0.1:${fresh.port}`
+      const current = (await session.defaultSession.cookies.get({ url, name: COOKIE_NAME }))[0]
+      if (current && current.value === fresh.token) return { ok: false, code: 'SAME_TOKEN' }
+      await applyEndpointCookie(fresh)
+      if (win && !win.isDestroyed()) win.webContents.reload()
+      return { ok: true, code: 'RELOADED' }
+    })
     ipcMain.handle('panel:quit', (_event, what) => {
       app.isQuitting = true
       if (what === 'assistant') spawnCli(['assistant', 'stop', '--yes', '--json'])

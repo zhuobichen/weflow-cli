@@ -785,8 +785,13 @@ export const TOOL_DEFS: ToolDef[] = [
     type: 'function',
     function: {
       name: 'get_reading_stats',
-      description: '公众号推送与日报处理的统计：哪些号发得多、哪些被日报处理得多。'
-        + '回答"我最近都在读什么/哪个号发得最多"这类问题时用它。'
+      description: '**公众号**推送与日报处理的统计：哪些号发得多、哪些被日报处理得多。'
+        + '适合"哪个号发得最多""日报处理了多少篇"这类问题。'
+        // 原文写的是「回答"我最近都在读什么/哪个号发得最多"这类问题时用它」——
+        // 而"我最近在读什么"**正是微信读书的问题**。2026-09-28 实测：用户问"我在读什么书"，
+        // 模型抓住这一句用了它，返回一串公众号推送量（"发得最多的是红星新闻"），
+        // 用户看到的就是一个答非所问的答复。工具没错，错在这句说明侵占了读书的问题空间。
+        + '**它统计的是公众号推送与日报，不含读书数据**——"我在读什么书"那类问题不要用它。'
         + '**日报没在跑的时候它会直说**（那不是"没内容"）。',
       parameters: {
         type: 'object',
@@ -916,6 +921,25 @@ export function unavailableToolReason(name: string, config: (key: any) => any = 
   const need = TOOL_REQUIREMENTS[name]
   if (!need) return null
   return String(config(need.key) || '').trim() ? null : need.why
+}
+
+/**
+ * 这台机器上**没启用**的能力，一句话一条，给系统提示词用。
+ *
+ * 为什么需要它：工具被藏起来之后，模型**看不见它存在**，于是用户问"我在读什么书"时它答
+ * "我没有 get_weread 这个工具" —— 2026-09-28 实测就是这么一轮对话，用户因此以为功能没做
+ * （其实做了、只是没配 key）。把"存在但没启用"告诉模型，它就能给出正确的下一步，
+ * 而不是否认这个功能存在。
+ *
+ * **这不等于把工具摆回去**：模型依然调不到它们，只是知道它们存在。把跑不了的工具放进工具表
+ * 的代价是实测过的（模型会去试，答复里带着一串报错，见 `availableToolDefs` 的说明）。
+ */
+export function unavailableCapabilities(
+  config: (key: any) => any = configService.get.bind(configService),
+): string[] {
+  return Object.entries(TOOL_REQUIREMENTS)
+    .filter(([name]) => unavailableToolReason(name, config))
+    .map(([, need]) => need.why)
 }
 
 /** 这台机器上真正可用的工具表。快路径派发也要过同一道判据（见 `unavailableToolReason`）。 */

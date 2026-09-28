@@ -13,7 +13,8 @@ import { selectFactsForInjection, frameLocalData } from './assistantMemory.js'
 import { configService } from './configService.js'
 import { AssistantMemory, type ChatTurn } from './assistantMemory.js'
 import { privacyGate } from './assistantPrivacy.js'
-import { TOOL_DEFS, availableToolDefs, unavailableToolReason, executeTool } from './assistantTools.js'
+import { TOOL_DEFS, availableToolDefs, unavailableCapabilities, unavailableToolReason,
+         executeTool } from './assistantTools.js'
 import type { AttachedImage, ToolContext } from './assistantTools.js'
 import { producedContent } from './assistantTools.js'
 import { recordTurn, describeForChat, summarizeArgs, clipReasoning } from './assistantTrace.js'
@@ -327,6 +328,15 @@ export class AssistantService {
     // 当前时间：**没有它，任何相对时间都是猜**。"上周三""昨天""这周"要变成工具能用的
     // 日期，模型得先知道今天是几号（`get_messages` 的 since/until 就是这么用的）。
     const parts = [BASE_PROMPT, `[当前时间] ${nowLine()}（本机时区）`, this.privacyStateLine()]
+    // **没启用的能力要说出来**，否则模型的工具表里看不到它们，用户一问就得到"我没有这个工具"
+    // —— 那是把"没配置"说成了"没这功能"（2026-09-28 实测：用户因此以为微信读书没做）。
+    // 注意这只是**告诉**它这些存在，它依然调不到；见 `unavailableCapabilities` 的说明。
+    const missing = unavailableCapabilities()
+    if (missing.length) {
+      parts.push('[本机没启用的能力]' + SEP + missing.map(line => `· ${line}`).join(SEP)
+        + SEP + '（这些工具**不在你的工具表里**，但你调不到的原因只是没配置，**不是这个功能不存在**。'
+        + '用户问到时直说"这块还没配置"并给出上面那个配置项，**不要说"我没有这个工具"**。）')
+    }
     const summary = this.memory.summary(userId)
     if (summary) {
       parts.push('[此前对话摘要]' + SEP + frameLocalData('memory.summary', summary))

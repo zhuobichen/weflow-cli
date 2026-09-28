@@ -94,7 +94,11 @@ test('渲染进程不碰文件系统、不碰进程、不碰凭据', () => {
 test('preload 只暴露固定的几个方法，且**不含**通用的 on/send', () => {
   const preload = code('preload.cjs')
   const exposed = [...preload.matchAll(/^\s{2}(\w+):/gm)].map((m) => m[1]).sort()
-  assert.deepEqual(exposed, ['dragEnd', 'dragMove', 'dragStart', 'info', 'onMode', 'openQuickMenu', 'quit', 'setMode'])
+  // `repair` 是 2026-09-28 加的：守护进程每次启动换 token，还开着的窗口手里就成了死凭据
+  // （球的脸图 401 → 变空白）。它**只让主进程重读端点文件并重载**，页面依旧拿不到 token ——
+  // 所以加它不违反这条用例的本意，但**必须显式改这一行**，不能悄悄变宽。
+  assert.deepEqual(exposed,
+    ['dragEnd', 'dragMove', 'dragStart', 'info', 'onMode', 'openQuickMenu', 'quit', 'repair', 'setMode'])
   // 通用订阅才是危险的：通道名一旦由渲染进程决定，那层隔离就名存实亡
   assert.doesNotMatch(preload, /on\s*:\s*\(/, '不许暴露通用的 on(name, cb)')
   assert.doesNotMatch(preload, /send\s*:\s*\(/)

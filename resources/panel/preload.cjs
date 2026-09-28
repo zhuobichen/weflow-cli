@@ -48,6 +48,13 @@ contextBridge.exposeInMainWorld('weflowPanel', {
   /** 主进程侧的实际状态，供界面显示"关窗后助手还在跑"这类事实 */
   info: () => ipcRenderer.invoke('panel:info'),
   /**
+   * 凭据失效时请主进程换一张（重读端点文件 + 刷新 cookie + 重载）。
+   *
+   * 页面**看不到 token**，也不该看到——所以这件事只能由主进程做，页面只负责触发。
+   * 助手没在跑、或 token 本来就没变时它**不重载**，返回一个 code 让页面自己决定怎么说。
+   */
+  repair: () => ipcRenderer.invoke('panel:repair'),
+  /**
    * 主进程把窗口切成了球形态/气泡形态时通知页面。**通道名是常量，不由调用方给**。
    *
    * 载荷在这里**收窄**过再交出去：`mode` 只认 'ball'/'chat'，`side` 只认 'left'/'right'，

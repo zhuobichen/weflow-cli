@@ -8,6 +8,43 @@ All notable user-facing changes are recorded here. This project follows [Semanti
 
 ### Fixed
 
+- **The panel ball went blank after the assistant restarted, and it now repairs itself.** The
+  daemon generates a fresh token on every start, and the window's cookie is planted when it opens -
+  so a window that outlives a restart holds dead credentials. Every `/panel/*` request then answers
+  401, and because those responses carry `Cache-Control: no-store` the ball's face (`panel.css`
+  loads it as a background image) fails to load: **a blank ball, with the window otherwise looking
+  normal**. Measured: the window had been open 25 hours against a daemon 25 hours younger, which is
+  how this was found - the user reported "my agent icon is gone".
+
+  The window can now recover by itself. Its status poll already distinguishes the case, and on
+  `UNAUTHORIZED` it asks the main process to re-read the endpoint file, refresh the cookie and
+  reload. The credentials still never reach the renderer - the main process does the reading, which
+  is where they belong; the preload's exposed surface grows by exactly one method and
+  `test/panel-packaging.test.ts` pins that list, so widening it stays a deliberate act. Two guards
+  keep the cure from being worse than the disease: **the reload only happens when the file's token
+  actually differs** from the cookie (otherwise an unrelated 401 would reload forever), and there is
+  a five-second floor plus a three-attempt cap in the page, because **a reload storm is harder to
+  diagnose than a blank ball**. Verified end to end by restarting the daemon and watching the
+  window reload on its own: the log's load counter went 73 → 74 with nobody touching the window.
+
+- **The assistant denied that unconfigured capabilities existed.** A tool whose prerequisite key is
+  missing is deliberately left out of the tool table - a tool that cannot run makes the model try it
+  and apologise with errors in the answer. But the model then has no way to know it exists, so
+  asking "what am I reading" produced **"I don't have a get_weread tool"**. That is true about the
+  tool table and false about the product: the feature was built, it just was not configured, and the
+  user reasonably concluded it had never been built. The system prompt now carries a
+  `[本机没启用的能力]` line naming each missing prerequisite and telling the model to answer "this
+  part is not configured" with the setting to change, **not** "I don't have that tool". The tools
+  stay unavailable - this only stops the model from denying the feature exists. Verified by asking:
+  the answer is now "can't do it, the only reason is dashscopeApiKey isn't configured".
+
+- **`get_reading_stats`'s description claimed a question it cannot answer.** It said to use it for
+  "what have I been reading lately" - which is exactly the WeRead question, so with `get_weread`
+  hidden the model reached for this tool and returned public-account push counts ("the most active
+  account is 红星新闻"). The tool was right; the sentence had taken over another capability's
+  question space. It now says what it covers (public-account pushes and daily-report processing) and
+  that it carries no reading data.
+
 - **`weflow-cli weread ...` read the key from a different place than the assistant did, so
   configuring it satisfied one and not the other.** The CLI read `WEREAD_API_KEY` from the
   environment (which is what WeRead's own setup page tells you to export); the assistant's

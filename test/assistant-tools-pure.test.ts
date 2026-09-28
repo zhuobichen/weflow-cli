@@ -14,7 +14,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 
 const { isSafeUrl, stripTags, extractText, extractFromChallengePage,
-        availableToolDefs, unavailableToolReason } =
+        availableToolDefs, unavailableToolReason, unavailableCapabilities } =
   await import('../src/services/assistantTools.js')
 
 test('公网 http(s) 链接放行', () => {
@@ -144,6 +144,24 @@ test('没配 key 的工具不出现在工具表里（摆了跑不了的，模型
   assert.equal(full.includes('search_semantic'), true)
   assert.equal(full.includes('get_weread'), true)
   assert.equal(full.length, withoutKeys.length + 2)
+})
+
+test('被藏掉的能力要能说出来 —— 否则模型只会说"我没有这个工具"', () => {
+  // 2026-09-28 实测：用户问"我在读什么书"，助手答"没有 get_weread 这个工具"。工具**是有的**，
+  // 只是没配 key 被藏了 —— 而模型看不见它就只知道没有。用户因此以为功能没做。
+  // 这两个函数的分工：`availableToolDefs` 决定"摆不摆"，`unavailableCapabilities` 决定
+  // "告不告诉模型它存在"。前者不能放宽（摆了跑不了的，模型会去试），所以补的是后者。
+  const empty = () => ''
+  // 空配置下三个都要说出来（`draft_reply` 只要求 DeepSeek，但空配置下它同样跑不了）
+  // 比排序后的结果：这份清单进的是提示词，顺序无关紧要，测试不该依赖字典的声明顺序
+  assert.deepEqual(unavailableCapabilities(empty).sort(),
+    ['微信读书需要 wereadApiKey', '语义检索需要 dashscopeApiKey',
+     '起草回复需要 deepseekApiKey（生成那一步）'].sort())
+  // 配上一个就少一条，而且说的还是人话（带配置项名，模型能照着告诉用户怎么配）
+  const onlyWeread = (key: string) => (key === 'wereadApiKey' ? 'k' : '')
+  assert.deepEqual(unavailableCapabilities(onlyWeread).sort(),
+    ['语义检索需要 dashscopeApiKey', '起草回复需要 deepseekApiKey（生成那一步）'].sort())
+  assert.deepEqual(unavailableCapabilities(() => 'k'), [], '都配齐了就没得说')
 })
 
 test('过滤的理由要说得出是哪一样缺了', () => {

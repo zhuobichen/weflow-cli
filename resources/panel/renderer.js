@@ -151,12 +151,41 @@ function explain(code, fallback) {
   }
 }
 
+/** 已请求过几次自愈。成功会重载页面，这个计数自然归零 */
+let repairTries = 0
+
+/**
+ * 凭据失效时请主进程换一张。
+ *
+ * **为什么需要它**：token 是守护进程每次启动新生成的，而窗口的 cookie 是打开那一刻种的。
+ * 所以 `assistant stop/start` 之后，还开着的窗口手里是死凭据——`/api/status` 与**球的脸图**
+ * （`Cache-Control: no-store`）一起 401，表现是**球变成空白**。2026-09-28 实测到：窗口比守护
+ * 进程早 25 小时，用户看到的是"图标不见了"，而状态栏那句"凭据失效了"在球形态下根本没人看。
+ *
+ * 连试三次还不行就停手：**重载风暴比空白球更难排查**，剩下的交给状态栏那句话。
+ */
+async function requestRepair() {
+  if (repairTries >= 3) return
+  repairTries += 1
+  try {
+    const r = await weflowPanel.repair()
+    if (r && r.ok) return                       // 主进程会重载页面，这里不用做别的
+    if (r && r.code === 'DAEMON_DOWN') {
+      statusEl.textContent = '助手没在运行。先在终端跑 weflow-cli assistant start。'
+    }
+  } catch {
+    // 主进程没接上就算了这个（例如旧版 preload），状态栏那句话已经说了该做什么
+  }
+}
+
 async function refreshStatus() {
   try {
     const res = await fetch('/api/status', { credentials: 'same-origin' })
     if (!res.ok) {
       const body = await res.json().catch(() => ({}))
       statusEl.textContent = explain(body.code, '连接异常')
+      // 只有**凭据过期**这一类能自愈；别的 401/403 重载多少次都一样
+      if (body.code === 'UNAUTHORIZED') requestRepair()
       return
     }
     const s = await res.json()
