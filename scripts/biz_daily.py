@@ -212,19 +212,29 @@ def _group_by_topic(articles):
     return groups, fallbacks
 
 
-def _classify_with_jev(client, title, body, topics):
+def _classify_with_jev(client, title, body, topics, noise=None):
     """让 Jev 判断这一篇；**问不出来就返回 None**，由调用方逐篇退回老路。
 
     这里刻意吞掉异常（包括 `JevError` 之外的意外），因为"分类这一篇失败"
     不该让整天的日报挂掉。但异常类型会打出来——一个真的写错了的行号不该
     在日志里长得跟"网络抖了一下"一样。
+
+    `noise` 可选（见 `_classify_articles_parallel`）：把**同一条**失败折叠成一次输出。
+    一天上百篇全因同一个原因失败时（实测：判断层按地区不可用，HTTP 451），打上百行
+    等于没说；而**没见过的异常类型或没见过的消息仍然每次照打**——折叠的是重复，不是未知。
     """
     if client is None:
         return None
     try:
         return client.decide_article(title, body, topics)
     except Exception as error:
-        print(f'    [WARN] Jev 分类失败（{type(error).__name__}），本篇退回 LLM 解析：{error}')
+        signature = (type(error).__name__, str(error)[:200])
+        if noise is not None and signature in noise['seen']:
+            noise['repeat'] += 1
+        else:
+            if noise is not None:
+                noise['seen'].add(signature)
+            print(f'    [WARN] Jev 分类失败（{type(error).__name__}），本篇退回 LLM 解析：{error}')
         return None
 
 
@@ -284,9 +294,12 @@ def _classify_articles_parallel(articles, client, topics, workers=JEV_WORKERS):
 
     started = time.time()
     decisions = {}
+    # 同一条失败折叠成一次输出（见 `_classify_with_jev`）：一天上百篇同一个原因失败时，
+    # 逐篇刷同一行等于没说；但没见过的异常/消息仍然照打。
+    noise = {'seen': set(), 'repeat': 0}
     with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
         futures = {
-            pool.submit(_classify_with_jev, client, title, body, topics): index
+            pool.submit(_classify_with_jev, client, title, body, topics, noise): index
             for index, title, body in todo
         }
         for future in as_completed(futures):
@@ -296,6 +309,8 @@ def _classify_articles_parallel(articles, client, topics, workers=JEV_WORKERS):
     # 先报个数：并发之后逐篇日志没有意义了，但这三件事必须看得见。
     print(f'  分类完成 {ok}/{len(todo)} 篇，耗时 {time.time() - started:.1f}s'
           f'（{workers} 并发；串行约需 {len(todo) * 0.97:.0f}s）')
+    if noise['repeat']:
+        print(f'  [WARN] 另有 {noise["repeat"]} 篇因**同一条**失败被折叠（原因已在上面打过一次）')
     return decisions
 
 
@@ -473,13 +488,13 @@ def get_db_keys(config):
     contact_salt = config.get('contactSalt', '')
     contact_key = decrypt_lock(contact_key_enc) if contact_key_enc else ''
 
-    # biz_message_0.db（订阅号库）：钥匙派生统一在 `_utils.biz_message_db()`。
-    # 这块原来自己算了两遍（先按 bizKey/bizSalt，又被下面按 passphrase 派生的一遍覆盖），
-    # 两遍并存就是分叉留下的痕迹 —— 见那个函数的注释。
-    from _utils import biz_message_db
-    try:
-        biz_db, biz_key, biz_salt = biz_message_db(config)
-    except RuntimeError as exc:
+    # biz_message_0.db（订阅号库）：钥匙派生统一在 `_utils.biz_message_db()`。
+    # 这块原来自己算了两遍（先按 bizKey/bizSalt，又被下面按 passphrase 派生的一遍覆盖），
+    # 两遍并存就是分叉留下的痕迹 —— 见那个函数的注释。
+    from _utils import biz_message_db
+    try:
+        biz_db, biz_key, biz_salt = biz_message_db(config)
+    except RuntimeError as exc:
         raise SystemExit(str(exc))
 
     return {

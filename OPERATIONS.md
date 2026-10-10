@@ -751,6 +751,9 @@ python scripts/generate_html.py --date 2026-09-05 --exclude-topics "新闻,投�
 - 分类要把文章标题与正文发往 `api.typesafe.ai`——和生成摘要发给 DeepSeek 是同一类动作，
   想完全不出网就用 `weflow-cli daily --no-ai`。
 - 排查用 `python scripts/biz_daily.py --date <日期> --classifier llm`（强制老路径）对比。
+- 如果日志里出现 `HTTP 451 … not available in your region`：那是**判断层按地区不可用**（服务端策略，不是配置错）。
+  日报不会因此坏掉——每篇都会退回老的 LLM 解析路径，只是白试一次；想让这一天的日报**连试都不试**，
+  加 `--classifier llm` 就行。同一条失败在日志里已经折叠成一次（`另有 N 篇因…被折叠`），不会刷屏。
 - 只要判断、不要生成（连 DeepSeek key 都不需要）：`weflow-cli daily --no-summary`。摘要/标签/简报一律不生成，md 里不会有 `## AI 摘要` 段；主题与相关度仍由 Jev 判断。流水线里下游步骤（行动建议/概念编译/AI 报告）仍会用 LLM，要全关再加 `--skip-classify --skip-wiki --skip-ai-report`。
 
 启动指定日期阅读器：

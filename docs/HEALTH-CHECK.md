@@ -89,6 +89,7 @@ schtasks /create /tn "WeFlow Health Check" ^
 
 | 问题 | 现象 | 为什么没自动修 |
 | --- | --- | --- |
+| 判断层按**地区**不可用 | `decide.py` 与日报的 Jev 分类都拿到 `HTTP 451: {"title":"Typesafe is not available in your region."}` | **不能修**（服务端策略；本机 2026-10-10 实测）。功能不坏，是**逐篇/整轮退回老路径**：助手按设计回退（日志里那行 `判断层不可用: HTTP 451…`），日报每篇退回 LLM 解析。**已改**：同一条失败在日报日志里**折叠成一次**（`另有 N 篇因**同一条**失败被折叠`），此前上百篇会刷上百行同一句话；要连这一次尝试也省掉就用 `--classifier llm`（`OPERATIONS.md` 里已写明）。 |
 | 未知 talker 的退出码不一致 | `messages <拼错的wxid>` 退出 0 且 `success:true`；同样输入 `export` 退出 1 | **退出码刻意不动**（"没有消息"不是错误，脚本与 MCP 依赖它），但**歧义已经说出来**（2026-10-09）：`messages` 遇到 `wxid_`/`@chatroom`/`@openim` 形状、而会话与联系人都不认识它时，人看的输出补一句「这个 ID 既不在会话里、也不在联系人里……先确认有没有拼错」，`--json` 里多一个可选的 `note` 字段（`success` 与退出码都不变）。真实命令跑过：`messages wxid_zzz_not_a_real_id --json` → `{"success":true,…,"note":"这个 ID 既不在会话里、也不在联系人里：…"}`，退出码 0。判定逻辑是纯函数 `emptyMessagesNote`（`src/services/messageQuery.ts`），接线处有守卫测试 |
 | `whitelist list` / `blacklist list` 空列表 | 曾只输出一个换行，没有「为空」提示 | **已修**（2026-10-09 复核）：不带参数时打印 `白名单为空` / `黑名单为空` 加一条「怎么添加」（`bin/weflow-cli.ts:2269`、`:2457`）；`whitelist list --json` 与 `blacklist list --json` 都返回 `{"success":true,"entries":[]}` —— 三条都用真实命令跑过，不是读代码推断的 |
 | `dashscopeApiKey` **曾**无法通过 `config set` 写入 | 脚本会读它，但它当时不在 `CliConfig` 里 ⇒ `config set` 拒绝、只能手改 config.json | **已修**（`favPassphrase` 是同一轮发现的）：键已声明、加密存储、`config set` 可写；守卫见 `test/config_keys_declared_test.py` |

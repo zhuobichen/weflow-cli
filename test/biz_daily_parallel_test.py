@@ -789,3 +789,43 @@ class FetchCacheDoesNotNeedTheConverterTests(unittest.TestCase):
         fake.HTML2Text = lambda: types.SimpleNamespace(handle=lambda html: html)
         with patch.dict(sys.modules, {'html2text': fake}):
             self.assertIs(sys.modules['html2text'], fake)
+
+
+class JevFailureNoiseTests(unittest.TestCase):
+    """同一个原因失败很多次时，日志该长什么样。
+
+    实测到的情形：判断层按**地区**不可用（`HTTP 451: Typesafe is not available in your
+    region.`），一天上百篇全都会失败。此前每篇都打一行 `[WARN] Jev 分类失败（…）`，
+    上百行同样的告警等于没说——而"这一轮到底为什么没判成"反而没人看得见。
+
+    折叠的边界要用**两种**断言钉住：重复的被折叠**且**没见过的照打。只钉前者的话，
+    一个把所有异常都吞掉、只打一行的实现也能过——那正好会把"真的写错了"藏起来。
+    """
+
+    def run_helper(self, articles, client, workers=2):
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            decisions = biz._classify_articles_parallel(articles, client, TOPICS, workers=workers)
+        return buffer.getvalue(), decisions
+
+    def test_the_same_failure_is_folded_into_one_line(self):
+        articles = [article(f'AI 第{i}篇') for i in range(6)]
+        client = StubClient(fail_on={f'AI 第{i}篇' for i in range(6)})
+        out, decisions = self.run_helper(articles, client)
+
+        self.assertEqual(len(client.seen), 6, '每篇仍然各试一次：回退是按篇的，不是整批放弃')
+        self.assertEqual(out.count('Jev 分类失败'), 1, '同一条失败只打一次，否则上百篇就是刷屏')
+        self.assertIn('另有 5 篇因**同一条**失败被折叠', out)
+        self.assertEqual(list(decisions.values()), [None] * 6, '失败就是失败，不许编一个判断出来')
+
+    def test_unseen_failures_are_never_folded_away(self):
+        class DistinctFailureClient:
+            def decide_article(self, title, body, topics):
+                raise RuntimeError(f'第 {title} 篇出了别的问题')
+
+        articles = [article(f'AI 第{i}篇') for i in range(4)]
+        out, _ = self.run_helper(articles, DistinctFailureClient())
+
+        self.assertEqual(out.count('Jev 分类失败'), 4,
+                         '没见过的消息要照打——一个真的写错了的行号不该被折叠掉')
+        self.assertNotIn('被折叠', out)
