@@ -42,8 +42,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _utils import (CHAT_CARD_PREFIX, SEPARATOR, call_deepseek, decrypt_lock,  # noqa: E402
-                    get_api_key, load_config,
+from _utils import (CHAT_CARD_PREFIX, LinkNamer, SEPARATOR,  # noqa: E402
+                    call_deepseek, decrypt_lock, get_api_key, line_concepts_path, load_config,
                     note_path as _shared_note_path, plain, write_with_frontmatter)
 from reply_debt import collect_conversations, format_line  # noqa: E402
 
@@ -179,12 +179,15 @@ def parse_note(raw):
     }
 
 
-def render_note(note, name, days, updated, messages):
+def render_note(note, name, days, updated, messages, namer=None):
     """卡片 → (frontmatter, body)。
 
     frontmatter 的键是**消费者定的**：`compile_wiki.scan_articles` 读 `title`/`source`/`topic`/`tags`。
     body 的 `## AI 摘要` 标题也是它定的（`_extract_summary` 就找这一段）。
     """
+    # `namer` 由调用方按**库根**建好（`LinkNamer.for_out_dir(<库>/Chat/Concepts)`）：
+    # 这个脚本只管卡片，而"另一条线有哪些名字"要问库 —— 不传就按裸名字渲染（老行为）。
+    namer = namer or (lambda x: x)
     frontmatter = {
         'title': f'{name}',
         'type': 'chat-card',
@@ -212,7 +215,9 @@ def render_note(note, name, days, updated, messages):
                 continue
             parts.append('### %s\n' % label)
             for item in note[key]:
-                parts.append('- [[%s]] %s %s' % (item['name'], SEPARATOR, item['desc']))
+                # 跨线同名要带路径（`namer`，见 `_utils.LinkNamer`）：卡片里这个链接指的是
+                # **聊天线**那张概念页，而两条线同名时裸 `[[名字]]` 在 Obsidian 里是二义的。
+                parts.append('- [[%s]] %s %s' % (namer(item['name']), SEPARATOR, item['desc']))
             parts.append('')
     if note['owed']:
         parts.append('## 欠着什么\n')
@@ -501,6 +506,10 @@ def main():
         return 1
 
     updated = datetime.now(TZ).strftime('%Y-%m-%d %H:%M')
+    # 卡片里指向概念的链接要跨线消歧（两条线同名时带路径）。按**库根**建一次：
+    # 认不出线（自定义 `--vault-root`）时它回一个恒等函数 ⇒ 渲染成裸名字（老行为）。
+    chat_concepts = line_concepts_path('chat') or 'Chat/Concepts'
+    namer = LinkNamer.for_out_dir(Path(args.vault_root).joinpath(*chat_concepts.split('/')))
     written, failed = [], []
     for card in cards:
         prompt = build_note_prompt(card['name'], card['lines'], args.days)
@@ -521,7 +530,8 @@ def main():
             continue
         path = note_path(args.out, card['name'])
         path.parent.mkdir(parents=True, exist_ok=True)
-        frontmatter, body = render_note(note, card['name'], args.days, updated, card['messages'])
+        frontmatter, body = render_note(note, card['name'], args.days, updated, card['messages'],
+                                        namer=namer)
         write_with_frontmatter(str(path), frontmatter, body)
         written.append({'name': card['name'], 'file': str(path),
                         'topics': len(note['topics']), 'people': len(note['people'])})

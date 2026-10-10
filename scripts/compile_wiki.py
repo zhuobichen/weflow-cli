@@ -23,9 +23,11 @@ from pathlib import Path
 from collections import defaultdict, Counter
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _utils import (CHAT_CARD_PREFIX, KNOWLEDGE_LINES, call_deepseek,  # noqa: E402
-                    normalize_concept_name, SEPARATOR, get_api_key, load_config,
-                    parse_frontmatter, write_with_frontmatter)
+from _utils import (CHAT_CARD_PREFIX, KNOWLEDGE_LINES, LinkNamer, call_deepseek,  # noqa: E402
+                    concept_link_target, concept_names, is_line_qualified,
+                    line_for_relative_concepts, link_target_name, normalize_concept_name,
+                    SEPARATOR, sibling_concepts_dir, get_api_key, load_config, parse_frontmatter,
+                    write_with_frontmatter)
 
 # Default paths
 SOURCE_ROOT = 'output/biz-daily'
@@ -228,6 +230,103 @@ def fix_source_links(pages_dir: str, source_dir: str) -> dict:
             pages.append(page.name)
             links += hits[0]
     return {'pages': pages, 'links': links, 'names': len(mapping)}
+
+
+# 「相关概念」那一段里的一行是 `- [[名字]]`（可能带 `|显示文本`）。
+WIKILINK_RE = re.compile(r'\[\[([^\]]+)\]\]')
+
+
+def _qualify_text(text, line_id, ambiguous, concept_page=True):
+    """把指向 `ambiguous` 里那些名字的链接改成带路径；返回 `(新文本, 改了几条)`。
+
+    **避开概念页的 `## 来源` 段**：那一段的链接指的是**卡片**（`- [[会话-甲]] — 标题`），
+    把它改成概念页是另一回事。实测库里这两段的二义链接分布是"相关概念 462 / 来源 0"，
+    所以这条边界没有割掉任何该改的东西——但它挡住了"改错对象"这一类。
+    """
+    head, sep, tail = text, '', ''
+    if concept_page:
+        at = text.find('\n## 来源')
+        if at >= 0:
+            head, sep, tail = text[:at], '\n## 来源', text[at + len('\n## 来源'):]
+    changed = [0]
+
+    def repl(match):
+        raw = match.group(1)
+        name = link_target_name(raw)
+        if name in ambiguous and not is_line_qualified(raw):
+            changed[0] += 1
+            return '[[%s]]' % concept_link_target(line_id, name, ambiguous)
+        return match.group(0)
+
+    return WIKILINK_RE.sub(repl, head) + sep + tail, changed[0]
+
+
+def qualify_links(out_dir, dry_run: bool = False) -> dict:
+    """把**跨线同名**的概念链接改成带路径的形式（`Chat/Concepts/DeepSeek|DeepSeek`）。
+
+    为什么要有：一个 Obsidian 库里两条线各有一张同名页时，裸 `[[DeepSeek]]` 是二义的
+    （官方判据：会 deterministic 解析，但不保证命中你想要的那张）。用户 2026-10-10 选的
+    修法是**同库内消歧**（不是把两条线拆成两个 Obsidian 库），所以链接按名字带上路径。
+
+    **只改"两条线都有"的名字**：只属于一条线的名字，裸写法本来就确定了；全库重写一遍
+    4.9 万张页换不来任何解析上的差别，而那种 diff 没人看得完。
+
+    扫哪些文件：两条线的概念目录、各自旁边的 `00-Overview.md`、以及聊天卡
+    （`Sources/Chat/*.md`，它们的 `- [[概念]] — 说明` 也是概念链接）。**实测**（2026-10-10）
+    全库指向这 36 个名字的链接一共 539 条，全都落在这三类里（`001_Daily` / `002_Literature` /
+    `Sources/WeChat` 一条都没有），所以不扫其余层不会漏。
+
+    认不出线（`--output` 指到库外）时**什么都不做**并说明原因：按猜出来的线改链接，
+    会把链接指到错误的目录，而那不会报错。
+    """
+    out_dir = Path(out_dir)
+    namer = LinkNamer.for_out_dir(out_dir)
+    sibling = sibling_concepts_dir(out_dir)
+    other_line = (line_for_relative_concepts('/'.join(Path(sibling).parts[-2:]))
+                  if sibling else None)
+    if not namer.line_id or not other_line:
+        return {'ok': False, 'reason': '这个输出目录不属于清单里的任何一条线（或找不到另一条线），'
+                                       '不猜着改'}
+    my_line = namer.line_id
+
+    ambiguous = concept_names(out_dir) & concept_names(sibling)
+    # 一张表列出**文件**（不是目录）：`(路径, 它属于哪条线, 是不是概念页)`。
+    # 概念目录要展开成 `*.md`；00-Overview 与聊天卡各自是单个文件。
+    targets = []
+    for line_dir, line_id in ((out_dir, my_line), (Path(sibling), other_line)):
+        for page in sorted(line_dir.glob('*.md')):
+            targets.append((page, line_id, True))
+        overview = line_dir.parent / '00-Overview.md'
+        if overview.is_file():
+            targets.append((overview, line_id, False))
+    cards = out_dir.parent.parent / 'Sources' / 'Chat'
+    if cards.is_dir():
+        for card in sorted(cards.glob('*.md')):
+            targets.append((card, 'chat', False))
+
+    result = {'ok': True, 'ambiguous': len(ambiguous), 'files': 0, 'changed': 0,
+              'pages': [], 'samples': [], 'errors': [], 'dryRun': bool(dry_run),
+              'scanned': [str(t[0]) for t in targets]}
+    if not ambiguous:
+        return result                      # 没有同名就没有二义，什么都不用改
+    for path, line_id, is_concept_page in targets:
+        try:
+            text = path.read_text(encoding='utf-8')
+        except OSError as error:
+            # 读不出来的要**说出来**：静默跳过会让"已消歧"变成一句假话
+            result['errors'].append('%s: %s' % (path.name, error))
+            continue
+        updated, hits = _qualify_text(text, line_id, ambiguous, concept_page=is_concept_page)
+        result['files'] += 1
+        if not hits:
+            continue
+        result['changed'] += hits
+        result['pages'].append(path.name)
+        if len(result['samples']) < 5:
+            result['samples'].append('%s（%d 条）' % (path.name, hits))
+        if not dry_run:
+            path.write_text(updated, encoding='utf-8')
+    return result
 
 
 def collect_dangling_targets(pages_dir: str) -> Counter:
@@ -631,7 +730,7 @@ def replace_source_section(text: str, lines: list) -> str:
 
 
 def build_pages_from_cards(pages_dir: str, card_dirs=None, dry_run: bool = False,
-                           limit: int = 0) -> dict:
+                           limit: int = 0, namer=None) -> dict:
     """**零模型**建页：定义直接用卡片里那句 `desc`，相关概念用共现。本地，不花钱。
 
     为什么可以不要模型：候补概念**全部只被一篇文章提到**，所以"综合多篇来源"没有用武之地
@@ -654,6 +753,7 @@ def build_pages_from_cards(pages_dir: str, card_dirs=None, dry_run: bool = False
 
     existing = {p.stem.casefold() for p in Path(pages_dir).glob('*.md')}
     out_dir = Path(pages_dir)
+    namer = namer or LinkNamer.for_out_dir(out_dir)
     today = time.strftime('%Y-%m-%d')
     # **只差大小写的两个概念名，在 Windows 上是同一个文件。** 原来的实现让后一个覆盖前一个：
     # 一页**没了**，而 `built` 把两个都算了（实测 49,953 页里丢 53：AI 那批 44、这批 9）。
@@ -694,7 +794,8 @@ def build_pages_from_cards(pages_dir: str, card_dirs=None, dry_run: bool = False
         others = [x for x in per_card.get(ref['file'], []) if x != name][:5]
         body = '# %s\n\n%s\n' % (name, definition)
         if others:
-            body += '\n## 相关概念\n\n' + ''.join('- [[%s]]\n' % o for o in others)
+            # `namer` 管跨线同名：两条线都有这个名字时链接要带路径（见 `_utils.LinkNamer`）
+            body += '\n## 相关概念\n\n' + ''.join('- [[%s]]\n' % namer(o) for o in others)
         body += '\n## 来源\n\n- [[%s]] %s %s\n' % (ref['file'], SEPARATOR, ref['title'])
         fm = {
             'title': '"%s"' % name,
@@ -892,7 +993,7 @@ def refresh_sources(pages_dir: str, card_dirs=None, dry_run: bool = False) -> di
 
 
 def iter_concept_pages(jobs: list, api_key: str, workers: int = CONCEPT_PAGES_WORKERS,
-                       origin: str = ''):
+                       origin: str = '', namer=None):
     """并发生成概念页，**按输入顺序**逐个产出 `((name, refs, out_file), result)`。
 
     生成器而不是列表，理由同 `article_notes.iter_concepts`：整批跑完才返回的话，
@@ -905,7 +1006,7 @@ def iter_concept_pages(jobs: list, api_key: str, workers: int = CONCEPT_PAGES_WO
     def one(job):
         name, refs, _ = job
         try:
-            return generate_concept(name, refs, api_key, origin=origin)
+            return generate_concept(name, refs, api_key, origin=origin, namer=namer)
         except Exception as error:
             # **不许静默**。原来这里是 `except Exception: return None`，于是
             # `reference_refs` 少给 `file`/`title` 造成的 KeyError 表现成
@@ -924,8 +1025,10 @@ def iter_concept_pages(jobs: list, api_key: str, workers: int = CONCEPT_PAGES_WO
             yield job, result
 
 
-def generate_concept(name: str, refs: list[dict], api_key: str, origin: str = '') -> str | None:
+def generate_concept(name: str, refs: list[dict], api_key: str, origin: str = '',
+                     namer=None) -> str | None:
     """Call DeepSeek to generate a concept Wiki page."""
+    namer = namer or (lambda x: x)
     # Build references section
     ref_lines = build_ref_lines(refs)
     ref_text = '\n'.join(ref_lines) if ref_lines else '(无详细信息)'
@@ -958,7 +1061,7 @@ def generate_concept(name: str, refs: list[dict], api_key: str, origin: str = ''
     if related:
         body_parts.append('## 相关概念\n\n')
         for rc in related:
-            body_parts.append(f'- [[{rc}]]\n')
+            body_parts.append(f'- [[{namer(rc)}]]\n')
         body_parts.append('\n')
     body_parts.append('## 来源\n\n')
     # **这一节不截断。** 截断是给**喂模型的参考行**留的预算（`build_ref_lines` 的 limit），
@@ -1070,6 +1173,8 @@ def main():
                         help='只把已有页面的"来源"段补齐成**当前全部来源**（本地，不调用模型）')
     parser.add_argument('--pages-from-cards', action='store_true',
                         help='**零模型**给还没有页的概念建页：定义取卡片里那句原话（本地，不花钱）')
+    parser.add_argument('--qualify-links', action='store_true',
+                        help='把跨线同名的概念链接改成带路径的形式（本地重写，不调模型）')
     parser.add_argument('--merge-duplicates', action='store_true',
                         help='把"规范化后同名"的多张页合并成一张（本地，不调模型；**会删页**）')
     parser.add_argument('--cards', action='append', default=None, metavar='DIR',
@@ -1105,6 +1210,25 @@ def main():
         result = build_dangling_pages(args.output, key, args.from_pages, args.workers)
         print('悬空目标 %d 个；本次尝试 %d 个、生成 %d 页、跳过 %d 个'
               % (result['dangling'], result['attempted'], result['generated'], result['skipped']))
+        return
+
+    if getattr(args, 'qualify_links', False):
+        # 本地消歧：两条线同名的那些链接按名字带上路径（`Chat/Concepts/DeepSeek|DeepSeek`），
+        # 免得 Obsidian 里那条裸链接命中另一条线的那张。**不调模型**，所以能随时重跑。
+        dry = getattr(args, 'dry_run', False)
+        result = qualify_links(args.output, dry_run=dry)
+        if not result['ok']:
+            print('没改任何东西：%s' % result['reason'], file=sys.stderr)
+            sys.exit(1)
+        head = '预览（一个字都没写）' if dry else '已消歧'
+        print('%s：两条线同名 %d 个；扫了 %d 个文件，%d 张页上改了 %d 条链接'
+              % (head, result['ambiguous'], result['files'], len(result['pages']), result['changed']))
+        for line in result['samples']:
+            print('  %s' % line)
+        for bad in result['errors']:
+            print('  [WARN] 读不出来：%s' % bad, file=sys.stderr)
+        if not result['changed']:
+            print('  没有需要改的（要么本来就带路径，要么两条线没有同名概念）')
         return
 
     if getattr(args, 'fix_source_links', False):
@@ -1181,6 +1305,9 @@ def main():
     source_dir = args.source
     out_dir = Path(args.output)
     out_dir.mkdir(parents=True, exist_ok=True)
+    # 跨线同名的链接要带路径（见 `_utils.LinkNamer`）：**渲染点有三处**，所以这里建一次、
+    # 一路传下去，而不是每处各判一遍（漏一处就在库里留下一批裸的二义链接）
+    namer = LinkNamer.for_out_dir(out_dir)
 
     # Step 1: Scan
     print(f'=== Step 1: 扫描文章 ===')
@@ -1213,7 +1340,7 @@ def main():
     done = 0
     # 边收边写：生成器一有结果就落盘，不等整批（见 `iter_concept_pages`）
     for (name, refs, out_file), result in iter_concept_pages(
-            jobs, api_key, args.workers, origin=origin_tag(args.source)):
+            jobs, api_key, args.workers, origin=origin_tag(args.source), namer=namer):
         done += 1
         if not result:
             print(f'  [ERR] {name} 没生成出来（{done}/{len(jobs)}）', file=sys.stderr)
@@ -1258,7 +1385,8 @@ def main():
         fm, _ = parse_frontmatter(cf.read_text(encoding='utf-8'))
         # **标题要先去引号再当键**：写出去的是 `title: "甲"`（YAML 安全），而这里的键是裸的 `甲`
         title = str(fm.get('title', cf.stem)).strip().strip('"')
-        index_lines.append(f'| {i+1} | [[{title}]] | {all_counts.get(title, 0)} |')
+        # 索引表的链接同样要消歧（表里指向的也是**这一条线**的那张页）
+        index_lines.append(f'| {i+1} | [[{namer(title)}]] | {all_counts.get(title, 0)} |')
 
     index_path = out_dir.parent / '00-Overview.md'
     with open(index_path, 'w', encoding='utf-8') as f:

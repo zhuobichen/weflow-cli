@@ -325,7 +325,7 @@ class ParallelPageTests(unittest.TestCase):
         import time as _t
         if delay is None:
             delay = lambda name: 0.02 * (5 - len(name))   # noqa: E731
-        def call(name, refs, api_key, origin=''):
+        def call(name, refs, api_key, origin='', namer=None):
             self.seen.append(name)
             _t.sleep(delay(name))
             if name in fail_for:

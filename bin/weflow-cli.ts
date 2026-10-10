@@ -3875,6 +3875,8 @@ program
         .option('--api-key <key>', 'DeepSeek API key')
         .option('--refresh-sources',
                 '只把已有概念页的"来源"段补齐成当前全部来源（本地重写，**不调用模型**）')
+        .option('--qualify-links',
+                '把跨线同名的概念链接改成带路径的形式（本地重写，**不调用模型**）')
         .option('--cards <dir...>', '产卡目录，可写多个；默认所有 output/*-notes（与索引的引用数同一口径）')
         .option('--dry-run', '仅预览，不读取文章、调用 AI 或写入概念页')
         .option('--yes', '确认调用 AI 并生成概念页')
@@ -3900,6 +3902,22 @@ program
             return
           }
 
+          if (opts.qualifyLinks) {
+            // 本地消歧：两条线同名的那些链接按名字带路径（`Chat/Concepts/DeepSeek|DeepSeek`），
+            // 免得 Obsidian 里那条裸链接命中另一条线的那张。**不调模型**，重跑幂等。
+            await runConfirmedPythonMutation({
+              action: 'wiki.qualifyLinks',
+              script,
+              args: ['--qualify-links', '--output', opts.output],
+              cliOptions: opts,
+              preview: { readsLocalKnowledge: true, rewritesExistingPages: true, usesAi: false },
+              confirmationMessage: `确认把 ${opts.output} 里跨线同名的概念链接改成带路径的形式？`
+                + '（本地重写，不调用 AI）',
+              apiKey: opts.apiKey,
+              timeout: 300_000,
+            })
+            return
+          }
           const limit = parseCliInteger(opts.limit, 'limit', 1, 1000, opts.json)
           const minRefs = parseCliInteger(opts.minRefs ?? '1', 'min-refs', 1, 50, opts.json)
           await runConfirmedPythonMutation({

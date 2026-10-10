@@ -418,9 +418,10 @@ weflow-cli search-index --days 3650 --article-days 365 --yes   # 要"整段历�
 | `weflow-cli user-notes --limit N --yes` | **你自己写的**笔记发给 DeepSeek（每篇一次） | 你的笔记**只读、绝不修改**；卡上标 `summary_by: model`（那是模型的理解，不是你的原话）；**你笔记里的 `[[链接]]` 优先** |
 | `weflow-cli wiki compile --source … --min-refs 2 --yes` | 概念发给 DeepSeek（每个概念一次） | `--min-refs 2` 滤掉只被一篇提到的一次性实体 |
 | `weflow-cli wiki compile --refresh-sources --yes` | **不出境** | 只把**已有页**的「来源」段补齐成当前全部来源（本地重写）。**拉完新文章要跑这一条**，否则新文章提到老概念时，那一页不会多出这条边 |
+| `weflow-cli wiki compile --qualify-links --dry-run` | **不出境** | 两条线同名（本机 36 个）时，把指向它们的链接改成带路径的 `[[Chat/Concepts/DeepSeek|DeepSeek]]` —— 否则 Obsidian 里那条裸链接会**命中另一条线**的那张。只改同名的、不碰「来源」段；幂等，重跑不改第二遍。本机实测 539 条 / 477 张页 |
 | `weflow-cli wiki compile --merge-duplicates --dry-run` | **不出境** | 把「规范化后同名」的多张页合并成一张（`GPT 5.6`/`GPT-5.6`/`GPT5.6`）。留来源最多的那张，其余名字进 `aliases`——**指向旧名字的链接一条都不断**，不必改别的文件。**它会删页**，先跑 `--dry-run` 看名单 |
 | `weflow-cli wiki compile --pages-from-cards --cards <线> --dry-run` | **不出境** | 给还没有页的概念建页：定义复用卡片里那句原话、相关概念取共现。**必须指定 `--cards`**（一条线一条线建，否则聊天线会被建进文章线） |
-| `weflow-cli wiki lint` | **不出境** | 断链 / 孤儿 / 空页 / **同一条线内**的同名 / 近似重名 / 退化字段；两条线都有同一个概念名会**单列一节**报出来（`crossLineSameName` —— 设计如此，不是要修的东西）。不传 `--dir` 就体检清单里的全部线 |
+| `weflow-cli wiki lint` | **不出境** | 断链 / 孤儿 / 空页 / **同一条线内**的同名 / **二义链接**（`ambiguousLinks`，修法见下一行的 `--qualify-links`）/ 近似重名 / 退化字段；两条线都有同一个概念名会**单列一节**报出来（`crossLineSameName` —— 设计如此，不是要修的东西）。不传 `--dir` 就体检清单里的全部线 |
 | `weflow-cli wiki graph --open` | **不出境** | 把概念图谱导成一张**自包含**的 3D 页面（`output/knowledge-graph-3d.html`，本机 49,956 个概念约 9MB，**双击就能逛，不需要起服务器**）。库、数据、坐标全部内联进去，所以它不联网 —— `file://` 下 `fetch` 会被 CORS 挡死，而引 CDN 又会把"本地优先"变成"要有网"。坐标是构建期用 Node 算好缓存的（`output/.graph3d-cache/`），只改渲染不会重算；先看规模用 `--dry-run`。**`--min-degree N`** 只画**在原图里**连接数 ≥N 的概念（去掉细枝看骨架：本机 ≥10 只剩 **3,825 点 / 1.09MB**，全量是 5 万点 / 9MB —— 5 万点时那张图看不清，不是不好看，是布局本身就糊）；**`--line wiki|chat`** 只画一条线（文章线 4.8 万 / 聊天线 1,527，两套概念口径不同，混在一起看不出结构）。两者都只改**给页面看的点集**；坐标按图内容分槽缓存（`graph-<hash>.json`），核心图与全量图来回切都不用重算。**`--flat`** 出 2D 版（canvas 平面图，更像 Obsidian 那种；默认写到 `output/knowledge-graph-2d.html`）：布局同样是构建期算好，但**按 2D 重算**而不是把 3D 的 x/y 拍扁（z 那一维也承载结构，拍扁会把两团不相干的点叠在一起），而且它**一个库都不引**（渲染是裸 canvas）。2D 的快得多：3,825 点 250 tick 只要 2.4 秒，页面 0.71MB（3D 同图 1.34MB）。 |
 
 四条卡片来源（文章 / 聊天 / 收藏 / 你自己的笔记）产出的东西是**同一种形状**（带 frontmatter +
@@ -448,7 +449,9 @@ weflow-cli wiki compile --source ./output/chat-notes --output ./output/wechat-va
 - **跨线同名不再跳过**（2026-10-10 起）：两条线各留一张 `DeepSeek` 是设计，图谱里它们标着各自的
   线。**代价**：Obsidian 里 `[[DeepSeek]]` 这条**裸链接未必命中你想要的那一张**（官方判据：有同名
   文件时会 deterministic 地解析，但不保证是哪一张；自带路径的 `[[Chat/Concepts/DeepSeek]]` 才确定）。
-  `wiki lint` 会把这类同名的一个个列出来——要精确指某一条线就点那份名单里的路径。本机当时有 36 个。
+  这个代价**已经按"同库内消歧"修掉了**：`weflow-cli wiki compile --qualify-links` 把指向同名的链接
+  改成带路径的形式（本机 539 条 / 477 张页，幂等）。**新出现的同名要重跑它** —— 体检的
+  `ambiguousLinks` 那一节就是盯着这件事的（列出来并给出命令）。
 - 三种形状自然落下来：**按会话的知识卡**就是第一步入库的那些卡；**主题汇总**与
   **人物/时间线**是第二步把卡里的 `[[话题]]`/`[[人名]]` 聚出来的概念页。
 - **文章线要先用一道提炼**（2026-09-26 实测后补上）：

@@ -25,8 +25,8 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _utils import (CONCEPT_DIRS, KNOWLEDGE_LINES, line_for_concept_dir, line_label,  # noqa: E402
-                    normalize_concept_name, parse_frontmatter)
+from _utils import (CONCEPT_DIRS, KNOWLEDGE_LINES, is_line_qualified, line_for_concept_dir,  # noqa: E402
+                    line_label, link_target_name, normalize_concept_name, parse_frontmatter)
 
 # 这里原来还有一份 `DEFAULT_PAGES_DIR = 'output/wechat-vault/Wiki/Concepts'`：**没人用**，
 # 而它是文章线概念目录的第二份拷贝 —— 谁哪天顺手用了它，聊天线就会静默地不被体检
@@ -74,16 +74,37 @@ def links_by_section(body: str) -> list:
     才真的建了页。所以那一节里的"还没有页"是**扩张候选**，不是坏掉的东西；
     而 `## 来源` 里的 `[[<卡片>.md]]` 断了就是**真断了**（卡片被删或改名）。
     一视同仁地报"40 条死链"，看的人只会以为这里烂掉了。
+
+    名字一律经 `link_target_name` **归一化**（去掉 `|显示文本`、去掉线的路径前缀）：
+    跨线同名的链接写的是 `[[Chat/Concepts/DeepSeek|DeepSeek]]`，不归一化的话这些链接
+    会被当成"带路径的卡片链接"报成断链——而它们其实解析得好好的。
     """
     section, out = '', []
     for line in (body or '').split('\n'):
         if line.strip().startswith('## '):
             section = line.strip()[3:].strip()
             continue
-        for name in _LINK.findall(line):
-            name = name.strip()
+        for raw in _LINK.findall(line):
+            name = link_target_name(raw)
             if name:
                 out.append((section, name))
+    return out
+
+
+def raw_links_by_section(body: str) -> list:
+    """和 `links_by_section` 一样，但**保留原始写法**：`(小节, 原文, 归一化后的名字)`。
+
+    体检要判"这条链接消歧了没有"，而那是**原文**才有的信息（归一化之后两种写法一模一样）。
+    """
+    section, out = '', []
+    for line in (body or '').split('\n'):
+        if line.strip().startswith('## '):
+            section = line.strip()[3:].strip()
+            continue
+        for raw in _LINK.findall(line):
+            raw = raw.strip()
+            if raw:
+                out.append((section, raw, link_target_name(raw)))
     return out
 
 
@@ -146,11 +167,19 @@ def inspect(pages: list, exists, card_links=()) -> dict:
     - `duplicateTitles`：**同一条线内**撞了名字的页（跨线同名不算，另见下一条）；
     - `crossLineSameName`：两条线都有这个名字（**设计使然，不是错误**）—— 合并视图里
       就是靠它看两条线在哪重叠；
+    - `ambiguousLinks`：**指向**"两条线都有"那个名字、又**没带路径**的链接 —— 在 Obsidian
+      里点它会命中哪一张是不确定的。这一项**能修**（`wiki compile --qualify-links`），
+      所以它和上一条不同：上一条不用改，这一条要改；
     - `nearDuplicates`：`{'sameNode': [...], 'contained': [...]}` 两档，可信度差一个量级
       —— 见 `near_duplicate_titles`。
     """
     stems = {page['stem'] for page in pages}
     inbound = {stem: 0 for stem in stems}
+    # 哪条线有哪些名字：下面判"跨线同名""二义链接"都要用，所以先算一次。
+    lines_of = {}
+    for page in pages:
+        lines_of.setdefault(page['stem'], set()).add(page.get('dir', ''))
+    ambiguous_names = {name for name, where in lines_of.items() if len(where) > 1}
     # **别名要归位到它那一页，否则那张页永远被报成孤儿。** 文件名是概念名的一个有损变换
     # （`:` `/ ? * " < > |` 换成 `_`，再截到 60 字符），而指向它的链接用的是**原名**：
     # `resolvable_names` 早就把别名算进"存在"了（所以断链是 0），但**入链计数**这里原来只认页码
@@ -167,9 +196,13 @@ def inspect(pages: list, exists, card_links=()) -> dict:
     for name in card_links:                       # 卡片 → 概念，这是主要入链
         if not (name.endswith('.md') or '/' in name) and stem_of(name) in inbound:
             inbound[stem_of(name)] += 1
-    broken, aspirational, empty = [], [], []
+    broken, aspirational, empty, ambiguous_links = [], [], [], []
     for page in pages:
-        for section, name in links_by_section(page['body']):
+        # 走**保留原文**的那一份：判"消歧了没有"只有原文里有信息（归一化之后两种写法一样）
+        for section, raw, name in raw_links_by_section(page['body']):
+            if name in ambiguous_names and not is_line_qualified(raw):
+                ambiguous_links.append({'page': page['stem'], 'dir': page.get('dir', ''),
+                                        'target': name})
             if exists(name):
                 if not (name.endswith('.md') or '/' in name) and stem_of(name) in inbound:
                     inbound[stem_of(name)] += 1
@@ -197,13 +230,11 @@ def inspect(pages: list, exists, card_links=()) -> dict:
     # **跨线同名另立一节**：它不是错误，是"这两条线在哪些概念上有重叠"——合并视图里
     # 唯一想看的那个数（2026-10-10 实测 36 个）。混进 `duplicateTitles` 的话，
     # 读的人会去"修"一个设计如此的东西。
-    lines_of = {}
-    for page in pages:
-        lines_of.setdefault(page['stem'], set()).add(page.get('dir', ''))
-    cross_line = sorted(name for name, where in lines_of.items() if len(where) > 1)
+    cross_line = sorted(ambiguous_names)
     return {'pages': len(pages), 'broken': broken, 'aspirational': aspirational,
             'orphans': orphans, 'empty': empty, 'duplicateTitles': duplicates,
             'crossLineSameName': cross_line,
+            'ambiguousLinks': ambiguous_links,
             'degenerateFields': degenerate_fields(pages),
             'nearDuplicates': near_duplicate_titles(pages)}
 
@@ -454,6 +485,15 @@ def main():
               % (len(report['crossLineSameName']), '、'.join(report['crossLineSameName'][:12])))
         print('  在 Obsidian 里这些名字的裸链接是**二义的**（官方：可能命中的不是你想要的'
               '那一张）。要精确指着某一条线就用带路径的链接 `[[Wiki/Concepts/名字]]`')
+    if report.get('ambiguousLinks'):
+        rows = report['ambiguousLinks']
+        pages_hit = len({r['page'] for r in rows})
+        print('\n**二义的链接 %d 条**（指向"两条线都有"的名字、又没带路径；%d 张页）：'
+              % (len(rows), pages_hit))
+        for item in rows[:5]:
+            print('  %s → [[%s]]' % (item['page'], item['target']))
+        print('  修：`weflow-cli wiki compile --qualify-links`（本地重写、不调模型；'
+              '先加 `--dry-run` 看条数）')
     if report['aspirational']:
         names = sorted({item['target'] for item in report['aspirational']})
         print('\n还没建页的相关概念 %d 个（**扩张候选，不是错误**）：%s'
@@ -479,8 +519,9 @@ def main():
         for field, info in report['degenerateFields'].items():
             print('  %s: %s（%s/%s 页）' % (field, info['值'], info['页数'], info.get('总页数', report['pages'])))
         print('  多半是上游分类器把整批语料扔进了一个桶——不改分类器的话，别信这个字段')
-    if not any((report['broken'], report['orphans'], report['empty'], report['duplicateTitles'])):
-        print('\n没有需要修的问题（断链/孤儿/空页/同名）')
+    if not any((report['broken'], report['orphans'], report['empty'], report['duplicateTitles'],
+                report.get('ambiguousLinks'))):
+        print('\n没有需要修的问题（断链/孤儿/空页/同名/二义链接）')
     return 0
 
 

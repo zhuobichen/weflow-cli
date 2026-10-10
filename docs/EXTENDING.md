@@ -167,8 +167,10 @@ inside it**, so a new line is a new tuple, not a new path string) and into every
 `test/concept-dirs-agreement.test.ts` pins (that test counts the sites itself rather than trusting a number written
 here) - that test fails until every reader of concept pages knows about the new directory, which is the point.
 
-Two things come for free and one does not. For free: graph node ids become line-qualified (`concept_key`), and
-`wiki lint` starts reporting the new line's overlap with the others under `crossLineSameName`. Not for free: a
+Two things come for free and one does not. For free: graph node ids become line-qualified (`concept_key`), link
+disambiguation follows automatically (`_utils.LinkNamer` reads the other lines' names and only qualifies names that
+more than one line has), and `wiki lint` starts reporting the new line's overlap with the others under
+`crossLineSameName`. Not for free: a
 **display name** - add it to `_utils.LINE_LABELS` and to `assistantTools.VAULT_LINE_LABELS`, which the same test
 pins against each other. Without them the line shows up in reports as a raw directory name, which is not a crash
 and therefore easy to miss.

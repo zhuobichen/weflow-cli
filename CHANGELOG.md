@@ -19,6 +19,16 @@ All notable user-facing changes are recorded here. This project follows [Semanti
 
 ## Unreleased
 
+- **Links that name a concept both knowledge bases have now say which one they mean.** With the two concept
+  namespaces split, a bare `[[DeepSeek]]` in Obsidian resolves deterministically but not necessarily to the page you
+  meant. Rather than moving the chat tree into a second vault, the fix keeps one vault and writes the line's path into
+  the link: `[[Chat/Concepts/DeepSeek|DeepSeek]]`. `weflow-cli wiki lint` reports the remaining ambiguous links in a
+  new `ambiguousLinks` section and `weflow-cli wiki compile --qualify-links` (dry-run first) rewrites them - only for
+  names both lines have, never inside a `## 来源` section (those links mean cards), and idempotently, so re-running
+  changes nothing. On this vault that was 36 shared names, 477 pages, 539 links; the rewrite was checked by reverse
+  audit: ambiguous links 462 → 0 while every other lint count and all three graph scopes stayed byte-identical.
+  New pages render the qualified form automatically (the page builders and `chat-notes` share one renderer), so a
+  *new* collision is the only thing that needs the command re-run - and lint is what tells you.
 - **Search can now be scoped to one of the two knowledge bases, and says which one it searched.** Following the
   namespace split above, `search`, `chat`, `vault search`, `vault rag` and the assistant's `search_semantic` /
   `search_knowledge` all take `--line wiki|chat|all` (or `line: "wiki"` for the assistant tools). **The default is

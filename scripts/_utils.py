@@ -431,6 +431,144 @@ def line_for_relative_concepts(relative):
     return None
 
 
+def line_concepts_path(line_id):
+    """线 id → 它的概念目录（**库内相对路径**，`Wiki/Concepts`）；认不出返回 None。"""
+    for lid, _root, concepts in KNOWLEDGE_LINES:
+        if lid == line_id:
+            return concepts
+    return None
+
+
+def concept_link_target(line_id, name, other_line_names=()):
+    """渲染一个概念链接该写成什么目标。
+
+    **只在"另一条线也有这个名字"时才带路径**（`Chat/Concepts/DeepSeek|DeepSeek`）：
+    两条线同名时裸 `[[DeepSeek]]` 在 Obsidian 里是二义的（官方判据：会 deterministic
+    解析，但不保证命中你想要的那张），所以给目标带上路径、用 `|` 保住显示文本。
+    只属于一条线的名字**一个字节都不动** —— 否则 4.9 万张页里绝大多数链接都要白重写
+    一遍，而那样改出来的 diff 没人看得完。
+    """
+    if name in other_line_names:
+        concepts = line_concepts_path(line_id)
+        if concepts:
+            return '%s/%s|%s' % (concepts, name, name)
+    return name
+
+
+def link_target_name(raw):
+    """`[[…]]` 里抓到的那一串 → 概念名。**解析只此一份。**
+
+    `[[Chat/Concepts/DeepSeek|DeepSeek]]` → `DeepSeek`。各处自己写 `split('|')` 的话，
+    漏掉一处那处的边就整条丢掉，而图里少一条边不报错。
+
+    **改动面越小越好**：只切掉 `|显示文本`，并且**只对带线路径的那些**再去掉前缀。
+    其余一律原样返回 —— 这个函数的上游既有"概念名"也有"卡片名"，随手多切一刀就会
+    改掉既有行为：
+
+    - 别切 `#`：这个库里的概念名**真的带 `#`**（`#GPT6`、`Erdős#1026`）。切了它们会被
+      当成别的名字，指向它们的边整条消失（2026-10-10 实测少了 4 条边，而图里少边不报错）。
+    - 别切 `.md`：`## 来源` 的卡片链接就写成 `[[名字.md]]`，`wiki_lint.resolve` 靠这个
+      后缀把它分流到卡片目录。切了它，那一支就再也不走了。
+    """
+    name = str(raw or '').strip()
+    if '|' in name:
+        name = name.split('|', 1)[0].strip()      # `[[目标|显示文本]]` → 目标
+    norm = name.replace('\\', '/')
+    for _lid, _root, concepts in KNOWLEDGE_LINES:
+        prefix = concepts + '/'
+        if norm.startswith(prefix):
+            norm = norm[len(prefix):]
+            if norm.lower().endswith('.md'):      # 带路径的写法里才去后缀（我们自己写的那种）
+                norm = norm[:-3]
+            break
+    return norm.strip()
+
+
+def is_line_qualified(raw):
+    """这条链接是不是**带了线的路径前缀**（`Wiki/Concepts/…` / `Chat/Concepts/…`）。
+
+    体检用它区分"已经消歧过的链接"和"还是裸的二义链接"。
+    """
+    name = str(raw or '').strip()
+    if '|' in name:
+        name = name.split('|', 1)[0].strip()
+    norm = name.replace('\\', '/')
+    for _lid, _root, concepts in KNOWLEDGE_LINES:
+        if norm == concepts or norm.startswith(concepts + '/'):
+            return True
+    return False
+
+
+def sibling_concepts_dir(concept_dir):
+    """同一个库里**另一条线**的概念目录；认不出线、或它不存在 → None。
+
+    **两级**：两条线都是 `<库>/<线>/Concepts`，库根是 `concept_dir.parent.parent`。
+    写成一级的话候选恒不存在（`<库>/Chat/Wiki/Concepts`）—— 于是"另一条线没有这个名字"
+    永远成立，链接不会带路径，而 Obsidian 里那条裸链接就**悄悄**变成二义的。
+    2026-09-27 那段同样的两级路径就是这么栽过一次（写在已删掉的那个函数的注释里）。
+
+    认线用**路径尾两段**而不是绝对路径（`line_for_relative_concepts`）：测试里的临时库、
+    或者用户把库根换了地方，尾两段仍然是 `Chat/Concepts` ⇒ 认得出；用绝对路径的话
+    只有仓库里那两个真实根才认得出，别的地方会安静地退化成"没有另一条线"。
+    """
+    norm = str(concept_dir).replace('\\', '/').rstrip('/')
+    parts = [p for p in norm.split('/') if p]
+    if len(parts) < 2:
+        return None
+    my_line = line_for_relative_concepts('/'.join(parts[-2:]))
+    if not my_line:
+        return None                       # 库外的目录：那里没有"另一条线"
+    root = os.path.dirname(os.path.dirname(norm))
+    for line_id, _r, concepts in KNOWLEDGE_LINES:
+        if line_id == my_line:
+            continue
+        candidate = os.path.join(root, *concepts.split('/'))
+        if os.path.isdir(candidate):
+            return candidate
+    return None
+
+
+def concept_names(concept_dir):
+    """那个目录里的概念名（文件名去掉 `.md`）。读不出来就返回空集（不猜）。"""
+    try:
+        return {f[:-3] for f in os.listdir(str(concept_dir)) if f.endswith('.md')}
+    except OSError:
+        return set()
+
+
+class LinkNamer:
+    """把概念名渲染成链接目标 —— **跨线同名时才带路径**，其余原样。
+
+    为什么要一个对象而不是每处写一句：**渲染点有三处**（模型建页、零模型建页、索引表），
+    各写一份的话漏一处就会在库里留下一批裸的二义链接，而它只在有人跑 `wiki lint` 时
+    才看得见。判断"要不要带路径"只需要另一条线的**文件名集合**，所以构造一次就够。
+    """
+
+    def __init__(self, line_id, other_names=()):
+        self.line_id = line_id or ''
+        self.other_names = set(other_names)
+
+    @classmethod
+    def for_out_dir(cls, out_dir):
+        """按输出目录定线，并顺手把另一条线的名字读出来（一次 listdir）。
+
+        认线用**路径尾两段**（`Chat/Concepts`），所以测试里的临时库、或库根换了地方都认得出。
+        认不出线（`--output` 指到库外的任意目录）时 **`line_id` 为空 → 一律渲染成裸名字**：
+        那是"库外目录"的既有行为，而不是按猜出来的线写一堆带路径的链接。
+        """
+        parts = [p for p in str(out_dir).replace('\\', '/').rstrip('/').split('/') if p]
+        line_id = line_for_relative_concepts('/'.join(parts[-2:])) if len(parts) >= 2 else None
+        if not line_id:
+            return cls('', ())
+        sibling = sibling_concepts_dir(out_dir)
+        return cls(line_id, concept_names(sibling) if sibling else ())
+
+    def __call__(self, name):
+        if not self.line_id:
+            return name
+        return concept_link_target(self.line_id, name, self.other_names)
+
+
 def concept_key(line_id, name):
     """线 id + 概念名 → 跨线唯一的主键。
 

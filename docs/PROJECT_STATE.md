@@ -314,7 +314,17 @@ links point at one of them, so the rule this replaced ("one name, one page, libr
 data on disk. What that rule protected is real and unchanged - a bare `[[DeepSeek]]` in Obsidian resolves
 deterministically but not necessarily to the page you meant - and it is now **reported rather than prevented**;
 the two ways to actually fix it (a root per line, or path-qualified links) are left to the step that splits the
-roots, so until then clicking such a link is genuinely ambiguous. Since 2026-10-10 the **readers** carry the same
+roots, so until then clicking such a link is genuinely ambiguous.
+
+**Resolved on 2026-10-10 the second way (D-106): the vault stays one library, and links that name a
+both-lines concept now carry the line's path** (`[[Chat/Concepts/DeepSeek|DeepSeek]]`). Measured before the
+rewrite: 36 shared names, 477 pages, 539 links (462 in concept pages, 36 in the index pages, 41 in the chat
+cards; none anywhere else in the vault). The rewrite was checked by reverse audit rather than by sampling -
+`ambiguousLinks` went 462 → 0 while every other lint count stayed identical (49,956 pages, 9 broken, 0 orphans,
+1 empty, 0 within-line duplicates, 36 cross-line names, 10,324 aspirational) and the graph's three scopes are
+byte-identical to before (48,429/144,628, 1,527/878, 49,956/145,795). **What is not solved**: a *new* collision
+will be written bare again until `wiki compile --qualify-links` is re-run, which is why `wiki lint` grew an
+`ambiguousLinks` section that names the fix. Since 2026-10-10 the **readers** carry the same
 line too (D-105): `search`, `chat`, `vault search`, `vault rag` and the assistant's `search_semantic` /
 `search_knowledge` all take `line: wiki|chat|all`, default to the article line where the user sees it (the
 *functions* default to `all` so a caller that forgets cannot silently halve the search), and every output says which
