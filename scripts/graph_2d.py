@@ -81,6 +81,9 @@ def main(argv=None):
         return g._fail('缺件：%s（应当在 %s 下随包发）' % ('、'.join(missing), g.LIB_DIR), args.json)
 
     data = json.dumps({'nodes': nodes, 'links': links}, ensure_ascii=False, separators=(',', ':'))
+    # 页面数据一份（含线的展示名），缓存键用抽掉展示名的那一份 —— 理由见 graph_3d.py
+    html_data = json.dumps({'nodes': nodes, 'links': links, 'lineLabels': g._utils.LINE_LABELS},
+                           ensure_ascii=False, separators=(',', ':'))
     # 与 3D 分开分槽：同一张图的 2D 与 3D 坐标不通用，各存一份（见 graph_3d.py 里那段注释）
     digest = g.layout_key(data, 2, args.ticks)
     cache = Path(args.cache)
@@ -122,7 +125,7 @@ def main(argv=None):
 <input id="q" placeholder="搜概念，回车跳过去">
 <div id="tag">2D · 坐标构建期算好 · 双击空白复位</div>
 <div id="boot">正在画…</div>
-<script>window.__DATA__ = {data};</script>
+<script>window.__DATA__ = {html_data};</script>
 <script>window.__POS__ = "{pos}";</script>
 <script>{viewer}</script>
 </body></html>

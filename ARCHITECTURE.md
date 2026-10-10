@@ -88,7 +88,8 @@ Node 原生层 src/core/                    Python 工作流 scripts/
   -> output/*-notes（卡片，四条来源各自产出，形状相同）
   -> Vault：**只有显式加 --with-vault / --with-wiki 才写**
        Sources/ 原始素材 + 001_Daily + 002_Literature 阅读笔记
-  -> 两个概念页目录：Wiki/Concepts（文章线）、Chat/Concepts（聊天线）
+  -> 两个概念页目录，**两条线各自的命名空间**（同名可以各有一张页；图谱主键是 `线:名字`）：
+       Wiki/Concepts（文章线）、Chat/Concepts（聊天线）
   -> 本地搜索或可选 AI RAG
   -> 概念图谱页面：wiki graph（自包含 2D/3D HTML，坐标缓存 output/.graph3d-cache/）
   -> review、report、annual-report、todos 等报告

@@ -33,6 +33,7 @@ sys.path.insert(0, str(REPO))
 # 在别的目录里调用会静默换成另一套口径（而 --out / --vault 都是绝对路径，不该被 cwd 影响）。
 os.chdir(REPO)
 import wiki_lint as wl
+import _utils
 
 # 页面要用的三个库随包发（`resources/` 整个进 npm 包），布局助手跟它们的库待在一起：
 # 它 `new Function` 跑的就是这几个 UMD，放一起就不会一个在包外、一个在包内。
@@ -93,22 +94,43 @@ def build_graph(vault, min_degree=0, line='all'):
         for p in wl.collect(str(d), wl.CARD_DIRS):
             p['line'] = label
             pages.append(p)
-    names = {p['stem'] for p in pages}
+    # **主键必须带线**（`wiki:DeepSeek`）：两条线各有一张同名页是设计使然，而以 stem 为主键
+    # 时它们是**同一个键** —— 合并图里那 36 组同名会互相顶掉（前端按 id 建 Map，后来的覆盖
+    # 先来的）。症状很轻：节点总数看着对，只是其中 36 个点不到、边也连着错的那一张。
+    by_line = {}
+    for p in pages:
+        by_line.setdefault(p['line'], set()).add(p['stem'])
+    # 线内解析不了时才回退到另一条线：两条线共用的那些概念就是它们之间那 4% 的"重叠信息"，
+    # 这张图正是要看这个（见 D-051）。回退的那条边方向是明确的：只有一条线有这个名字。
+    other_line = {}
+    for lbl, stems in by_line.items():
+        for stem in stems:
+            other_line.setdefault(stem, lbl)
     edges = set()
     for p in pages:
         body = p['body']
         at = body.find('## 来源')
         if at != -1:
             body = body[:at]
+        mine = _utils.concept_key(p['line'], p['stem'])
         for _sec, name in wl.links_by_section(body):
             t = name.replace('.md', '').strip()
-            if t in names and t != p['stem']:
-                edges.add((p['stem'], t))
-    degree = {p['stem']: 0 for p in pages}
+            here = by_line.get(p['line'], ())
+            if t in here:
+                target = _utils.concept_key(p['line'], t)      # 同一条线里的那个
+            elif t in other_line:
+                target = _utils.concept_key(other_line[t], t)  # 只有另一条线有它
+            else:
+                continue
+            if target != mine:
+                edges.add((mine, target))
+    degree = {}
     for a, b in edges:
-        degree[a] += 1
-        degree[b] += 1
-    nodes = [{'id': p['stem'], 'deg': degree[p['stem']], 'line': p['line']} for p in pages]
+        degree[a] = degree.get(a, 0) + 1
+        degree[b] = degree.get(b, 0) + 1
+    nodes = [{'id': _utils.concept_key(p['line'], p['stem']), 'name': p['stem'],
+              'deg': degree.get(_utils.concept_key(p['line'], p['stem']), 0), 'line': p['line']}
+             for p in pages]
     # 边写成二元数组而不是 {source,target} 对象：7 万条边能省掉 1 MB 的重复键名
     links = [[a, b] for a, b in sorted(edges)]
     if min_degree > 0:
@@ -125,6 +147,10 @@ VIEWER = r'''
   window.__t0 = performance.now();
   const NODES = window.__DATA__.nodes;
   const LINKS = window.__DATA__.links.map(([s, t]) => ({ source: s, target: t }));
+  // 线的展示名由 Python 那边传进来（`_utils.LINE_LABELS`），页面里不再写第二份 ——
+  // 合并视图必须说清每个点来自哪条线，而两份名字漂了的那天不会报错。
+  const LINE_LABELS = window.__DATA__.lineLabels || {};
+  const lineLabel = (n) => LINE_LABELS[n.line] || n.line || '';
   const N = NODES.length;
   const hud = document.getElementById('stats');
   const info = document.getElementById('info');
@@ -401,8 +427,10 @@ VIEWER = r'''
       selLines.visible = nb.length > 0;
     }
     const nb = nbrs(n.id).slice().sort((a, b) => b.deg - a.deg);
-    const head = nb.slice(0, 18).map((m) => m.id).join('、');
-    info.innerHTML = '<b>' + esc(n.id) + '</b> · ' + n.deg + ' 条连接' +
+    // 显示一律用 `name`（主键是 `线:名字`）—— 直接把 id 印出来的话，两个同名的概念
+    // 会看着像两条线的名字里真有个冒号。
+    const head = nb.slice(0, 18).map((m) => m.name).join('、');
+    info.innerHTML = '<b>' + esc(n.name) + '</b> · ' + esc(lineLabel(n)) + ' · ' + n.deg + ' 条连接' +
       (nb.length ? '<div class="nb">' + esc(head) + (nb.length > 18 ? ' …（共 ' + nb.length + '）' : '') + '</div>' : '');
     // 取景要让「它 + 它的邻居」一起进画面。固定拉近到 60 单位是错的：枢纽的邻居散在
     // 整团云里（Codex 的 603 个邻居横跨全图），那样屏幕上全是不相干的点。
@@ -429,7 +457,7 @@ VIEWER = r'''
     hoverAt = now;
     const n = pick(x, y, 9, false);
     if (!n) { tag.textContent = '拖 = 转 · 滚轮 = 缩放 · 点一个概念看它连着谁 · 双击空白 = 停/开自转'; return; }
-    tag.textContent = n.id + ' · ' + n.deg + ' 条连接';
+    tag.textContent = n.name + ' · ' + lineLabel(n) + ' · ' + n.deg + ' 条连接';
   }
 
   // 搜索：25,431 个点里靠拖是找不到的，直接跳
@@ -438,9 +466,18 @@ VIEWER = r'''
     if (e.key !== 'Enter') return;
     const q = box.value.trim().toLowerCase();
     if (!q) return;
-    const hit = NODES.find((n) => n.id.toLowerCase() === q) || NODES.find((n) => n.id.toLowerCase().includes(q));
-    if (hit) select_(hit);
-    else info.textContent = '没找到「' + box.value.trim() + '」';
+    // 搜的是 `name`，不是主键（主键是 `线:名字`，两条线都有的名字按主键搜会只中一个）。
+    // 同名两页都在时**两个都要说**：合并视图里这正是要看见的东西，只跳第一个会让人
+    // 以为另一条线没有这个概念。
+    const exact = NODES.filter((n) => n.name.toLowerCase() === q || n.id.toLowerCase() === q);
+    const pool = (exact.length ? exact : NODES.filter((n) => n.name.toLowerCase().includes(q)))
+      .slice().sort((a, b) => b.deg - a.deg);
+    if (!pool.length) { info.textContent = '没找到「' + box.value.trim() + '」'; return; }
+    select_(pool[0]);
+    if (pool.length > 1) {
+      info.innerHTML += '<div class="nb">两条线都有「' + esc(pool[0].name) + '」：' +
+        esc(pool.map((m) => lineLabel(m)).join('、')) + '（这里跳的是连接更多的那张）</div>';
+    }
   });
 
   // ---------- 渲染循环：按需渲染 ----------
@@ -533,7 +570,11 @@ def main(argv=None):
         return _fail('缺库：%s（应当在 %s 下随包发）' % ('、'.join(missing), LIB_DIR), args.json)
     three = LIB_THREE.read_text(encoding='utf-8')
     d3lib = '\n'.join((LIB_DIR / f).read_text(encoding='utf-8') for f in LIB_D3)
+    # 页面数据**一份**（含线的展示名），而布局缓存的键是**抽掉展示名的那一份**：
+    # 往缓存键里加一个字段就等于换一把键 —— 5 万点的布局要重算 55 秒，而图一个点都没变。
     data = json.dumps({'nodes': nodes, 'links': links}, ensure_ascii=False, separators=(',', ':'))
+    html_data = json.dumps({'nodes': nodes, 'links': links, 'lineLabels': _utils.LINE_LABELS},
+                           ensure_ascii=False, separators=(',', ':'))
     # 布局在 Node 里算（250 tick 实测 55 秒），留到构建期；页面打开就是现成坐标。
     # 图没变就沿用缓存 —— 只改渲染的时候不该每次都等一分钟。
     cache = Path(args.cache)
@@ -580,7 +621,7 @@ def main(argv=None):
 <div id="tag">拖 = 转 · 滚轮 = 缩放 · 点一个概念看它连着谁 · 双击空白 = 停/开自转</div>
 <script>{three}</script>
 <script>{d3lib}</script>
-<script>window.__DATA__ = {data};</script>
+<script>window.__DATA__ = {html_data};</script>
 <script>window.__POS__ = "{pos}";</script>
 <script>{VIEWER}</script>
 </body></html>

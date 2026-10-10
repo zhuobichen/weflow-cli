@@ -306,7 +306,15 @@ not a gap. `Sources/` holds **raw material** (`Sources/WeChat/<date>/` from the 
 the reading notes, `Wiki/` holds the **article line's** generated concept pages plus `00-Overview.md`, and `Chat/` holds the
 **chat line's** (`Chat/Concepts/`, `Chat/00-Overview.md`) - one Vault, two knowledge bases, split on
 2026-09-27 at the user's request (D-051 records why every reader had to be told about both: reading one of
-two directories is silently wrong, not broken). Two things about this were
+two directories is silently wrong, not broken). Since 2026-10-10 the two lines also have separate **concept
+namespaces** (D-104): the same name may hold a page on both lines, graph node ids are line-qualified
+(`wiki:DeepSeek`), and `wiki lint` reports the overlap in its `crossLineSameName` section instead of counting
+those pages as duplicates. Measured on 2026-10-10: **36** names have a page on both lines and **539** article-line
+links point at one of them, so the rule this replaced ("one name, one page, library-wide") was never true of the
+data on disk. What that rule protected is real and unchanged - a bare `[[DeepSeek]]` in Obsidian resolves
+deterministically but not necessarily to the page you meant - and it is now **reported rather than prevented**;
+the two ways to actually fix it (a root per line, or path-qualified links) are left to the step that splits the
+roots, so until then clicking such a link is genuinely ambiguous. Two things about this were
 wrong on 2026-09-27 and are now fixed: the concept directory was **declared in two places** (`VAULT_DIRS` said
 `007_Wiki/Concepts`, every writer and reader used the top-level `Wiki/Concepts`), so `007_Wiki/` was created and
 never filled; and the historical import skipped `Sources/` entirely (it would have carried ~33 GB of images), which

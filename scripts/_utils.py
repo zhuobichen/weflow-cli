@@ -404,6 +404,45 @@ def line_for_concept_dir(path):
             return line_id
     return None
 
+
+# 线的展示名。**只此一份**：图谱的提示、体检的报告、助手的输出都取它，各写一句
+# "文章线/聊天线"的后果是改词那天只改到一半，而没有任何东西会红。
+LINE_LABELS = {'wiki': '文章线', 'chat': '聊天线'}
+
+# 主键的分隔符。选 `:` 是因为**概念页的文件名里不可能有它**（Windows 禁止，
+# `compile_wiki` 也会把它换成 `_`）—— 主键要能被原样切回 (线, 名字)，
+# 这个判据就必须没有二义。改成 `-` 或 `_` 都会把 `AI-Agent` 这类名字切错，
+# 而症状是"图谱里两个节点凭一个错名字连上了"，不报错。
+LINE_SEP = ':'
+
+
+def concept_key(line_id, name):
+    """线 id + 概念名 → 跨线唯一的主键。
+
+    **为什么需要**：两条线各有一张同名页是设计使然（用户 2026-10-10 要求两个概念
+    命名空间分开），而图谱的主键原来就是文件 stem ⇒ 两棵目录里的 `DeepSeek` 是
+    **同一个键**。2026-10-10 实测：合并图里 49,956 个节点里有 36 组撞键，前端
+    `new Map(NODES.map(n => [n.id, n]))` 会静默只留一个 —— 节点数看着对，少掉的那个
+    却点不到。同名的两页靠这个键分开。
+    """
+    return '%s%s%s' % (line_id, LINE_SEP, name)
+
+
+def split_concept_key(key):
+    """主键 → (线 id, 名字)；**认不出线就返回 `(None, 原样)`，不猜**。
+
+    兼容没有线前缀的旧主键（认不出线的情形），调用方按"没有线"处理。
+    """
+    line_id, sep, name = str(key).partition(LINE_SEP)
+    if not sep or line_id not in LINE_LABELS:
+        return None, str(key)
+    return line_id, name
+
+
+def line_label(line_id):
+    """线 id → 展示名；认不出返回 None（调用方自己决定"无线"怎么写）。"""
+    return LINE_LABELS.get(line_id)
+
 # 一篇文章**没能被分类**时落到哪一类。
 #
 # 收成一处是因为它曾经在写入路径上有两个不同的答案、相隔七行：

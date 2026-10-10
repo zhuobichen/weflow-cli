@@ -187,6 +187,49 @@ test('--line 只画一条线（文章线 / 聊天线两张图口径不同，混�
   })
 })
 
+test('跨线同名：两张页拿到两个不同的主键，展示名随数据进来', () => {
+  withTemp((tmp) => {
+    const vault = join(tmp, 'vault')
+    mkdirSync(join(vault, 'Wiki', 'Concepts'), { recursive: true })
+    mkdirSync(join(vault, 'Chat', 'Concepts'), { recursive: true })
+    writeFileSync(join(vault, 'Wiki', 'Concepts', '共有.md'), concept('共有', '见 [[甲]]。'), 'utf8')
+    writeFileSync(join(vault, 'Wiki', 'Concepts', '甲.md'), concept('甲', '不引用别人。'), 'utf8')
+    writeFileSync(join(vault, 'Chat', 'Concepts', '共有.md'), concept('共有', '见 [[话]]。'), 'utf8')
+    writeFileSync(join(vault, 'Chat', 'Concepts', '话.md'), concept('话', '不引用别人。'), 'utf8')
+
+    const out = join(tmp, 'g.html')
+    const r = runGraph(tmp, ['--vault', vault, '--out', out, '--json'])
+    assert.equal(r.status, 0, `退出码 ${r.status}：${r.stderr.slice(0, 400)}`)
+    const html = readFileSync(out, 'utf8')
+    const data = /window\.__DATA__ = (\{.*?\});/s.exec(html)
+    assert.ok(data, '页面上该有 __DATA__')
+    const parsed = JSON.parse(data![1])
+    const ids = parsed.nodes.map((n: any) => n.id)
+    // **主键带线**：不带线的话这两张是同一个键，前端 `new Map(…n.id…)` 只留一个 —— 节点
+    // 总数看着对，其中 36 组里的一个点不到（2026-10-10 实测本机库）。ids 全是 `线:名字`。
+    assert.equal(new Set(ids).size, ids.length, `主键撞了：${ids.join('、')}`)
+    assert.ok(ids.includes('wiki:共有') && ids.includes('chat:共有'),
+      `同名的两张该是两个不同的键：${ids.join('、')}`)
+    assert.deepEqual(ids.map((i: string) => i.split(':')[0]).sort(), ['chat', 'chat', 'wiki', 'wiki'])
+    // 名字单独存一份：图上/面板上要显示的是它，不是主键
+    const named = parsed.nodes.filter((n: any) => n.name === '共有')
+    assert.equal(named.length, 2, '两张同名页都该在，且都带着名字')
+    assert.deepEqual(parsed.lineLabels, { wiki: '文章线', chat: '聊天线' },
+      '线的展示名要随数据进来（源头是 _utils.LINE_LABELS，页面里不该再写一份）')
+  })
+})
+
+test('3D 视图显示的是名字，不是主键（这份视图没有夹具，所以钉源码形状）', () => {
+  // 2D 那份能在 jsdom + 假 canvas 上真跑（见 `graph-2d-cli.test.ts`），这份要 WebGL，跑不了。
+  // 所以这里**只能钉形状**：退回 `n.id` 的症状很轻（面板和提示条里出现 `wiki:共有`），
+  // 而没有任何断言会红。搜输入框那条不该钉：按主键搜是**允许**的（能精确指定某条线）。
+  const src = readFileSync(join(ROOT, 'scripts', 'graph_3d.py'), 'utf8')
+  for (const bad of [/esc\(n\.id\)/, /n\.id \+ ' · '/, /map\(\(m\) => m\.id\)/]) {
+    assert.ok(!bad.test(src), `3D 视图把主键当名字显示了：${bad}`)
+  }
+  assert.ok(src.includes('esc(n.name)'), '信息面板该显示名字')
+})
+
 test('手跑（没有 CLI 的 PYTHONIOENCODING）时中文也不会崩，也不该是乱码', () => {
   withTemp((tmp) => {
     const vault = fixtureVault(join(tmp, 'vault'))

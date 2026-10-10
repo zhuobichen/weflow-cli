@@ -217,7 +217,8 @@ class NearDuplicateTests(unittest.TestCase):
         `--merge-duplicates` 按目录跑、永远动不了跨线的组。
 
         2026-09-28 实测踩到：合并跑完后报告还剩 2 组（`AI 工具`、`GLORIA`），全是跨线的，
-        而报告写着"这些就是合并会合并的"。跨线同名由 `duplicateTitles` 那一节负责。
+        而报告写着"这些就是合并会合并的"。跨线同名由 `crossLineSameName` 那一节负责
+        （2026-10-10 起它单列一节、**不当成问题**；`duplicateTitles` 只管同一条线内撞名）。
         """
         left, right = self.pages('AI 工具'), self.pages('AI工具')
         left[0]['dir'], right[0]['dir'] = 'Wiki/Concepts', 'Chat/Concepts'

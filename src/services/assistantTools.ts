@@ -62,6 +62,28 @@ const vaultDirs = (): string[] => {
 }
 
 /**
+ * 线的展示名 —— **TS 侧只此一份**。原来有两处各自从路径里找 `Chat` 这个词猜
+ * （`wiki_health` 与 `get_vault_stats`），改词的那天只会改到一半。
+ *
+ * 与 Python 侧 `_utils.LINE_LABELS` 是同一份名单，靠 `test/concept-dirs-agreement.test.ts`
+ * 钉住一致（跨语言没法共享一个常量，这个仓库对这类常量的既有做法就是"各写各的、由测试钉住"）。
+ *
+ * **两条线各自一个根之后这里要跟着改**：路径里不会再有 `Wiki`/`Chat` 这一段。
+ * 到那时 `wiki_health` 已经直接取 Python 给的 `report.lineLabel`（认得线的目录它都会给），
+ * 这里只剩"认不出的目录"这一支要兜底。
+ */
+export const VAULT_LINE_LABELS: Record<string, string> = { Wiki: '文章线', Chat: '聊天线' }
+
+/** 概念目录 → 线的展示名。**认不出线就返回目录名，不猜成某一条**。 */
+export function vaultLineLabel(dir: string): string {
+  const parts = dir.split(/[\\/]/)
+  for (const [segment, label] of Object.entries(VAULT_LINE_LABELS)) {
+    if (parts.includes(segment)) return label
+  }
+  return parts.filter(Boolean).pop() || dir
+}
+
+/**
  * 概念名 → 文件名。**与 `compile_wiki` 是同一套规则**（非法字符换下划线、截到 60 字）。
  *
  * 这里必须消毒：邻居名是从**文件内容**里读出来的，直接拼进路径就能走出目录
@@ -2013,7 +2035,7 @@ export async function executeTool(name: string, args: Record<string, any>, ctx: 
           const idx = wikiIndexPath(dir)
           if (!existsSync(idx)) continue
           const m = readFileSync(idx, 'utf8').match(/共\s*(\d+)\s*个概念/)
-          if (m) conceptCounts.push(`${dir.split(/[\\/]/).includes('Chat') ? '聊天线' : '文章线'} ${m[1]}`)
+          if (m) conceptCounts.push(`${vaultLineLabel(dir)} ${m[1]}`)
         }
         if (conceptCounts.length) lines.push(`概念页: ${conceptCounts.join('、')}`)
         return lines.join('\n')
@@ -2156,25 +2178,34 @@ export async function executeTool(name: string, args: Record<string, any>, ctx: 
         const parts: string[] = []
         let totalBad = 0
         for (const dir of vaultDirs()) {
-          const line = dir.split(/[\\/]/).includes('Chat') ? '聊天线' : '文章线'
-          if (!existsSync(dir)) { parts.push(`【${line}】目录不存在，跳过`); continue }
+          // **线名优先由 Python 那边给**（`report.lineLabel`，源头是 `_utils.LINE_LABELS`）：
+          // 两条线各自一个根之后聊天线很可能不再叫 `Chat`，按路径猜会把聊天线报成
+          // **文章线**，还不报错。`guess` 只在目录不存在（来不及问 Python）与自定义
+          // `--dir` 认不出线时兜底。
+          const guess = vaultLineLabel(dir)
+          if (!existsSync(dir)) { parts.push(`【${guess}】目录不存在，跳过`); continue }
           // 超时给 60 秒：本机最大的一条线（3,623 页）实测 **3.4 秒**（脚本里的 O(n²) 修掉之后，
           // 见 wiki_lint.py 那条注释），17 倍余量够用。默认的 30 秒曾经也超——那是因为脚本本身慢，
           // 不是超时给得小。
           const r = await runPythonJson<any>('wiki_lint.py', ['--dir', dir, '--json'], { timeoutMs: 60_000 })
           if (!r.ok || !r.data) {
             // 失败要说出来：静默跳过会让"体检通过"变成一句假话
-            parts.push(`【${line}】体检失败: ${r.error || '读不到结果'}`)
+            parts.push(`【${guess}】体检失败: ${r.error || '读不到结果'}`)
             totalBad += 1
             continue
           }
           const d = r.data
+          const line = d.lineLabel || guess
           const broken = (d.broken || []).length
           const orphans = (d.orphans || []).length
           const empty = (d.empty || []).length
           const dup = Object.keys(d.duplicateTitles || {}).length
+          // 跨线同名**不计入问题数**：两条线各留一张同名页是设计（两个命名空间分开），
+          // 把它算成"要修的"会让人去修一个设计如此的东西。
+          const cross = (d.crossLineSameName || []).length
           totalBad += broken + orphans + empty + dup
-          parts.push(`【${line}】${d.pages || 0} 张页：断链 ${broken}、孤儿 ${orphans}、空页 ${empty}、同名 ${dup} 组`)
+          parts.push(`【${line}】${d.pages || 0} 张页：断链 ${broken}、孤儿 ${orphans}、空页 ${empty}、同名 ${dup} 组`
+            + (cross ? `（另有 ${cross} 个概念两条线都有，设计如此）` : ''))
         }
         return (totalBad ? '' : '两个知识库都没有断链/孤儿/空页/同名。\n') + parts.join('\n')
       }

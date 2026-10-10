@@ -1403,6 +1403,55 @@ which is what the gate is for.
   semantics are not reliable here), as is any automatic labelling: there is no gold standard for "is this
   draft right", so the feature records what it judged and says so rather than claiming calibration.
 
+## D-104: 两条线各有一个概念命名空间，而"一个名字全库只有一张页"这条规则撤掉了
+
+**Status:** Active（**取代 D-051 里「A name belongs to exactly one page」那一段**；D-051 的其余部分——同一个库、
+那份五个读者要对齐的目录清单、目录一致性测试——全部仍然成立）
+
+**决定。** 概念名变成**带线限定**的：文章线与聊天线可以各有一张同名页；`compile_wiki` 不再因为
+"另一条线已有同名页"而跳过；凡是把概念名当键的地方都改用 `_utils.concept_key(线, 名字)`
+（形如 `wiki:DeepSeek`）。图谱节点的 id 就是它。`wiki lint` 把跨线同名放进新的一节
+`crossLineSameName`（**报出来，但不当问题**），`duplicateTitles` 从此只管**同一条线内**撞名。
+
+分隔符是 `:`：**概念页的文件名里不可能有它**（Windows 禁止，`compile_wiki` 也会把它换成 `_`），
+而主键要能被原样切回 `(线, 名字)` —— 换成 `-` 或 `_` 都会把 `AI-Agent` 这类名字切错，症状是
+"图谱里两个节点凭一个错名字连上了"，不报错。
+
+**为什么必须撤。** 用户 2026-10-10 要求两条线在**概念命名空间、目录、检索/RAG** 三层上都分开，
+同时保留"合起来看/查"的显式入口。而"一个概念名在库里只能有一张页"正好是"两个命名空间"的反面。
+
+**那条规则原本挡的是什么，它现在还在不在。** D-051 当年否决"两条线各留一张同名页"的理由是
+Obsidian 里 `[[DeepSeek]]` 会二义。这个理由**是真的**：官方文档给的判据是"有同名文件时，裸链接会
+deterministic 地解析，但**未必命中你想要的那一张**"，消歧手段就是带路径的链接 `[[文件夹/名字]]`。
+**而且它早就在库里发生了**：2026-10-10 实测，两棵目录里有 **36 个**同名概念各有一张页
+（`DeepSeek`、`MiniMax`…，聊天页建于 09-27~28、文章页建于 10-01 那次批量编译），文章线一侧有
+**539 条**链接指向这些名字。也就是说这条约束**在库里的数据上并不成立**，守卫只挡住了 09-27 之后
+**新建**的同名页。
+所以现在把二义**如实报出来**（lint 的 `crossLineSameName` 那一节），而不是靠"不建那张页"回避。
+彻底解决它有两条路，都留给后面：① 两条线各自一个根（各自一个 Obsidian 库，名字各自唯一）；
+② 给指向同名的链接按名字加路径。**本条目不预先选定**——所以今天在 Obsidian 里点一个同名链接，
+命中的哪一张仍是不确定的：这是**已知代价**，写在这里而不是等人来发现。
+
+**顺手修掉的一个真 bug。** 图谱节点 id 原来就是文件 stem ⇒ 那 36 组是**同一个键**。前端
+`new Map(NODES.map(n => [n.id, n]))` 只留一个，症状很轻：节点总数看着对，其中 36 个点不到、
+边连着错的那一张。实测（2026-10-10，直接调 `graph_3d.build_graph`）：
+`--line all` 49,956 个节点，**主键唯一数从 49,920 升到 49,956（0 个撞键）**；边 145,794 → **145,795**；
+289 条跨线边里"本来能在本线解析、却跑到另一条线"的是 **0**。同一改动下文章线单独跑是
+48,429 点 / 144,628 边，与改动前**一字不差**。
+
+**验证到什么程度（这条撤掉的是一个安全性质，所以要写清）。**
+- 2D 视图在 jsdom + 假 canvas 上**真跑**：跨线同名的夹具下两个主键都在、图上写的是名字不是主键、
+  搜这个名字会说"两条线都有"（`test/graph-2d-cli.test.ts`）；
+- 3D 视图要 WebGL，本机没有能跑它的夹具 ⇒ 只钉了源码形状（`test/graph-3d-cli.test.ts`），
+  **没有真跑过**；
+- 三条断言做过**变异检查**（主键退回 stem、`n.name` 退回 `n.id`、改一个标签字）——都真的会红；
+- MCP 的 `wechat.get_concept` 用**真库**手工调过：36 个同名概念每个都会说出"两条线都有"并指明
+  给的是哪一张；1491 个只在聊天线有的名字**不多嘴**（这条没有变成常驻测试——那些目录是模块级
+  常量、不可注入，所以测试用不了夹具）。
+
+**没改的东西。** 两条线**仍然共用一个库根** `output/wechat-vault`（物理分开是后面一步）；
+`compile_wiki` 仍然一次只写一条线；`--output` 之外的地方一个都没动。
+
 ## D-103: `messages` 的退出码不动，但把"这个 ID 谁都不认识"说出来
 
 **Status:** Active（补 `docs/HEALTH-CHECK.md` 里那行"未知 talker 退出码不一致"）
@@ -2949,6 +2998,12 @@ there, **nothing errors**. So `build_jobs` skips a name that already has a page 
 reports the two skip reasons separately (a re-run versus a deliberate non-duplicate), because a single "skipped
 N" line would read as if all of them were re-runs. The alternative - keeping both pages, one per line - was
 rejected: a browseable graph is the thing the user asked for, and an ambiguous link is not a link.
+
+**Superseded on 2026-10-10 by D-104.** The user asked for the two concept **namespaces** to be separate, so both
+pages are kept and that skip was removed. The Obsidian facts quoted above are still true and are quoted again in
+D-104 - what changed is the remedy: the ambiguity is now *reported* (`wiki lint`'s `crossLineSameName` section)
+rather than prevented by not creating the page. 36 such pairs already existed in the vault when this was written,
+so the invariant this paragraph describes was never true of the data on disk.
 
 **A migrated parameter is a silent failure too.** `conceptNeighbors(pageName, wikiDirs)` took one directory and
 now takes a list; a caller still passing a string is not a type error at runtime, and `for (const dir of

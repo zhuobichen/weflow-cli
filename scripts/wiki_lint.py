@@ -25,9 +25,12 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _utils import CONCEPT_DIRS, KNOWLEDGE_LINES, normalize_concept_name, parse_frontmatter  # noqa: E402
+from _utils import (CONCEPT_DIRS, KNOWLEDGE_LINES, line_for_concept_dir, line_label,  # noqa: E402
+                    normalize_concept_name, parse_frontmatter)
 
-DEFAULT_PAGES_DIR = 'output/wechat-vault/Wiki/Concepts'
+# 这里原来还有一份 `DEFAULT_PAGES_DIR = 'output/wechat-vault/Wiki/Concepts'`：**没人用**，
+# 而它是文章线概念目录的第二份拷贝 —— 谁哪天顺手用了它，聊天线就会静默地不被体检
+# （"体检通过"于是成了假话）。默认值现在只有一个来源：`--dir` 不传就是清单里的全部线。
 # 文章线的根（材料目录 `002_Literature`/`Sources/WeChat` 都在它下面）。取自清单的**第一条线**，
 # 不再自己写一遍字符串 —— 两条线各自一个根之后，这里会跟着清单变。
 VAULT_ROOT = KNOWLEDGE_LINES[0][1]
@@ -140,7 +143,9 @@ def inspect(pages: list, exists, card_links=()) -> dict:
     - `aspirational`：`## 相关概念` 那节里指向"还没建页"的概念——**扩张候选，不是错误**；
     - `orphans`：连卡片都没提到过它的页面（卡片链接也算入链，否则每张页都会被误报成孤儿）；
     - `empty`：没有定义也没有要点；
-    - `duplicateTitles`：同名页；
+    - `duplicateTitles`：**同一条线内**撞了名字的页（跨线同名不算，另见下一条）；
+    - `crossLineSameName`：两条线都有这个名字（**设计使然，不是错误**）—— 合并视图里
+      就是靠它看两条线在哪重叠；
     - `nearDuplicates`：`{'sameNode': [...], 'contained': [...]}` 两档，可信度差一个量级
       —— 见 `near_duplicate_titles`。
     """
@@ -179,10 +184,26 @@ def inspect(pages: list, exists, card_links=()) -> dict:
     orphans = sorted(stem for stem, count in inbound.items() if count == 0)
     titles = {}
     for page in pages:
-        titles.setdefault(page['title'] or page['stem'], []).append(page['stem'])
-    duplicates = {title: stems for title, stems in titles.items() if len(stems) > 1}
+        # **同名要按线分组判**。两条线各有一张同名页是设计使然（用户 2026-10-10 要求两个
+        # 概念命名空间分开），它不是"同名页"这一项要找的东西；真该报的是**同一条线里**
+        # 撞了名字 —— 那会让 `[[名字]]` 在那一棵目录里就没有确定目标。
+        titles.setdefault(page.get('dir', ''), {}).setdefault(
+            page['title'] or page['stem'], []).append(page['stem'])
+    duplicates = {}
+    for _where, by_title in sorted(titles.items()):
+        for title, stems in by_title.items():
+            if len(stems) > 1:
+                duplicates.setdefault(title, []).extend(stems)
+    # **跨线同名另立一节**：它不是错误，是"这两条线在哪些概念上有重叠"——合并视图里
+    # 唯一想看的那个数（2026-10-10 实测 36 个）。混进 `duplicateTitles` 的话，
+    # 读的人会去"修"一个设计如此的东西。
+    lines_of = {}
+    for page in pages:
+        lines_of.setdefault(page['stem'], set()).add(page.get('dir', ''))
+    cross_line = sorted(name for name, where in lines_of.items() if len(where) > 1)
     return {'pages': len(pages), 'broken': broken, 'aspirational': aspirational,
             'orphans': orphans, 'empty': empty, 'duplicateTitles': duplicates,
+            'crossLineSameName': cross_line,
             'degenerateFields': degenerate_fields(pages),
             'nearDuplicates': near_duplicate_titles(pages)}
 
@@ -229,7 +250,7 @@ def near_duplicate_titles(pages: list) -> dict:
     # **按目录分开比。** 两个概念目录是**两个知识库**（D-051），同一个名字两边各有一张页是
     # 设计使然、不是重复；`compile_wiki --merge-duplicates` 也是按目录跑的，永远动不了跨线的
     # 组。2026-09-28 实测：合并跑完后还剩 2 组（`AI 工具`、`GLORIA`）全是跨线的 —— 而报告
-    # 写着"这些就是合并会合并的"，是句假话。跨线同名另有 `duplicateTitles` 那一节在报。
+    # 写着"这些就是合并会合并的"，是句假话。跨线同名另有 `crossLineSameName` 那一节在报。
     named = sorted({(p.get('dir', ''), p['title'] or p['stem']) for p in pages})
     same, contained = [], []
     for where in sorted({w for w, _ in named}):
@@ -395,6 +416,12 @@ def main():
     report['success'] = True
     report['pagesDir'] = existing
     report['cardLinks'] = len(card_links)
+    # **这一趟体检的是哪条线**：读的人（助手的 `wiki_health`）要按线分栏报，而它原来是从
+    # 路径里找 `Chat` 这个词猜的 —— 两条线各自一个根之后聊天线很可能不再叫 `Chat`，
+    # 于是它会**把聊天线报成文章线**，且不报错。所以由这一侧给出（认不出线就给 null）。
+    lines = [line_for_concept_dir(d) for d in existing]
+    report['line'] = lines[0] if len(set(lines)) == 1 else None
+    report['lineLabel'] = line_label(report['line'])
 
     if args.json:
         print(json.dumps(report, ensure_ascii=False, indent=2))
@@ -417,9 +444,16 @@ def main():
             print('  %s（%d 字）' % (item['page'], item['chars']))
         print('  重新跑一次 wiki compile 通常就好了（那次模型返回不完整）')
     if report['duplicateTitles']:
-        print('\n同名页 %d 组：' % len(report['duplicateTitles']))
+        print('\n同名页 %d 组（**同一条线内**撞了名字）：' % len(report['duplicateTitles']))
         for title, stems in list(report['duplicateTitles'].items())[:5]:
             print('  %s ← %s' % (title, '、'.join(stems)))
+    if report.get('crossLineSameName'):
+        # 不当成问题报：两条线各留一张同名页是设计（用户要求两个命名空间分开）。
+        # 列出来是因为"哪些概念两条线都有"本身有信息量，而它**只能从这里看到**。
+        print('\n两条线都有的概念 %d 个（**设计如此，不用改**）：%s'
+              % (len(report['crossLineSameName']), '、'.join(report['crossLineSameName'][:12])))
+        print('  在 Obsidian 里这些名字的裸链接是**二义的**（官方：可能命中的不是你想要的'
+              '那一张）。要精确指着某一条线就用带路径的链接 `[[Wiki/Concepts/名字]]`')
     if report['aspirational']:
         names = sorted({item['target'] for item in report['aspirational']})
         print('\n还没建页的相关概念 %d 个（**扩张候选，不是错误**）：%s'

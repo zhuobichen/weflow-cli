@@ -98,6 +98,25 @@ test('图谱那两个脚本读同一份清单，而不是自己硬编码两条�
   }
 })
 
+test('两条线的展示名：Python 一份、TS 一份，字必须一样', () => {
+  // 跨语言没法共享一个常量（`_utils.LINE_LABELS` 是 Python 的、助手那侧必须有 TS 的），
+  // 按本仓库对这类常量的既有做法：各写各的、由测试钉住。漂了的症状是**同一条线在两处
+  // 叫两个名字**（体检说"文章线"、统计说"Wiki"），而看的人不知道哪个才算数。
+  // 键**带不带引号都要认**：TS 写 `Wiki: '文章线'`、Python 写 `'wiki': '文章线'`。
+  // （只认一种的话，另一种会解析成空集，而"空集"与"两边一致"在断言里是两码事。）
+  const pairs = (text: string): Record<string, string> => Object.fromEntries(
+    [...text.matchAll(/'?(\w+)'?\s*:\s*'([^']+)'/g)].map(m => [m[1].toLowerCase(), m[2]]))
+
+  const py = pairs(block(read('scripts', '_utils.py'), 'LINE_LABELS = {', '}', 'scripts/_utils.py'))
+  assert.deepEqual(py, { wiki: '文章线', chat: '聊天线' }, '_utils.LINE_LABELS 是这份清单的源头')
+
+  const ts = pairs(block(read('src', 'services', 'assistantTools.ts'),
+    'export const VAULT_LINE_LABELS', '}', 'src/services/assistantTools.ts'))
+  // TS 那边用路径段做键（`Wiki`/`Chat`），Python 用线 id（`wiki`/`chat`）—— 小写之后必须一致，
+  // 这样连"哪条线对应哪个名字"也一起钉住了，而不只是"名字出现的集合一样"。
+  assert.deepEqual(ts, py, 'assistantTools.VAULT_LINE_LABELS 与 Python 那份不一致')
+})
+
 test('导入 CONCEPT_DIRS 的那两个脚本，确实在遍历它', () => {
   // 它们共用源头，所以清单不会漂；会坏的是"导入了却没拿它去遍历"——那时搜的仍然是空气，
   // 而且因为 `CONCEPT_DIRS` 还在 import 列表里，读代码的人看不出问题。
@@ -108,20 +127,19 @@ test('导入 CONCEPT_DIRS 的那两个脚本，确实在遍历它', () => {
   }
 })
 
-test('compile_wiki 一次只写一条线：默认文章线，另一条只用来查重', () => {
+test('compile_wiki 一次只写一条线；跨线查重那个老行为不许回来', () => {
   // `compile_wiki` 的默认输出是**文章线**；聊天线靠 `--output` 显式指过去
   // （`Chat/00-Overview.md` 就是这么生成的）。默认值要是漂到 `Chat/`，文章线会被写进聊天目录。
   const source = read('scripts', 'compile_wiki.py')
   assert.match(source, /OUTPUT_ROOT = 'output\/wechat-vault\/Wiki\/Concepts'/,
     'compile_wiki 的默认输出目录是文章知识库')
-  // 它确实会碰 CONCEPT_DIRS —— 但**只用来查重**（另一个目录里已有同名页就不重复建，
-  // 否则 `[[DeepSeek]]` 在 Obsidian 里会同时命中两张页）。所以这里钉的不是"不许提"，
-  // 而是"提它的那个函数不许写文件"。
-  assert.match(source, /sibling_concept_dirs/, 'compile_wiki 要拿另一条线的目录来查重')
-  // 取到下一个函数定义为止（用函数名当收尾标记，避免在字符串里写换行转义）
-  const helper = block(source, 'def sibling_concept_dirs(', 'def build_jobs(', 'scripts/compile_wiki.py')
-  for (const forbidden of ['write_text', 'open(', 'mkdir', 'write_with_frontmatter']) {
-    assert.ok(!helper.includes(forbidden),
-      `sibling_concept_dirs 只该回答"另一条线在哪"，不该动它（出现了 ${forbidden}）`)
-  }
+  // **2026-10-10 起跨线同名不再跳过**：用户要求两个概念命名空间分开，两条线各留一张
+  // 同名页是设计。这条断言是**反向**的 —— 老实现在实现里就是"另一条线已有同名页就不建"，
+  // 它要是原样回来，两张页的承诺就只在文档里，没有任何东西会红。
+  // 只盯**定义与调用**，不盯散文：注释里正当地提它的名字（说明为什么撤掉）不算回来 ——
+  // 盯整段文本的话，写注释的人会被迫含糊其辞，而含糊的注释比这个守卫更坏。
+  assert.ok(!/def sibling_concept_dirs|sibling_concept_dirs\s*\(/.test(source),
+    'compile_wiki 里又出现了跨线查重：跨线同名会被静默跳过')
+  assert.ok(!/other_dirs/.test(source),
+    'build_jobs 又在接"另一条线的目录"了 —— 那正是被撤掉的那个行为')
 })

@@ -23,7 +23,7 @@ from pathlib import Path
 from collections import defaultdict, Counter
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _utils import (CHAT_CARD_PREFIX, CONCEPT_DIRS, call_deepseek,  # noqa: E402
+from _utils import (CHAT_CARD_PREFIX, KNOWLEDGE_LINES, call_deepseek,  # noqa: E402
                     normalize_concept_name, SEPARATOR, get_api_key, load_config,
                     parse_frontmatter, write_with_frontmatter)
 
@@ -524,64 +524,38 @@ def origin_tag(source_dir: str) -> str:
 CONCEPT_PAGES_WORKERS = 6
 
 
-def sibling_concept_dirs(out_dir: Path) -> list:
-    """同一个库里**另一条线**的概念目录（有的话）。
+def skip_note(skipped: int) -> str:
+    """跳过多少、为什么 —— 现在**只有一类原因**：本目录已有这张页（重跑，正常）。
 
-    **一个概念名在库里只能有一张页。** 两张同名页会让 `[[DeepSeek]]` 在 Obsidian 里变成二义的
-    ——它挑一张连上，另一张等同于断了，而**两边都不报错**。这正是聊天卡要加 `会话-` 前缀的原因；
-    概念页没有前缀可用，所以只能用「另一条线已有同名页就不再建」来保证名字唯一。2026-09-27 实测：
-    分开目录之后，聊天线立刻为 11 个文章线已有的概念各建了一张同名页，`wiki lint` 报"同名页 11 组"。
+    2026-10-10 之前还有第二类"另一条线已有同名页，故意不建"（那个 `sibling_concept_dirs`
+    已经被删掉），现在取消了：用户要求两个概念**命名空间分开**，两条线各留一张同名页是设计。
+    代价写在该条 DECISIONS 里（Obsidian 里同名裸链接是二义的），取代 D-051 那一段。
 
-    只在这个输出目录**确实落在一条已知的知识库线上**时才去找：`--output` 指到库外的任意目录时，
-    那里没有"另一条线"，也就没有什么可跳过的。
+    留着这个函数（而不是在 `main()` 里内联一句 f-string）是因为它**能被测**：
+    内联的那句改坏了不会有任何东西红。
     """
-    # **两级**：两条线都是 `<库>/<线>/Concepts`（`Wiki/Concepts`、`Chat/Concepts`），
-    # 库根是 `out_dir.parent.parent`。写成一级的话候选目录恒不存在（`<库>/Chat/Wiki/Concepts`），
-    # 于是这段静默失效、同名页照建 —— 2026-09-27 第一次就是这么写的，跑完那 11 张又回来了。
-    root = out_dir.parent.parent
-    mine = out_dir.resolve()
-    found = []
-    for relative in CONCEPT_DIRS:
-        candidate = root / relative
-        if candidate.resolve() == mine or not candidate.is_dir():
-            continue
-        found.append(candidate)
-    return found
+    return f'  跳过 {skipped} 个已有概念' if skipped else ''
 
 
-def skip_note(skipped: int, elsewhere: int) -> str:
-    """跳过多少、分别为什么 —— **两类原因要分开说**。
-
-    本目录已有 = 重跑（正常）；另一条线已有同名页 = 故意不重复建（`sibling_concept_dirs`）。
-    合成一句"跳过 N 个"的话，看到的人会以为全是重跑，而这 11 个正是分开目录之后新增的那一类。
-    写成函数是为了**能被测**：留在 `main()` 里的一句 f-string，改坏了不会有任何东西红。
-    """
-    if not skipped and not elsewhere:
-        return ''
-    where = f'（其中 {elsewhere} 个在另一条线已有同名页）' if elsewhere else ''
-    return f'  跳过 {skipped + elsewhere} 个已有概念{where}'
-
-
-def build_jobs(top_concepts: list, out_dir, other_dirs: list = ()) -> tuple:
+def build_jobs(top_concepts: list, out_dir) -> tuple:
     """滤掉**已经有页**的概念，返回 `([(name, refs, out_file)], 跳过数)`。
+
+    **只按本目录判**：这是"重跑不重复建"。跨线同名**不再跳过** —— 两条线各有一张
+    `DeepSeek` 是设计（用户要求两个概念命名空间分开），跳过才是那个要让路的老行为。
 
     这一步必须在**提交给线程池之前**做。原来那版是串行循环里 `if out_file.exists(): continue`，
     顺序上天然不会为已存在的页花钱；一旦改成并发，"先提交、拿到结果再丢"就变成了**为一个
     已存在的页付一次费**——而且不报错，只体现在账单上。
     """
-    jobs, skipped, elsewhere = [], 0, 0
+    jobs, skipped = [], 0
     for name, refs in top_concepts:
         safe_name = re.sub(r'[\\/:*?"<>|]', '_', name)[:60]
         out_file = out_dir / f'{safe_name}.md'
         if out_file.exists():
             skipped += 1
             continue
-        # 另一条线已经有同名页 —— 跳过，理由见 `sibling_concept_dirs`
-        if any((other / f'{safe_name}.md').exists() for other in other_dirs):
-            elsewhere += 1
-            continue
         jobs.append((name, refs, out_file))
-    return jobs, skipped, elsewhere
+    return jobs, skipped
 
 
 def all_card_dirs(card_dirs=None) -> list:
@@ -1151,8 +1125,12 @@ def main():
             print('这条通道要指定 --cards（一条线一条线地建），例如：', file=sys.stderr)
             print('  文章线：--cards output/article-notes --cards output/fav-notes '
                   '--cards output/user-notes', file=sys.stderr)
-            print('  聊天线：--cards output/chat-notes --output '
-                  'output/wechat-vault/Chat/Concepts', file=sys.stderr)
+            # 聊天线的输出目录**从清单取**，不写死：两条线各自一个根之后，写死的那份
+            # 会指到一个已经不存在的地方，而它只是一句提示，没人会因此报错。
+            chat = next((' %s/%s' % (root, concepts) for line_id, root, concepts in KNOWLEDGE_LINES
+                         if line_id == 'chat'), None)
+            if chat:
+                print('  聊天线：--cards output/chat-notes --output%s' % chat, file=sys.stderr)
             sys.exit(1)
         result = build_pages_from_cards(args.output, cards,
                                         dry_run=getattr(args, 'dry_run', False))
@@ -1229,9 +1207,9 @@ def main():
     top_concepts = ranked[:args.limit]
     generated = 0
 
-    # 已有页在**花钱之前**滤掉（见 `build_jobs`：先提交再丢弃 = 为已存在的页付一次费）
-    # 另一条线的概念目录一起传进去：一个概念名在库里只能有一张页（见 `sibling_concept_dirs`）
-    jobs, skipped, elsewhere = build_jobs(top_concepts, out_dir, sibling_concept_dirs(out_dir))
+    # 已有页在**花钱之前**滤掉（见 `build_jobs`：先提交再丢弃 = 为已存在的页付一次费）。
+    # 只按本目录判：跨线同名照建（两条线是两个命名空间），不跳过的理由见 `build_jobs`。
+    jobs, skipped = build_jobs(top_concepts, out_dir)
     done = 0
     # 边收边写：生成器一有结果就落盘，不等整批（见 `iter_concept_pages`）
     for (name, refs, out_file), result in iter_concept_pages(
@@ -1245,7 +1223,7 @@ def main():
         write_with_frontmatter(str(out_file), fm, body)
         generated += 1
 
-    note = skip_note(skipped, elsewhere)
+    note = skip_note(skipped)
     if note:
         print(note)
     print(f'  生成 {generated} 个新概念')

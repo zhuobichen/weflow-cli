@@ -267,13 +267,28 @@ export function buildServer(): Server {
           if (!name || name.includes('/') || name.includes('\\') || name.includes('..')) {
             return { content: [{ type: 'text', text: '概念名无效' }] }
           }
+          // **两条线各留一张同名页是设计**（用户要求两个概念命名空间分开）。只回第一条
+          // 会让人以为另一条没有这个概念 —— 所以同名的都要说出来，并指明回的是哪一张。
+          const found: string[] = []
           for (const dir of VAULT_WIKI_DIRS) {
             for (const ext of ['', '.md']) {
               const path = safeChildPath(dir, name + ext)
-              if (path && existsSync(path)) {
-                return { content: [{ type: 'text', text: readFileSync(path, 'utf-8') }] }
-              }
+              if (path && existsSync(path)) { found.push(path); break }
             }
+          }
+          if (found.length) {
+            const text = readFileSync(found[0], 'utf-8')
+            if (found.length === 1) return { content: [{ type: 'text', text }] }
+            // 用**目录名**说清是哪条线（`Wiki/Concepts` / `Chat/Concepts`）：这里不再自己
+            // 写一份"文章线/聊天线"的名单 —— 那份在 `_utils.LINE_LABELS` 与助手里各有一份，
+            // 已经有测试钉着两边一致，再来第三份就是三处要一起改。
+            const rel = (p: string): string => {
+              const dir = VAULT_WIKI_DIRS.find(d => p.startsWith(d))
+              return dir ? dir.split(/[\\/]/).slice(-2).join('/') : p
+            }
+            const where = found.map(rel)
+            return { content: [{ type: 'text', text:
+              `（这个概念两条线都有：${where.join('、')}；下面是第一条 ${where[0]}）\n\n${text}` }] }
           }
           // Fuzzy search
           for (const dir of VAULT_WIKI_DIRS) {

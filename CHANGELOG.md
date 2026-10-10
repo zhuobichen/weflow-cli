@@ -19,6 +19,18 @@ All notable user-facing changes are recorded here. This project follows [Semanti
 
 ## Unreleased
 
+- **The article knowledge base and the chat knowledge base are now two concept namespaces, as requested.** A concept
+  name may hold a page on both lines - `wiki compile` no longer skips a name because the other line already has one -
+  and every place that turns a name into a key now qualifies it with the line (`wiki:DeepSeek`), so the merged graph
+  keeps both instead of one silently shadowing the other. `wiki lint` reports the overlap in its own
+  `crossLineSameName` section (by design, not an error) and `duplicateTitles` now only covers collisions **inside**
+  one line. Two honest notes: the two lines still share one vault root, so a bare `[[DeepSeek]]` in Obsidian is
+  genuinely ambiguous until the roots are split - that ambiguity is now *reported* rather than avoided by not
+  creating the page (the official rule is "a bare link with duplicates resolves deterministically but not
+  necessarily to the one you meant"; `[[Chat/Concepts/DeepSeek]]` is unambiguous) - and 36 such pairs already
+  existed in this vault, so the invariant this replaced was never true of the data. Verified on the real vault:
+  36 shared names, and `wechat.get_concept` now names both lines for each of them while 1,491 chat-only names get no
+  extra note; the 2D viewer is exercised for real in jsdom, the 3D one only syntax-checked (it needs WebGL).
 - **`messages` now says when an ID is one nobody knows, instead of looking like "no messages".** An input shaped like
   an id (`wxid_…`, `…@chatroom`, `…@openim`) is passed straight through, so a typo produced exactly the same output as
   a real conversation that happens to be empty: `未找到消息` and exit code 0. It still exits 0 - "no messages" is not

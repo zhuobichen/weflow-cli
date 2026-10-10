@@ -162,9 +162,16 @@ description is the material for the page.
 `Wiki/Concepts` for the article line, `Chat/Concepts` for the conversation line - so a source that writes into a
 directory nobody reads is invisible, and `compile_wiki` writes whichever line you point `--output` at (one line per
 run, by design). If your source belongs to an existing line, you are done; if it deserves its own, it goes into
-`_utils.CONCEPT_DIRS` and into every other declaration that `test/concept-dirs-agreement.test.ts` pins (that test
-counts the sites itself rather than trusting a number written here) - that test
-fails until every reader of concept pages knows about the new directory, which is the point.
+`_utils.KNOWLEDGE_LINES` (**as of 2026-10-10 each entry is a line id plus its own root plus the concepts directory
+inside it**, so a new line is a new tuple, not a new path string) and into every other declaration that
+`test/concept-dirs-agreement.test.ts` pins (that test counts the sites itself rather than trusting a number written
+here) - that test fails until every reader of concept pages knows about the new directory, which is the point.
+
+Two things come for free and one does not. For free: graph node ids become line-qualified (`concept_key`), and
+`wiki lint` starts reporting the new line's overlap with the others under `crossLineSameName`. Not for free: a
+**display name** - add it to `_utils.LINE_LABELS` and to `assistantTools.VAULT_LINE_LABELS`, which the same test
+pins against each other. Without them the line shows up in reports as a raw directory name, which is not a crash
+and therefore easy to miss.
 
 The guard to copy: `test/chat_notes_test.py` writes a card and then runs the **real consumer**
 (`compile_wiki.scan_articles`) over it, asserting the links and descriptions come back. That is the shape of every

@@ -25,6 +25,12 @@
   const index = new Map()
   for (let i = 0; i < N; i += 1) index.set(nodes[i].id, i)
 
+  // **画给人看的一律用 `name`**：主键是 `线:名字`（两条线各有一张同名页时要分开），
+  // 直接把主键印在画布上，两个同名概念会像叫「wiki:DeepSeek」「chat:DeepSeek」。
+  const LINE_LABELS = data.lineLabels || {}
+  const label = (n) => n.name || n.id
+  const lineLabel = (n) => LINE_LABELS[n.line] || n.line || ''
+
   const edges = []
   for (const pair of data.links) {
     const a = index.get(pair[0])
@@ -274,7 +280,7 @@
       placed.push([sx, sy])
       shownLabels += 1
       ctx.fillStyle = forced ? '#ffffff' : 'rgba(201,211,230,0.78)'
-      ctx.fillText(nodes[i].id, sx + 6, sy)
+      ctx.fillText(label(nodes[i]), sx + 6, sy)
     }
   }
 
@@ -299,9 +305,9 @@
     if (i >= 0) {
       neighbours = new Set(adj[i])
       if (hudInfo) {
-        const names = [...neighbours].slice(0, 6).map((j) => nodes[j].id).join('、')
+        const names = [...neighbours].slice(0, 6).map((j) => label(nodes[j])).join('、')
         const more = neighbours.size > 6 ? ' 等' : ''
-        hudInfo.innerHTML = `<b>${escapeHtml(nodes[i].id)}</b> · 连 ${neighbours.size} 个（${escapeHtml(names)}${more}）`
+        hudInfo.innerHTML = `<b>${escapeHtml(label(nodes[i]))}</b> · ${escapeHtml(lineLabel(nodes[i]))} · 连 ${neighbours.size} 个（${escapeHtml(names)}${more}）`
       }
     } else {
       neighbours = null
@@ -376,23 +382,32 @@
       if (event.key !== 'Enter') return
       const needle = q.value.trim().toLowerCase()
       if (!needle) return
-      let hit = -1
+      // 搜 `name`（主键也认，方便精确指定某一条线）。同名两页都在时**两个都算命中**，
+      // 跳连接更多的那张并把另一条线也说出来 —— 合并视图里这正是要看见的东西。
+      const exact = []
       for (let i = 0; i < N; i += 1) {
-        if (nodes[i].id.toLowerCase() === needle) { hit = i; break }
+        if (label(nodes[i]).toLowerCase() === needle || nodes[i].id.toLowerCase() === needle) exact.push(i)
       }
-      if (hit < 0) {
+      let pool = exact
+      if (!pool.length) {
+        pool = []
         for (let i = 0; i < N; i += 1) {
-          if (nodes[i].id.toLowerCase().includes(needle)) { hit = i; break }
+          if (label(nodes[i]).toLowerCase().includes(needle)) pool.push(i)
         }
       }
-      if (hit < 0) {
+      if (!pool.length) {
         if (hudInfo) hudInfo.textContent = `没找到「${q.value.trim()}」`
         return
       }
+      pool.sort((a, b) => (nodes[b].deg || 0) - (nodes[a].deg || 0))
+      const hit = pool[0]
       view.scale = Math.max(view.scale, 2.5)
       view.x = cssW() / 2 - X[hit] * view.scale
       view.y = cssH() / 2 - Y[hit] * view.scale
       setFocus(hit)
+      if (pool.length > 1 && hudInfo) {
+        hudInfo.innerHTML += `<div>两条线都有「${escapeHtml(label(nodes[hit]))}」：${escapeHtml(pool.map((i) => lineLabel(nodes[i])).join('、'))}</div>`
+      }
     })
   }
 
@@ -404,7 +419,7 @@
       else if (nodes[i].line === 'chat') chat += 1
     }
     hudStats.textContent = `${N.toLocaleString('en-US')} 个概念 · ${(E.length / 2).toLocaleString('en-US')} 条链接`
-      + ` · 文章线 ${wiki.toLocaleString('en-US')} / 聊天线 ${chat.toLocaleString('en-US')}`
+      + ` · ${LINE_LABELS.wiki || 'wiki'} ${wiki.toLocaleString('en-US')} / ${LINE_LABELS.chat || 'chat'} ${chat.toLocaleString('en-US')}`
   }
   if (hudInfo) hudInfo.textContent = HINT
   if (boot) boot.style.display = 'none'
