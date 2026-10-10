@@ -82,7 +82,12 @@ def build_graph(vault, min_degree=0, line='all'):
     否则每放大一次门槛，度数就变一次，同一个数在不同页面上含义不同。
     """
     pages = []
-    for label, d in (('wiki', vault / 'Wiki' / 'Concepts'), ('chat', vault / 'Chat' / 'Concepts')):
+    # 概念目录清单来自 `_utils.KNOWLEDGE_LINES`（经 `wiki_lint` 透出）。**别再在这里硬编码**：
+    # 这两行曾经把两条线的相对路径直接拼在 `vault` 上，而它们不在任何一致性清单里
+    # （`test/concept-dirs-agreement.test.ts` 只管那五处声明）⇒ 清单改了图也不会变，
+    # 症状是"图里少一半节点"，而且不报错。
+    for label, _root, concepts in wl.KNOWLEDGE_LINES:
+        d = vault / concepts
         if line != 'all' and label != line:
             continue
         for p in wl.collect(str(d), wl.CARD_DIRS):
@@ -506,7 +511,7 @@ def main(argv=None):
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')
     args = _parse_args(sys.argv[1:] if argv is None else argv)
     vault = Path(args.vault)
-    if not (vault / 'Wiki' / 'Concepts').is_dir() and not (vault / 'Chat' / 'Concepts').is_dir():
+    if not any((vault / concepts).is_dir() for _line, _root, concepts in wl.KNOWLEDGE_LINES):
         return _fail('Vault 里没有概念目录：%s（先跑 `wiki compile`，或用 --vault 指定）' % vault, args.json)
 
     nodes, links = build_graph(vault, min_degree=args.min_degree, line=args.line)

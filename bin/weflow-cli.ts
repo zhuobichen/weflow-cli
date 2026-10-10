@@ -5644,14 +5644,19 @@ program
   program.commands.find(c => c.name() === 'wiki')?.addCommand(
     new Command('lint')
       .description('知识库体检：断链、孤儿、空页、同名（本地，不联网）')
-      .option('--dir <dir>', '概念页目录', './output/wechat-vault/Wiki/Concepts')
+      // 不给默认值：不传 `--dir` 时体检脚本自己的默认（清单里的**全部线**）。
+      // 这里曾经默认只给文章线，而脚本默认两条线都体检 ⇒"半开半合"：命令行跑出来
+      // 与脚本跑出来口径不同，而两边都不报错。
+      .option('--dir <dirs...>', '概念页目录（可重复；不传则体检清单里的全部线）')
       .option('--json', '输出机器可读结果')
       .action(async (opts) => {
         const { execFile } = await import('child_process')
         const { promisify } = await import('util')
         const execFileAsync = promisify(execFile)
         const script = join(resolvePackageRoot(), 'scripts', 'wiki_lint.py')
-        const args = [script, '--dir', String(opts.dir), ...(opts.json ? ['--json'] : [])]
+        const dirs = Array.isArray(opts.dir) ? opts.dir : (opts.dir ? [opts.dir] : [])
+        const args = [script, ...dirs.flatMap((d: string) => ['--dir', String(d)]),
+          ...(opts.json ? ['--json'] : [])]
         try {
           const { stdout } = await execFileAsync(getPythonCommand(), args, {
             timeout: 120_000, maxBuffer: 20 * 1024 * 1024, env: pythonProcessEnv(),

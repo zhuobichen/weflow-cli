@@ -25,12 +25,14 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _utils import CONCEPT_DIRS, normalize_concept_name, parse_frontmatter  # noqa: E402
+from _utils import CONCEPT_DIRS, KNOWLEDGE_LINES, normalize_concept_name, parse_frontmatter  # noqa: E402
 
 DEFAULT_PAGES_DIR = 'output/wechat-vault/Wiki/Concepts'
-VAULT_ROOT = 'output/wechat-vault'
-# 体检要看的**全部**概念页目录（Vault 相对路径那份清单在 `_utils.CONCEPT_DIRS`）。
-VAULT_CONCEPT_DIRS = tuple(str(Path(VAULT_ROOT) / d) for d in CONCEPT_DIRS)
+# 文章线的根（材料目录 `002_Literature`/`Sources/WeChat` 都在它下面）。取自清单的**第一条线**，
+# 不再自己写一遍字符串 —— 两条线各自一个根之后，这里会跟着清单变。
+VAULT_ROOT = KNOWLEDGE_LINES[0][1]
+# 体检要看的**全部**概念页目录：由清单拼出（每条线 = 根 + 线内概念目录）。
+VAULT_CONCEPT_DIRS = tuple(str(Path(root) / concepts) for _line, root, concepts in KNOWLEDGE_LINES)
 # 链接可能指向的「材料」层（与卡片目录一起参与可解析性判断）
 MATERIAL_DIRS = tuple(str(Path(VAULT_ROOT) / d) for d in
                       ('002_Literature', '001_Daily', 'Sources/Chat', 'Sources/WeChat'))

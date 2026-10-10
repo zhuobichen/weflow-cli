@@ -368,7 +368,41 @@ CHAT_CARD_PREFIX = '会话-'
 # 读的一方（`wiki_lint` / `vault_search` / `vault_rag` / 助手的 `search_knowledge`）
 # 都要把**两个都读**，否则新分出去的那一半会静默地搜不到——而这个仓库已经因为
 # "同一个事实写在两处"栽过好几次，所以 TS 那边有一份平行的列表，有测试钉住两者一致。
-CONCEPT_DIRS = ('Wiki/Concepts', 'Chat/Concepts')
+#
+# 这一层是 2026-10-10 立的：用户要求两条线**各自一棵树**（不只是同根下的两个子目录），
+# 而"一串 Vault 相对路径"这个形状把"共用一个根"写死了 ⇒ 改值不够、得先改形状。
+# 现在两条线的根**仍然相同**（物理迁移还没做），所以下面这层只是把形状立起来；
+# 迁移时只改 `root` 的值，不再动形状。**唯一源头**：`CONCEPT_DIRS` 由它派生，
+# 图谱那两处曾经的硬编码也改读它。
+KNOWLEDGE_LINES = (
+    # (线 id, 根, 线内的概念目录)
+    ('wiki', 'output/wechat-vault', 'Wiki/Concepts'),
+    ('chat', 'output/wechat-vault', 'Chat/Concepts'),
+)
+
+
+def concept_dirs():
+    """所有线的概念目录（Vault 相对路径），顺序即展示顺序：文章在前。"""
+    return tuple(concepts for _line, _root, concepts in KNOWLEDGE_LINES)
+
+
+CONCEPT_DIRS = concept_dirs()
+
+
+def line_for_concept_dir(path):
+    """给一个概念目录（任意写法）→ 线 id；认不出就返回 None（**不猜**）。
+
+    认不出是正常情形（`wiki compile --output` 可以指到库外的任意目录），
+    调用方要按"没有线"处理，而不是当成某条线。
+    """
+    try:
+        target = os.path.normcase(os.path.abspath(str(path)))
+    except Exception:
+        return None
+    for line_id, root, concepts in KNOWLEDGE_LINES:
+        if target == os.path.normcase(os.path.abspath(os.path.join(root, concepts))):
+            return line_id
+    return None
 
 # 一篇文章**没能被分类**时落到哪一类。
 #

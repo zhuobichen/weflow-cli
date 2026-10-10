@@ -52,9 +52,11 @@ function conceptsOnly(paths: string[]): string[] {
   return [...new Set(paths.map(tail2).filter(p => /^(Wiki|Chat)\/Concepts$/.test(p)))]
 }
 
-/** 源头：`scripts/_utils.py` 的 `CONCEPT_DIRS`。 */
+/** 源头：`scripts/_utils.py` 的 `KNOWLEDGE_LINES`（每条线 = 线 id + 根 + 线内概念目录）。
+ *  2026-10-10 起概念目录由它派生（`CONCEPT_DIRS = concept_dirs()`）—— 条目里的括号会把
+ *  `block(..., ')')` 提前截断，所以结束标记用下一段的开头。 */
 function fromUtils(): string[] {
-  const text = block(read('scripts', '_utils.py'), 'CONCEPT_DIRS = (', ')', 'scripts/_utils.py')
+  const text = block(read('scripts', '_utils.py'), 'KNOWLEDGE_LINES = (', '\nCONCEPT_DIRS', 'scripts/_utils.py')
   return conceptsOnly(quoted(text))
 }
 
@@ -81,6 +83,18 @@ test('六个声明处对「概念页目录」的清单完全一致', () => {
 
   for (const [who, get] of decls) {
     assert.deepEqual(get(), expected, `${who} 声明了别的目录清单——两个知识库分开之后，少一个目录不会报错，只会少一半结果`)
+  }
+})
+
+test('图谱那两个脚本读同一份清单，而不是自己硬编码两条路径', () => {
+  // 2026-10-10 之前它们把 `vault / 'Wiki' / 'Concepts'` 与 `vault / 'Chat' / 'Concepts'` 写死，
+  // 而它们**不在**上面那五处声明里 ⇒ 清单改了图不会变，症状是"图里少一半节点"，且不报错。
+  for (const file of ['graph_3d.py', 'graph_2d.py']) {
+    const text = read('scripts', file)
+    assert.ok(text.includes('KNOWLEDGE_LINES'),
+      `${file} 没有读 KNOWLEDGE_LINES：硬编码的那份不会跟着清单走`)
+    assert.ok(!/'Wiki'\s*\/\s*'Concepts'/.test(text) && !/'Chat'\s*\/\s*'Concepts'/.test(text),
+      `${file} 里还留着硬编码的概念路径`)
   }
 })
 

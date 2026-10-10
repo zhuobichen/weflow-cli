@@ -59,7 +59,9 @@ def main(argv=None):
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')
     args = _parse_args(sys.argv[1:] if argv is None else argv)
     vault = Path(args.vault)
-    if not (vault / 'Wiki' / 'Concepts').is_dir() and not (vault / 'Chat' / 'Concepts').is_dir():
+    # 与 `graph_3d.build_graph` 一样，清单从 `_utils.KNOWLEDGE_LINES` 读（经 `wiki_lint` 透出），
+    # 不在这里硬编码——硬编码的地方不会跟着清单变，只会静默少算。
+    if not any((vault / concepts).is_dir() for _line, _root, concepts in g.wl.KNOWLEDGE_LINES):
         return g._fail('Vault 里没有概念目录：%s（先跑 `wiki compile`，或用 --vault 指定）' % vault, args.json)
 
     nodes, links = g.build_graph(vault, min_degree=args.min_degree, line=args.line)
