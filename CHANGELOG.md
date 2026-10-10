@@ -39,7 +39,9 @@ All notable user-facing changes are recorded here. This project follows [Semanti
   has never completed a login, so this path has run only in tests, with `fetch` stubbed. **Nothing reads the saved
   path yet either**: the file is on disk and `components[].filePath` points at it, but the assistant still receives
   only the text and the kind, so it cannot act on the picture. Handing images to a model is a separate egress
-  decision, not a side effect of this switch.
+  decision, not a side effect of this switch. **And the switch downloads from any sender**: it runs while the polled
+  message is parsed, before the assistant decides whether to answer, so the allowlist gates replies rather than
+  downloads - turn it on only if that is what you want.
 
 - **Two scripts crashed when their output was redirected or piped, and the crash was invisible from inside this
   repository.** `scripts/quality_eval.py` prints `⚠️` and `scripts/wechat_emoticon.py` prints `✓`; with stdout at the
