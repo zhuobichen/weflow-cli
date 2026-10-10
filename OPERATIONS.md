@@ -300,7 +300,7 @@ python scripts/quality_eval.py consistency ~/.weflow-cli/labels/labels-<时间�
 
 **清单是盲的**：`sample` 打印给你的那张表**不印 Jev 的答案**（只有日期与历史标注）。
 先看见模型说了什么，人就会往它靠，测出来的"一致率"会偏高——而偏高的量无法估计。
-`topicConfidence`/`relevanceScore`/`includeScore` 仍然存在 JSON 里供算账，标注时别翻它。
+`topicConfidence`/`relevanceScore`/`includeScore` **只在被判断层判过的那篇文章上存在**（它们由 `_apply_decision` 从判断结果写进去）。走 LLM 回退路径的文章没有这几个分 ——所以判断层按地区不可用（见下面的 451）时，日报里整批都没有它们；标注时别翻它。
 
 `score` 会给出四件事：
 
@@ -739,6 +739,7 @@ python scripts/generate_html.py --date 2026-09-05 --exclude-topics "新闻,投�
 - 相关度会写进 frontmatter 的 `relevance`（仍是「高/中/低」三个字），并额外写入
   `relevanceScore`（原始分值）与 `topicConfidence`（主题的置信度）。那三档的切点是
   暂定的，原始分留着，将来重新校准时不用重跑历史日报。
+  **前提**：这三个分只在判断层（Jev）判过的文章上才有（它们来自 `decision`）。判断层不可用、整轮走 LLM 回退路径时，日报里就没有它们 —— 2026-10-10 实测：回填日的 383 篇里 0 篇带 `relevanceScore`，而 `biz_daily.py` 的 `_article_entry` 本身是会写这几个键的。
 - 同一批问题里还问了一个**「该不该收进今天的日报」**（`includeScore`，0~1）。
   日报的收录门用它，而不是拿相关度顶替——相关度答的是"对读者的实用价值"，
   答不了"今天该不该收它"。切点默认 `0.5`，同样暂定；`generate_ai_report.py`
