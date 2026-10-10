@@ -1427,7 +1427,7 @@ which is what the gate is for.
 
 7. **它是"谁发来的都下"，不是"只下白名单的"**：下载发生在长轮询解析消息那一步，比"助手要不要回答"的判断**更早一层**（访问控制住在 `assistantService` 里）。所以白名单管的是**回不回答**，管不到**下不下载**；只要有人能给这个机器人发消息，他发的媒体就会落盘。这不是疏漏而是层次顺序的后果，所以写在这里而不是悄悄改行为；要收紧的话，正确做法是把"允许谁"的判据上移到解析层，而不是把下载搬到访问控制之后。
 
-**Consequences:** 新配置键 `wechatMediaDownload`（五处齐全，`test/config-keys.test.ts` 会拦）；新模块 `src/services/wechatMedia.ts`；`parseInboundMessage` 变为 async（唯一调用点已 `await`）；`CHANGELOG.md`、`docs/PROJECT_STATE.md`、`OPERATIONS.md` 同步；测试 +10（`test/wechat-media.test.ts`，含"默认关不发请求""名字逃逸被吃掉""四种失败不留文件"与真实解密链路的假 fetch 用例）。**尚未在真实入站消息上跑过**：本机这条通道从未完成登录（与 D-045 记的那个缺口同一个），所以这条路只在测试里跑过，`fetch` 是打的桩。第一次真收到图时，要回头看 `output/wechat-media/` 里有没有东西、以及日志里有没有那行"未落地"。
+**Consequences:** 新配置键 `wechatMediaDownload`（五处齐全，`test/config-keys.test.ts` 会拦）；新模块 `src/services/wechatMedia.ts`；`parseInboundMessage` 变为 async（唯一调用点已 `await`）；`CHANGELOG.md`、`docs/PROJECT_STATE.md`、`OPERATIONS.md` 同步；测试 +10（`test/wechat-media.test.ts`，含"默认关不发请求""名字逃逸被吃掉""四种失败不留文件"与真实解密链路的假 fetch 用例）。**已在真实入站消息上验过**（2026-10-10，重新 `login-wechat` 之后）：先收到一条文字并被回答（证明通道与访问控制都活着），再收到一张真图 —— **27,637 字节、PNG 魔数、PIL 打开成功（798×513 RGB）**。这一条比"目录里有文件"强得多：乱码是打不开的，能打开才说明解密正确。同一时刻日志里的 `忽略非文本消息 (image)` 也印证了"文件落盘、但助手不把它喂给模型"这条设计。下一步若要把图交给模型，走 D-042 的 egress 决策，不要在这里顺手放开。
 
 ## D-101: `business/xweb/` 是 MMKV 加密存储：本地读不出来，这条线不进能力面
 

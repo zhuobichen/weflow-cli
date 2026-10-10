@@ -35,8 +35,9 @@ All notable user-facing changes are recorded here. This project follows [Semanti
   name (a name sent by the server is reduced to a sanitised basename, so `../` cannot escape the directory), a 25 MB
   per-item cap, and the failure behaviour - a download that fails, comes back empty or exceeds the cap writes
   **nothing**, leaving `filePath` empty plus one log line naming the reason, rather than a 0-byte file that the rest of
-  the pipeline would treat as a picture. **Not yet observed on a real inbound message** - the channel on this machine
-  has never completed a login, so this path has run only in tests, with `fetch` stubbed. **Nothing reads the saved
+  the pipeline would treat as a picture. **Observed on a real inbound message** (2026-10-10): after a fresh `login-wechat`, a
+  text message was answered, then a real image came through as 27,637 bytes with PNG magic - and PIL opened it at
+  798x513 RGB, so the bytes are a real picture and not just ciphertext that happened to land on disk. **Nothing reads the saved
   path yet either**: the file is on disk and `components[].filePath` points at it, but the assistant still receives
   only the text and the kind, so it cannot act on the picture. Handing images to a model is a separate egress
   decision, not a side effect of this switch. **And the switch downloads from any sender**: it runs while the polled
