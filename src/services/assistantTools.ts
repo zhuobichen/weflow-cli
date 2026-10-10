@@ -72,15 +72,40 @@ const vaultDirs = (): string[] => {
  * 到那时 `wiki_health` 已经直接取 Python 给的 `report.lineLabel`（认得线的目录它都会给），
  * 这里只剩"认不出的目录"这一支要兜底。
  */
-export const VAULT_LINE_LABELS: Record<string, string> = { Wiki: '文章线', Chat: '聊天线' }
+export const VAULT_LINE_LABELS: Record<string, string> = { wiki: '文章线', chat: '聊天线' }
+
+/** 概念目录 → 线 id（`wiki`/`chat`）。按**路径段**认（`…/Wiki/Concepts`）；认不出返回 null，不猜。 */
+export function vaultLineId(dir: string): string | null {
+  const segments = dir.split(/[\\/]/).map(s => s.toLowerCase())
+  for (const id of Object.keys(VAULT_LINE_LABELS)) {
+    if (segments.includes(id)) return id
+  }
+  return null
+}
 
 /** 概念目录 → 线的展示名。**认不出线就返回目录名，不猜成某一条**。 */
 export function vaultLineLabel(dir: string): string {
-  const parts = dir.split(/[\\/]/)
-  for (const [segment, label] of Object.entries(VAULT_LINE_LABELS)) {
-    if (parts.includes(segment)) return label
-  }
-  return parts.filter(Boolean).pop() || dir
+  const id = vaultLineId(dir)
+  if (id) return VAULT_LINE_LABELS[id]
+  return dir.split(/[\\/]/).filter(Boolean).pop() || dir
+}
+
+/**
+ * 工具参数里的 `line`：`wiki` / `chat` / `all`，不传就是 `wiki`（两条线分开之后，
+ * **默认只看文章线**，要合起来看显式给 `all`）。
+ *
+ * 认不出的值返回 `null` 让调用方**报错**，而不是当 `all`：`line: 'wiki '` 或 `'Wiki'`
+ * 悄悄变成"两条线都搜"的话，"我限定住了"就是句假话，而结果里看不出来。
+ */
+export function toolLine(value: unknown): 'wiki' | 'chat' | 'all' | null {
+  const raw = String(value ?? '').trim().toLowerCase()
+  if (!raw) return 'wiki'
+  return raw === 'wiki' || raw === 'chat' || raw === 'all' ? raw : null
+}
+
+/** 线 id → 展示名（工具输出里说"搜了哪条"用）。 */
+export function lineLabelOf(line: 'wiki' | 'chat' | 'all'): string {
+  return line === 'all' ? '两条线' : (VAULT_LINE_LABELS[line] ?? line)
 }
 
 /**
@@ -877,6 +902,12 @@ export const TOOL_DEFS: ToolDef[] = [
         type: 'object',
         properties: {
           query: { type: 'string', description: '要找的意思，用自然语言描述' },
+          line: {
+            type: 'string',
+            description: '搜哪一条知识库：wiki=公众号文章线与聊天记录里的文章（默认）、'
+              + 'chat=你的微信聊天记录、all=两条都搜。**默认只搜 wiki**，'
+              + '问"我们聊过什么"「上次说的那个」这类一定要给 chat 或 all，否则会搜不到。',
+          },
           top_k: { type: 'number', description: '要几条，默认 8，上限 20' },
           confirm: {
             type: 'boolean',
@@ -909,7 +940,8 @@ export const TOOL_DEFS: ToolDef[] = [
     type: 'function',
     function: {
       name: 'search_knowledge',
-      description: '搜索**本地知识库**（从公众号文章沉淀的 Wiki 概念页与学习日报），适合查概念解释、找之前整理过的知识。'
+      description: '搜索**本地知识库**的概念页（公众号文章沉淀的是一条线、你自己的微信对话沉淀的是另一条），'
+        + '适合查概念解释、找之前整理过的知识。**默认只搜文章那条线**，`line` 可以换成聊天那条或两条都搜。'
         + '**返回时会一并给出这一页连到的相关概念（每个一句定义）**——可以顺着它们再用本工具逐跳查下去，'
         + '这样一次追问能走开一小块知识，而不是停在一个孤立页面上。'
         + '（聊天里说过什么用 search_chats；助手记得的关于你的事用 search_memory）',
@@ -917,6 +949,13 @@ export const TOOL_DEFS: ToolDef[] = [
         type: 'object',
         properties: {
           keyword: { type: 'string', description: '概念名或关键词, 如 RAG、Agent' },
+          line: {
+            type: 'string',
+            description: '搜哪一条知识库：wiki=公众号文章沉淀的概念（默认）、'
+              + 'chat=你自己的微信对话沉淀的概念、all=两条都搜。'
+              + '**默认只搜 wiki**；问"我们聊过的某个概念"要给 chat 或 all。'
+              + '同一个概念名两条线可能各有一张页（那是设计），返回里会指明给的是哪一条。',
+          },
           depth: { type: 'integer', description: '沿「相关概念」走几跳：默认 1 只给直接邻居，2 能一次看到这个概念周围的生态（最多 3）' },
         },
         required: ['keyword'],
@@ -1878,6 +1917,8 @@ export async function executeTool(name: string, args: Record<string, any>, ctx: 
         // 两者都在仓库既有的云端路径上（不是新类别），但这里如实写出来。
         const query = String(args.query || '').trim()
         if (!query) return '(缺少 query 参数)'
+        const line = toolLine(args.line)
+        if (!line) return `(line 只能是 wiki / chat / all，收到「${String(args.line)}」)`
         const topK = boundedToolInteger(args.top_k, 8, 20, 'top_k')
         // 外部机器默认只给预览（`semantic_search.py` 没有 --dry-run，按入参说清）
         if (ctx.requiresConfirm && args.confirm !== true) {
@@ -1885,14 +1926,27 @@ export async function executeTool(name: string, args: Record<string, any>, ctx: 
             + `再把前 ${topK} 条命中的本地片段（可能含聊天或文章原文）发给判断模型 Jev 重排。`)
         }
         // **查询词走环境变量、不进 argv**：仓库写进测试的隐私纪律（进程列表里看不到正文）
-        const result = await runPythonJson<any[]>('semantic_search.py',
-          ['search', '--top-k', String(topK)],
+        const result = await runPythonJson<any>('semantic_search.py',
+          ['search', '--top-k', String(topK), '--line', line],
           { env: { WEFLOW_SEARCH_QUERY: query }, timeoutMs: 90_000 })
         if (!result.ok) return fail('语义检索失败（索引可能还没建：weflow-cli search-index）', result)
-
-        const rows = Array.isArray(result.data) ? result.data : []
-        if (!rows.length) return `(语义检索没有结果「${query}」)`
-        return `语义检索「${query}」前 ${rows.length} 条：` + String.fromCharCode(10) + rows.map((row: any) => {
+        if (result.data && typeof result.data.error === 'string') {
+          return `(语义检索没跑成：${String(result.data.error).slice(0, 120)})`
+        }
+        if (!result.data || !Array.isArray(result.data.results)) {
+          // **形状不对要响，不能降级成"没有结果"**：脚本那边 `search` 的输出是一个带
+          // `line` / `results` 的对象，而"读不到"和"搜不到"在界面上长得一模一样
+          // （`(语义检索没有结果)`）—— 那正是这个仓库一直在防的那种静默。
+          return `(语义检索返回了看不懂的形状：${JSON.stringify(result.data).slice(0, 120)})`
+        }
+        const rows = result.data.results
+        const note = String(result.data.note || '')
+        const scope = String(result.data.lineLabel || lineLabelOf(line))
+        if (!rows.length) {
+          return `(语义检索在${scope}里没有结果「${query}」${note ? '：' + note : ''}`
+            + `${line === 'all' ? ')' : '；`line: \'all\'` 两条线一起搜)'}`
+        }
+        return `语义检索「${query}」（范围：${scope}）前 ${rows.length} 条：` + String.fromCharCode(10) + rows.map((row: any) => {
           const title = String(row.title || row.source || '(无标题)').slice(0, 40)
           const score = typeof row.score === 'number' ? `（${row.score.toFixed(2)}）` : ''
           const text = privacyGate.maskMessageBody(
@@ -1940,15 +1994,22 @@ export async function executeTool(name: string, args: Record<string, any>, ctx: 
       case 'search_knowledge': {
         const kw = String(args.keyword || '')
         if (!kw) return '(缺少 keyword 参数)'
-        const liveDirs = vaultDirs().filter(dir => existsSync(dir))
-        if (!liveDirs.length) return '(知识库尚未生成, 先运行 weflow-cli wiki compile)'
-        // **两个目录一起搜**（文章知识库 + 聊天知识库）。分开是用户要求的，但"分开"
-        // 不该变成"搜不到"——只读一个的话，另一半会静默缺席。
+        const line = toolLine(args.line)
+        if (!line) return `(line 只能是 wiki / chat / all，收到「${String(args.line)}」)`
+        const all = vaultDirs().filter(dir => existsSync(dir))
+        if (!all.length) return '(知识库尚未生成, 先运行 weflow-cli wiki compile)'
+        // **默认只搜文章线**（两条线分开是用户要求的）；`line: 'all'` 才两条一起搜。
+        // 范围一定要写在输出里：不说的话，"这一条线里没有"会被读成"整个知识库里没有"。
+        const liveDirs = line === 'all' ? all : all.filter(dir => vaultLineId(dir) === line)
+        if (!liveDirs.length) {
+          return `(${lineLabelOf(line)}还没有概念页——知识库里现在只有${all.map(vaultLineLabel).join('、')}；`
+            + `要看那些用 line: 'all')`
+        }
         const entries: Array<{ dir: string; file: string; where: string }> = []
         let total = 0
         for (const dir of liveDirs) {
           // 标注来源，好让模型（和读日志的人）知道这条来自哪个知识库
-          const where = /[\\/]Chat[\\/]/.test(dir) ? '聊天' : '文章'
+          const where = vaultLineId(dir) === 'chat' ? '聊天' : '文章'
           for (const file of readdirSync(dir).filter(f => f.endsWith('.md'))) {
             entries.push({ dir, file, where })
             total += 1
@@ -1967,23 +2028,32 @@ export async function executeTool(name: string, args: Record<string, any>, ctx: 
             const text = pageBody(readFileSync(join(e.dir, e.file), 'utf8'))
             const at = text.toLowerCase().indexOf(kw.toLowerCase())
             if (at === -1) return null
-            const line = text.slice(Math.max(0, at - 80), at + 160)
+            // （局部变量别叫 `line`：外层那个 `line` 是"搜哪条知识库"，同名会把它遮住）
+            const snippetLine = text.slice(Math.max(0, at - 80), at + 160)
               .split('\n').find(l => l.includes(kw)) || ''
-            return { ...e, snippet: line.trim().slice(0, 180) }
+            return { ...e, snippet: snippetLine.trim().slice(0, 180) }
           }).filter((e): e is { dir: string; file: string; where: string; snippet: string } => e !== null)
             .slice(0, 5)
-          if (!contentHits.length) return `(知识库未收录「${kw}」, 共 ${total} 个概念页)`
-          return '正文提及「' + kw + '」的概念页:' + '\n'
+          if (!contentHits.length) {
+            // **说清是哪个范围里没收录**：只写"知识库未收录"会被读成整个知识库都没有
+            return `(${lineLabelOf(line)}没收录「${kw}」, 这一趟看了 ${total} 个概念页`
+              + (line === 'all' ? ')' : '；`line: \'all\'` 可以连另一条线一起搜)')
+          }
+          return `正文提及「${kw}」的概念页（${lineLabelOf(line)}）:` + '\n'
             + contentHits.map(e => `· ${e.file.replace('.md', '')}（${e.where}）: ${e.snippet}`).join('\n')
         }
         const hit = hits[0]
         const name = hit.file.replace('.md', '')
         const page = readFileSync(join(hit.dir, hit.file), 'utf8')
+        // 两条线各有一张同名页是**设计**（两个命名空间分开）。只给第一条会让模型以为另一条
+        // 没有这个概念 —— 而它可能正是用户问的那一条（"我们聊过的"vs"公众号里读到的"）。
+        const alsoIn = hits.filter(h => h.where !== hit.where).map(h => h.where)
+        const alsoNote = alsoIn.length ? `（另一个同名页在${alsoIn.join('、')}知识库：line: 'all' 两条都看）` : ''
         // **顺带把邻居给出去**（见 `conceptNeighbors`）：一次调用拿到"这个概念 + 连着它的一小块子图"。
         // 不点明"可以再用本工具查其中任意一个"的话，模型会把它当装饰性文字读过去。
         const depth = boundedToolInteger(args.depth, 1, 3, 'depth')
         const { levels, truncated, missing } = conceptSubgraph(name, depth)
-        const out = [`「${name}」概念页（${hit.where}知识库）:`, page.slice(0, 2000)]
+        const out = [`「${name}」概念页（${hit.where}知识库）${alsoNote}:`, page.slice(0, 2000)]
         if (levels.length) {
           out.push('', depth > 1
             ? `—— 它周围的概念（${depth} 跳；「←」标出是从哪个概念连过来的）——`

@@ -19,7 +19,8 @@ import sys, os, json
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _utils import load_config, create_engine, get_api_key, get_dashscope_key
-from semantic_search import search as semantic_search, build_index, INDEX_DIR, VECTORS_FILE
+from semantic_search import (search as semantic_search, build_index, INDEX_DIR, VECTORS_FILE,
+                             LINE_CHOICES, line_label)
 
 PROMPT_TEMPLATE = """你是一个个人知识助手，可以访问用户的微信聊天记录和公众号文章。
 
@@ -36,8 +37,12 @@ PROMPT_TEMPLATE = """你是一个个人知识助手，可以访问用户的微�
 请用中文简洁回答，在关键信息处引用来源编号（如 [1]、[2]）。"""
 
 
-def format_context(results: list[dict]) -> str:
-    """将搜索结果格式化为 RAG context。"""
+def format_context(results: list[dict], line: str = 'all') -> str:
+    """将搜索结果格式化为 RAG context。
+
+    没有内容时**说清是"这条线里没有"**：`（未找到相关信息）` 会被模型读成"用户的知识库里
+    没有"，而它其实只是"这一条线里没有"——答案的事实性就错在这里。
+    """
     chunks = []
     for i, item in enumerate(results, 1):
         if item.get('type') == 'article':
@@ -55,12 +60,13 @@ def format_context(results: list[dict]) -> str:
             chunks.append(
                 f"[{i}] 内容: {item.get('text', str(item)[:500])}"
             )
-    return '\n\n'.join(chunks) if chunks else '（未找到相关信息）'
+    return '\n\n'.join(chunks) if chunks else '（**%s**里没找到相关信息）' % line_label(line)
 
 
-def build_prompt(question: str, results: list[dict], history: list[dict] = None) -> str:
+def build_prompt(question: str, results: list[dict], history: list[dict] = None,
+                 line: str = 'all') -> str:
     """构建 RAG prompt。"""
-    context = format_context(results)
+    context = format_context(results, line)
 
     if history and len(history) > 0:
         history_text = '\n'.join(
@@ -73,10 +79,14 @@ def build_prompt(question: str, results: list[dict], history: list[dict] = None)
 
 
 def query_rag(question: str, embed_key: str, chat_key: str, top_k: int = 10,
-              talker: str = None, history: list[dict] = None) -> dict:
-    """执行一次 RAG 查询。"""
+              talker: str = None, history: list[dict] = None, line: str = 'all') -> dict:
+    """执行一次 RAG 查询。
+
+    `line` 一路透到语义检索。**答案里要写清搜的是哪条线**：RAG 的坏法不是报错，是
+    "这条线里没有"被说成"你的知识库里没有"。函数默认 `all`，用户看到的默认在 CLI 那一层。
+    """
     # 1. 语义检索
-    results = semantic_search(question, embed_key, top_k=top_k)
+    results = semantic_search(question, embed_key, top_k=top_k, line=line)
 
     # 2. 过滤 talker（如果指定）
     if talker:
@@ -88,7 +98,7 @@ def query_rag(question: str, embed_key: str, chat_key: str, top_k: int = 10,
             }
 
     # 3. 构建 prompt
-    prompt = build_prompt(question, results, history)
+    prompt = build_prompt(question, results, history, line)
 
     # 4. 调用 AI
     config = load_config()
@@ -104,15 +114,17 @@ def query_rag(question: str, embed_key: str, chat_key: str, top_k: int = 10,
         else:
             sources.append(f"[{i}] {item.get('title', item.get('id', '?'))[:60]}")
 
-    return {'answer': answer, 'sources': sources}
+    return {'answer': answer, 'sources': sources, 'line': line, 'lineLabel': line_label(line)}
 
 
-def interactive_mode(embed_key: str, chat_key: str):
+def interactive_mode(embed_key: str, chat_key: str, line: str = 'all'):
     """交互式多轮对话。"""
     config = load_config()
     engine_type = config.get('aiEngine', 'deepseek')
 
     print(f'\n🤖 RAG 智能助手 ({engine_type})')
+    # **把范围写在脸上**：交互模式一开就是十几轮，用户中途改了 `--line` 是看不到的
+    print(f'  检索范围: {line_label(line)}（`all` 才两条线一起搜）')
     print('  输入问题开始对话，输入 /help 查看帮助，输入 /exit 退出\n')
 
     history: list[dict] = []
@@ -143,7 +155,7 @@ def interactive_mode(embed_key: str, chat_key: str):
             print(f'✓ {result}\n')
             continue
 
-        result = query_rag(question, embed_key, chat_key, top_k=10, history=history)
+        result = query_rag(question, embed_key, chat_key, top_k=10, history=history, line=line)
         history.append({'question': question, 'answer': result['answer']})
 
         print(f'\n🤖 助手:\n{result["answer"]}')
@@ -161,6 +173,8 @@ def main():
     parser.add_argument('--top-k', type=int, default=10, help='检索数量（默认 10）')
     parser.add_argument('--talker', help='限定联系人/群聊')
     parser.add_argument('--api-key', help='DeepSeek API key（优先从 config 读取）')
+    parser.add_argument('--line', choices=list(LINE_CHOICES), default='wiki',
+                        help='只看一条知识库：wiki=文章线（默认）、chat=聊天线、all=两条都看')
     parser.add_argument('--json', action='store_true', help='JSON 输出')
     args = parser.parse_args()
 
@@ -179,13 +193,16 @@ def main():
         sys.exit(1)
 
     if args.interactive or not question:
-        interactive_mode(embed_key, chat_key)
+        interactive_mode(embed_key, chat_key, line=args.line)
     else:
-        result = query_rag(question, embed_key, chat_key, top_k=args.top_k, talker=talker)
+        result = query_rag(question, embed_key, chat_key, top_k=args.top_k, talker=talker,
+                           line=args.line)
         if args.json:
             print(json.dumps(result, ensure_ascii=False, indent=2))
         else:
-            print(f'\n{result["answer"]}')
+            # 范围写在这句话里：`--line chat` 没答上来时，读的人要能一眼看出
+            # 是"聊天线里没有"还是"整个知识库里没有"
+            print(f'\n（检索范围：{result["lineLabel"]}）\n{result["answer"]}')
             if result.get('sources'):
                 print(f"\n📎 来源: {' | '.join(result['sources'])}")
 

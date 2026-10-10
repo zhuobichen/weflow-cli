@@ -1403,6 +1403,43 @@ which is what the gate is for.
   semantics are not reliable here), as is any automatic labelling: there is no gold standard for "is this
   draft right", so the feature records what it judged and says so rather than claiming calibration.
 
+## D-105: 检索也按线分：一个 `--line`、两层默认值，且默认写在输出里
+
+**Status:** Active（接着 D-104：那条把**概念**分成两个命名空间，这条把**检索**分成两条线）
+
+**决定。** 四个读者（`search` 语义检索、`chat` RAG、`vault search`、`vault rag`）加上助手的
+`search_semantic` / `search_knowledge` 都接受 `line`：`wiki` = 文章线、`chat` = 聊天线、
+`all` = 两条都看。**用户看到的默认是文章线**（两条线分开是用户的决定），而输出里**每一处都
+写明这一趟搜了哪条线**，并在空结果时给出"怎么放宽范围"。
+
+**两层默认值，方向是故意反的。** 函数层（`semantic_search.search`、`vault_search.collect_files`、
+`vault_rag.collect_context`、`rag_chat.query_rag`）默认 **`all`**；只有 CLI/工具参数那一层默认
+**`wiki`**。理由：调用方忘了传 `line` 时，"多搜一条线"只是结果多余，"少搜一半"是**静默的错答案**。
+这一条与 D-051/D-104 记的是同一类失效——读一半而没有任何东西会红。
+
+**掩码必须在取候选之前。** 语义检索那边按 `type` 过滤（索引是**一份**：两条线在同一次嵌入里
+算，靠记录上的 `type` 分，所以不需要两份索引），做法是把不属于这条线的相似度压成 `-inf`
+**再** `argsort`。反过来的"先取 top-k 再过滤"看着更简单，但会错两次：条数会少（`--top-k 10
+--line chat` 只回 3 条，而没人会说为什么），以及 `pool_size` 截断之后**返回另一条线的结果**
+（实测变异：`--line chat` 回了两条**文章**，还标着"聊天线"）。`test/knowledge_line_scope_test.py`
+用一个人造索引钉住这个方向。
+
+**输出形状变了一次，而且是**报错**地变。** `semantic_search.py search` 的 stdout 从**裸数组**
+变成一个对象（`line` / `lineLabel` / `results` / `indexCounts`，有时 `note`）——范围与
+"为什么是空的"只有进程边界那一侧知道。助手那边的解析因此从 `Array.isArray(data) ? data : []`
+（旧形状会被静默降级成"没有结果"）改成**形状不对就报出来**：读不到和搜不到在聊天里长得
+一模一样，这个仓库一直在防这种静默。
+
+**为什么 `search-index build` 不加 `--line`。** 索引一份，按线的过滤在查询时做。分线建索引
+只会让 `--line all` 变成**假的 all**（另一条线的记录根本不在索引里，而界面上看不出来）。
+要省钱请用 `--days` / `--article-days` 收窗口。
+
+**已知限制（没验过的那一半）。** 语义检索的**向量路径在本机从未用真索引跑过**——索引从来没建过
+（`output/.semantic_index` 不存在，建它要 `dashscopeApiKey` 并花用户的嵌入费用）。所以掩码、
+`line_counts`、"索引里没有这条线"这些是拿**人造索引**测的；真索引上的行为**没有实测**。
+关键词回退那条路（本机实际会走的那条）在真库上验过：`vault search --line chat` 只回聊天卡与
+聊天概念、`--line wiki` 只回文章。
+
 ## D-104: 两条线各有一个概念命名空间，而"一个名字全库只有一张页"这条规则撤掉了
 
 **Status:** Active（**取代 D-051 里「A name belongs to exactly one page」那一段**；D-051 的其余部分——同一个库、

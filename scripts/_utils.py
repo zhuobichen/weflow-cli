@@ -416,6 +416,21 @@ LINE_LABELS = {'wiki': '文章线', 'chat': '聊天线'}
 LINE_SEP = ':'
 
 
+def line_for_relative_concepts(relative):
+    """给一个**库内相对**概念目录（`Wiki/Concepts`）→ 线 id；认不出返回 None（**不猜**）。
+
+    与 `line_for_concept_dir` 的分工：那个比的是**绝对路径**（适合已经知道库根的调用方）；
+    这个只比对清单里那串相对路径 —— 测试里的临时库、或 `--vault` 指到别处时库根对不上，
+    但"`Chat/Concepts` 属于聊天线"这一层仍然成立。
+    """
+    def norm(p):
+        return os.path.normcase(str(p).replace('/', os.sep).replace('\\', os.sep))
+    for line_id, _root, concepts in KNOWLEDGE_LINES:
+        if norm(concepts) == norm(relative):
+            return line_id
+    return None
+
+
 def concept_key(line_id, name):
     """线 id + 概念名 → 跨线唯一的主键。
 

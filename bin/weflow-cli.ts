@@ -4251,6 +4251,7 @@ program
         .description('Vault 搜索 — 文章+概念+笔记')
         .argument('<query>', '搜索关键词')
         .option('--type <type>', 'all / article / concept / note', 'all')
+        .option('--line <line>', 'wiki=文章线(默认) / chat=聊天线 / all=两条都搜', 'wiki')
         .option('--top-k <n>', '返回数量', '10')
         .action(async (query, opts) => {
           const pkgRoot = resolvePackageRoot()
@@ -4259,8 +4260,13 @@ program
             console.log(chalk.red('type 必须是 all、article、concept 或 note'))
             process.exit(1)
           }
+          if (!['wiki', 'chat', 'all'].includes(opts.line)) {
+            console.log(chalk.red('line 必须是 wiki、chat 或 all'))
+            process.exit(1)
+          }
           const topK = parseCliInteger(opts.topK, 'top-k', 1, 100)
-          await runPythonCmd(script, [query, '--type', opts.type, '--top-k', String(topK), '--json'])
+          await runPythonCmd(script, [query, '--type', opts.type, '--line', opts.line,
+                                      '--top-k', String(topK), '--json'])
         })
     )
 
@@ -4272,6 +4278,7 @@ program
         .description('Vault 问答 — 基于知识库的 AI 对话')
         .argument('<question>', '问题')
         .option('--top-k <n>', '检索条数', '8')
+        .option('--line <line>', 'wiki=文章线(默认) / chat=聊天线 / all=两条都搜', 'wiki')
         .option('--api-key <key>', 'DeepSeek API key')
         .option('--dry-run', '仅预览，不读取知识库或调用 AI')
         .option('--yes', '确认读取本地知识并发送筛选后的上下文到 AI')
@@ -4280,11 +4287,16 @@ program
           const pkgRoot = resolvePackageRoot()
           const script = join(pkgRoot, 'scripts', 'vault_rag.py')
           const topK = parseCliInteger(opts.topK, 'top-k', 1, 100, opts.json)
+          if (!['wiki', 'chat', 'all'].includes(opts.line)) {
+            console.log(chalk.red('line 必须是 wiki、chat 或 all'))
+            process.exit(1)
+          }
           const preview = {
             success: true,
             dryRun: true,
             action: 'vault.rag',
             topK,
+            line: opts.line,
             readsLocalKnowledge: true,
             usesAi: true,
             sendsSelectedContextToAi: true,
@@ -4310,7 +4322,7 @@ program
               return
             }
           }
-          const args = ['--top-k', String(topK)]
+          const args = ['--top-k', String(topK), '--line', opts.line]
           if (opts.json) args.push('--json')
           const { execFile } = await import('child_process')
           const { promisify } = await import('util')
@@ -4879,6 +4891,7 @@ program
     .description('语义搜索知识库（聊天记录 + 文章）')
     .argument('<query>', '搜索关键词')
     .option('--top-k <n>', '返回数量', '10')
+    .option('--line <line>', 'wiki=文章线(默认) / chat=聊天记录 / all=两条都搜', 'wiki')
     .option('--api-key <key>', 'DashScope embedding API key')
     .option('--dry-run', '仅预览，不读取索引或调用向量服务')
     .option('--yes', '确认执行可能调用云端向量服务的搜索')
@@ -4890,11 +4903,16 @@ program
     const pkgRoot = resolvePackageRoot()
       const script = join(pkgRoot, 'scripts', 'semantic_search.py')
       const topK = parseCliInteger(opts.topK, 'top-k', 1, 100, opts.json)
+      if (!['wiki', 'chat', 'all'].includes(opts.line)) {
+        console.log(chalk.red('line 必须是 wiki、chat 或 all'))
+        process.exit(1)
+      }
       const preview = {
         success: true,
         dryRun: true,
         action: 'semantic-search.query',
         topK,
+        line: opts.line,
         readsLocalIndex: true,
         mayUseCloudEmbedding: true,
       }
@@ -4919,7 +4937,7 @@ program
           return
         }
       }
-      const args: string[] = [script, 'search', '--top-k', String(topK)]
+      const args: string[] = [script, 'search', '--top-k', String(topK), '--line', opts.line]
       try {
         const { stdout } = await execFileAsync(getPythonCommand(), args, {
           timeout: 60_000, maxBuffer: 10 * 1024 * 1024,
@@ -5017,6 +5035,7 @@ program
     .description('RAG 智能助手 — 基于聊天记录和公众号的对话式问答')
     .argument('[question]', '要问的问题（不传则进入交互模式）')
     .option('--top-k <n>', '检索数量', '10')
+    .option('--line <line>', 'wiki=文章/文章概念(默认) / chat=聊天记录 / all=两条都搜', 'wiki')
     .option('--talker <name>', '限定联系人/群聊')
     .option('--api-key <key>', 'AI API key')
     .option('--dry-run', '仅预览，不读取知识库或调用 AI')
@@ -5029,11 +5048,16 @@ program
     const pkgRoot = resolvePackageRoot()
       const script = join(pkgRoot, 'scripts', 'rag_chat.py')
       const topK = parseCliInteger(opts.topK, 'top-k', 1, 100, opts.json)
+      if (!['wiki', 'chat', 'all'].includes(opts.line)) {
+        console.log(chalk.red('line 必须是 wiki、chat 或 all'))
+        process.exit(1)
+      }
       const preview = {
         success: true,
         dryRun: true,
         action: 'rag-chat.query',
         topK,
+        line: opts.line,
         interactiveRequired: !question,
         readsLocalKnowledge: true,
         usesCloudEmbedding: true,
@@ -5068,7 +5092,7 @@ program
       }
       const args: string[] = [script]
       if (question) {
-        args.push('--top-k', String(topK))
+        args.push('--top-k', String(topK), '--line', opts.line)
         if (opts.json) args.push('--json')
         try {
           const { stdout } = await execFileAsync(getPythonCommand(), args, {
@@ -5086,7 +5110,7 @@ program
         }
       } else {
         // 交互模式：使用 spawn 保持终端交互
-        args.push('--interactive', '--top-k', String(topK))
+        args.push('--interactive', '--top-k', String(topK), '--line', opts.line)
         const child = spawn(getPythonCommand(), args, {
           windowsHide: true,
           stdio: 'inherit',

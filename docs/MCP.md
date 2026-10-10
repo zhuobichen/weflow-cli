@@ -118,10 +118,10 @@ client-local config that is not in version control.
 | `wechat.get_sns` | Read the Moments timeline or statistics. | Decrypted WeChat database |
 | `wechat.get_weread` | Read WeRead shelf, notebooks, or search books. | `wereadApiKey` config |
 | `wechat.get_todos` | List todos extracted from chat history. | `scripts/extract_todos.py`, Python |
-| `wechat.search_knowledge` | Fuzzy-search concept pages in the knowledge base. | Vault Wiki output |
+| `wechat.search_knowledge` | Fuzzy-search concept pages in the knowledge base. Searches **one of the two lines by default** (the article one); pass `line: "chat"` or `"all"` for the conversation line. | Vault Wiki output |
 | `wechat.search_memory` | Search long-term assistant memory. | `~/.weflow-cli/assistant_memory.json` |
 | `wechat.search_chats` | Find which conversation discussed something (literal words). | Decrypted WeChat database, **words leave the machine - `confirm: true` required** |
-| `wechat.search_semantic` | Find chat messages by meaning, not literal words. | `dashscopeApiKey` config, network - **query and hits leave the machine, `confirm: true` required** |
+| `wechat.search_semantic` | Find chat messages by meaning, not literal words. Defaults to the article line; pass `line: "chat"` or `"all"`. | `dashscopeApiKey` config, network - **query and hits leave the machine, `confirm: true` required** |
 | `wechat.who_owes_reply` | Rank the conversations waiting on a reply. | Decrypted WeChat database, **text leaves the machine - `confirm: true` required** |
 | `wechat.draft_reply` | Draft candidate replies. | Decrypted WeChat database, **text leaves the machine - `confirm: true` required** |
 | `wechat.export_chat` | Export one conversation to HTML, txt, json or excel. | Decrypted WeChat database, **writes under `output/exports/`** |

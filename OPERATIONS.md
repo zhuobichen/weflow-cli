@@ -548,11 +548,20 @@ weflow-cli wiki lint --json     # 机器可读
 ```powershell
 weflow-cli search "PM2.5 对植物用水效率的影响"
 weflow-cli search "..." --no-rerank     # 只按向量/关键词相似度，不调决策模型
+weflow-cli search "项目排期" --line chat   # 只看聊天那条线
+weflow-cli search "..." --line all         # 两条线一起（默认只搜文章线）
 ```
+
+**`--line wiki|chat|all` 四处都有**（`search` 语义检索、`chat` RAG、`vault search`、`vault rag`），
+助手的 `search_semantic` / `search_knowledge` 也有同名参数。两条知识库分开之后，**默认只搜
+文章线**，要把聊天那条也搜上就显式给 `all`。输出里每一处都会写明这一趟搜的是哪条线，空了
+还会说清"是没命中还是这条线在索引里根本没有记录"——不写的话，"这条线里没有"会被读成
+"整个知识库里没有"。
 
 检索分两段：第一段算相似度取回 20 条候选，第二段用**一次**决策请求给每条候选问一个
 "是否真的回答了这个问题"，按概率重排后返回 `--top-k` 条（默认 10）。第二段约 1 秒，
-与候选数基本无关。
+与候选数基本无关。`--line` 的过滤发生在**取候选之前**（不是取完再筛），所以不会出现
+"要 10 条只回 3 条"或者"另一条线的结果混进来还标着本线的名字"。
 
 - 返回里 `score` 仍是相似度（含义没变），重排的分数在 `rerankScore`。
 - 没配 `typesafeApiKey`、连接失败或服务过载（529）时，**原序返回并打一行 WARN**，

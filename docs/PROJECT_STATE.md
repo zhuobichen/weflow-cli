@@ -314,7 +314,15 @@ links point at one of them, so the rule this replaced ("one name, one page, libr
 data on disk. What that rule protected is real and unchanged - a bare `[[DeepSeek]]` in Obsidian resolves
 deterministically but not necessarily to the page you meant - and it is now **reported rather than prevented**;
 the two ways to actually fix it (a root per line, or path-qualified links) are left to the step that splits the
-roots, so until then clicking such a link is genuinely ambiguous. Two things about this were
+roots, so until then clicking such a link is genuinely ambiguous. Since 2026-10-10 the **readers** carry the same
+line too (D-105): `search`, `chat`, `vault search`, `vault rag` and the assistant's `search_semantic` /
+`search_knowledge` all take `line: wiki|chat|all`, default to the article line where the user sees it (the
+*functions* default to `all` so a caller that forgets cannot silently halve the search), and every output says which
+line it searched. The semantic side carries this as a mask applied **before** the top-k sort over one shared index.
+**Limitation to keep in view**: the vector path of semantic search has never run against a real index on this
+machine - the index does not exist (building it needs `dashscopeApiKey` and spends the user's embedding credit), so
+the mask is pinned against a hand-made fixture index and the real-data check was done on the keyword fallback (which
+is the path this machine actually takes). Two things about this were
 wrong on 2026-09-27 and are now fixed: the concept directory was **declared in two places** (`VAULT_DIRS` said
 `007_Wiki/Concepts`, every writer and reader used the top-level `Wiki/Concepts`), so `007_Wiki/` was created and
 never filled; and the historical import skipped `Sources/` entirely (it would have carried ~33 GB of images), which

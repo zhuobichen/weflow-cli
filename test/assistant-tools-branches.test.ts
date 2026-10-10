@@ -441,9 +441,33 @@ test('search_knowledge 缺关键词时不读盘', async () => {
   assert.equal(await run('search_knowledge', {}), '(缺少 keyword 参数)')
 })
 
-test('search_knowledge 找不到时给出概念页总数（与环境无关的那部分）', async () => {
+test('search_knowledge 找不到时说清是哪个范围没收录（与环境无关的那部分）', async () => {
   const out = await run('search_knowledge', { keyword: '绝不存在的概念xyzzy' })
-  assert.ok(/知识库未收录「绝不存在的概念xyzzy」/.test(out) || /知识库尚未生成/.test(out), out)
+  assert.ok(/没收录「绝不存在的概念xyzzy」/.test(out) || /知识库尚未生成/.test(out), out)
+  // **范围要写在里面**：只写"知识库未收录"会被读成"整个知识库都没有"，
+  // 而它其实只是"这一条线里没有"（默认只搜文章线，两条线是分开的）
+  assert.ok(/文章线/.test(out), `该说明搜的是哪条线：${out}`)
+  assert.ok(/line: 'all'/.test(out), `该告诉怎么放宽范围：${out}`)
+})
+
+test('search_knowledge：line 认不出时报错，不悄悄当 all', async () => {
+  // 大小写与空白**要容忍**（模型很自然会传 `Wiki` / ` chat `），而且它并没有放大范围
+  assert.match(await run('search_knowledge', { keyword: 'xyzzy-no-such', line: 'Wiki' }), /文章线/)
+  assert.match(await run('search_knowledge', { keyword: 'xyzzy-no-such', line: ' chat ' }), /聊天线/)
+  // 真正要拦的是**别的字符串**：认不出就当 all 的话，"我限定住了"是句假话，
+  // 而结果里看不出来（两条线混在一起，谁都不会怀疑）
+  for (const bad of ['articles', 'wiki2', 'two']) {
+    assert.match(await run('search_knowledge', { keyword: 'x', line: bad }),
+      /line 只能是 wiki \/ chat \/ all/, `line=${JSON.stringify(bad)} 该被拦住`)
+  }
+})
+
+test('search_knowledge：要聊天线时只读那一个目录', async () => {
+  // 这一条只钉**范围过滤生效**（目录是仓内的真实路径，两个都存在时结果不同）
+  const wikiOnly = await run('search_knowledge', { keyword: 'xyzzy-no-such', line: 'wiki' })
+  const chatOnly = await run('search_knowledge', { keyword: 'xyzzy-no-such', line: 'chat' })
+  assert.match(wikiOnly, /文章线/)
+  assert.match(chatOnly, /聊天线/)
 })
 
 test('get_stats 汇总本地数据，并同时报出知识库那一半', async () => {
@@ -616,21 +640,28 @@ test('who_owes_reply：没人欠账时说实话', async () => {
 
 // ------------------------------------------------- 语义检索与导出
 
+/** `semantic_search.py search` 在自己那一侧的返回：一个带范围的对象（不是裸数组）。 */
+function semanticPayload(rows: any[], line = 'wiki', extra: Record<string, unknown> = {}): string {
+  const label = line === 'all' ? '两条线' : (line === 'chat' ? '聊天线' : '文章线')
+  return JSON.stringify({ success: true, line, lineLabel: label, results: rows, ...extra })
+}
+
 test('search_semantic：查询词走环境变量，不进 argv', async () => {
   // 仓库写进测试的隐私纪律：用户输入继承环境变量而不是进程参数（ps 里看不到正文）
-  const calls = stubScript(JSON.stringify([{ title: '某篇文章', source: 'x.md', score: 0.9, text: '片段' }]))
+  const calls = stubScript(semanticPayload([{ title: '某篇文章', source: 'x.md', score: 0.9, text: '片段' }]))
   try {
     await run('search_semantic', { query: '和钱有关的讨论' })
     assert.equal(calls[0].env?.WEFLOW_SEARCH_QUERY, '和钱有关的讨论', '查询词必须在环境变量里')
     assert.equal(calls[0].args.includes('和钱有关的讨论'), false, '查询词不许出现在 argv')
-    assert.deepEqual(calls[0].args, ['search', '--top-k', '8'])
+    // 不传 line 时按文章线搜（两条线分开之后，默认只看一条）
+    assert.deepEqual(calls[0].args, ['search', '--top-k', '8', '--line', 'wiki'])
   } finally { bridge.setScriptRunner(null) }
 })
 
-test('search_semantic：结果渲染成标题+分数+片段', async () => {
+test('search_semantic：结果渲染成标题+分数+片段，并写明搜的是哪条线', async () => {
   const realGet = configService.get.bind(configService)
   ;(configService as any).get = (k: string) => (k === 'assistantPrivacy' ? 'balanced' : realGet(k))
-  stubScript(JSON.stringify([
+  stubScript(semanticPayload([
     { title: '部署方案', source: 'a.md', score: 0.87, text: '先灰度再全量' },
     { title: '预算讨论', source: 'b.md', score: 0.71, text: '成本核算' },
   ]))
@@ -639,14 +670,24 @@ test('search_semantic：结果渲染成标题+分数+片段', async () => {
     assert.match(out, /前 2 条/)
     assert.match(out, /部署方案（0\.87）/)
     assert.match(out, /先灰度再全量/)
+    // **范围要写在结果里**：不说的话，"这条线里没有"会被读成"整个知识库里没有"
+    assert.match(out, /范围：文章线/, `输出该说明范围：${out.slice(0, 60)}`)
   } finally {
     bridge.setScriptRunner(null)
     ;(configService as any).get = realGet
   }
 })
 
+test('search_semantic：要聊天线时才给 --line chat', async () => {
+  const calls = stubScript(semanticPayload([], 'chat'))
+  try {
+    await run('search_semantic', { query: '排期', line: 'chat' })
+    assert.ok(calls[0].args.includes('chat'), `该把 chat 透到脚本：${calls[0].args.join(' ')}`)
+  } finally { bridge.setScriptRunner(null) }
+})
+
 test('search_semantic：严格模式下片段被遮罩', async () => {
-  stubScript(JSON.stringify([{ title: 't', score: 0.5, text: '第三方正文内容' }]))
+  stubScript(semanticPayload([{ title: 't', score: 0.5, text: '第三方正文内容' }]))
   try {
     const out = await run('search_semantic', { query: 'x' })
     assert.doesNotMatch(out, /第三方正文内容/)
@@ -654,9 +695,12 @@ test('search_semantic：严格模式下片段被遮罩', async () => {
 })
 
 test('search_semantic：没结果与失败是两句不同的话', async () => {
-  stubScript('[]')
+  stubScript(semanticPayload([], 'wiki', { note: '索引里一条文章线的记录都没有' }))
   try {
-    assert.match(await run('search_semantic', { query: 'x' }), /没有结果/)
+    const out = await run('search_semantic', { query: 'x' })
+    assert.match(out, /没有结果/)
+    assert.match(out, /索引里一条文章线的记录都没有/, '脚本给的 note（为什么是空的）要带出来')
+    assert.match(out, /line: 'all'/, '要说清怎么放宽范围')
   } finally { bridge.setScriptRunner(null) }
 
   stubScript('', 3, '缺少 dashscopeApiKey')
@@ -664,6 +708,25 @@ test('search_semantic：没结果与失败是两句不同的话', async () => {
     const out = await run('search_semantic', { query: 'x' })
     assert.match(out, /语义检索失败/)
     assert.match(out, /search-index/, '失败时要提示可能还没建索引')
+  } finally { bridge.setScriptRunner(null) }
+})
+
+test('search_semantic：脚本换了输出形状时必须响，不许降级成"没有结果"', async () => {
+  // 旧形状是**裸数组**。`Array.isArray(data) ? data : []` 那写法会把它变成"没有结果"——
+  // 而"读不到"和"搜不到"在聊天里长得一模一样，这正是这个仓库一直在防的静默失败。
+  stubScript(JSON.stringify([{ title: '旧形状', score: 0.9, text: 'x' }]))
+  try {
+    const out = await run('search_semantic', { query: 'x' })
+    assert.doesNotMatch(out, /没有结果/, `旧形状不许被当成空结果：${out}`)
+    assert.match(out, /看不懂的形状/)
+  } finally { bridge.setScriptRunner(null) }
+
+  // 脚本自己报的错（`{"error": ...}`）要原样说出来，别混进"形状看不懂"
+  stubScript(JSON.stringify({ error: 'missing search query' }))
+  try {
+    const out = await run('search_semantic', { query: 'x' })
+    assert.match(out, /没跑成/)
+    assert.match(out, /missing search query/)
   } finally { bridge.setScriptRunner(null) }
 })
 

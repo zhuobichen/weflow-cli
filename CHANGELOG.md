@@ -19,6 +19,19 @@ All notable user-facing changes are recorded here. This project follows [Semanti
 
 ## Unreleased
 
+- **Search can now be scoped to one of the two knowledge bases, and says which one it searched.** Following the
+  namespace split above, `search`, `chat`, `vault search`, `vault rag` and the assistant's `search_semantic` /
+  `search_knowledge` all take `--line wiki|chat|all` (or `line: "wiki"` for the assistant tools). **The default is
+  the article line** because the two bases were split on purpose; `all` merges them explicitly. Every result says
+  which line it came from, and an empty result distinguishes "nothing matched" from "this line has no records in the
+  index at all". The functions underneath default to `all` instead, so a caller that forgets the argument searches
+  too much rather than silently half. Two notes: with the semantic index the line is a mask applied **before** the
+  top-k sort over one shared index (one index, filtered at query time - `search-index` deliberately has no `--line`,
+  since a per-line index would make `all` a lie), and `semantic_search.py search`'s JSON changed from a bare array
+  to an object (`line` / `results` / `indexCounts` / `note`); the assistant now reports an unrecognised shape
+  instead of degrading it to "no results". Scoped to the keyword path on this machine, which is the one that runs
+  here: `vault search "微信" --line chat` returns chat cards and chat concept pages only, `--line wiki` article
+  titles only.
 - **The article knowledge base and the chat knowledge base are now two concept namespaces, as requested.** A concept
   name may hold a page on both lines - `wiki compile` no longer skips a name because the other line already has one -
   and every place that turns a name into a key now qualifies it with the line (`wiki:DeepSeek`), so the merged graph
