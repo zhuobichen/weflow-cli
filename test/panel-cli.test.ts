@@ -19,6 +19,7 @@ process.env.HOME = HOME
 process.env.USERPROFILE = HOME
 
 const { startPanelServer } = await import('../src/panel/server.js')
+const { assistantScenes } = await import('../src/services/assistantScenes.js')
 
 /**
  * 跑一次 CLI。**必须是异步 spawn，不能用 `spawnSync`**：
@@ -46,11 +47,14 @@ function parse(stdout: string): any {
 
 /** 起一个桩端点并写好端点文件；返回收尾函数 */
 async function bootEndpoint(outcome: any = { status: 'replied', text: '收到' }) {
-  const calls: string[] = []
+  const calls: Array<{ text: string; sceneId?: string }> = []
   const service: any = {
     isChannelActive: () => false,
     quotaState: () => ({ used: 7, limit: 100 }),
-    ask: async (_bucket: string, text: string) => { calls.push(text); return outcome },
+    ask: async (_bucket: string, text: string, _onLog?: unknown, sceneId?: string) => {
+      calls.push({ text, ...(sceneId ? { sceneId } : {}) })
+      return outcome
+    },
   }
   const server = await startPanelServer({
     service, memoryBucket: 'wxid_me', memoryNote: '记忆桶：wxid_me（与微信共用一个大脑）',
@@ -94,6 +98,17 @@ test('守护进程没跑时，--ask 也如实说，而不是假装答了', async
   assert.equal(parse(r.stdout).code, 'PANEL_NOT_RUNNING')
 })
 
+test('--scene 没有 --ask 或为空值 → 参数错误', async () => {
+  for (const args of [
+    ['panel', '--scene', '日报', '--yes', '--json'],
+    ['panel', '--ask', '有效问题', '--scene', '  ', '--yes', '--json'],
+  ]) {
+    const r = await runCli(args)
+    assert.equal(r.status, 1)
+    assert.equal(parse(r.stdout).code, 'INVALID_ARGUMENT')
+  }
+})
+
 test('--ask 空字符串 → 参数错误', async () => {
   const r = await runCli(['panel', '--ask', '   ', '--yes', '--json'])
   assert.equal(r.status, 1)
@@ -101,6 +116,12 @@ test('--ask 空字符串 → 参数错误', async () => {
 })
 
 // ---------------------------------------------------------------- 真端点
+
+test('--status 与 --scene 冲突时按参数错误处理', async () => {
+  const r = await runCli(['panel', '--status', '--scene', '日报', '--json'])
+  assert.equal(r.status, 1)
+  assert.equal(parse(r.stdout).code, 'INVALID_ARGUMENT')
+})
 
 test('端点起来了：--status 报出端口、配额、以及**用的是哪个记忆桶**', async () => {
   const ep = await bootEndpoint()
@@ -126,8 +147,25 @@ test('panel ask 真的把话交给了助手，并把答复原样带回来', asyn
     assert.equal(body.success, true)
     assert.equal(body.status, 'replied')
     assert.equal(body.reply, '你最近在关注 AI+法律')
-    assert.deepEqual(ep.calls, ['我最近在关注什么'])
+    assert.deepEqual(ep.calls, [{ text: '我最近在关注什么' }])
   } finally { await ep.close() }
+})
+
+test('--scene 通过现有端点只传递本轮场景 id', async () => {
+  for (const item of assistantScenes.list()) assistantScenes.remove(item.id)
+  assistantScenes.add({ id: '日报', name: '日报场景', keywords: [], instruction: '', outputSpec: '', skills: [], enabled: true })
+  assistantScenes.save()
+  const ep = await bootEndpoint({ status: 'replied', text: '按日报场景处理完成' })
+  try {
+    const r = await runCli(['panel', '--ask', '整理一下', '--scene', '日报', '--yes', '--json'])
+    assert.equal(r.status, 0, r.stderr || r.stdout)
+    assert.equal(parse(r.stdout).reply, '按日报场景处理完成')
+    assert.deepEqual(ep.calls, [{ text: '整理一下', sceneId: '日报' }])
+  } finally {
+    await ep.close()
+    for (const item of assistantScenes.list()) assistantScenes.remove(item.id)
+    assistantScenes.save()
+  }
 })
 
 test('配额用尽走的是"回答"而不是"错误"：exit 0，正文是那句话', async () => {

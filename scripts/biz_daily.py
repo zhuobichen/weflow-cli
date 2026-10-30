@@ -142,6 +142,164 @@ def _tags_for_write(article, topic):
     return article.get('tags', [topic])
 
 
+def recent_article_counts(output_root, exclude_date, days=7):
+    """最近若干天每天的文章数（跳过目标日与空日期）。用于判断"今天是不是异常地少"。"""
+    counts = []
+    if not output_root.is_dir():
+        return counts
+    for entry in sorted(output_root.iterdir(), reverse=True):
+        if not entry.is_dir() or entry.name == exclude_date:
+            continue
+        if not re.match(r'^\d{4}-\d{2}-\d{2}$', entry.name):
+            continue
+        target = entry / '.articles.json'
+        if not target.exists():
+            continue
+        try:
+            data = json.loads(target.read_text(encoding='utf-8'))
+        except Exception:
+            continue
+        count = len(data.get('articles') or [])
+        if count > 0:
+            counts.append(count)
+        if len(counts) >= days:
+            break
+    return counts
+
+
+#: 低于中位数的这个比例才算"异常偏少"。定 30% 而不是 50%：公众号本来就有明显的工作日/周末
+#: 起伏（实测 84 ~ 526 篇），阈值太松会让正常的清淡日天天报警，那样这个提示很快就没人看了。
+LOW_VOLUME_RATIO = 0.3
+#: 样本中位数低于这个数就不下结论：样本本身太小的时候，"少"没有可比性。
+LOW_VOLUME_MIN_MEDIAN = 20
+
+
+def detect_low_volume(output_root, date_str, today_count):
+    """今天是不是比最近几天少得离谱。返回 None 表示正常（或样本不足以判断）。
+
+    存在的理由见调用处：这不是统计趣味，是**唯一能把"没人推送"和"客户端没开"分开的信号**。
+    """
+    counts = recent_article_counts(output_root, date_str)
+    if len(counts) < 3:
+        return None
+    ordered = sorted(counts)
+    median = ordered[len(ordered) // 2]
+    if median < LOW_VOLUME_MIN_MEDIAN:
+        return None
+    if today_count >= median * LOW_VOLUME_RATIO:
+        return None
+    return {
+        'today': today_count,
+        'median': median,
+        'ratio': round(today_count / median, 2),
+        'sample': len(counts),
+    }
+
+
+def session_activity(config, biz_db_path, days=3):
+    """客户端**自己**认为每天有多少个公众号会话有更新。
+
+    为什么要单独读会话表：消息表和会话表是两份独立记录。两者都少，说明推送压根没到本机；
+    只有消息表少，才可能是我们读漏了。2026-10-29 实测两者一致（今天 14 / 昨天 148），
+    而订阅号界面里能看到两百篇——那些是**联网现拉**的，从未落盘。
+
+    读不到就返回 `{}`：这只是诊断信息，不该让日报失败。
+    """
+    from _utils import decrypt_lock
+    import os
+    try:
+        pass_enc = str(config.get('favPassphrase', '') or config.get('decryptKey', ''))
+        if not pass_enc:
+            return {}
+        passphrase = bytes.fromhex(decrypt_lock(pass_enc))
+        root = os.path.dirname(os.path.dirname(os.path.abspath(biz_db_path)))
+        sdb = os.path.join(root, 'session', 'session.db')
+        if not os.path.exists(sdb):
+            return {}
+        with open(sdb, 'rb') as fh:
+            salt = fh.read(16)
+        key = hashlib.pbkdf2_hmac('sha512', passphrase, salt, 256000, dklen=32).hex()
+        conn = sqlcipher.connect(sdb)
+        cur = conn.cursor()
+        cur.execute(f'PRAGMA key = "x\'{key}{salt.hex()}\'"')
+        cur.execute("SELECT username, last_timestamp FROM SessionTable WHERE username LIKE 'gh_%'")
+        result = {}
+        tz = timezone(timedelta(hours=8))
+        for _user, ts in cur.fetchall():
+            if not ts:
+                continue
+            day = datetime.fromtimestamp(ts, tz=tz).strftime('%Y-%m-%d')
+            result[day] = result.get(day, 0) + 1
+        conn.close()
+        return result
+    except Exception:
+        return {}
+
+
+def browser_history_articles(date_str, tz, limit=300):
+    """从**内嵌浏览器**的浏览历史里补读公众号文章。
+
+    为什么需要：微信 4.x 的订阅号是网页渲染的（`radium` 里的 Chromium）。用户在客户端里
+    点开的文章**不写** `biz_message_0.db`，只在这份 Chromium `History` 里留下
+    `(url, title, last_visit_time)`。2026-10-29 实测：那天消息表只有 29 行，而历史库里
+    有用户实际打开过的公众号文章，包括一篇在消息表里完全找不到的。
+
+    边界：
+      - **只读**、只取 `mp.weixin.qq.com` 的 URL，不碰其它浏览记录；
+      - 这是"你打开过的"，不是"推送过的"，所以它补的是缺口，不能替代推送；
+      - 任何失败都返回空列表——诊断/补读功能不该让日报挂掉。
+    """
+    import os
+    import sqlite3
+    try:
+        appdata = os.environ.get('APPDATA') or ''
+        if not appdata:
+            return []
+        base = Path(appdata) / 'Tencent' / 'xwechat' / 'radium' / 'web' / 'profiles'
+        if not base.is_dir():
+            return []
+        target = datetime.strptime(date_str, '%Y-%m-%d').replace(tzinfo=tz)
+        start = int((target - datetime(1601, 1, 1, tzinfo=timezone.utc)).total_seconds() * 1_000_000)
+        end = start + 86400 * 1_000_000
+        found = {}
+        for profile in base.iterdir():
+            hist = profile / 'History'
+            if not hist.exists():
+                continue
+            try:
+                conn = sqlite3.connect(f'file:{hist}?mode=ro&immutable=1', uri=True)
+                cur = conn.cursor()
+                cur.execute(
+                    "SELECT url, title, last_visit_time FROM urls "
+                    "WHERE url LIKE '%mp.weixin.qq.com%' AND last_visit_time >= ? AND last_visit_time < ?",
+                    (start, end))
+                for url, title, visit in cur.fetchall():
+                    if url and url not in found:
+                        found[url] = (title or '', visit)
+                conn.close()
+            except Exception:
+                continue
+        out = []
+        for url, (title, visit) in list(found.items())[:limit]:
+            when = (datetime(1601, 1, 1, tzinfo=timezone.utc)
+                    + timedelta(microseconds=visit)).astimezone(tz)
+            out.append({
+                'account': '(browser-history)',
+                'account_name': '浏览记录',
+                'source_category': '',
+                'title': title or url,
+                'digest': '',
+                'url': url,
+                'cover': '',
+                'local_text': '',
+                'time': when.strftime('%H:%M'),
+                'timestamp': int(when.timestamp()),
+            })
+        return out
+    except Exception:
+        return []
+
+
 def _article_key(entry):
     """同一篇文章的合并键：url 优先（微信文章 url 唯一），没有 url 时退回标题+时间。"""
     url = str(entry.get('url') or '').strip()
@@ -153,7 +311,7 @@ def _article_key(entry):
     return 'no-url:%s|%s' % (title, entry.get('time') or '')
 
 
-def merge_articles_json(json_path, date_str, serializable, decision_model=None):
+def merge_articles_json(json_path, date_str, serializable, decision_model=None, session_days=None):
     """把这一批**并进** `.articles.json`，返回落盘的全部条目（按时间排序）。
 
     为什么必须合并：同一天可能跑两次（午报 13 点 + 日终 24 点）。第二次进来时
@@ -164,6 +322,7 @@ def merge_articles_json(json_path, date_str, serializable, decision_model=None):
     `.image_map.json` 早就是合并写的（`existing_map.update(...)`），这里只是把它缺的那半补上。
     """
     merged = {}
+    session_days = session_days or {}
     previous_model = None
     if json_path.exists():
         try:
@@ -181,6 +340,12 @@ def merge_articles_json(json_path, date_str, serializable, decision_model=None):
         if key:
             merged[key] = entry
     articles = sorted(merged.values(), key=lambda e: (e.get('time') or '', e.get('title') or ''))
+    # **安静的一天和"客户端没开"必须能分辨。**
+    # 公众号推送只在微信客户端运行时才会写进本地库，所以客户端没开的那几个小时是**永久缺失**的
+    # （上游不补发）。2026-10-29 实测：本地库整天只有 21 行、14 个账号，而前一天是 248 行、
+    # 151 个账号，且当天 00:00–10:00 一行都没有——日报却安静地发了一封 6 篇的邮件。
+    # 没人报错，因为"少"和"正常但冷清"在数据上长得一样。这里把它变成一句话。
+    low_volume = detect_low_volume(json_path.parent.parent, date_str, len(articles))
     payload = {
         'generated_at': datetime.now(timezone(timedelta(hours=8))).strftime('%Y-%m-%d %H:%M:%S'),
         'date': date_str,
@@ -189,6 +354,23 @@ def merge_articles_json(json_path, date_str, serializable, decision_model=None):
         'decisionModel': decision_model if decision_model is not None else previous_model,
         'articles': articles,
     }
+    if low_volume:
+        payload['lowVolume'] = low_volume
+        # 会话表是**客户端自己的**记录：它也少，就说明推送没到本机，而不是我们读漏了。
+        yesterday = (datetime.strptime(date_str, '%Y-%m-%d')
+                     - timedelta(days=1)).strftime('%Y-%m-%d')
+        sess_today = session_days.get(date_str)
+        sess_prev = session_days.get(yesterday)
+        payload['lowVolume']['sessionToday'] = sess_today
+        payload['lowVolume']['sessionPrevDay'] = sess_prev
+        detail = ''
+        if sess_today is not None:
+            detail = (f' 客户端会话表同日也只有 {sess_today} 个公众号有更新'
+                      + (f'（前一天 {sess_prev}）' if sess_prev is not None else '')
+                      + '——推送没到本机，不是读漏了。')
+        print(f'  [WARN] 本日只采到 {low_volume["today"]} 篇，最近 {low_volume["sample"]} 天的中位数是 '
+              f'{low_volume["median"]} 篇。{detail}'
+              f'订阅号界面里的内容可能是联网现拉的，从未落盘。')
     json_path.parent.mkdir(parents=True, exist_ok=True)
     json_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding='utf-8')
     return articles
@@ -931,6 +1113,22 @@ def main():
     parser.add_argument('--date', help='日期 YYYY-MM-DD, 默认今天')
     parser.add_argument('--dry-run', action='store_true', help='仅预览，不抓取')
     parser.add_argument('--limit', type=int, default=0, help='最多处理篇数 (0=不限制)')
+    parser.add_argument('--browser-history', action='store_true',
+                        help='把客户端内嵌浏览器里当天打开过的公众号文章也纳入（4.x 订阅号是网页渲染的，'
+                             '这些文章不写消息库）')
+    parser.add_argument('--rss-feed', action='append', default=None, metavar='URL',
+                        help='外部 RSS/Atom 订阅源（可重复）。微信 4.2.0.11 起绝大多数公众号推送不再落库，'
+                             '这一项用标准订阅源补回缺口；只取 mp.weixin.qq.com 且按当天过滤')
+    parser.add_argument('--rss-feeds-file', default='output/rss-feeds.json', metavar='PATH',
+                        help='订阅源配置文件（默认 output/rss-feeds.json，不存在就忽略）。'
+                             '把常订阅的源写在这里，定时任务就不用带一长串 --rss-feed')
+    parser.add_argument('--rss-opml', default=None, metavar='PATH',
+                        help='OPML 订阅文件：从任意 RSS 阅读器导出的订阅列表，一次导入几十上百个源，'
+                             '不用手抄地址')
+    parser.add_argument('--articles-json', action='append', default=None, metavar='PATH',
+                        help='外部文章列表 JSON（可重复）：一个数组，每项含 title/url/account/'
+                             'date/time/timestamp。用于接入任何自行取得的来源——本工具既不关心'
+                             '也不实现那个来源怎么拿数据')
     parser.add_argument('--api-key', help='AI API key (或设环境变量 DEEPSEEK_API_KEY)')
     parser.add_argument('--engine', default='deepseek', help='AI 引擎: local/deepseek/claude/ollama')
     parser.add_argument('--no-ai', action='store_true', help='关闭摘要、分类和日报简报的 AI 调用')
@@ -1056,6 +1254,102 @@ def main():
                     })
         except:
             pass
+
+    # 订阅号是网页渲染的：**你点开过的**文章只留在内嵌浏览器的历史里（见
+    # `browser_history_articles` 的说明）。默认关——它补的是"读过但没推送落库"的那部分，
+    # 打开它意味着把浏览记录也纳入日报，这该由用户显式决定。
+    if getattr(args, 'browser_history', False):
+        try:
+            extra = browser_history_articles(date_str, tz)
+        except Exception:
+            extra = []
+        if extra:
+            seen = {_article_key(item) for item in articles}
+            added = [item for item in extra if _article_key(item) not in seen]
+            articles.extend(added)
+            print(f'  浏览记录补入 {len(added)} 篇（客户端里打开过、但推送没落库的）')
+
+    # 外部 RSS 订阅源：微信 4.2.0.11 起，绝大多数公众号推送不再写入消息库
+    # （实测同一账号 10-26/27 每天 480+ 行，升级后掉到 11 行），界面里的列表改为联网现拉。
+    # 这一项让日报能接标准订阅源（RSS/Atom）把缺口补回来，不涉及任何非官方协议。
+    rss_feeds = list(getattr(args, 'rss_feed', None) or [])
+    try:
+        from rss_feed import load_rss_feeds, load_opml_feeds, rss_feed_articles
+        feeds_file = getattr(args, 'rss_feeds_file', None)
+        if feeds_file and not os.path.isabs(feeds_file):
+            # 锚到仓库根而不是进程工作目录：定时任务由 Task Scheduler 拉起，
+            # 工作目录可能是 C:\Windows\System32，相对路径会静默读不到配置。
+            feeds_file = os.path.join(SCRIPT_DIR, feeds_file)
+        for url in load_rss_feeds(feeds_file):
+            if url not in rss_feeds:
+                rss_feeds.append(url)
+        # OPML：用户从任意 RSS 阅读器导出的订阅列表，一次导入几十上百个源。
+        opml_file = getattr(args, 'rss_opml', None)
+        if opml_file and not os.path.isabs(opml_file):
+            opml_file = os.path.join(SCRIPT_DIR, opml_file)
+        for url in load_opml_feeds(opml_file):
+            if url not in rss_feeds:
+                rss_feeds.append(url)
+    except Exception:
+        pass
+    if rss_feeds:
+        try:
+            extra = rss_feed_articles(date_str, tz, rss_feeds)
+        except Exception as exc:
+            extra = []
+            print(f'  RSS 读取失败（不影响其它数据源）: {type(exc).__name__}')
+        if extra:
+            seen = {_article_key(item) for item in articles}
+            added = [item for item in extra if _article_key(item) not in seen]
+            articles.extend(added)
+            print(f'  RSS 补入 {len(added)} 篇（来自 {len(rss_feeds)} 个订阅源）')
+
+    # 外部文章列表 JSON：协议中立的接入口。谁用什么办法拿到这批文章与本工具无关，
+    # 这里只负责"按日期过滤 + 去重 + 合并进当天"。
+    extra_files = getattr(args, 'articles_json', None)
+    if extra_files:
+        merged_total = 0
+        for path in extra_files:
+            try:
+                with open(path, 'r', encoding='utf-8') as fh:
+                    payload = json.load(fh)
+                items = payload.get('articles', []) if isinstance(payload, dict) else payload
+                if not isinstance(items, list):
+                    continue
+                picked = []
+                for item in items:
+                    if not isinstance(item, dict):
+                        continue
+                    when = str(item.get('date') or '')
+                    if when and when != date_str:
+                        continue
+                    url = str(item.get('url') or '').strip()
+                    title = str(item.get('title') or '').strip()
+                    if not url and not title:
+                        continue
+                    ts = item.get('timestamp')
+                    if not isinstance(ts, (int, float)) or ts <= 0:
+                        ts = 0
+                    picked.append({
+                        'account': item.get('account') or '(external)',
+                        'account_name': item.get('account_name') or item.get('account') or '(external)',
+                        'source_category': item.get('source_category') or '',
+                        'title': title or url,
+                        'url': url,
+                        'digest': item.get('digest') or '',
+                        'cover': item.get('cover') or '',
+                        'local_text': '',
+                        'time': item.get('time') or '',
+                        'timestamp': int(ts),
+                    })
+                seen = {_article_key(it) for it in articles}
+                added = [it for it in picked if _article_key(it) not in seen]
+                articles.extend(added)
+                merged_total += len(added)
+            except Exception as exc:
+                print(f'  外部文章文件读取失败（跳过）: {type(exc).__name__}')
+        if merged_total:
+            print(f'  外部文章补入 {merged_total} 篇（来自 {len(extra_files)} 个文件）')
 
     # Sort by time
     articles.sort(key=lambda a: a['timestamp'])
@@ -1331,7 +1625,9 @@ def main():
 
     json_path = out_dir / '.articles.json'
     try:
-        merged_articles = merge_articles_json(json_path, date_str, serializable, decision_model)
+        merged_articles = merge_articles_json(
+            json_path, date_str, serializable, decision_model,
+            session_activity(config, keys['biz_db']))
         print(f'  ✓ 结构化数据: {json_path} ({len(merged_articles)} 篇，本次新增 {len(serializable)} 篇)')
     except Exception as e:
         print(f'  [WARN] JSON 写入失败: {e}')

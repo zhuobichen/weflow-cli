@@ -65,6 +65,8 @@ export interface TurnInput {
   text: string
   kind: string
   origin: TurnOrigin
+  /** 本机入口可指定一个仅对本轮生效的场景 */
+  sceneId?: string
   /** 微信来源才有：白名单判定要它的 senderId / conversationType / mentionedBot */
   message?: WechatInboundMessage
 }
@@ -597,20 +599,20 @@ export class AssistantService {
    * 见那个字段的注释。
    */
   async handleMessage(userId: string, text: string, kind: string,
-                      inboundImages: Array<{ filePath: string }> = []): Promise<string> {
+                      inboundImages: Array<{ filePath: string }> = [], sceneId?: string): Promise<string> {
     if (this.inFlight) {
       throw new Error('handleMessage 重入：它依赖串行调用（记忆窗口、turnCalls 都是实例字段）')
     }
     this.inFlight = true
     try {
-      return await this.handleMessageInner(userId, text, kind, inboundImages)
+      return await this.handleMessageInner(userId, text, kind, inboundImages, sceneId)
     } finally {
       this.inFlight = false
     }
   }
 
   private async handleMessageInner(userId: string, text: string, kind: string,
-                                   inboundImages: Array<{ filePath: string }> = []): Promise<string> {
+                                   inboundImages: Array<{ filePath: string }> = [], sceneId?: string): Promise<string> {
     // kind==='image' 只有在**带着已落盘图片**时才是 D-128 那条新路；裸的图片消息
     // （runTurn 已经过滤掉的那种）走到这里仍按老规矩拒绝。
     if (kind !== 'text' && !(kind === 'image' && inboundImages.length)) {
@@ -618,6 +620,10 @@ export class AssistantService {
     }
 
     let t = text.trim()
+    const explicitScene = sceneId === undefined ? null : assistantScenes.resolveExplicit(sceneId)
+    if (explicitScene && !explicitScene.match) {
+      throw new Error(explicitScene.why ?? `无法使用场景「${sceneId}」`)
+    }
     // 每轮重置（空数组也覆盖）：上一轮的图片不能漏到这一轮的句柄空间里。
     this.turnInboundImages = inboundImages
     // 来信图片的句柄指路牌：**能看才摆**（strict 且非本地推理不摆——与 get_messages 的
@@ -710,7 +716,7 @@ export class AssistantService {
     // 场景：**命令要认，但只认真的存在的东西**。`parseSceneCommand` 只在后半段是已存在的
     // 场景 id 时才当指令，所以「场景切换怎么用」这种问话不会被吃掉（见那边的注释）。
     // 位置在内置指令之后、ReAct 之前：场景是这一轮的上下文，不是要模型去执行的任务。
-    const sceneCmd = parseSceneCommand(t, assistantScenes)
+    const sceneCmd = sceneId ? null : parseSceneCommand(t, assistantScenes)
     if (sceneCmd) {
       if (sceneCmd.kind === 'list') {
         const scenes = assistantScenes.list()
@@ -739,14 +745,13 @@ export class AssistantService {
 
     // === ReAct 主循环 ===
     this.memory.addTurn(userId, 'user', t)
-    // 挑场景：绑定 → 关键词 → 上次用过的（都不中就不加场景段，默认行为一字不变）
-    const picked = assistantScenes.resolve(userId, t)
+    // 显式场景只覆盖这一轮，不写入绑定或最近使用；否则沿用绑定 → 关键词 → 上次用过的。
+    const picked = explicitScene ?? assistantScenes.resolve(userId, t)
     const scene = picked.match?.scene ?? null
     if (picked.match) {
       trace.steps.push({ kind: 'note', detail: `场景「${picked.match.scene.name}」· 命中：`
-        + ({ binding: '绑定', keyword: '关键词', lastUsed: '上次用过的' }[picked.match.how]) })
-      // 命中了就记一笔"上次用它"（写盘失败不抛，见 AssistantScenes.save）
-      if (assistantScenes.lastUsedFor(userId) !== picked.match.scene.id) assistantScenes.save()
+        + ({ explicit: '本轮指定', binding: '绑定', keyword: '关键词', lastUsed: '上次用过的' }[picked.match.how]) })
+      if (!sceneId && assistantScenes.lastUsedFor(userId) !== picked.match.scene.id) assistantScenes.save()
     } else if (picked.why) {
       // **多义要留痕**：不然用户只看到"这次没带场景"，不知道是因为撞车了
       trace.steps.push({ kind: 'note', detail: picked.why })
@@ -855,7 +860,7 @@ export class AssistantService {
     }
 
     try {
-      const reply = await this.handleMessage(sessionId, text, kind, inboundImages)
+      const reply = await this.handleMessage(sessionId, text, kind, inboundImages, input.sceneId)
       this.dailyCount++
       // **这里不报"已回复"**：回没回得出去是投递方才知道的事（微信的 sendText 会失败）。
       // 两处都报的话，微信那条路会在日志里出现两遍"已回复"，看着像处理了两条消息。
@@ -968,9 +973,10 @@ export class AssistantService {
   }
 
   /** 本机入口用：投一条消息进同一条队列，返回这一轮的结果 */
-  ask(sessionId: string, text: string, onLog?: (line: string) => void): Promise<TurnOutcome> {
+  ask(sessionId: string, text: string, onLog?: (line: string) => void,
+      sceneId?: string): Promise<TurnOutcome> {
     let outcome: TurnOutcome = { status: 'error', message: '未取得结果' }
-    return this.enqueueTurn({ sessionId, text, kind: 'text', origin: 'panel' }, (o) => {
+    return this.enqueueTurn({ sessionId, text, kind: 'text', origin: 'panel', sceneId }, (o) => {
       outcome = o
       // 投递结果由这一侧报（`runTurn` 不知道投递成没成）
       if (o.status === 'replied') {

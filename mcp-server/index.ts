@@ -31,6 +31,7 @@ import { startHttpServer } from './http.js'
 /** 简单的 HTML → Markdown 转换（处理微信文章常见结构） */
 import { boundedToolInteger, MCP_TOOL_DEFS, executeTool } from '../src/services/assistantTools.js'
 import { AssistantMemory } from '../src/services/assistantMemory.js'
+import { PLUGIN_TOOL_PREFIX, callPluginTool, closePlugins, listPluginTools } from '../src/services/pluginService.js'
 
 // ---- 本地微信数据工具 (复用 assistant 工具层, 微信 bot / MCP server 同源) ----
 // MCP 无微信用户身份, 记忆固定挂 'mcp' 用户下; 与 assistant 守护进程共用同一持久化文件
@@ -189,7 +190,17 @@ export function buildServer(): Server {
     { capabilities: { tools: {} } }
   )
 
-  server.setRequestHandler(ListToolsRequestSchema, async () => ({
+  // **插件工具是动态的**：`plugin.<id>.<tool>` 由本机已启用的插件决定，没有插件时这一项为空，
+  // 所以默认行为与加入插件机制前逐字相同。一个起不来的插件只会让它自己那几条消失，
+  // 不会让整张工具表报错（D-137）。
+  server.setRequestHandler(ListToolsRequestSchema, async () => {
+    let pluginTools: Awaited<ReturnType<typeof listPluginTools>> = []
+    try {
+      pluginTools = await listPluginTools()
+    } catch {
+      pluginTools = []
+    }
+    return ({
     tools: [
       {
         name: 'wechat.search_articles',
@@ -241,8 +252,14 @@ export function buildServer(): Server {
       },
       // ---- 本地微信数据 (与 weflow-cli assistant / 微信 bot 共享工具层) ----
       ...ASSISTANT_TOOLS,
+      ...pluginTools.map(tool => ({
+        name: tool.name,
+        description: tool.description,
+        inputSchema: tool.inputSchema as any,
+      })),
     ],
-  }))
+    })
+  })
 
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const { name, arguments: args = {} } = request.params
@@ -314,6 +331,10 @@ export function buildServer(): Server {
         }
 
         default: {
+          // 插件工具先分流：确认门与转发都在 `pluginService`，这里不要自己再判一遍。
+          if (name.startsWith(PLUGIN_TOOL_PREFIX)) {
+            return { content: [{ type: 'text', text: await callPluginTool(name, args as Record<string, unknown>) }] }
+          }
           // assistant 工具层统一分发 (wechat.list_sessions / wechat.get_messages / ...)
           if (name.startsWith('wechat.')) {
             const text = await executeTool(name.slice('wechat.'.length), args, MCP_TOOL_CTX)
@@ -335,6 +356,17 @@ export function buildServer(): Server {
  * 判定的规则在 `httpConfig.ts`（纯函数、有测试）：必须带令牌、只绑回环、默认不开。
  */
 async function main() {
+  // 插件是**子进程**：本服务退出时不关，它们会留在后台。所以两条传输都在这里收尾。
+  let closing = false
+  const shutdown = async (code: number) => {
+    if (closing) return
+    closing = true
+    try { await closePlugins() } catch { /* 关不掉也要退出 */ }
+    process.exit(code)
+  }
+  process.on('SIGINT', () => { void shutdown(0) })
+  process.on('SIGTERM', () => { void shutdown(0) })
+
   const opts = resolveHttpOptions(process.env, process.argv.slice(2))
   if (!opts) {
     await buildServer().connect(new StdioServerTransport())

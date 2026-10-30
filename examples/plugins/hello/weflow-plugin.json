@@ -1,0 +1,16 @@
+{
+  "schema": "weflow-plugin/1",
+  "id": "hello",
+  "name": "示例：回声",
+  "version": "0.1.0",
+  "kind": "mcp-server",
+  "description": "最小可用的 MCP 工具插件，用来验证链路是否打通；也是自己写插件时可以直接拷的骨架。",
+  "entry": {
+    "command": "node",
+    "args": ["index.mjs"]
+  },
+  "permissions": {
+    "network": false,
+    "writes": []
+  }
+}

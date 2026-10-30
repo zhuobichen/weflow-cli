@@ -13,7 +13,7 @@
  * `loadIssue`/`saveIssue` 不抛但必记。
  *
  * **场景不给模型碰**：没有任何模型可调的工具能改场景。配置类的东西只能用户显式改
- * （同 `隐私` 那条注释的立场）。所以这个类只有 CLI 和内置指令两个调用方。
+ * （同 `隐私` 那条注释的立场）。调用方包括 CLI、单轮面板覆盖与内置会话指令。
  */
 import { existsSync, mkdirSync, readFileSync, renameSync } from 'fs'
 import { homedir } from 'os'
@@ -42,7 +42,7 @@ export interface Scene {
   enabled: boolean
 }
 
-export type MatchHow = 'binding' | 'keyword' | 'lastUsed'
+export type MatchHow = 'explicit' | 'binding' | 'keyword' | 'lastUsed'
 export interface SceneMatch { scene: Scene; how: MatchHow }
 
 interface ScenesFile {
@@ -242,6 +242,14 @@ export class AssistantScenes {
   }
 
   // ---------- 三档匹配 ----------
+
+  /** 只允许显式覆盖一个当前已启用的场景；它不改变会话绑定或最近使用记录。 */
+  resolveExplicit(sceneId: string): { match: SceneMatch | null; why?: string } {
+    const scene = this.get(sceneId)
+    if (!scene) return { match: null, why: `没有场景「${sceneId}」` }
+    if (!scene.enabled) return { match: null, why: `场景「${sceneId}」已停用` }
+    return { match: { scene, how: 'explicit' } }
+  }
 
   /**
    * 挑一个场景。**只认唯一**：多个场景命中同样长的关键词时**拒绝**（返回 null + 理由），

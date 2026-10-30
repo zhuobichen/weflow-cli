@@ -81,7 +81,19 @@ Node 原生层 src/core/                    Python 工作流 scripts/
 
 未指定日期运行 `daily` 时，会先检查昨天是否缺少 `README.md`、`.articles.json` 或 `index.html`；昨天不完整则先补齐，成功后再生成今天。显式 `--date` 和 `--dry-run` 是单日期操作。
 
-### 知识库与报告
+#### 日报排期与增量邮件
+
+```text
+output/biz-daily/<日期>/.articles.json
+  -> 13:00 午报处理今天
+  -> 23:30 夜报处理今天尚未发送的内容
+  -> 登录补跑处理昨天（包括 23:30 后到达的文章）
+  -> 每次 SMTP 成功后原子更新 .mail-sent.json（仅 SHA-256 内容指纹）
+```
+
+增量状态按日期保存，仅记录规范化文章 URL 的指纹。13:00 午报、23:30 夜报和登录补跑共享该状态，发送失败和 `--dry-run` 不推进状态；增量 dry-run 会读取状态以预览实际差量。缺失或损坏状态按完整内容发送，避免静默漏报。紧凑主题的展示上限之外的文章不记为已发送，因此可以在后续运行补齐。
+
+## 知识库与报告
 
 ```text
 日报 / 收藏 / 微信读书笔记 / 聊天卡 / 你自己的笔记
@@ -110,6 +122,36 @@ MCP（stdio 或回环 HTTP） / 本机面板 / 官方 Bot 通道
 ```
 
 MCP 客户端本身是可信调用方，配置前必须审查其权限和工作目录。**MCP 的工具面由助手的工具表派生**（少掉 `save_memory`、`look_at_image`、`set_todo_status` 三个），所以它**不是纯只读**：写入类调用要显式 `confirm`，读取类里有几个会出网（抓正文、公开文章搜索、语义检索、起草）。**发送消息、发布文章、改配置这三件事在两侧都没有工具**——`weflow-cli capabilities --json` 的 `safety.mcpDefaultReadOnly` 是这条边界的机器可读版本。助手默认拒绝所有来信；`send` 仅用于已建立的官方 Bot 通道会话，不等于操控个人微信账号，也不能向普通个人联系人或群聊发消息。
+
+### 插件与外部工具
+
+```text
+~/.weflow-cli/plugins.json（注册表：id / enabled / trusted）
+  -> MCP 服务启动时读取已启用的插件
+  -> 每个插件拉起一个**独立子进程**（白名单环境，不继承 process.env）
+  -> 子进程提供的工具以 plugin.<id>.<tool> 并入工具表
+  -> 调用前判确认门：未 trusted 的插件必须带 confirm，confirm 不转发
+  -> 失败 / 握手超时只让该插件自己的工具消失
+```
+
+插件有两种：`mcp-server`（提供工具，工具以 `plugin.<id>.<tool>` 并入 MCP 工具表）与 `knowledge-source`
+（采集材料，写卡片）：
+
+```text
+plugin run <id>
+  -> 宿主建好 out_dir，把作业 JSON 从 stdin 交给插件子进程
+  -> 插件只往 out_dir 写 .md 卡片
+  -> scripts/plugin_card_lint.py 用 compile_wiki 自己的解析函数读一遍
+  -> 报告"消费端读出 N 张"与被跳过的原因
+```
+
+卡片是给 `compile_wiki.scan_articles` 读的，不是给人读的：正文里没有 `[[wikilink]]` 的卡片会被**静默跳过**，
+所以校验交给消费端本身，不在 TypeScript 里再写一份规则。`plugin run` **不**接着建概念页——那仍是一条线一条线
+单独跑的命令。
+
+插件是**普通进程**，不需要依赖本仓库的代码；宿主只按协议（工具）或 stdin 作业（采集）说话。这里没有进程内加载器：
+插件拿不到数据库路径、配置或文件系统句柄，能拿到什么完全由宿主交给它（D-137、D-138）。清单里的 `permissions`
+只用于展示，不是沙箱——插件仍以用户身份作为普通进程运行。
 
 ### 本机面板与助手守护进程
 

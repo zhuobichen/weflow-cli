@@ -18,6 +18,7 @@
     "bin/",
     "src/",
     "resources/",
+    "examples/",
     "docs/images/",
     "docs/*.md",
     "logo.png",

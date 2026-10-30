@@ -316,6 +316,55 @@ test('端到端：命中关键词的场景会进系统提示词，并留下轨�
   assert.match(note.detail, /命中：关键词/)
 })
 
+test('端到端：本轮指定场景压过绑定，但不改变绑定或最近使用，下一轮恢复既有匹配', async () => {
+  resetStore()
+  assistantScenes.add(scene({ id: 'bound', name: '固定场景', instruction: '固定规则' }))
+  assistantScenes.add(scene({ id: 'one-shot', name: '临时场景', instruction: '临时规则' }))
+  assistantScenes.bind('wxid_me', 'bound')
+  assistantScenes.noteUsed('wxid_me', 'bound')
+  assistantScenes.save()
+  const svc = await boot()
+
+  await svc.ask('wxid_me', '这次临时覆盖', undefined, 'one-shot')
+  const firstSystem = captured[0].find((m: any) => m.role === 'system').content
+  assert.match(firstSystem, /临时场景/)
+  assert.match(firstSystem, /临时规则/)
+  assert.doesNotMatch(firstSystem, /固定规则/)
+  assert.equal(assistantScenes.binding('wxid_me'), 'bound')
+  assert.equal(assistantScenes.lastUsedFor('wxid_me'), 'bound')
+  const note = svc.recentTrace('wxid_me').steps.find((s: any) => s.kind === 'note' && /场景/.test(s.detail))
+  assert.match(note.detail, /本轮指定/)
+
+  await svc.ask('wxid_me', '下一轮不覆盖')
+  const secondSystem = captured[1].find((m: any) => m.role === 'system').content
+  assert.match(secondSystem, /固定场景/)
+  assert.doesNotMatch(secondSystem, /临时规则/)
+})
+
+test('端到端：指定覆盖时同名场景命令作为普通问题处理，不会改绑定', async () => {
+  resetStore()
+  assistantScenes.add(scene({ id: 'target', name: '目标场景', instruction: '目标规则' }))
+  assistantScenes.save()
+  const svc = await boot()
+
+  await svc.ask('wxid_me', '场景 target', undefined, 'target')
+  assert.equal(captured.length, 1, '覆盖模式不能把原始问题当成绑定指令吞掉')
+  assert.equal(assistantScenes.binding('wxid_me'), '')
+  assert.match(captured[0].find((m: any) => m.role === 'system').content, /目标规则/)
+})
+
+test('端到端：显式停用或不存在的场景在处理消息前失败且不调用模型', async () => {
+  resetStore()
+  assistantScenes.add(scene({ id: 'disabled', enabled: false }))
+  const svc = await boot()
+  for (const sceneId of ['disabled', 'missing', '']) {
+    const outcome = await svc.ask('wxid_me', '无效覆盖', undefined, sceneId)
+    assert.equal(outcome.status, 'error')
+    assert.match(outcome.message, sceneId === 'disabled' ? /已停用/ : /没有场景/)
+  }
+  assert.equal(captured.length, 0)
+})
+
 test('端到端：没命中任何场景时，提示词里没有场景段（默认行为不变）', async () => {
   resetStore()
   assistantScenes.add(scene({ id: '日报', keywords: ['日报'], instruction: '按主题分组' }))

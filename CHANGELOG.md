@@ -18,6 +18,29 @@ purpose** - a hand-written "latest is X" is exactly the claim that goes stale he
 
 All notable user-facing changes are recorded here. This project follows [Semantic Versioning](https://semver.org/).
 
+## 1.21.5
+
+- **日报能接外部 RSS 源了（`--rss-feed` / `output/rss-feeds.json`），因为 4.2.0.11 把公众号推送的落库量砍掉了约 98%。**
+  2026-10-30 实测同一账号的每日落库量：10-26 / 10-27 是 **486 / 481** 行，10-28 13:16 升级到 4.2.0.11
+  之后变成 **248 / 21 / 11**（10-30 那 11 行里真正的文章推送只有 7 篇）。三组对照排除了"我们读错了"：
+  五个消息分片全扫过，`gh_` 表**只**在 `biz_message_0.db`（550 张里 539 张），没搬到别的库；用户当天
+  确实看到、却没落库的一篇标题，在五个库里全搜 **0 命中**；`applet.db` 只有 6 张 WMPF 元数据表，没有
+  feed 表。
+  - 界面里的列表是**联网现拉**的，而且是落库那部分的超集：滚动时在 applet 内存里量到 **5608** 个不同
+    文章 URL，当天的 7 条落库推送里只有 2 条出现在其中。
+  - 新增 `--rss-feed URL`（可重复）与 `--rss-feeds-file PATH`（默认 `output/rss-feeds.json`）。只取
+    `mp.weixin.qq.com` 且发布时间落在当天的条目，RSS 2.0 与 Atom 都认；**单个源坏了只跳过它**，日报
+    不会因此失败。命令行与配置文件里的源会合并去重。
+  - 支持 **OPML 导入**（`--rss-opml`）：从任意 RSS 阅读器导出一次订阅列表即可，几十上百个源一次读入，
+    只取 `xmlUrl`、递归展开分组、忽略 `htmlUrl`；与命令行 `--rss-feed`、配置文件合并去重。
+  - 默认配置路径**锚在仓库根**，不依赖进程工作目录：定时任务由 Task Scheduler 拉起，工作目录可能是
+    `C:\Windows\System32`，用相对路径会静默读不到（已从该目录实测验证）。
+  - 不配任何源时行为不变（D-139 的低量告警、D-141 的 `--browser-history` 照旧）。
+
+    验证版本：微信 4.2.0.11。测试：`test/daily_articles_merge_test.py` 15 → **23** 条
+    （`RssFeedTests` 8 条：只取当天/只取公众号、Atom、坏源隔离、空源、无日期跳过、配置三种写法、
+    配置缺失或损坏、去重保序）。
+
 ## 1.21.4
 
 - **`check` 不再把"我看不见"讲成"微信没在运行"。** 2026-10-28 实测：`check` 报

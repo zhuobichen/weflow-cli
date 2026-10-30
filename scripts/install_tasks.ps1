@@ -1,4 +1,4 @@
-# Register / update the two scheduled tasks for the official-account daily report.
+# Register / update the official-account daily report tasks.
 # Idempotent: running it again overwrites the definitions with the same values.
 #
 # Why this cannot always be done for you: writing to Task Scheduler is refused in a
@@ -17,14 +17,13 @@
 #   powershell -NoProfile -ExecutionPolicy Bypass -File <repo>\scripts\install_tasks.ps1
 #   powershell -NoProfile -ExecutionPolicy Bypass -File <repo>\scripts\install_tasks.ps1 -Uninstall
 #
-# The two tasks:
-#   WeFlow Daily       00:05 + at logon   -> YESTERDAY (the last complete day)
-#   WeFlow Daily Noon  13:00              -> TODAY so far (half a day of pushes)
+# The scheduled runs:
+#   WeFlow Daily       23:30                -> TODAY near end of day
+#   WeFlow Daily Noon  13:00                -> TODAY so far (half a day of pushes)
+#   WeFlow Daily Catchup at logon           -> YESTERDAY if the night run was missed
 #
-# Why 00:05 the next day instead of 24:00 tonight: it is the same instant, but "yesterday"
-# then lines up with the date directory the run writes into, and it does not collide with
-# other jobs on the hour. Official accounts keep pushing until 24:00, so this is the only
-# moment that has the complete day.
+# The scheduled end-of-day pass is at 23:30. The logon catch-up targets yesterday,
+# so posts arriving in the final half-hour are included on the next login.
 #
 # This file is intentionally ASCII-only: Windows PowerShell 5.1 reads a BOM-less file as
 # the ANSI codepage, so non-ASCII text here turns into mojibake *and* a parse error.
@@ -47,7 +46,7 @@ if (-not $isAdmin) {
 }
 
 if ($Uninstall) {
-    foreach ($name in @('WeFlow Daily Noon', 'WeFlow Daily')) {
+    foreach ($name in @('WeFlow Daily Catchup', 'WeFlow Daily Noon', 'WeFlow Daily')) {
         if (Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue) {
             Unregister-ScheduledTask -TaskName $name -Confirm:$false
             Write-Host "removed: $name"
@@ -74,26 +73,30 @@ if (-not (Test-Path $vbs)) {
 }
 $action = '//B //Nologo "' + $vbs + '"'
 
-# End of day: yesterday. The at-logon trigger is the catch-up: this machine slept for
-# 37 hours and StartWhenAvailable did NOT actually start the missed run (NumberOfMissedRuns=2,
-# no run record), so "it will catch up by itself" is not something to rely on.
+# End of day: process today at 23:30. A same-day logon catch-up is deliberately separate
+# so that waking after midnight processes yesterday rather than silently relabeling it.
 Register-ScheduledTask -TaskName 'WeFlow Daily' `
-    -Action (New-ScheduledTaskAction -Execute $wscript -Argument $action) `
-    -Trigger @((New-ScheduledTaskTrigger -Daily -At '00:05'),
-               (New-ScheduledTaskTrigger -AtLogOn)) `
+    -Action (New-ScheduledTaskAction -Execute $wscript -Argument ($action + ' night')) `
+    -Trigger (New-ScheduledTaskTrigger -Daily -At '23:30') `
     -Settings $settings `
-    -Description 'WeChat daily report for yesterday (00:05 + at logon, idempotent, no window)' -Force | Out-Null
+    -Description 'WeChat daily report for today (23:30, no window)' -Force | Out-Null
 
-# Noon: today so far. Deliberately NO at-logon trigger: a morning logon would produce a
-# very thin "noon" report and write the .noon_done marker, which would then make the real
-# 13:00 run skip itself (the guard keys on that marker).
+# Noon: today so far. No logon trigger: a morning logon must not produce a thin report
+# and set the marker that tells the actual 13:00 pass to skip itself.
 Register-ScheduledTask -TaskName 'WeFlow Daily Noon' `
     -Action (New-ScheduledTaskAction -Execute $wscript -Argument ($action + ' noon')) `
     -Trigger (New-ScheduledTaskTrigger -Daily -At '13:00') `
     -Settings $settings `
     -Description 'WeChat daily report for today so far (13:00, no window)' -Force | Out-Null
 
-foreach ($name in @('WeFlow Daily', 'WeFlow Daily Noon')) {
+# Missed-run recovery: after logon, fill yesterday and include any posts after 23:30.
+Register-ScheduledTask -TaskName 'WeFlow Daily Catchup' `
+    -Action (New-ScheduledTaskAction -Execute $wscript -Argument ($action + ' catchup')) `
+    -Trigger (New-ScheduledTaskTrigger -AtLogOn) `
+    -Settings $settings `
+    -Description 'WeChat daily report catch-up for yesterday at logon' -Force | Out-Null
+
+foreach ($name in @('WeFlow Daily', 'WeFlow Daily Noon', 'WeFlow Daily Catchup')) {
     $t = Get-ScheduledTask -TaskName $name
     $i = Get-ScheduledTaskInfo -TaskName $name
     Write-Host ("{0,-20} {1,-8} next {2}" -f $t.TaskName, $t.State, $i.NextRunTime) -ForegroundColor Green
@@ -101,5 +104,6 @@ foreach ($name in @('WeFlow Daily', 'WeFlow Daily Noon')) {
 Write-Host ''
 Write-Host 'Run one now instead of waiting:'
 Write-Host '  Start-ScheduledTask -TaskName "WeFlow Daily Noon"   # today so far'
-Write-Host '  Start-ScheduledTask -TaskName "WeFlow Daily"        # yesterday, complete'
-Write-Host 'Logs: <repo>\logs\daily-<date>[-noon].log'
+Write-Host '  Start-ScheduledTask -TaskName "WeFlow Daily"        # today, 23:30 pass'
+Write-Host '  Start-ScheduledTask -TaskName "WeFlow Daily Catchup" # yesterday after missed night run'
+Write-Host 'Logs: <repo>\logs\daily-<date>[-noon|-night].log'

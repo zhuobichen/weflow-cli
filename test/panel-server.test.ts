@@ -21,6 +21,7 @@ process.env.USERPROFILE = HOME
 
 const { startPanelServer } = await import('../src/panel/server.js')
 const { configService } = await import('../src/services/configService.js')
+const { assistantScenes } = await import('../src/services/assistantScenes.js')
 
 /** 只替换 `quickReplyContacts` 这一个键，其余键仍走真实现（这个文件里别的用例不碰它） */
 async function withQuickReplies<T>(value: string, body: () => Promise<T>): Promise<T> {
@@ -30,7 +31,7 @@ async function withQuickReplies<T>(value: string, body: () => Promise<T>): Promi
 }
 
 interface Stub {
-  calls: { bucket: string; text: string }[]
+  calls: { bucket: string; text: string; sceneId?: string }[]
   outcome?: any
   hang?: boolean
   release?: () => void
@@ -59,8 +60,8 @@ function stubService(opts: { hang?: boolean; outcome?: any; trace?: any } = {}):
       workingTurns: 2,
       saveError: '',
     }),
-    ask: async (bucket: string, text: string) => {
-      stub.calls.push({ bucket, text })
+    ask: async (bucket: string, text: string, _onLog?: unknown, sceneId?: string) => {
+      stub.calls.push({ bucket, text, ...(sceneId ? { sceneId } : {}) })
       if (stub.outcome && typeof stub.outcome.then === 'function') return stub.outcome
       return stub.outcome ?? { status: 'replied', text: '收到' }
     },
@@ -216,6 +217,42 @@ test('问一句：把文本交给助手，带回答复，并说明用的是哪�
     assert.equal(body.memoryBucket, 'wxid_me', '要把桶名带回去，界面才好显示')
     assert.deepEqual(stub.calls, [{ bucket: 'wxid_me', text: '我最近有什么待办？' }])
   } finally { await server.close() }
+})
+
+test('显式场景 id 只转发已启用的场景；缺失、停用或格式错误时在入队前拒绝', async () => {
+  for (const item of assistantScenes.list()) assistantScenes.remove(item.id)
+  assistantScenes.add({ id: 'enabled-scene', name: '启用场景', keywords: [], instruction: '仅此轮', outputSpec: '', skills: [], enabled: true })
+  assistantScenes.add({ id: 'disabled-scene', name: '停用场景', keywords: [], instruction: '', outputSpec: '', skills: [], enabled: false })
+  assistantScenes.bind('panel-user', 'enabled-scene')
+  assistantScenes.noteUsed('panel-user', 'enabled-scene')
+  assistantScenes.save()
+
+  const { server, stub, base, token } = await boot()
+  try {
+    const valid = await ask(base, token, { text: '只问这一轮', sceneId: 'enabled-scene' })
+    assert.equal(valid.status, 200)
+    assert.deepEqual(stub.calls, [{ bucket: 'wxid_me', text: '只问这一轮', sceneId: 'enabled-scene' }])
+
+    for (const invalidBody of [
+      { text: '不应入队', sceneId: 'missing-scene' },
+      { text: '不应入队', sceneId: 'disabled-scene' },
+      { text: '不应入队', sceneId: '' },
+      { text: '不应入队', sceneId: 123 },
+    ]) {
+      const invalid = await ask(base, token, invalidBody)
+      assert.equal(invalid.status, 400)
+      assert.equal((await invalid.json() as any).code, 'INVALID_SCENE')
+    }
+    assert.equal(stub.calls.length, 1, '无效场景不能进入助手队列')
+    assert.equal(assistantScenes.binding('wxid_me'), '')
+    assert.equal(assistantScenes.lastUsedFor('wxid_me'), '')
+    assert.equal(assistantScenes.binding('panel-user'), 'enabled-scene')
+    assert.equal(assistantScenes.lastUsedFor('panel-user'), 'enabled-scene')
+  } finally {
+    await server.close()
+    for (const item of assistantScenes.list()) assistantScenes.remove(item.id)
+    assistantScenes.save()
+  }
 })
 
 test('答完之后把这一轮的轨迹带回去（页面折叠显示成"思考过程"）', async () => {

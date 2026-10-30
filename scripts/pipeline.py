@@ -68,6 +68,13 @@ def main():
                              '450 篇约 75 分钟 → 秒级；对上游的请求次数不变（见 biz_daily.prefetch_bodies）')
     parser.add_argument('--source', action='append', default=[], metavar='NAME',
                         help='仅处理指定公众号，可重复或用逗号分隔')
+    parser.add_argument('--rss-feed', action='append', default=None, metavar='URL',
+                      help='外部 RSS/Atom 订阅源（可重复），原样转发给 biz_daily：'
+                           '微信 4.2.0.11 起绝大多数公众号推送不再落库，用标准订阅源补缺口')
+    parser.add_argument('--rss-feeds-file', default=None, metavar='PATH',
+                        help='订阅源配置文件，原样转发给 biz_daily（默认 output/rss-feeds.json）')
+    parser.add_argument('--rss-opml', default=None, metavar='PATH',
+                        help='OPML 订阅文件，原样转发给 biz_daily：一次导入几十上百个源')
     args = parser.parse_args()
 
     if args.yesterday:
@@ -113,6 +120,12 @@ def main():
         step1_args += ['--date', args.date]
     for source in args.source:
         step1_args += ['--source', source]
+    for feed_url in (args.rss_feed or []):
+        step1_args += ['--rss-feed', feed_url]
+    if args.rss_feeds_file:
+        step1_args += ['--rss-feeds-file', args.rss_feeds_file]
+    if args.rss_opml:
+        step1_args += ['--rss-opml', args.rss_opml]
     if args.no_ai:
         step1_args += ['--no-ai']
     if args.no_summary and not args.no_ai:

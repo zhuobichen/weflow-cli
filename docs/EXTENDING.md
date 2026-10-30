@@ -22,6 +22,18 @@ A plugin/adapter mechanism is on the roadmap on purpose, with its constraint wri
 not read configuration, databases or arbitrary files directly, and must be disableable individually
 (`docs/ROADMAP.md`, "插件/适配器机制"). It is not implemented.
 
+**What does exist (2026-10-29, D-137/D-138): out-of-process plugins of two kinds.** A third party can add *tools*
+without touching this repository, because the tool is not loaded into this process — it lives in its own MCP server
+that WeFlow spawns and re-exports as `plugin.<id>.<tool>`. A third party can also add a *knowledge source*: a
+command that receives a job on stdin, writes cards into one directory the host creates, and exits; `plugin run`
+validates those cards with the real consumer (`scripts/plugin_card_lint.py` calls `compile_wiki`'s own parsers) so
+the "card without a wikilink is skipped silently" trap is reported instead of discovered later. All of this
+satisfies the roadmap's three criteria by construction rather than by declaration: no config/database/arbitrary-file
+access (the only channels are stdio MCP and one output directory), a rebuilt environment whitelist instead of
+`process.env`, and `plugin disable <id>` for one entry. See [PLUGIN.md](PLUGIN.md) for the contract and
+`examples/plugins/` for two runnable skeletons. **This does not reopen D-048**: there is still no in-process
+loader, no `exports` field, and no way for a plugin to gain a capability the host does not hand it over.
+
 ## Recipe A - a new assistant tool
 
 The most common extension. All of it is in `src/services/assistantTools.ts` unless noted.

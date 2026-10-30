@@ -1667,8 +1667,7 @@ which is what the gate is for.
 
 ## D-119: 日报的排期形状：跑"昨天"、允许补跑、抓之前并发预热正文缓存
 
-**Status:** Active（2026-10-16 落地；本机任务 `WeFlow Daily` 每日 08:20 跑 `pipeline.py --yesterday
---prefetch-bodies`，并用 `Start-ScheduledTask` 实跑过一次）
+**Status:** Historical schedule superseded by D-136（2026-10-16 落地；原本机任务每日 00:05/登录补跑昨天；运行“昨天”的原则仍用于 D-136 的登录补跑）
 
 **Decision.** 四件事一起定，它们是同一个问题的四个面：
 1. 计划任务跑**昨天**（新旗标 `--yesterday`），不是"今天"；
@@ -4290,3 +4289,194 @@ Markdown；**只有 OCR 后的文字**（截断到 3000 字，与文章线同量
 所以：提示词**不问主题**，`parse_note` 就算收到 `topic` 也不采纳，卡片固定 `topic: 文档`；
 已有的 177 张卡本地改回统一值（只改 frontmatter，不重新调模型）。`compile_wiki` 照常消费
 （概念页「来源」栏写"文档"，如实）。
+
+## D-133: 面板 CLI 的场景覆盖只作用于一轮
+
+**Status:** Active
+
+**Decision.** `panel --ask --scene <id>` selects an existing, enabled scene for that CLI turn only. The panel API validates it before dispatch; the service uses it to build the prompt without changing binding or last-used state. Without the option, binding → keyword → last-used resolution is unchanged, including for WeChat-origin turns. The desktop panel UI and status payload remain unchanged.
+
+**Reason.** A one-off task may need a different prompt without permanently changing how a conversation is handled. Reusing the authenticated loopback endpoint and serialized assistant queue preserves the shared quota and memory path, while an explicit per-turn field avoids mutating conversation configuration.
+
+**Consequences.**
+- Unknown, disabled, or malformed scene ids fail before a turn is queued.
+- The trace labels the selected scene `本轮指定`; the next turn uses normal resolution.
+- Regression coverage pins prompt selection, non-mutation, API validation, and CLI forwarding.
+
+## D-134: Document distinct local secret and database cache boundaries
+
+**Status:** Active
+
+**Decision.** Documentation distinguishes AES-GCM secret fields in `config.json` from the separate `keys.enc` cache and the optional plaintext SQLite database cache. The config key derives from a salt and machine/account names and is not protected by an OS secret store. The key-cache fallback is reversible XOR with its key stored beside the data. `WEFLOW_CACHE_ENABLED=1` enables a cache containing plaintext SQLite data. Local processing is not described as eliminating local compromise, account, legal, or platform-compatibility risks.
+
+**Reason.** Calling every local key cache "machine-bound AES-256-GCM" overstated protection and ignored the plaintext cache. Accurate, bounded claims help users understand the storage boundary without publishing process-memory or key-extraction details.
+
+**Consequences.** `SECURITY.md`, the README summary, and [PROJECT_STATE.md](PROJECT_STATE.md) distinguish these protections and residual risks.
+
+## D-135: Official-account email delivery is incremental
+
+**Status:** Active
+
+**Decision.** The noon and end-of-day mail jobs pass `--incremental`. `daily_mail.py` filters article records using SHA-256 fingerprints of canonical URLs (falling back to source/title/time when no URL exists), and atomically records only articles actually rendered in a successfully accepted SMTP send in that date's `.mail-sent.json`. Common WeChat tracking parameters are excluded from URL identity. Failed SMTP sends and dry-runs do not advance state (incremental dry-run still reads the ledger so it previews the true delta); absent or malformed state fails open to a full send rather than silently suppressing content. Items omitted by compact-topic display limits are not marked sent. Manual full resend remains available by invoking the script without `--incremental`.
+
+**Reason.** The noon and end-of-day jobs read the same cumulative `.articles.json`, so the later email repeated content from the first. A date-local delivery ledger makes the second send a true delta while retaining retry behavior and not mistaking fetched-but-not-mailed articles for delivered content.
+
+**Consequences.** The state file contains hashes only, not article titles, URLs, bodies, or recipient details. SMTP success precedes the atomic ledger update; a crash between those two operations can cause a retry duplicate, which is preferred to losing mail. `daily_mail_test.py` covers identity normalization, failure and retry boundaries, malformed state, privacy, and display-limit coverage.
+
+## D-136: Daily reports run at 13:00 and 23:30 with logon catch-up
+
+**Status:** Active
+
+**Decision.** Keep the 13:00 noon report, move the night task to 23:30 and process the current day, and add a logon-only catch-up task for yesterday. The three modes use separate completion markers so catch-up cannot suppress the current day's night run. Noon, night, and catch-up share `.mail-sent.json`, so each email contains only articles not previously sent successfully for that date.
+
+**Reason.** The user requested runs at 13:00 and 23:30. Keeping the old "process yesterday" semantics at 23:30 would send the wrong date; removing logon recovery would leave posts after 23:30 and missed sleep-time runs unhandled. Separate same-day night and yesterday catch-up paths preserve both meanings.
+
+**Consequences.** The night email covers new articles collected by 23:30. Articles arriving in the final half-hour are appended to yesterday's delivery delta by the next logon catch-up. If there is no further logon, those articles remain in the local daily output until a later catch-up. `scripts/install_tasks.ps1` registers the noon, night, and catch-up tasks.
+
+## D-137: Third-party tools arrive as out-of-process MCP plugins, not as a loader
+
+**Status:** Active
+
+**Decision.** A plugin is a directory with `weflow-plugin.json` and a command that starts a **standard MCP server over stdio**. WeFlow spawns it, lists its tools, and re-exports them as `plugin.<id>.<tool>` alongside the existing `wechat.*` tools. The registry lives at `~/.weflow-cli/plugins.json` (`WEFLOW_PLUGIN_REGISTRY` overrides it for tests). Management is `weflow-cli plugin add|list|remove|enable|disable|trust|untrust|doctor`.
+
+Three boundaries are enforced by the host, not by trusting the manifest:
+
+1. **Out of process.** The plugin receives no WeFlow object, database path, or configuration value; the only channel is MCP over stdio.
+2. **No inherited environment.** Child processes get a rebuilt whitelist (`childEnv()`), not `process.env` — which would otherwise hand over every API key.
+3. **Confirmation by default.** An untrusted plugin's tools return a preview unless the caller passes `confirm: true`; `confirm` is stripped before forwarding. Disabled plugins do not run even with `confirm`.
+
+A handshake timeout (20 s, `WEFLOW_PLUGIN_CONNECT_TIMEOUT_MS`) is part of the decision, because it is the difference between "one plugin is broken" and "the tool table never answers".
+
+**Reason.** D-048 rejected an in-process loader because such a plugin would hold exactly the reach of the code it joins. This keeps that rejection intact while making the door it left ajar usable: everything a plugin can reach is what the host chooses to hand it over one pipe. D-056 (skills as material) was the smallest useful form of the roadmap's P4 item; this is the first form that adds a *capability* without editing this repository, which is what the roadmap's acceptance criteria demanded — no direct access to configuration, databases, or arbitrary files, and individually disableable.
+
+**Consequences.** `permissions.network` / `permissions.writes` are **declarations for display, not enforcement**, and `docs/PLUGIN.md` says so explicitly rather than implying a sandbox we do not have — repeating the mistake D-048 criticised would be worse than not shipping the field. A plugin still runs as an ordinary process under the user's identity; `plugin trust` is a human decision, not an assessment. A plugin that fails to start or never completes the handshake is skipped (its tools simply do not appear) while other plugins and the built-in tools keep working — `test/plugin.test.ts` pins that isolation and the timeout. With no plugins registered the served tool table is byte-for-byte what it was before, so the defaults of every existing client are unchanged. Still absent, and named in `docs/PLUGIN.md` rather than left to be discovered: a central registry and a compatibility matrix beyond the `schema` version. (The knowledge-source kind this decision listed as absent was added by D-138.)
+
+## D-138: A knowledge-source plugin is validated by the real consumer, not by a second copy of the rules
+
+**Status:** Active
+
+**Decision. D-137 gains a second plugin kind.** `kind: "knowledge-source"` names a command that receives a job as JSON **on stdin** (`out_dir`, optional `input_dir`/`since`/`until`), writes `.md` cards into `out_dir`, and exits. `weflow-cli plugin run <id>` runs it, then hands the produced cards to the **actual consumer** — `scripts/plugin_card_lint.py` imports `compile_wiki` and calls its own `parse_frontmatter` / `concept_links` / `article_topic` — and reports how many cards the consumer could read and why the rest were skipped. Knowledge-source plugins are deliberately excluded from `listPluginTools` (they have no tools) and from `doctor`'s connection check (they are not run there, because `doctor` is a read-only check).
+
+**Reason.** The card contract already exists (`docs/EXTENDING.md` Recipe F, four producers), and its most expensive failure mode is silent: `scan_articles` skips any card whose body has no `[[wikilink]]` — the file exists, the directory exists, nothing errors, and the concept page simply never appears. A plugin author debugging that by eye will look at a file that looks correct. Two things follow and both are enforced here rather than documented: the job travels on **stdin** (a command line is visible in the process list and may carry dates or paths), and the validation is performed by **the consumer's own code** rather than re-implemented in TypeScript — a second implementation would be a second contract that stays green when the Python side changes.
+
+**Consequences.** A knowledge-source plugin cannot write anywhere except the `out_dir` the host creates and passes in, and it never learns a knowledge-base path or a configuration value — the same boundary D-137 draws for tools, expressed as a directory instead of a pipe. The host does **not** chain `compile_wiki` after `run`: building concept pages stays a separate, per-line command on purpose (the two knowledge lines are kept apart), so `plugin run` reports readability and stops there. `test/plugin.test.ts` covers the exclusion from the tool table, the stdin job, the failure paths (missing binary, wrong kind), and that a failed lint is reported as a failure rather than as "0 cards". `plugin_card_lint.py` is subject to `test/script_stdout_encoding_test.py` like every other script.
+
+## D-139: A low-volume day is reported, and the session table is used to tell "not delivered" from "not read"
+
+**Status:** Active
+
+**Decision.** When a day's article count falls below 30% of the median of the previous seven days (median ≥ 20, at least 3 days of history), `biz_daily.py` records `lowVolume: {today, median, ratio, sample, sessionToday, sessionPrevDay}` in `.articles.json`, prints a warning, and `daily_mail.py` puts the same sentence **at the top of the email**. `sessionToday` comes from a second, independent source: the client's own `SessionTable` (`session_activity()` reads `last_timestamp` for `gh_%` accounts), so the report can distinguish "the pushes never reached this machine" from "we failed to read them".
+
+**Reason.** On 2026-10-29 the daily report quietly delivered 6 articles while the user could see roughly 200 in WeChat's 订阅号 view. Three independent local layers agreed there was nothing more to read: the message tables held 29 rows for that day (248 the day before), `SessionTable` had **14** 公众号 sessions updated today against **148** yesterday, and the article the user pasted was absent from every `.db` under the account directory — verified with zstd decompression and a positive control that found two other articles through the identical path. So WeChat 4.2 renders 订阅号 content from the network and does not persist those pushes; re-login, opening the 订阅号 folder, and favouriting an article (which *does* write `favorite.db`) all left `biz_message_0.db` untouched at its 22:38 mtime. **No reader change can recover content that never reached storage**, and the expensive part of that day was not the missing data — it was that nothing said so. Before this change the only signal was a small number inside an email that looked normal.
+
+**Consequences.** The failure is now loud in three places (log, `.articles.json`, email header) and the session count makes the diagnosis one line instead of an afternoon. Thresholds are 30% / median ≥ 20 / 3 days deliberately: measured daily volume ranges 84–526, so a looser threshold would fire on genuinely quiet days and the warning would stop being read. `sessionToday` is only meaningful for the day just ended (a session's `last_timestamp` is its *latest* message, so older days look small by construction) — the field is therefore compared against the previous day only, and the docs say so rather than inviting a wrong reading. What this does **not** do: recover the missing articles, or fetch 订阅号 content over the network. If the client is not persisting pushes, the report for that day is structurally short, and the honest behaviour is to say so.
+
+## D-140: WeChat 4.2.0.11 stopped writing official-account pushes into `biz_message_0.db` at the moment it was installed
+
+**Status:** Active — observed on one machine, cause not yet confirmed by the vendor
+
+**Finding.** On the development machine, 公众号 push rows in `biz_message_0.db` collapsed **at 13:16 on 2026-10-28**, the minute `D:\WeiXin\Weixin.exe` was replaced (file mtime 13:16:47, version 4.2.0.11; the repo verifies against 4.1.15.56 per D-130). Splitting each day at 13:16 makes the break unambiguous, and the three preceding days act as the control — for them the afternoon half is *larger* than the morning half, so the ratio, not the clock, is what changed:
+
+| day | rows before 13:16 | rows after 13:16 |
+| --- | --- | --- |
+| 2026-10-25 | 191 | 231 |
+| 2026-10-26 | 251 | 295 |
+| 2026-10-27 | 237 | 297 |
+| **2026-10-28** | **240** | **30** |
+| 2026-10-29 | 14 | 15 |
+
+Three independent local records agree that the content never arrived, so this is not a reader defect: message rows (29 for 10-29 against 270 the day before), `SessionTable` (14 公众号 sessions with a last message that day against 148), and `SessionUnreadListTable_1` (13 entries against 73). An article the user could see in the 订阅号 view was searched for across every `.db` under the account directory — with zstd decompression and a positive control that found two other articles through the identical path — and it was **absent**. Re-login, opening the 订阅号 folder, and favouriting an article all left `biz_message_0.db` at its pre-existing mtime; favouriting did write `favorite.db`, which shows the client can still persist when asked.
+
+**Reason for recording it rather than treating it as "a quiet day".** `WECHAT_VERIFIED` exists precisely so that "newer than verified" is a warning instead of a surprise, and this is the first measured case where newer-than-verified came with a real data loss. It also cost hours to diagnose, because a short report and a genuinely quiet day look identical from the outside.
+
+**Consequences.** No public 4.2.0 release note mentions 公众号 or 订阅号 — the official text is "修复一些已知问题", and the reported changes are text-selection translation, the emoji panel, and call-window behaviour ([IT之家](https://www.ithome.com/1/018/634.htm)). So the mechanism change is **undocumented**; this entry records the measurement, not a vendor explanation. The practical guidance is therefore: if 公众号 volume collapses right after a client update, **verify against the previous client build before blaming the reader**, and treat the daily numbers as suspect until that is settled. D-139's low-volume warning plus the session cross-check is what makes this visible within one report instead of an afternoon. Still open: whether downgrading restores delivery (the decisive experiment), and whether the break is 4.2.0.11-specific or 4.2-general — the user reports 4.2 was already running the previous evening, which is consistent with the 10-28 afternoon already being broken.
+
+## D-141: The 4.x 订阅号 view is web-rendered, and the embedded browser's history is a second article source
+
+**Status:** Active — opt-in, `biz_daily.py --browser-history`
+
+**Finding.** 微信 4.x renders 订阅号 in an embedded Chromium (`%APPDATA%\Tencent\xwechat\radium\web\profiles\multitab_*\History`, a plain SQLite `urls(url, title, last_visit_time)` table). An article the user opened is recorded **there** and nowhere in WeChat's `.db` files: the article quoted on 2026-10-29 was found in `History` as `10-29 23:57 | 新西兰大选在即，"谁上台都绕不开中国" | https://mp.weixin.qq.com/s/slTht3jANnQkNuqYYLUoLQ` while being absent from every `.db` under the account directory (zstd-decompressed search with a positive control). This also answers the "do I have to click for the database to update?" question: clicking does leave a record — just not in the database WeFlow was reading.
+
+**Decision.** `browser_history_articles(date_str, tz)` reads those profiles **read-only**, keeps only `mp.weixin.qq.com` URLs whose last visit falls inside the requested day, and returns them in the same shape as push articles. It is wired to an **opt-in** flag, `--browser-history`, rather than on by default: it is a different kind of data (what *you opened*, not what was *pushed*), and pulling someone's browsing history into a daily report without asking is not a default anyone should have to discover.
+
+**Reason.** After the 4.2 change the push path can silently under-report (D-140), and the only local record of the missing articles was this history. On 2026-10-29 it recovered **9** opened articles that the message tables never contained. Without it, the honest options were "say the day is short" or "change the client version"; with it, part of the gap is fillable from data already on the machine.
+
+**Consequences.** The flag is documented as *supplementary*: history holds opened articles only (4–19/day measured), so it narrows the gap and cannot replace pushes. Reading is confined to `%APPDATA%\Tencent\xwechat\radium\web\profiles\*` and to `mp.weixin.qq.com` rows; the other browsing records in that same database are not touched, and `test/daily_articles_merge_test.py` pins both the "other domains excluded" and "other days excluded" filters, plus a quiet-empty return when the directory is absent. Chromium's HTTP cache was checked first and is not usable — 227 MB of compressed responses yielded **zero** article ids, so the history database is the only plaintext source here. Nothing in this path contacts the network; fetching article bodies still goes through the existing cached fetcher.
+
+**A rejected hypothesis, recorded because it nearly shipped.** The same profile carries `Share Data`, whose `share_data_table(url, real_url, author, share_data)` holds article metadata — 3934 rows, of which **2028 were absent from `History`**, which looked like "the feed was rendered but not opened" and would have been a complete push list. That inference was wrong: `History` only goes back to **2026-08-01** on this machine, so older rows cannot appear in it. Once the articles were dated by fetching their pages (`ori_create_time` — the pages do expose it), the correction was unambiguous: of 413 dated articles, 209 were published after 2026-08-01, and **only 2 of those were never opened**. `share_data_table` is a metadata cache for articles that *were* opened (possibly on another device), not a record of what was pushed, and it has no timestamp of its own. `--feed-snapshot` and `--feed-dated` were written, tested against this table, and then **removed** once the measurement disproved their premise; keeping them would have meant shipping a feature whose stated purpose was false. The reusable part — `publish_time_from_html()` — went with them, since its only consumer was the disproven path.
+
+## D-142: The 4.x 订阅号 view is a WMPF applet, and its store is `radium/users/<hash>/applet/data/8/applet.db`
+
+**Status:** Corrected 2026-10-30 — the file is the WMPF **applet registry**, not the feed; the feed is not stored locally at all
+
+**Finding (the measurement — still valid).** A whole-profile differential was taken while the 订阅号 view was opened and scrolled (33,346 files snapshotted before and after, 90 s apart). Exactly one new writer appeared that is not the browser cache: `%APPDATA%\Tencent\xwechat\radium\users\<profile-hash>\applet\data\8\applet.db` plus a **6.3 MB `-wal`**, both updating during the scroll. The same window wrote only images (WebP/JPEG) and two ~3.5 MB gzip **article pages** into the Chromium cache — no feed payload. The conclusion is that 订阅号 is no longer a chat session at all: it is a **mini-program (WMPF applet)**, which is why nothing about it reaches `biz_message_0.db` (D-140) and why the session/unread counters stay near zero.
+
+**Correction (2026-10-30): the store was read, and it is not the feed.** 该库的表结构后来读了出来（`sqlite_master` 是明文，不必解开数据页）：只有 **6 张表** —— `PrefetchStat`、`WaPackageInfo`、`WaLaunchInfo`、`WaBizAttrVer`、`WaSubPackage`、`WxaAttr`，全部是 WMPF 自己的**小程序包 / 启动信息 / 预取统计 / 小程序资料**元数据（六条建表语句正对应 `flue\utility\ilink_service\applet\storage\` 下六个 Storage 类），没有任何 article / feed / msg / title / url 表。所以差分里"滚动订阅号时 `applet.db` 在写"是真的，写进去的是小程序启动与包信息；原文"这个文件就是 feed"那一步推论错了，而且错在最容易被差分证据说服的地方：**一个文件在正确的时间被写，不等于它写了你在找的内容**。
+
+**Where the pushes are not.** 同日实测（2026-10-30）：`biz_message_0.db` 共 553 张 `Msg_*` 表，全天合计 **14 行**（与 D-139 记的 14 一致）；applet 的 74 个 MMKV 文件（含 4 MB 的 `usrmmkvstorage0`）里 **0** 个 `mp.weixin.qq.com` URL、**0** 处「公众号/订阅号/article/feed」文本；Chromium 侧只有 `History`（8133 处文章 URL，打开过的）、`Favicons`、`Share Data` 与 mpxworker 模板 HTML。四类落点合起来指向同一个结论：**列表是联网现拉的，客户端只留"你打开过什么"**。这同时解释了 D-140（推送不再进消息库）与 D-141（历史里只有打开过的）为什么都对。
+
+**Why the key is no longer the question.** 该库确实加的是 SQLCipher 4（页 4096、`reserve` 80、salt = 文件前 16 字节，判据在合成库上以正/负对照验证过），密钥由 WMPF 运行时算出后交给库层，`kdf_iter` 为 256000 —— 也就是说它和 WeChat 主库的钥匙体系不是一套，原文列的排除项因此都为真。但即便把这一层解开，得到的也只是上面那 6 张表。**这条路不通向日报目标**，继续投入的边际收益为零。
+
+**What this entry is for now.** 它记录一次被证伪的推论，而不是一条待办：不要再去 `applet.db` 里找推送，也不要再为了"读推送"去攻它的加密。下一个遇到"4.2 订阅号为什么没有本地记录"的人，应该直接从"列表没有落盘"开始，而不是从"某个文件被加密了"开始。
+
+**What blocked reading it (kept for the record).** `applet.db` is encrypted with a scheme that is not the WeChat database one. Exhausted at the time, all against the file header as salt and against a zero salt: PBKDF2-HMAC-SHA1 / SHA256 / SHA512 at 1000 / 4000 / 64000 / 256000 iterations; `cipher_compatibility` 2 / 3 / 4 with both a passphrase-form and a raw-key-form key; and a raw zero key. Every attempt returns `file is not a database`. The header is not `SQLite format 3`, the file is a clean multiple of 4096 bytes, and opening the live file returns `database is locked` unless it is copied together with its WAL. (2026-10-30 复核：格式确为 SQLCipher 4；上述排除项成立，只是它们指向的那个目标不是推送。)
+
+**Consequences (rewritten 2026-10-30).** WeFlow 的诚实位置：**4.2 上"当天推送了哪些文章"没有本地数据源**，这不是读法或密钥问题，而是客户端不再把列表写下来。保留的行为不变（D-139 的低量告警、D-141 的 `--browser-history` 补读打开过的文章）。本条目现在的用途是拦住"再去破 `applet.db`"这条回头路：它是小程序注册表，`-wal` 在滚动时增长只是因为它被顺带写入了启动/包元数据。想要真正的推送列表，只能走网络接口（需要登录态、属非官方协议），按 `AGENTS.md` 不做。
+
+## D-143: 4.2.0.11 之后用**外部 RSS 订阅源**补推送缺口（标准协议，不碰非官方接口）
+
+**Status:** Active (2026-10-30)
+
+**Context.** D-142 定的是"本地没有完整推送列表"。但把话说死之前，2026-10-30 又做了一次定量测量，得到的不是"没有"，而是**掉了约 98%**：
+
+| 日期 | 落库的公众号消息 | 落库的公众号数 | 备注 |
+| --- | --- | --- | --- |
+| 2026-10-26 | 486 | 248 | 升级前 |
+| 2026-10-27 | 481 | 239 | 升级前 |
+| 2026-10-28 | 248 | 151 | **当天 13:16 升级到 4.2.0.11** |
+| 2026-10-29 | 21 | 14 | 升级后 |
+| 2026-10-30 | 11 | 12 | 其中真正的文章推送只有 7 篇 |
+
+"账号数" = 当天该 `gh_` 消息表至少有 1 行的公众号数（落库口径，不是"客户端显示"）。前两天的 248 / 239 正好对上用户记忆里的"每天两百多个公众号"——所以"两百多篇"在升级前是准确的本地事实，丢的是**记录**，不是用户的记忆。
+
+同日还做了两组对照，把"是不是我们读错了"排掉：① 五个消息分片（`message_0..3`、`biz_message_0`）全扫，`gh_` 消息**只**在 `biz_message_0.db`（550 张表里 539 张是 `gh_`），别的分片一张都没有——所以不是"搬走了"；② 把当天落库的 7 篇标题逐字回查，用用户确认当天在订阅号里看到、但不在那 7 篇里的一篇（`全面从严治党贵在持之以恒`）在**五个库里全搜，0 命中**——所以不是"漏读了某张表"。
+
+**Decision.** 增加 `--rss-feed`（可重复）：从**标准 RSS/Atom** 拉当天文章，过滤条件只有两条——`url` 含 `mp.weixin.qq.com`、发布时间落在目标日期内。理由：
+
+- 它**不碰登录态、不碰非官方协议**，`AGENTS.md` 的红线没有被踩；
+- 微信没有"停止支持公众号"，只是不再把列表镜像到本地，因此上游的公众号转 RSS 服务仍然可用；
+- 失败必须是**软失败**：单个源解析不了就跳过并记一行 stderr，其余源照常，日报绝不因订阅源挂掉。
+
+**Boundaries (写明，避免下一个误解).** ① 这是**补充源**，不是替代品：没有配置 `--rss-feed` 时行为与 D-139/D-141 完全一致；② RSS 的覆盖取决于用户订阅了哪些源，WeFlow 不去猜、不去抓公众号主页；③ 只取当天，去重走既有的 `_article_key`（url 优先），所以和落库文章重复时以先到者为准，不会双份。
+
+**Measured caveat (2026-10-30, on a real public bridge).** 拿 `wechat2rss.xlab.app` 的「量子位」源实测，发现两件影响准确性的事，写下来免得后来人以为是 bug：
+
+1. **`pubDate` 不是真实发布时间**，而是桥**批量抓取的时间**：同一个批次里 5 篇文章的时间全是 `11:40:00`。所以按日期过滤的粒度是"批次"，真实发布时间最多会差到相邻一天（晚上发的文章，凌晨批次抓到就算到第二天）。要精确到分钟只能用文章页里的 `ori_create_time`（已验证可读），但那是每篇一次抓取，属于"按需启用"而不是默认。
+2. **源是全文的，体积不小**：单源约 **1.9 MB**，200 个源一天两次约 **0.4 GB** 下载量。所以现实做法是**只订真正会读的 30–60 个号**，而不是把 240 个全部镜像过来——"回到从前的数量"和"回到从前的体验"在这里不是同一件事。
+**覆盖率实测（2026-10-30，这是最该先看的一条）.** 写了 `scripts/rss_match.py` 把本机 690 个订阅号和公开服务的收录列表（实测 **395** 个，文档里说的"600+"已过时）做匹配，结果：**确认可迁移 6 个（1%）、疑似 3 个、迁移不了 681 个（99%）**。原因是收录列表集中在安全/开发两类，而本机订阅以 AI、科研、行业为主。**结论：现成的免费公开列表对任意个人订阅基本无用**——要覆盖"你自己的号"，必须用能按需添加任意公众号的桥（自建或付费私有部署），而那一步通常就走非官方通道了。这条数字应该写在任何"RSS 能救回来"的说法前面。
+**Verification.** `test/daily_articles_merge_test.py::RssFeedTests` 钉了 5 件事：只取当天且只取公众号、Atom 也能解析、坏源不拖垮其它源、空源列表返回空、没有日期的条目被跳过。端到端实测（2026-10-30）：`--rss-feed` 补入 2 篇并与库里的 5 篇合并成 7 篇，日期过滤把「昨天 23:59」那条正确排除。
+
+## D-144: 4.2 把订阅号从"会话系统"迁入"信息流"，本地持久化随之终结
+
+**Status:** Active — 重大架构变动，不可逆（2026-10-30 记录）
+
+**这是本仓库面对的最大一次外部变动，单独记录。** 之前 D-140 / D-142 / D-143 各自记的是"某条路走不通"，本条记的是**为什么所有本地路同时失效**。
+
+**机制（实测支撑）.**
+- 升级前：每个公众号 = 一个**会话**，每条推送 = 一条 message，落在 `biz_message_0.db` 的 `Msg_<md5(username)>` 表里。这是"读本地库"能拿到全部推送的**唯一原因**。
+- 升级后：订阅号整体变成 **WMPF 小程序里的信息流视图**——不是会话。**没有会话就没有 message，没有 message 就没有表可写**。界面里的列表改为联网现拉，客户端只保留"你打开过的"（Chromium `History`，D-141）。
+
+**留下的那批为什么还能落库.** 实测 10-29/30 仍落库的 21 个号里，**19 个是商家/机构/通知类**（支付、快递、医院、学校、招聘），只有 2 个内容号。它们能留下，是因为**仍以会话形式存在**（服务号通知走老通道）。
+
+**动机（推断，明确标注为推断）.**
+1. **存储与写放大**——`biz_message_0.db` 单库 297 MB、553 张表；上亿用户每天 200+ 条推送（含正文与图片索引）的写放大不可持续。改为"按需拉取、渲染即弃"可降一个量级。
+2. **可运营性**——信息流可以排序、插推荐、做灰度；**逐条落库的会话是不可运营的**，服务端改不了已经写进用户硬盘的数据。
+3. **减少第三方抓取面**——列表不落盘确实挡住了本地解析类工具，但**牺牲了客户端自身的离线可读性**，所以更像架构改动的副产品而非主因。
+4. **多端一致**——手机端订阅号早已是信息流，PC 端随 4.x 重写（WMPF/radium）对齐。
+
+**为什么"没有风声".** 对普通用户零感知：文章照常能看，只是不再存进硬盘。**没有任何普通用户会因此抱怨，所以不会有新闻。** 这也意味着：**不要指望微信改回来**——信息流化是产品方向，不可逆。
+
+**对本仓库的约束（重要）.**
+- "读本地库拿到当天全部推送"这条能力**永久性结束**，不是待修 bug，也不该继续投入（已在 D-142 / D-143 分别验证过 `applet.db` 与公开 RSS 两条替代路）。
+- 任何"当天全覆盖"的方案都必须**自己向外获取**，因而受平台额度约束：同类最成熟工具（wechat-article-exporter）自述"每次 1–2 个公众号、间隔 5–10 分钟"，实测本机触发 `200013 freq control` 后 20 分钟仍未恢复。
+- 因此产品形态只能是两种之一：**① 少量号高频 + 其余轮转（延迟换覆盖，不漏内容）**；**② 用户自备订阅源（`--rss-feed` / `--rss-opml` / `--articles-json`，已实现）**。**"零配置 + 当天全量 + 免费"三者不可兼得**，这条要写进任何面向用户的说明里。

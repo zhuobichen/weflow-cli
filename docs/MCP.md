@@ -139,6 +139,25 @@ the assistant's own model through a side channel, and MCP returns only the tool'
 nowhere while the reply still said "you can see it now". A tool that cannot do its job on a transport is not
 offered on it (the same rule `unavailableToolReason` applies elsewhere). The chat-data tools share service code with the optional `weflow-cli assistant` WeChat bot, but access is still controlled by the MCP client's permissions and local configuration. The bot and MCP transport are not interchangeable message channels.
 
+## Plugin tools (`plugin.*`)
+
+Tools whose name starts with `plugin.` are **not shipped by this project**. They come from third-party MCP servers
+you registered yourself, re-exported as `plugin.<id>.<tool>` so they cannot collide with the `wechat.*` surface
+([PLUGIN.md](PLUGIN.md), D-137). With no plugins registered this section does not apply and the table above is the
+complete surface.
+
+What the host guarantees for them:
+
+- The plugin runs **out of process** with a rebuilt environment whitelist, so it never receives this server's
+  configuration, database path, or API keys.
+- An untrusted plugin's tool returns a **preview** unless the call passes `confirm: true`; `confirm` is not forwarded.
+  `plugin trust <id>` opts out for one plugin and is a human decision, not an assessment.
+- `plugin disable <id>` removes its tools entirely. A plugin that fails to start or never completes the handshake
+  only loses its own tools; the rest of the surface keeps working.
+
+What it does **not** guarantee: the manifest's `permissions` are displayed by `plugin doctor`, not enforced. A plugin
+is still an ordinary process running as you — review the code before trusting it.
+
 ## Safety boundary
 
 - The server inherits the permissions of the MCP client. Only add it to a client you trust.

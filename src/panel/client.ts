@@ -44,6 +44,8 @@ export function panelPair(endpoint: PanelEndpoint): Promise<ClientResult<{ url: 
   return request(endpoint, '/api/pair', { method: 'POST' })
 }
 
-export function panelAsk(endpoint: PanelEndpoint, text: string): Promise<ClientResult<any>> {
-  return request(endpoint, '/api/ask', { method: 'POST', body: JSON.stringify({ text }) }, 200_000)
+export function panelAsk(endpoint: PanelEndpoint, text: string, sceneId?: string): Promise<ClientResult<any>> {
+  return request(endpoint, '/api/ask', {
+    method: 'POST', body: JSON.stringify({ text, ...(sceneId ? { sceneId } : {}) }),
+  }, 200_000)
 }

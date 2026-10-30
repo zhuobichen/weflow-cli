@@ -32,6 +32,17 @@ import { applyDerivedNtKeys, enableFavorites, detectFavDbPath } from '../src/ser
 import type { ChatSession } from '../src/types.js'
 import { disabledIds, describeSkill, readSkillBody, scanSkills, skillRoots, skillState } from '../src/services/assistantSkills.js'
 import { assistantScenes, validateSceneId, type Scene } from '../src/services/assistantScenes.js'
+import {
+  addPlugin,
+  checkPluginHealth,
+  lintCards,
+  listPlugins,
+  pluginRoot,
+  registryFile,
+  removePlugin,
+  runKnowledgeSource,
+  setPluginFlags,
+} from '../src/services/pluginService.js'
 import { detectWechatClient, reportedDataDirs, samePath } from '../src/services/wechatClient.js'
 import { WECHAT_VERIFIED, compareWechatVersions, describeCompatVerdict } from '../src/services/wechatCompat.js'
 
@@ -542,7 +553,7 @@ program
         },
         localPanel: {
           status: 'panel --status --json',
-          ask: 'panel --ask "<text>" --yes --json',
+          ask: 'panel --ask "<text>" --yes --json [--scene <id>]',
           preview: 'panel --dry-run --json',
           execute: 'panel --yes --json',
           confirmationRequired: true,
@@ -7599,6 +7610,251 @@ skillCmd
   })
 
 // ==================== scene (会话场景) ====================
+const pluginCmd = program
+  .command('plugin')
+  .description('MCP 工具插件：把外部 MCP server 的工具并进本项目的工具面（进程外运行，默认每次调用需确认）')
+
+/** 三个动作共用的失败出口：`--json` 时给机器看的错误码，否则给人看的一句话。 */
+function pluginFail(error: unknown, json?: boolean): never {
+  const message = error instanceof Error ? error.message : String(error)
+  if (json) console.log(JSON.stringify({ success: false, error: message }))
+  else console.error(chalk.red(message))
+  process.exit(1)
+}
+
+pluginCmd
+  .command('list')
+  .description('列出已注册的插件')
+  .option('--json', 'JSON 输出')
+  .action((opts) => {
+    // **默认不打印插件目录路径**：机器输出里给路径会把本机用户名带进日志/issue。
+    const rows = listPlugins().map(p => ({
+      id: p.id,
+      name: p.manifest.name,
+      version: p.manifest.version,
+      kind: p.manifest.kind,
+      enabled: p.enabled,
+      trusted: p.trusted,
+      network: p.manifest.permissions?.network === true,
+      description: p.manifest.description || '',
+    }))
+    if (opts.json) {
+      console.log(JSON.stringify({ success: true, total: rows.length, plugins: rows }))
+      return
+    }
+    if (!rows.length) {
+      console.log(chalk.gray('还没有注册任何插件'))
+      console.log(chalk.gray('装一个：weflow-cli plugin add <插件目录>'))
+      return
+    }
+    for (const r of rows) {
+      const flags = [
+        r.kind === 'knowledge-source' ? '知识源' : '',
+        r.enabled ? '' : '已禁用',
+        r.trusted ? '已信任' : '需确认',
+        r.network ? '声明联网' : '',
+      ].filter(Boolean).join(' · ')
+      console.log(`${chalk.cyan(r.id)} v${r.version}  ${r.name}${flags ? chalk.gray('  [' + flags + ']') : ''}`)
+      if (r.description) console.log(chalk.gray(`    ${r.description.slice(0, 100)}`))
+    }
+  })
+
+pluginCmd
+  .command('add <dir>')
+  .description('注册一个插件目录（该目录里要有 weflow-plugin.json）')
+  .option('--json', 'JSON 输出')
+  .action((dir, opts) => {
+    try {
+      const record = addPlugin(dir)
+      if (opts.json) {
+        console.log(JSON.stringify({ success: true, id: record.id, name: record.manifest.name, enabled: true, trusted: false }))
+        return
+      }
+      console.log(`${chalk.green('已注册')} ${chalk.cyan(record.id)} ${record.manifest.name}`)
+      console.log(chalk.gray('未信任状态：调用它的工具需要带 confirm: true。检查它能不能起来：weflow-cli plugin doctor'))
+    } catch (e) {
+      pluginFail(e, opts.json)
+    }
+  })
+
+pluginCmd
+  .command('remove <id>')
+  .description('从注册表移除一个插件（不删插件目录本身）')
+  .option('--yes', '跳过确认')
+  .option('--json', 'JSON 输出')
+  .action(async (id, opts) => {
+    try {
+      if (!opts.yes) {
+        if (opts.json) {
+          console.log(JSON.stringify({
+            success: false,
+            code: 'CONFIRMATION_REQUIRED',
+            error: '这是本机注册表的写操作：先确认，再加 --yes 执行',
+          }))
+          process.exit(1)
+        }
+        const { confirmed } = await inquirer.prompt([{
+          type: 'confirm',
+          name: 'confirmed',
+          message: `从注册表移除插件 ${id}？（插件目录不会被删除）`,
+          default: false,
+        }])
+        if (!confirmed) {
+          console.log(chalk.gray('已取消'))
+          return
+        }
+      }
+      const removed = removePlugin(id)
+      if (!removed) {
+        if (opts.json) console.log(JSON.stringify({ success: false, error: `没有这个插件：${id}` }))
+        else console.error(chalk.red(`没有这个插件：${id}`))
+        process.exit(1)
+      }
+      if (opts.json) console.log(JSON.stringify({ success: true, removed: id }))
+      else console.log(chalk.green(`已移除 ${id}`))
+    } catch (e) {
+      pluginFail(e, opts.json)
+    }
+  })
+
+for (const [name, enabled] of [['enable', true], ['disable', false]] as const) {
+  pluginCmd
+    .command(`${name} <id>`)
+    .description(`${name === 'enable' ? '启用' : '禁用'}一个插件（${name === 'enable' ? '工具会出现在 MCP 工具表里' : '工具不再出现在 MCP 工具表里'}）`)
+    .option('--json', 'JSON 输出')
+    .action((id, opts) => {
+      try {
+        const record = setPluginFlags(id, { enabled })
+        if (opts.json) console.log(JSON.stringify({ success: true, id: record.id, enabled: record.enabled }))
+        else console.log(chalk.green(`${record.enabled ? '已启用' : '已禁用'} ${record.id}`))
+      } catch (e) {
+        pluginFail(e, opts.json)
+      }
+    })
+}
+
+for (const [name, trusted] of [['trust', true], ['untrust', false]] as const) {
+  pluginCmd
+    .command(`${name} <id>`)
+    .description(trusted ? '信任该插件：调用其工具不再需要 confirm' : '取消信任：调用其工具重新需要 confirm')
+    .option('--json', 'JSON 输出')
+    .action((id, opts) => {
+      try {
+        const record = setPluginFlags(id, { trusted })
+        if (opts.json) console.log(JSON.stringify({ success: true, id: record.id, trusted: record.trusted }))
+        else if (record.trusted) {
+          console.log(chalk.yellow(`已信任 ${record.id}：它的工具将被直接调用，不再逐次确认`))
+          console.log(chalk.gray('这是你的判断，不是对插件的评估——它仍然是第三方代码。'))
+        } else console.log(chalk.green(`已取消信任 ${record.id}`))
+      } catch (e) {
+        pluginFail(e, opts.json)
+      }
+    })
+}
+
+pluginCmd
+  .command('doctor')
+  .description('逐个启动插件并报告能否连通、有哪些工具、声明了什么')
+  .option('--json', 'JSON 输出')
+  .action(async (opts) => {
+    const records = listPlugins()
+    if (!records.length) {
+      if (opts.json) console.log(JSON.stringify({ success: true, total: 0, plugins: [] }))
+      else console.log(chalk.gray('还没有注册任何插件'))
+      return
+    }
+    const results = []
+    for (const record of records) results.push(await checkPluginHealth(record))
+    if (opts.json) {
+      console.log(JSON.stringify({ success: true, total: results.length, plugins: results }))
+      return
+    }
+    for (const r of results) {
+      const isSource = r.kind === 'knowledge-source'
+      const state = !r.enabled
+        ? chalk.gray('已禁用')
+        : isSource
+          ? chalk.green('就绪')
+          : r.ok ? chalk.green('可连通') : chalk.red('连不上')
+      const tail = !isSource && r.ok ? chalk.gray(`  ${r.toolCount} 个工具`) : ''
+      console.log(`${chalk.cyan(r.id)} v${r.version}  ${state}${tail}`)
+      if (r.error) console.log(chalk.red(`    ${r.error}`))
+      for (const tool of r.tools) console.log(chalk.gray(`    · ${tool}`))
+      for (const warning of r.warnings) console.log(chalk.yellow(`    ⚠ ${warning}`))
+      if (r.permissions?.writes?.length) {
+        console.log(chalk.gray(`    声明会写：${r.permissions.writes.join('、')}（仅为声明，宿主无法核实）`))
+      }
+    }
+    console.log(chalk.gray(`\n注册表：${registryFile()}`))
+    console.log(chalk.gray(`插件目录：${pluginRoot()}`))
+  })
+
+pluginCmd
+  .command('run <id>')
+  .description('跑一次知识源插件：产出卡片，并交给知识库消费端读一遍')
+  .option('--since <date>', '起始日期 YYYY-MM-DD')
+  .option('--until <date>', '结束日期 YYYY-MM-DD')
+  .option('--input <dir>', '传给插件的输入目录')
+  .option('--out <dir>', '卡片输出目录（缺省 output/<id>-notes）')
+  .option('--json', 'JSON 输出')
+  .action(async (id, opts) => {
+    const record = listPlugins().find(p => p.id === id)
+    if (!record) {
+      pluginFail(new Error(`没有这个插件：${id}`), opts.json)
+      return
+    }
+    const run = await runKnowledgeSource(record, {
+      since: opts.since,
+      until: opts.until,
+      inputDir: opts.input,
+      outDir: opts.out,
+    })
+    if (!run.ok) {
+      const tail = run.stderr.trim().split(/\r?\n/).filter(Boolean).slice(-5).join('\n')
+      if (opts.json) {
+        console.log(JSON.stringify({
+          success: false,
+          id,
+          error: run.error || '插件失败',
+          stderr: tail,
+        }))
+        process.exit(1)
+      }
+      console.error(chalk.red(`采集失败：${run.error || '插件失败'}`))
+      if (tail) console.error(chalk.gray(tail))
+      process.exit(1)
+    }
+
+    // 卡片是给消费端读的，不是给人读的：这里真的跑一遍消费端再报结果。
+    const lint = await lintCards(run.outDir)
+    if (opts.json) {
+      console.log(JSON.stringify({
+        success: true,
+        id,
+        outDir: run.outDir,
+        cards: lint.cards,
+        readable: lint.readable,
+        links: lint.links,
+        skipped: lint.skipped,
+        lintError: lint.error,
+      }))
+      return
+    }
+    console.log(`${chalk.green('已采集')} ${chalk.cyan(id)} → ${run.outDir}`)
+    if (!lint.ok) {
+      console.log(chalk.yellow(`卡片体检没跑成：${lint.error}`))
+      return
+    }
+    console.log(`卡片 ${lint.cards} 张，消费端读出 ${lint.readable} 张（共 ${lint.links} 条概念链接）`)
+    for (const skip of lint.skipped.slice(0, 8)) {
+      console.log(chalk.yellow(`  ⚠ ${skip.file}：${skip.reason}`))
+    }
+    if (lint.skipped.length > 8) console.log(chalk.gray(`  …还有 ${lint.skipped.length - 8} 张`))
+    if (lint.readable < lint.cards) {
+      console.log(chalk.gray('被跳过的卡片不会产生概念页；按上面的原因改插件，然后重跑。'))
+    }
+  })
+
 const sceneCmd = program
   .command('scene')
   .description('会话场景：按会话生效的提示词预设（绑定 → 关键词 → 上次用过的）')
@@ -8036,12 +8292,19 @@ program
   .description('打开本机面板窗口 (Electron 悬浮球；没有 Electron 就降级用 Edge --app)')
   .option('--status', '只看状态，不打开窗口')
   .option('--ask <text>', '在命令行里问一句（面板减去像素）')
+  .option('--scene <id>', '只给本次 --ask 使用的场景，不改变会话绑定')
   .option('--dry-run', '仅预览，不启动窗口或守护进程')
   .option('--yes', '确认打开')
   .option('--json', '输出 JSON 格式')
   .action(async (opts) => {
     const { readEndpoint, endpointFile } = await import('../src/panel/endpoint.js')
     const { panelStatus, panelAsk, panelPair } = await import('../src/panel/client.js')
+
+    if (opts.scene !== undefined && opts.ask === undefined) {
+      if (opts.json) console.log(JSON.stringify({ success: false, code: 'INVALID_ARGUMENT', error: '--scene 只能与 --ask 一起使用' }))
+      else console.log(chalk.red('--scene 只能与 --ask 一起使用'))
+      process.exit(1)
+    }
 
     // ---------------------------------------------------------- 只读：状态
     if (opts.status) {
@@ -8075,6 +8338,12 @@ program
         else console.log(chalk.red('--ask 不能为空'))
         process.exit(1)
       }
+      const sceneId = String(opts.scene ?? '').trim()
+      if (opts.scene !== undefined && !sceneId) {
+        if (opts.json) console.log(JSON.stringify({ success: false, code: 'INVALID_ARGUMENT', error: '--scene 不能为空' }))
+        else console.log(chalk.red('--scene 不能为空'))
+        process.exit(1)
+      }
       if (opts.json && !opts.yes) {
         console.log(JSON.stringify({ success: false, code: 'CONFIRMATION_REQUIRED', error: '这会真的问助手（可能调用 AI 并占用配额），用 --yes 确认' }))
         process.exit(1)
@@ -8085,7 +8354,7 @@ program
         else console.log(chalk.yellow('本机入口没在运行（先 weflow-cli assistant start）'))
         process.exit(1)
       }
-      const r = await panelAsk(endpoint, text)
+      const r = await panelAsk(endpoint, text, sceneId || undefined)
       if (opts.json) {
         console.log(JSON.stringify(r.ok
           ? { success: true, status: r.data.status, reply: r.data.reply }

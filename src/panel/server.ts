@@ -37,6 +37,7 @@ import type { AssistantService, TurnOutcome } from '../services/assistantService
 import { describeForPanel } from '../services/assistantTrace.js'
 import { privacyGate } from '../services/assistantPrivacy.js'
 import { configService } from '../services/configService.js'
+import { assistantScenes } from '../services/assistantScenes.js'
 import { resolvePackageRoot } from '../utils/packageRoot.js'
 
 /** 8KB 够一句问题用；超了就是有人在灌东西 */
@@ -337,6 +338,7 @@ export async function startPanelServer(options: PanelServerOptions): Promise<Pan
         // 重名会得到"匹配多个会话"这种可读的失败，不猜）。
         quickReplies: String(configService.get('quickReplyContacts') || '')
           .split(',').map(item => item.trim()).filter(Boolean).slice(0, 20),
+
       })
       return
     }
@@ -366,16 +368,33 @@ export async function startPanelServer(options: PanelServerOptions): Promise<Pan
       const body = await readBody(req)
       if (!body.ok) { json(res, body.code === 'PAYLOAD_TOO_LARGE' ? 413 : 400, { ok: false, code: body.code }); return }
       let text = ''
-      try { text = String((JSON.parse(body.text) as any)?.text ?? '') } catch {
+      let sceneId = ''
+      let hasSceneId = false
+      try {
+        const parsed = JSON.parse(body.text) as any
+        text = String(parsed?.text ?? '')
+        hasSceneId = parsed?.sceneId !== undefined
+        if (hasSceneId && (typeof parsed.sceneId !== 'string' || !parsed.sceneId.trim())) {
+          json(res, 400, { ok: false, code: 'INVALID_SCENE' }); return
+        }
+        sceneId = hasSceneId ? parsed.sceneId.trim() : ''
+      } catch {
         json(res, 400, { ok: false, code: 'BAD_JSON' }); return
       }
       text = text.trim()
       if (!text) { json(res, 400, { ok: false, code: 'EMPTY_TEXT' }); return }
       if (text.length > 4000) { json(res, 413, { ok: false, code: 'TEXT_TOO_LONG' }); return }
+      if (hasSceneId) {
+        const selected = assistantScenes.resolveExplicit(sceneId)
+        if (!selected.match) {
+          json(res, 400, { ok: false, code: 'INVALID_SCENE', error: selected.why })
+          return
+        }
+      }
 
       inFlight = true
       try {
-        const raced = await withTimeout(service.ask(memoryBucket, text, onLog), TURN_TIMEOUT_MS)
+        const raced = await withTimeout(service.ask(memoryBucket, text, onLog, sceneId || undefined), TURN_TIMEOUT_MS)
         if (raced.kind === 'timeout') {
           // 超时**不等于**这一轮没跑完：它可能还在队列里跑着。所以这里只是不再等它，
           // 那一轮之后仍会落记忆、仍会占配额。日志里说清，别让人以为它被取消了。

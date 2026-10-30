@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import html
 import json
 import os
@@ -21,6 +22,8 @@ import pathlib
 import re
 import smtplib
 import sys
+import tempfile
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from email.header import Header
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -65,6 +68,98 @@ def group_by_topic(articles, topics):
     for t in groups:
         groups[t].sort(key=lambda a: (a.get('time') or '', a.get('relevanceScore') or 0), reverse=True)
     return groups
+
+
+def _canonical_article_url(url: str) -> str:
+    """Remove tracking query values so URL changes do not resend the same article."""
+    try:
+        parts = urlsplit(url or '')
+    except ValueError:
+        return (url or '').strip()
+    if not parts.scheme or not parts.netloc:
+        return (url or '').strip()
+    tracking_keys = {'ascene', 'chksm', 'clicktime', 'enterid', 'from', 'isappinstalled',
+                     'scene', 'sessionid', 'subscene'}
+    query = sorted((key, value) for key, value in parse_qsl(parts.query, keep_blank_values=True)
+                   if not key.lower().startswith('utm_') and key.lower() not in tracking_keys)
+    path = parts.path.rstrip('/')
+    normalized_query = urlencode(query)
+    if not path and not normalized_query:
+        return f'{parts.scheme.lower()}://{parts.netloc.lower()}'
+    return urlunsplit((parts.scheme.lower(), parts.netloc.lower(), path,
+                       normalized_query, ''))
+
+
+def article_fingerprint(article: dict) -> str:
+    """Stable, content-free key for one official-account article."""
+    url = _canonical_article_url(article.get('url', ''))
+    identity = url or '\0'.join((article.get('source') or '', article.get('title') or '',
+                                  article.get('time') or ''))
+    return hashlib.sha256(identity.encode('utf-8')).hexdigest()
+
+
+def mail_state_path(date: str) -> pathlib.Path:
+    return articles_path(date).with_name('.mail-sent.json')
+
+
+def load_sent_fingerprints(path: pathlib.Path) -> set[str]:
+    if not path.is_file():
+        return set()
+    try:
+        if path.stat().st_size > 10 * 1024 * 1024:
+            raise ValueError('mail state too large')
+        state = json.loads(path.read_text(encoding='utf-8'))
+        if state.get('version') != 1:
+            raise ValueError('unsupported mail state version')
+        fingerprints = state.get('fingerprints')
+        if isinstance(fingerprints, list) and all(
+                isinstance(value, str) and re.fullmatch(r'[0-9a-f]{64}', value)
+                for value in fingerprints):
+            return set(fingerprints)
+    except (OSError, ValueError, json.JSONDecodeError, AttributeError):
+        pass
+    print('[WARN] 已发送邮件状态无效，按完整日报发送以避免漏报', file=sys.stderr)
+    return set()
+
+
+def save_sent_fingerprints(path: pathlib.Path, fingerprints: set[str]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = json.dumps({'version': 1, 'fingerprints': sorted(fingerprints)}, indent=2)
+    fd, temp_name = tempfile.mkstemp(prefix='.mail-sent-', suffix='.tmp', dir=path.parent)
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8') as stream:
+            stream.write(payload)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temp_name, path)
+    finally:
+        if os.path.exists(temp_name):
+            os.unlink(temp_name)
+
+
+def deliver_mail(user, auth, to, subject, text_body, html_body, *,
+                 incremental=False, state_path=None, sent=None, articles=()):
+    send(user, auth, to, subject, text_body, html_body)
+    if incremental:
+        sent = set(sent or ())
+        sent.update(article_fingerprint(article) for article in articles)
+        save_sent_fingerprints(state_path, sent)
+
+
+def only_unsent_articles(articles: list[dict], sent: set[str]) -> list[dict]:
+    return [article for article in articles if article_fingerprint(article) not in sent]
+
+
+def articles_in_email(groups: dict, clusters: dict | None = None) -> list[dict]:
+    """Return only articles actually rendered, including compact-topic limits."""
+    clusters = clusters or {}
+    shown = []
+    for topic, items in groups.items():
+        section_clusters = clusters.get(topic) or [(topic, list(items))]
+        for _name, cluster_items in section_clusters:
+            shown.extend(cluster_items if topic in DIGEST_TOPICS
+                         else cluster_items[:OTHER_TOPIC_LIMIT])
+    return shown
 
 
 GITHUB_RE = re.compile(r'https?://github\.com/[\w\-./]+', re.I)
@@ -459,16 +554,24 @@ def main():
     ap.add_argument('--to', default='', help='收件人；缺省用配置 dailyMailTo，再缺省发给自己')
     ap.add_argument('--topics', default=','.join(DEFAULT_TOPICS), help='逗号分隔的主题')
     ap.add_argument('--label', default='', help='标题后缀，如「截至中午」——区分半日速览与次日完整版')
+    ap.add_argument('--incremental', action='store_true',
+                    help='只发送该日期尚未成功发送的文章；发送成功后记录内容指纹')
     ap.add_argument('--no-digest', action='store_true', help='不生成每主题的 AI 综述（省钱、更快）')
-    ap.add_argument('--dry-run', action='store_true', help='只渲染，不发送')
+    ap.add_argument('--dry-run', action='store_true', help='只渲染，不发送或更新已发送状态；配合 --incremental 时预览真实增量')
     args = ap.parse_args()
 
     topics = [t.strip() for t in args.topics.split(',') if t.strip()]
-    data, articles = load_articles(args.date, set(topics))
+    data, all_articles = load_articles(args.date, set(topics))
+    state_path = mail_state_path(args.date)
+    sent = load_sent_fingerprints(state_path) if args.incremental else set()
+    articles = only_unsent_articles(all_articles, sent)
     groups = group_by_topic(articles, topics)
     total = sum(len(v) for v in groups.values())
     print(f'{args.date}: 命中 {total} 篇（{", ".join(f"{t}={len(v)}" for t, v in groups.items())}）')
     if not total:
+        if args.incremental:
+            print('没有新文章需要发送')
+            return
         raise SystemExit('没有可发送的文章')
 
     cfg = load_config()
@@ -490,6 +593,7 @@ def main():
     with_repo = sum(1 for a in articles if github_links(bodies.get(a.get('url'), '')))
     print(f'正文含 GitHub 链接: {with_repo} 篇')
 
+    mailed_articles = articles_in_email(groups, clusters)
     text_body, html_body, total = render(args.date, groups, digests, bodies, clusters)
     # **`--label` 支持 ASCII 代号**，中文在这里映射。原因：调用方 `daily_task.ps1` 是
     # 无 BOM 的 UTF-8，Windows PowerShell 5.1 会按 GBK 解码它，直接传中文会变成
@@ -500,8 +604,21 @@ def main():
     suffix = f'（{label}）' if label else ''
     subject = f'公众号日报 {args.date}{suffix}：{" / ".join(t for t in topics if groups.get(t))} {total} 篇'
     if label:
-        text_body = f'【{label}】以下是到此刻为止收到的 {total} 篇。完整版会在次日凌晨按整天重发。\n\n' + text_body
-
+        text_body = f'【{label}】以下是到此刻为止收到的 {total} 篇。\n\n' + text_body
+    if args.incremental:
+        text_body = f'本次仅包含此前未成功发送的 {total} 篇新文章。\n\n' + text_body
+    # **安静的一天和"客户端没开"必须能分辨**，见 biz_daily.detect_low_volume。
+    # 这一行比它下面所有内容都重要：它是这封邮件唯一能告诉你"今天可能是数据缺了"的地方。
+    low = data.get('lowVolume') if isinstance(data, dict) else None
+    if isinstance(low, dict) and low.get('median'):
+        note = (f'⚠ 本日只采到 {low.get("today")} 篇，最近 {low.get("sample")} 天的中位数是 '
+                f'{low.get("median")} 篇。公众号推送只在微信客户端运行时才写进本地库，'
+                f'客户端没开的时段补不回来——先确认它当时在运行。')
+        text_body = note + '\n\n' + text_body
+        html_body = (
+            '<p style="margin:0 0 14px;padding:10px 12px;background:#fff4e5;'
+            'border-left:3px solid #f59e0b;color:#7c4a03;font-size:14px">' + note + '</p>'
+        ) + html_body
     user, auth = smtp_settings()
     to = args.to or str(cfg.get('dailyMailTo') or '') or user
     print(f'收件人: {to}  主题: {subject}  正文字符: {len(text_body)}')
@@ -510,7 +627,9 @@ def main():
         out.write_text(html_body, encoding='utf-8')
         print(f'[dry-run] 已渲染到 {out}')
         return
-    send(user, auth, to, subject, text_body, html_body)
+    deliver_mail(user, auth, to, subject, text_body, html_body,
+                 incremental=args.incremental, state_path=state_path,
+                 sent=sent, articles=mailed_articles)
     print(f'已发送到 {to}')
 
 

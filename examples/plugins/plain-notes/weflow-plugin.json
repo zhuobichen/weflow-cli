@@ -1,0 +1,16 @@
+{
+  "schema": "weflow-plugin/1",
+  "id": "plain-notes",
+  "name": "示例：纯文本笔记",
+  "version": "0.1.0",
+  "kind": "knowledge-source",
+  "description": "把一目录纯文本笔记转成知识库卡片；不联网、不调模型，用来验证知识源插件链路，也是自己写采集器时可以直接拷的骨架。",
+  "entry": {
+    "command": "node",
+    "args": ["index.mjs"]
+  },
+  "permissions": {
+    "network": false,
+    "writes": ["output/plain-notes-notes"]
+  }
+}
