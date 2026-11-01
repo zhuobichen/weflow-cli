@@ -140,38 +140,43 @@ jobs:
           export PYTHONDONTWRITEBYTECODE=1
           mkdir -p "$HOME/.weflow-cli"
 
-          # 模拟全局安装：包目录属于 root，普通用户不可写。
-          # **必须连仓库根一起设只读**：只锁 dist/scripts/bin 的话，`<root>/output`
-          # 还能被创建（父目录可写），判据就形同虚设——第一次写这个 job 时正是这样，
-          # CI 上 resolveOutputRoot() 仍返回包目录（2026-11-01 失败日志）。
-          chmod -R a-w dist scripts bin
-          chmod a-w .
+          # 为什么复制一份包目录，而不是直接 chmod 仓库：
+          # checkout 里前面的步骤可能已经建过 `output/`，而 `chmod a-w .` 只锁父目录，
+          # 已存在的 `output/` 仍可写 —— 判据就形同虚设（第一次、第二次都在这里翻车）。
+          # 复制到临时目录后 `output/` 保证不存在，等价于全新全局安装，判据才是确定的。
+          pkg="$(mktemp -d)"
+          cp -r dist "$pkg/dist"
+          mkdir -p "$pkg/scripts"
+          cp scripts/_utils.py "$pkg/scripts/_utils.py"
+          printf '%s\n' '{"name":"weflow-cli","version":"0.0.0","type":"module"}' > "$pkg/package.json"
+          chmod -R a-w "$pkg"
 
           echo "--- TypeScript 侧 ---"
-          out=$(node -e "import('./dist/src/utils/outputRoot.js').then(m => process.stdout.write(m.resolveOutputRoot()))")
+          out=$(cd "$pkg" && node -e "import('./dist/src/utils/outputRoot.js').then(m => process.stdout.write(m.resolveOutputRoot()))")
           echo "resolveOutputRoot() = $out"
           case "$out" in
-            "$HOME"/*) echo "  ✓ 落在 HOME 之下" ;;
+            "$HOME"/*) echo "  OK 落在 HOME 之下" ;;
             *) echo "::error::输出根没有回退到 HOME：$out"; exit 1 ;;
           esac
 
           echo "--- Python 侧 ---"
-          py=$(python3 -c "import sys; sys.path.insert(0,'scripts'); import _utils; print(_utils.output_root())")
+          py=$(PYTHONPATH="$pkg/scripts" python3 -c "import _utils; print(_utils.output_root())")
           echo "_utils.output_root() = $py"
           case "$py" in
-            "$HOME"/*) echo "  ✓ 落在 HOME 之下" ;;
+            "$HOME"/*) echo "  OK 落在 HOME 之下" ;;
             *) echo "::error::Python 输出根没有回退到 HOME：$py"; exit 1 ;;
           esac
 
-          # 正对照：包目录可写时必须**保持原位置**（Windows 与源码检出的老用法不变）
-          chmod u+w .
-          chmod -R u+w dist scripts bin
-          out2=$(node -e "import('./dist/src/utils/outputRoot.js').then(m => process.stdout.write(m.resolveOutputRoot()))")
+          # 正对照：包目录可写时必须**保持原位置**（Windows 与源码检出的老用法不变）。
+          # 没有这一条，一个"永远回退到 HOME"的实现也能让上面的断言全绿。
+          chmod -R u+w "$pkg"
+          out2=$(cd "$pkg" && node -e "import('./dist/src/utils/outputRoot.js').then(m => process.stdout.write(m.resolveOutputRoot()))")
           echo "包目录可写时 resolveOutputRoot() = $out2"
           case "$out2" in
-            "$HOME"/*) echo "::error::包目录可写时不应再回退到 HOME"; exit 1 ;;
-            *) echo "  ✓ 仍在包目录（老路径不变）" ;;
+            "$pkg"/*) echo "  OK 仍在包目录（老路径不变）" ;;
+            *) echo "::error::包目录可写时应留在包目录，实际：$out2"; exit 1 ;;
           esac
+
       - name: 合成加密库 + CLI 端到端（Linux）
         run: |
           set -euo pipefail
