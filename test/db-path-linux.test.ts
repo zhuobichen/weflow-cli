@@ -9,7 +9,7 @@
  * `✓ 检测到数据目录: /tmp/fakehome/.var/app/com.tencent.wechat/data/xwechat_files`。
  */
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
@@ -84,6 +84,63 @@ test('Snap 布局（~/snap/<pkg>/common/xwechat_files）能被发现', async (t)
     assert.equal(found, root, 'Snap 的数据目录必须被认出来')
   } finally {
     cleanup()
+  }
+})
+
+test('数据目录是符号链接时也能发现（Linux 常见：软链到另一块盘）', async (t) => {
+  if (process.platform !== 'linux') {
+    t.skip('只在 Linux 上验证')
+    return
+  }
+  const home = mkdtempSync(join(tmpdir(), 'wf-link-'))
+  try {
+    const real = join(home, 'real', 'xwechat_files')
+    mkdirSync(join(real, 'wxid_demo', 'db_storage', 'message'), { recursive: true })
+    writeFileSync(join(real, 'wxid_demo', 'db_storage', 'message', 'message_0.db'), '')
+    symlinkSync(real, join(home, 'xwechat_files'))
+
+    const found = await detectUnder(home)
+    assert.ok(found, '符号链接的数据目录必须能被发现')
+    // 报软链路径或真实路径都算对——判据是"能落到同一个目录"
+    assert.equal(realpathSync(found), realpathSync(real))
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test('同机多账号：两个 wxid 目录都要列出来', async (t) => {
+  if (process.platform !== 'linux') {
+    t.skip('只在 Linux 上验证')
+    return
+  }
+  const { home, root, cleanup } = fakeHome('xwechat_files')
+  try {
+    mkdirSync(join(root, 'wxid_second', 'db_storage', 'message'), { recursive: true })
+    writeFileSync(join(root, 'wxid_second', 'db_storage', 'message', 'message_0.db'), '')
+    const found = await detectUnder(home)
+    assert.ok(found)
+    const accounts = new DbPathService().findAccountDirs(found)
+    assert.deepEqual(accounts.sort(), ['wxid_demo', 'wxid_second'])
+  } finally {
+    cleanup()
+  }
+})
+
+test('家目录含中文与空格时也能发现（Linux 用户名常见）', async (t) => {
+  if (process.platform !== 'linux') {
+    t.skip('只在 Linux 上验证')
+    return
+  }
+  const base = mkdtempSync(join(tmpdir(), 'wf-cn-'))
+  const home = join(base, '测试 用户')
+  try {
+    const root = join(home, 'xwechat_files')
+    mkdirSync(join(root, 'wxid_demo', 'db_storage', 'message'), { recursive: true })
+    writeFileSync(join(root, 'wxid_demo', 'db_storage', 'message', 'message_0.db'), '')
+    const found = await detectUnder(home)
+    assert.equal(found, root, '中文+空格路径不能被截断或转义坏')
+  } finally {
+    rmSync(base, { recursive: true, force: true })
   }
 })
 
