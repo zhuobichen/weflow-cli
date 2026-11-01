@@ -1,0 +1,19 @@
+[Unit]
+Description=WeFlow 公众号日报（%i）
+Documentation=https://github.com/zhuobichen/weflow-cli
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# 仓库位置由 deploy/systemd/install.sh 在安装时替换成绝对路径——
+# systemd 的 WorkingDirectory/ExecStart 都**不支持**环境变量展开，
+# 所以不能靠 EnvironmentFile 传路径（试过：verify 直接判 fatal error）。
+WorkingDirectory=__WEFLOW_REPO__
+# `%i` 就是实例名：weflow-daily@noon.timer → noon，@night.timer → night。
+# 与 crontab 用同一个入口脚本，模式语义都在脚本里。
+ExecStart=__WEFLOW_REPO__/scripts/daily_task.sh %i
+KillSignal=SIGTERM
+TimeoutStartSec=1800
+StandardOutput=journal
+StandardError=journal

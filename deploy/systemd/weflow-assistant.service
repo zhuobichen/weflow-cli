@@ -1,0 +1,27 @@
+[Unit]
+Description=WeFlow 第二大脑助手（常驻）
+Documentation=https://github.com/zhuobichen/weflow-cli
+# 依赖网络但不强求在线：离线时守护进程也能起，只是消息通道不可用
+After=network-online.target
+Wants=network-online.target
+# 不再需要就删掉下面这行；它的作用是"被写进 cgroup 后不会因为一次 OOM 把机器拖垮"
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+# 关键：前台运行（`assistant run`），由 systemd 负责常驻。
+# 不要用 `assistant start`——那是自己 fork 的托管方式，会和 systemd 抢进程管理。
+ExecStart=__WEFLOW_CLI__ assistant run --yes
+# SIGTERM 是 systemd 默认的停止信号；程序收到后会打印"收到 SIGTERM"并清理 pid/端点文件
+KillSignal=SIGTERM
+TimeoutStopSec=30
+# 崩溃后 5 秒重启；正常退出（exit 0）不重启——那是用户主动停的
+Restart=on-failure
+RestartSec=5
+# 日志直接进 journal：`journalctl --user -u weflow-assistant -f`
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

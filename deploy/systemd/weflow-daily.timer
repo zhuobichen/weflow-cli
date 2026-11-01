@@ -1,0 +1,19 @@
+[Unit]
+Description=WeFlow 公众号日报定时器（%i）
+Documentation=https://github.com/zhuobichen/weflow-cli
+
+[Timer]
+# 一个模板文件服务两种模式：实例名就是 daily_task.sh 的模式参数。
+#   systemctl --user enable --now weflow-daily@noon.timer
+#   systemctl --user enable --now weflow-daily@night.timer
+# 时间按**本机时区**解释；两段与 crontab 的 13:00 / 23:30 一致。
+# 若你的 noon/night 想用不同时刻，就复制两份 timer 并改这里。
+OnCalendar=*-*-* 13:00:00
+OnCalendar=*-*-* 23:30:00
+# 关机错过的那次，开机后补跑（日报本来就是"补上缺口"更有用）
+Persistent=true
+# 抖一下再跑，避免开机瞬间和别的启动任务抢资源
+RandomizedDelaySec=60
+
+[Install]
+WantedBy=timers.target

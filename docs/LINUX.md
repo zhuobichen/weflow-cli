@@ -92,6 +92,31 @@ pip install -r requirements.txt        # 或 python -m pip install --user -r req
   fitz                 ○ (pip install pymupdf)
 ```
 
+## 开机自启（systemd，可选）
+
+仓库带了用户级 systemd 单元（`deploy/systemd/`）：助手常驻 + 日报定时器。
+
+```bash
+./deploy/systemd/install.sh            # 只装
+./deploy/systemd/install.sh --enable   # 装好并启用
+```
+
+它会把你**仓库的实际路径**替换进单元文件再写到 `~/.config/systemd/user/`——
+systemd 的 `ExecStart=` / `WorkingDirectory=` 不支持环境变量展开，路径必须写死。
+
+两个单元的关键设计：
+
+| 单元 | 要点 |
+| --- | --- |
+| `weflow-assistant.service` | 前台跑 `assistant run`（**不是** `assistant start`：那是自己 fork 的托管方式，会和 systemd 抢进程管理）；`KillSignal=SIGTERM` 触发程序里的有序关闭 |
+| `weflow-daily@.service` | 模板单元，`%i` 就是 `daily_task.sh` 的模式（`noon` / `night`），一个文件覆盖两种 |
+
+`weflow-daily.timer` 的 `OnCalendar` 与 crontab 一致（13:00 / 23:30），
+`Persistent=true` 让关机错过的那次在开机后补跑。
+
+在 Ubuntu 24.04 上用 `systemd-analyze verify` 校验过三个单元（OK）；
+`daily_task.sh` 需存在且可执行（npm 包里已包含 `scripts/**/*.sh`）。
+
 ## 定时任务
 
 ```bash
