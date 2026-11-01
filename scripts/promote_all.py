@@ -13,7 +13,11 @@ from datetime import datetime
 
 SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(SCRIPTS_DIR)
-DEFAULT_VAULT = os.path.join(PROJECT_ROOT, 'output', 'wechat-vault')
+try:
+    from _utils import output_root as _output_root
+    DEFAULT_VAULT = os.path.join(_output_root(), 'wechat-vault')
+except Exception:
+    DEFAULT_VAULT = os.path.join(PROJECT_ROOT, 'output', 'wechat-vault')
 
 sys.path.insert(0, SCRIPTS_DIR)
 from _utils import call_deepseek

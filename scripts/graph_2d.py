@@ -29,7 +29,11 @@ import graph_3d as g  # noqa: E402
 
 VIEWER2D = g.LIB_DIR / 'viewer2d.js'
 LAYOUT = g.LIB_DIR / 'layout.mjs'
-DEFAULT_OUT = REPO / 'output' / 'knowledge-graph-2d.html'
+try:
+    from _utils import output_root as _output_root
+    DEFAULT_OUT = os.path.join(_output_root(), 'knowledge-graph-2d.html')
+except Exception:
+    DEFAULT_OUT = REPO / 'output' / 'knowledge-graph-2d.html'
 
 
 def _parse_args(argv):

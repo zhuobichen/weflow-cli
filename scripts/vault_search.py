@@ -15,8 +15,16 @@ SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SCRIPTS_DIR)
 from _utils import (CONCEPT_DIRS, LINE_LABELS, line_for_relative_concepts)  # noqa: E402
 PROJECT_ROOT = os.path.dirname(SCRIPTS_DIR)
-DEFAULT_VAULT = os.path.join(PROJECT_ROOT, 'output', 'wechat-vault')
-DEFAULT_BIZ = os.path.join(PROJECT_ROOT, 'output', 'biz-daily')
+try:
+    from _utils import output_root as _output_root
+    DEFAULT_VAULT = os.path.join(_output_root(), 'wechat-vault')
+except Exception:
+    DEFAULT_VAULT = os.path.join(PROJECT_ROOT, 'output', 'wechat-vault')
+try:
+    from _utils import output_root as _output_root
+    DEFAULT_BIZ = os.path.join(_output_root(), 'biz-daily')
+except Exception:
+    DEFAULT_BIZ = os.path.join(PROJECT_ROOT, 'output', 'biz-daily')
 
 LINE_CHOICES = ('all', 'wiki', 'chat')
 

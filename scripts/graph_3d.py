@@ -39,9 +39,21 @@ import _utils
 # 它 `new Function` 跑的就是这几个 UMD，放一起就不会一个在包外、一个在包内。
 LIB_DIR = REPO / 'resources' / 'js' / 'graph3d'
 # 布局缓存是**派生数据**（几千个坐标），跟 graph.json 一起放 output/ 下，不进仓库。
-CACHE_DIR = REPO / 'output' / '.graph3d-cache'
-DEFAULT_VAULT = REPO / 'output' / 'wechat-vault'
-DEFAULT_OUT = REPO / 'output' / 'knowledge-graph-3d.html'
+try:
+    from _utils import output_root as _output_root
+    CACHE_DIR = os.path.join(_output_root(), '.graph3d-cache')
+except Exception:
+    CACHE_DIR = REPO / 'output' / '.graph3d-cache'
+try:
+    from _utils import output_root as _output_root
+    DEFAULT_VAULT = Path(_output_root()) / 'wechat-vault'
+except Exception:
+    DEFAULT_VAULT = REPO / 'output' / 'wechat-vault'
+try:
+    from _utils import output_root as _output_root
+    DEFAULT_OUT = os.path.join(_output_root(), 'knowledge-graph-3d.html')
+except Exception:
+    DEFAULT_OUT = REPO / 'output' / 'knowledge-graph-3d.html'
 LIB_THREE = LIB_DIR / 'three.min.js'
 # d3-force-3d 的 UMD 包**不带依赖**：它从全局 `d3` 命名空间里取 dispatch/timer/quadtree/
 # octree/binarytree，所以这五个必须按顺序先引。少一个的报错是 "u.timer is not a function"，

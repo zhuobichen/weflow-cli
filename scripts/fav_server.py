@@ -18,7 +18,11 @@ import urllib.request
 
 SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(SCRIPTS_DIR)
-SOURCE_ROOT = os.path.join(PROJECT_ROOT, 'output', 'biz-daily')
+try:
+    from _utils import output_root as _output_root
+    SOURCE_ROOT = os.path.join(_output_root(), 'biz-daily')
+except Exception:
+    SOURCE_ROOT = os.path.join(PROJECT_ROOT, 'output', 'biz-daily')
 MAX_BODY_BYTES = 1 * 1024 * 1024
 
 

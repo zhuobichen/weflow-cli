@@ -4565,7 +4565,7 @@ program
     .addCommand(
       new Command('init')
         .description('初始化 Obsidian Vault 目录结构')
-        .option('-p, --path <dir>', 'Vault 路径', './output/wechat-vault')
+        .option('-p, --path <dir>', 'Vault 路径', join(resolveOutputRoot(), 'wechat-vault'))
         .option('--dry-run', '仅预览将创建或覆盖的项目，不修改文件')
         .option('--yes', '确认创建目录并写入模板文件')
         .option('--json', '输出 JSON 格式，不返回本地路径或文件名')
@@ -4787,7 +4787,7 @@ program
         .option('-l, --limit <n>', '最多生成概念数', '20')
         .option('--min-refs <n>', '至少被几篇材料提到才建页（2 能滤掉新闻里的一次性实体）', '1')
         .option('--source <dir>', '材料目录（**必须含 [[概念]] — 说明 形状的链接**，否则聚合不出任何概念）', './output/biz-daily')
-        .option('-o, --output <dir>', '概念页输出目录', './output/wechat-vault/Wiki/Concepts')
+        .option('-o, --output <dir>', '概念页输出目录', join(resolveOutputRoot(), 'wechat-vault', 'Wiki', 'Concepts'))
         .option('--api-key <key>', 'DeepSeek API key')
         .option('--refresh-sources',
                 '只把已有概念页的"来源"段补齐成当前全部来源（本地重写，**不调用模型**）')
@@ -4987,7 +4987,7 @@ program
           const { execFile } = await import('child_process')
           const { promisify } = await import('util')
           const execFileAsync = promisify(execFile)
-          const vaultPath = join(process.cwd(), 'output', 'wechat-vault')
+          const vaultPath = join(resolveOutputRoot(), 'wechat-vault')
 
           const repo = opts.repo || configService.get('vaultRepo')
           if (!repo) {
@@ -5124,7 +5124,7 @@ program
         .description('创建阅读笔记 — 为文章生成 Vault 笔记页')
         .option('--date <YYYY-MM-DD>', '日期（默认今天）')
         .option('--source <dir>', '文章目录', './output/biz-daily')
-        .option('--vault <path>', 'Vault 路径', './output/wechat-vault')
+        .option('--vault <path>', 'Vault 路径', join(resolveOutputRoot(), 'wechat-vault'))
         .option('--dry-run', '仅预览，不读取文章或写入笔记')
         .option('--yes', '确认生成阅读笔记')
         .option('--json', '输出机器可读结果，不返回本地路径')
@@ -5290,7 +5290,7 @@ program
       new Command('sync-weread')
         .description('微信读书同步到 Vault')
         .option('--type <type>', 'all / shelf / notes', 'all')
-        .option('--vault <path>', 'Vault 路径', './output/wechat-vault')
+        .option('--vault <path>', 'Vault 路径', join(resolveOutputRoot(), 'wechat-vault'))
         .option('--dry-run', '仅预览，不请求微信读书或写入 Vault')
         .option('--yes', '确认同步微信读书数据')
         .option('--json', '输出机器可读结果，不返回书籍或本地路径')
@@ -5348,7 +5348,7 @@ program
   vaultPromoteCmd
     .command('ideas')
     .description('生成主题导航和可选的研究想法')
-    .option('--vault <path>', 'Vault 路径', './output/wechat-vault')
+    .option('--vault <path>', 'Vault 路径', join(resolveOutputRoot(), 'wechat-vault'))
     .option('--with-ai', '允许 AI 生成研究想法')
     .option('--api-key <key>', 'AI API key，仅与 --with-ai 一起使用')
     .option('--dry-run', '仅预览，不读取笔记、调用 AI 或写入 Vault')
@@ -5361,7 +5361,7 @@ program
   vaultPromoteCmd
     .command('all')
     .description('生成参考索引和可选的永久笔记、项目提案')
-    .option('--vault <path>', 'Vault 路径', './output/wechat-vault')
+    .option('--vault <path>', 'Vault 路径', join(resolveOutputRoot(), 'wechat-vault'))
     .option('--with-ai', '允许 AI 生成永久笔记和项目提案')
     .option('--api-key <key>', 'AI API key，仅与 --with-ai 一起使用')
     .option('--dry-run', '仅预览，不读取笔记、调用 AI 或写入 Vault')
@@ -6817,7 +6817,7 @@ program
     .command('user-notes')
     .description('读你自己写的笔记，长成知识卡（之后用 wiki compile 聚成概念页）—— **你的笔记只读，绝不修改**')
     .option('--limit <n>', '最多处理几篇笔记', '20')
-    .option('--vault <dir>', '库目录', './output/wechat-vault')
+    .option('--vault <dir>', '库目录', join(resolveOutputRoot(), 'wechat-vault'))
     .option('--refresh', '已有卡的也重做')
     .option('--dry-run', '仅预览：几篇笔记会发给模型（只读本地，零出境）')
     .option('--yes', '确认把笔记发给生成模型')

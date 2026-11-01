@@ -55,7 +55,10 @@ export function safeSubprocessError(error: unknown, label = '子进程执行失�
   if (value?.code === 'ENOENT') return `${label}: 运行时或命令不可用`
   if (value?.code === 'ETIMEDOUT' || value?.killed || value?.signal) return `${label}: 执行超时或被终止`
   if (typeof value?.code === 'number' || /^\d+$/.test(String(value?.code || ''))) {
-    const detail = stderrTail(value?.stderr)
+  // **stderr 空的时候要看 stdout**：我们自己有一半脚本把 `[ERROR] ...` 打到 stdout
+  // （例如 compile_wiki.py 缺 API key 时），只读 stderr 会把它压成一句
+  // "子进程执行失败 (exit 1)"，用户根本不知道是缺 key。2026-11-01 在 Linux 实测踩到。
+  const detail = stderrTail(value?.stderr) || stderrTail((value as { stdout?: unknown })?.stdout)
     return `${label} (exit ${String(value.code)})${detail ? `: ${detail}` : ''}`
   }
   return label

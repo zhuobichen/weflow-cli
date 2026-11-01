@@ -20,6 +20,23 @@
 | 公众号日报（外部源） | ✅ | `--articles-json` / `--rss-feed` / `--rss-opml`，端到端跑通 |
 | 定时任务 | ✅ | `scripts/daily_task.sh`（cron / systemd timer 都能调） |
 | 知识库 / MCP / 导出 | ✅ | 不依赖 Windows |
+| 日报 HTML（index/article） | ✅ | 2026-11-01 实测产出 30KB + 65KB |
+| 双向链接 / 阅读笔记 | ✅ | `enrich_backlinks`、`create_reading_notes` 实跑通过 |
+| 概念图谱 `wiki graph` | ✅ | 3D 与 `--flat` 2D 都实跑通过 |
+
+## 产物在哪里
+
+输出根**必须可写**，按优先级：`WEFLOW_OUTPUT_DIR` → 包目录下的 `output/`（可写时）
+→ `~/.weflow-cli/output`。全局安装时包目录属于 root，所以实际落在后者：
+
+```
+~/.weflow-cli/output/biz-daily/<日期>/    日报（index.html / article.html / 分类目录）
+~/.weflow-cli/output/wechat-vault/        Vault（002_Literature/WeChat/<日期>/）
+~/.weflow-cli/output/knowledge-graph-3d.html
+~/.weflow-cli/output/.cache/              抓取缓存
+```
+
+用 `python3 scripts/nt_decrypt.py key-status` 或 `weflow-cli check` 都能看到当前配置能否读库。
 
 ## 拿不到密钥时的两条正路
 
