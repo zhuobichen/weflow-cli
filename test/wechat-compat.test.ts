@@ -64,8 +64,8 @@ test('Linux 上版本未知不能说成"微信没在运行"（平台不支持探
   // check 却报"未知（微信没在运行）"。版本探测只实现了 Windows，
   // 于是"探测不了"被写成了"客户端没开"——这正是 D-145 要避免的假错误。
   const linux = describeUnknownVersionReason({ platform: 'linux' })
-  assert.match(linux.reason, /版本探测仅支持 Windows/)
-  assert.match(linux.reason, /linux/)
+  assert.match(linux.reason, /没找到客户端版本记录/)
+  assert.match(linux.reason, /uh\.dat/)
   assert.doesNotMatch(linux.reason, /微信没在运行/, 'Linux 上不能把原因说成没在运行')
   assert.match(linux.compatReason, /不代表客户端没运行/)
 

@@ -98,8 +98,8 @@ export function describeUnknownVersionReason(options: {
   }
   if (platform !== 'win32') {
     return {
-      reason: `未知（版本探测仅支持 Windows，当前平台 ${platform}）`,
-      compatReason: '版本探测仅支持 Windows，本平台无法判定，不代表客户端没运行',
+      reason: `未知（没找到客户端版本记录；Windows 读进程，Linux 读 ~/.xwechat/uh/uh.dat）`,
+      compatReason: '没找到客户端版本记录，无法判定；这不代表客户端没运行',
     }
   }
   return { reason: '未知（微信没在运行）', compatReason: '' }

@@ -1002,26 +1002,26 @@ program
     }
 
     // Step 0: 检测微信版本
-    console.log(chalk.yellow('步骤 0/3: 检测微信版本...'))
-    const version = await keyService.detectWeChatVersion()
+      console.log(chalk.yellow('步骤 0/3: 检测微信版本...'))
+      const version = await keyService.detectWeChatVersion()
+      // detectWeChatVersion() 只回答“3.x / 4.x / null”，拿不到具体版本号；
+      // 具体版本要走 detectWechatClient()（Windows 读进程，Linux 读 uh.dat）。
+      const clientFacts = await detectWechatClient()
+      const shownVersion = clientFacts.version
 
-    if (version) {
-      console.log(chalk.green(`✓ 检测到微信 ${version} 版本`))
-    } else {
-      // 注意：null 不等于“微信没在运行”。版本探测只实现了 Windows
-      // （见 docs/VERSION_METHODS.md 里“方法只在单一平台可用”的记录），
-      // Linux 上客户端明明在跑也拿不到版本——直接写“未检测到运行中的微信进程”
-      // 会把“探测不支持”讲成“客户端没开”（D-145 要避免的假错误）。
-      // 2026-11-01 在 Ubuntu + 微信 4.1.13.26 上实测踩到。
-      console.log(chalk.gray(process.platform === 'win32'
-        ? '  未检测到运行中的微信进程'
-        : `  ${describeUnknownVersionReason({ platform: process.platform }).reason}`))
-      // 检查已有配置或数据目录
-      const existingPath = configService.get('dbPath')
-      if (existingPath && existsSync(existingPath)) {
-        console.log(chalk.green(`  使用已配置的数据目录: ${existingPath}`))
+      if (shownVersion) {
+        console.log(chalk.green(`✓ 检测到微信 ${shownVersion} 版本`))
+      } else if (version) {
+        console.log(chalk.green(`✓ 检测到微信 ${version} 版本`))
+      } else {
+        // 注意：null 不等于“微信没在运行”。把“探测不到”讲成“客户端没开”
+        // 是 D-145 记的假错误（2026-11-01 在 Linux 上实测踩到）。
+        console.log(chalk.gray(`  ${describeUnknownVersionReason({ platform: process.platform }).reason}`))
+        const existingPath = configService.get('dbPath')
+        if (existingPath && existsSync(existingPath)) {
+          console.log(chalk.green(`  使用已配置的数据目录: ${existingPath}`))
+        }
       }
-    }
 
     if (version === '3.x') {
       // ====== 3.x 初始化 ======

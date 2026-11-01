@@ -24,7 +24,8 @@
  * 分成"能用/不能用"（判据是**有没有 `Weixin.dll`** —— 启动器加载的就是它）。
  * 两种观测都取不到就是 `null` + 一句 `note`，不拿"磁盘上只有一个版本目录"这种推断顶替。
  */
-import { existsSync, readdirSync, realpathSync, statSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { join, win32 } from 'node:path'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
@@ -426,6 +427,65 @@ const defaultRunner: PowershellRunner = async (command) => {
  *
  * 非 Windows 直接返回"平台不支持"（`Get-CimInstance` 是 Windows 的），**不是**返回"没问题"。
  */
+/**
+ * Linux 上判断"微信在不在跑、版本是多少"。
+ *
+ * 与 Windows 不同，这里没有 WMI/命令行里的 `--user-lib-dir`，所以走两条确定的观测：
+ *   1. **运行状态**：扫 `/proc/<pid>/comm`，只认 `wechat`/`weixin`（主程序）；
+ *      `wechatappex` 是小程序容器，存在不等于主程序在跑。
+ *   2. **版本**：读客户端自己的记录 `~/.xwechat/uh/uh.dat`（protobuf 里带 `x.y.z.w`）。
+ *      这不是猜——文件里就有版本字面量，2026-11-01 在 4.1.13.26 上核对过。
+ *
+ * 为什么不复用 Windows 那条：那边依赖 PowerShell 的 `Win32_Process` 与
+ * `Weixin.dll` 映射信息，Linux 上都没有。
+ */
+export function detectLinuxClient(homeDir: string = homedir()): WechatClientFacts {
+  const root = join(homeDir, '.xwechat')
+  const facts: WechatClientFacts = {
+    running: false, viewFiltered: false,
+    loadedDirs: [], version: null, note: '', unusableVersionDirs: [],
+    versionTokens: [],
+    dataDirs: [],
+    updateData: { path: join(root, 'update', 'update.data'), present: false },
+    crashRecords: { dir: join(root, 'crashinfo'), reports: 0, records: 0, newest: null },
+    caveats: [],
+  }
+
+  // 1) 运行状态
+  try {
+    for (const entry of readdirSync('/proc')) {
+      if (!/^\d+$/.test(entry)) continue
+      let comm = ''
+      try {
+        comm = readFileSync(`/proc/${entry}/comm`, 'utf8').trim().toLowerCase()
+      } catch { continue }
+      if (comm !== 'wechat' && comm !== 'weixin') continue
+      facts.running = true
+      // 数据目录：客户端命令行里自带（`--wechat-files-path=`）
+      try {
+        const cmdline = readFileSync(`/proc/${entry}/cmdline`, 'utf8')
+        const m = cmdline.match(/--wechat-files-path=([^\0\s]+)/)
+        if (m) facts.dataDirs.push(m[1])
+      } catch { /* 读不到不影响结论 */ }
+      break
+    }
+  } catch { /* /proc 不可读 */ }
+
+  // 2) 版本：客户端自己的记录
+  try {
+    const raw = readFileSync(join(root, 'uh', 'uh.dat')).toString('latin1')
+    const m = raw.match(/(\d+\.\d+\.\d+\.\d+)/)
+    if (m) facts.version = m[1]
+  } catch { /* 文件不存在就留空 */ }
+
+  facts.note = facts.version
+    ? `版本取自客户端自身记录 ~/.xwechat/uh/uh.dat（Linux 无 WMI/模块表可查）`
+    : facts.running
+      ? `客户端在跑，但读不到 ~/.xwechat/uh/uh.dat 里的版本记录 ⇒ 版本未知`
+      : `客户端没在运行，也没有版本记录 ⇒ 版本未知`
+  return facts
+}
+
 export async function detectWechatClient(run: PowershellRunner = defaultRunner): Promise<WechatClientFacts> {
   const root = xwechatRoot()
   const nothing: WechatClientFacts = {
@@ -436,8 +496,13 @@ export async function detectWechatClient(run: PowershellRunner = defaultRunner):
     crashRecords: { dir: root ? join(root, 'crashinfo') : '', reports: 0, records: 0, newest: null },
     caveats: [],
   }
+  if (process.platform === 'linux') {
+    // Linux 有自己的两条观测（/proc + uh.dat），不再一律报“未知”。
+    // macOS 仍只有“未知”：那里连数据目录都要用户自己给，没有可复用的记录。
+    return detectLinuxClient()
+  }
   if (process.platform !== 'win32') {
-    return { ...nothing, note: `判版本只做了 Windows（当前平台 ${process.platform}）` }
+    return { ...nothing, note: `macOS 上不做版本探测（当前平台 ${process.platform}）` }
   }
   let raw = ''
   try {
