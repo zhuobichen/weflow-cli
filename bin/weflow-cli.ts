@@ -9280,11 +9280,24 @@ program
     console.log(chalk.white('\n配置状态:'))
     const configured = configService.isConfigured()
     const hasKey = !!configService.get('ntKey') || !!configService.get('decryptKey')
-    if (configured && hasKey) {
-      console.log(chalk.green('  ✓ 已初始化 — 可以运行 weflow-cli'))
-    } else {
-      console.log(chalk.yellow('  ○ 未初始化 — 运行 weflow-cli init'))
-    }
+      if (configured && hasKey) {
+        // "配置齐了"不等于"这台机器上能用"：从 Windows 拷过来的 config.json
+        // 路径全是 C:\…，在 Linux 上一个都不存在。只报"✓ 已初始化"会让人
+        // 以为一切正常（2026-11-01 实测：数据目录全不存在仍报已初始化）。
+        const configuredPaths = [
+          configService.get('ntDbPath'), configService.get('dbPath'), configService.get('dbPath3x'),
+        ].filter((v): v is string => !!v)
+        const missing = configuredPaths.filter((v) => !existsSync(v))
+        if (missing.length > 0) {
+          console.log(chalk.yellow('  ○ 已配置，但数据目录在本机不存在'))
+          console.log(chalk.gray('    可能是从另一台机器拷来的配置（例如 Windows 的 C: 路径）。'))
+          console.log(chalk.gray('    在本机重新运行: weflow-cli init'))
+        } else {
+          console.log(chalk.green('  ✓ 已初始化 — 可以运行 weflow-cli'))
+        }
+      } else {
+        console.log(chalk.yellow('  ○ 未初始化 — 运行 weflow-cli init'))
+      }
 
 
       // 4.5 数据可读性：把“配置对不对”升级成“到底能读几个库”。
@@ -9307,6 +9320,10 @@ program
             const label = st.mode === 'passphrase' ? '口令' : '密钥'
             if (st.mode === 'none') {
               console.log(chalk.yellow(`  数据可读性: 未配置凭据（${st.total} 个库都读不了）`))
+            } else if (st.verdict === 'no-databases' || st.total === 0) {
+              // 一个库都没找到 ≠ 密钥不对。混着说会让人去换口令，
+              // 而真因是数据目录路径或权限（2026-11-01 在迁移配置上实测踩到）。
+              console.log(chalk.yellow('  数据可读性: 没找到可读的数据库（检查数据目录路径与权限）'))
             } else if (st.verdict === 'ok') {
               console.log(chalk.green(`  数据可读性: ${label}可解开 ${st.matched}/${st.total} 个库`))
             } else {
