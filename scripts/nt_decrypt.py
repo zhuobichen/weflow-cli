@@ -128,8 +128,100 @@ else:
     kernel32 = None
 
 
+def _find_weixin_pids_win32():
+    """EnumProcesses + QueryFullProcessImageNameW 找所有 Weixin.exe，按内存占用降序返回。
+
+    为什么需要这条兜底：pymem 走的是 ToolHelp32Snapshot，在 WeChat 4.2.0.11 上
+    **列不出 Weixin.exe**（实测本机 20 个 Weixin.exe 进程，pymem 只看到一批
+    WeChatAppEx.exe）。于是 scan 会误报 "Weixin.exe 未运行"，把"检测方法不适用"
+    讲成"客户端没运行"——两条观测打架时，错的必须是检测方法。
+    """
+    if not IS_WINDOWS:
+        return []
+    try:
+        from ctypes import wintypes
+        psapi = ctypes.WinDLL('psapi', use_last_error=True)
+        kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        kernel32.QueryFullProcessImageNameW.argtypes = [
+            wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR, ctypes.POINTER(wintypes.DWORD)]
+
+        arr = (wintypes.DWORD * 4096)()
+        needed = wintypes.DWORD()
+        if not psapi.EnumProcesses(ctypes.byref(arr), ctypes.sizeof(arr), ctypes.byref(needed)):
+            return []
+        count = needed.value // ctypes.sizeof(wintypes.DWORD)
+    except Exception:
+        return []
+
+    def _probe(pid):
+        h = kernel32.OpenProcess(0x1000, False, pid)   # PROCESS_QUERY_LIMITED_INFORMATION
+        if not h:
+            return None
+        try:
+            buf = ctypes.create_unicode_buffer(1024)
+            size = wintypes.DWORD(1024)
+            if kernel32.QueryFullProcessImageNameW(h, 0, buf, ctypes.byref(size)):
+                if os.path.basename(buf.value).lower() in ('weixin.exe', 'wechat.exe'):
+                    return (pid, _process_working_set(pid))
+        finally:
+            kernel32.CloseHandle(h)
+        return None
+
+    found = []
+    for i in range(count):
+        pid = arr[i]
+        if not pid:
+            continue
+        hit = _probe(int(pid))
+        if hit:
+            found.append(hit)
+
+    # EnumProcesses 本身也可能被"进程视图隔离"挡住（实测某环境只返回 51 个进程、
+    # 0 个 Weixin.exe，而逐 PID 试探能找到 20 个）。所以命中为空时再暴力扫一遍。
+    if not found:
+        for pid in range(4, 100000):
+            hit = _probe(pid)
+            if hit:
+                found.append(hit)
+    found.sort(key=lambda x: x[1], reverse=True)
+    return [pid for pid, _ in found]
+
+
+def _process_working_set(pid):
+    """进程工作集大小（失败返回 0）。只用于挑"主进程"。"""
+    try:
+        from ctypes import wintypes
+        class PMC(ctypes.Structure):
+            _fields_ = [('cb', wintypes.DWORD), ('PageFaultCount', wintypes.DWORD),
+                        ('PeakWorkingSetSize', ctypes.c_size_t), ('WorkingSetSize', ctypes.c_size_t),
+                        ('QuotaPeakPagedPoolUsage', ctypes.c_size_t),
+                        ('QuotaPagedPoolUsage', ctypes.c_size_t),
+                        ('QuotaPeakNonPagedPoolUsage', ctypes.c_size_t),
+                        ('QuotaNonPagedPoolUsage', ctypes.c_size_t),
+                        ('PagefileUsage', ctypes.c_size_t),
+                        ('PeakPagefileUsage', ctypes.c_size_t),
+                        ('PrivateUsage', ctypes.c_size_t)]
+        kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        h = kernel32.OpenProcess(0x0400 | 0x0010, False, pid)
+        if not h:
+            return 0
+        try:
+            pmc = PMC()
+            pmc.cb = ctypes.sizeof(pmc)
+            if ctypes.WinDLL('psapi', use_last_error=True).GetProcessMemoryInfo(
+                    h, ctypes.byref(pmc), pmc.cb):
+                return pmc.WorkingSetSize
+        finally:
+            kernel32.CloseHandle(h)
+    except Exception:
+        pass
+    return 0
+
+
 def find_weixin_pid():
-    """Find WeChat process ID (Windows: pymem; Linux: /proc scan)."""
+    """Find WeChat process ID (Windows: pymem → Win32 兜底; Linux: /proc scan)."""
     if not IS_WINDOWS:
         return find_weixin_pid_linux()
     try:
@@ -145,7 +237,10 @@ def find_weixin_pid():
                 pass
     except ImportError:
         pass
-    return None
+    # pymem 的快照在 4.2 上漏主进程（登记为 docs/VERSION_METHODS.md 的 M-02），
+    # 走 Win32 枚举兜底（M-03；EnumProcesses 快路径为 M-04）。
+    pids = _find_weixin_pids_win32()
+    return pids[0] if pids else None
 
 
 _LINUX_WECHAT_COMMS = {'wechat', 'wechatappex', 'weixin'}

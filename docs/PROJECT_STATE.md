@@ -607,6 +607,7 @@ step (the CLI's interactive-menu entry is the notable one).
 - Security and reporting: [SECURITY.md](../SECURITY.md)
 - MCP surface: [MCP.md](MCP.md)
 - Design rationale: [DECISIONS.md](DECISIONS.md)
+- **Method × WeChat version table** (which extraction method still works, why a retired one failed, and what replaced it): [VERSION_METHODS.md](VERSION_METHODS.md) — guarded by `test/version_methods_test.py` (D-145)
 - Partner integration record: [PARTNERS.md](PARTNERS.md)
 - AI integration surface: [AI_INTERFACE.md](AI_INTERFACE.md)
 - Overall improvement and expansion plan: [ROADMAP.md](ROADMAP.md)
