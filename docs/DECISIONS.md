@@ -4519,3 +4519,31 @@ init 步骤 4    :  NT 数据库扫描: Weixin.exe 未运行
 ① 在修复点附近的注释里指向具体 M-ID；② 更新表中该行的状态与证据日期。
 
 **Verification.** `test/version_methods_test.py`（6 项）+ 两次变异实验。
+
+## D-146: 第三方依赖必须在 requirements.txt 声明，并由测试守住
+
+**Status:** Active（2026-11-01）
+
+**问题（本仓库真实踩到两次）。** 依赖漂移不会让任何东西变红，只会让**某条命令在用户机器上**
+ImportError，或者更糟——静默降级：
+
+- `PIL`（6 个脚本在用：导出 HTML、PDF、头像、表情、图片、面板）与 `requests`（面板抓取）
+  一直没写进 `requirements.txt`。用户按 README 装完 `-r requirements.txt` 会以为装齐了。
+- `zstandard` 在 CI 里只装在 python job、没装在 `linux-write-path` job：订阅号消息体是 zstd
+  压缩的，`extract_article_info()` 抛 ImportError 后被取数循环的 `except: continue` 吞掉，
+  输出变成**"找到 0 篇文章"**——一个依赖缺失伪装成了"今天没有更新"。
+
+**决定.**
+
+1. `scripts/*.py` 里每个第三方顶层导入，必须满足其一：
+   - 在 `requirements.txt` 里声明（导入名与包名不同时，用 `test/dependency_declared_test.py`
+     的 `IMPORT_TO_PACKAGE` 映射，例如 `PIL`→`pillow`、`fitz`→`pymupdf`）；
+   - 在 `ALLOWED_UNDECLARED` 里，且**写明为什么**（可选功能 / 仅 Windows 有意义）。
+2. 判据由 `test/dependency_declared_test.py` 执行，含三条**反向**约束，缺一条它就会腐化：
+   - 正对照：喂一个虚构包必须被判"未声明"（解析器坏掉时不许报通过）；
+   - 允许名单里的条目必须真的被某个脚本导入（否则就是死条目）；
+   - 同一个包不能既在 requirements 里又在允许名单里（否则"未声明"永远判不出来）。
+3. 可选依赖在 `check` 里成对展示（导入名 + 安装用的真实包名），缺了只提示、不算红。
+
+**验证.** 变异测试：给 `scripts/read_image.py` 注入 `import totally_fake_pkg_xyz` 后
+测试立刻变红并指明文件与名字；还原后恢复绿。
