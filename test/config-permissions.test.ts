@@ -44,6 +44,9 @@ test('保存配置后：~/.weflow-cli 是 700、config.json 是 600', async (t) 
   } finally {
     if (savedHome === undefined) delete process.env.HOME
     else process.env.HOME = savedHome
+    // 清理前先恢复可写：目录还是 555 时 rmSync 会在 unlink 上 EACCES，
+    // 于是**测试本身通过、清理阶段红**（CI 上就这么红了一次）。
+    try { chmodSync(join(home, '.weflow-cli'), 0o700) } catch { /* 目录可能不在了 */ }
     rmSync(home, { recursive: true, force: true })
   }
 })
@@ -75,6 +78,9 @@ test('目录刻意设为只读(555)时：保存必须失败，且不许偷偷把
   } finally {
     if (savedHome === undefined) delete process.env.HOME
     else process.env.HOME = savedHome
+    // 清理前先恢复可写：目录还是 555 时 rmSync 会在 unlink 上 EACCES，
+    // 于是**测试本身通过、清理阶段红**（CI 上就这么红了一次）。
+    try { chmodSync(join(home, '.weflow-cli'), 0o700) } catch { /* 目录可能不在了 */ }
     rmSync(home, { recursive: true, force: true })
   }
 })
