@@ -218,6 +218,25 @@ jobs:
           python3 scripts/nt_decrypt.py key-status --root "$HOME/synth" --json | tee /tmp/ks.json
           python3 -c "import json;d=json.load(open('/tmp/ks.json'));assert d['matched']>=1, d;print('  ✓ 凭据可解开合成库')"
 
+          echo "--- 直接查库（诊断：确认库本身有数据）---"
+          python3 - <<'PY'
+          import glob, hashlib, os, sqlcipher3
+          home = os.environ['HOME']
+          db = glob.glob(os.path.join(home, 'synth', '**', 'biz_message_0.db'), recursive=True)[0]
+          key, salt = '11' * 32, '22' * 16
+          conn = sqlcipher3.connect(db)
+          conn.execute(f"PRAGMA key = \"x'{key}{salt}'\"")
+          cur = conn.cursor()
+          users = [r[0] for r in cur.execute("SELECT user_name FROM Name2Id")]
+          print('  Name2Id:', users)
+          for u in users:
+              tbl = 'Msg_' + hashlib.md5(u.encode()).hexdigest()
+              n = cur.execute(f'SELECT count(*) FROM "{tbl}"').fetchone()[0]
+              rows = cur.execute(f'SELECT create_time FROM "{tbl}"').fetchall()
+              print(f'  {tbl}: {n} 行, create_time={[r[0] for r in rows]}')
+          conn.close()
+          PY
+
           echo "--- CLI daily（包目录只读）---"
           chmod -R a-w dist scripts bin
           node dist/bin/weflow-cli.js daily --date 2026-01-01 --dry-run --no-ai | tee /tmp/daily.log
