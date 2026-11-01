@@ -7254,6 +7254,12 @@ program
   .option('--json', '输出机器可读的最终结果；运行日志写入 stderr')
   .option('--email', '生成后把日报按主题（AI / 文学 / 学术）发到邮箱（每个主题附一段 AI 综述，逐篇给要点）')
   .option('--mail-to <address>', '邮件收件人；缺省用配置 dailyMailTo，再缺省发给自己')
+  // Linux 上拿不到本地库密钥时，**外部订阅源是唯一的日报来源**——
+  // 之前这些旗标只存在于 `scripts/pipeline.py`，主命令 `weflow-cli daily` 用不了
+  // （2026-11-01 实测：`daily --articles-json` 报 unknown option）。
+  .option('--articles-json <file>', '外部文章 JSON（无需本地库；可重复）', (v, prev: string[] = []) => [...prev, v], [])
+  .option('--rss-feed <url>', 'RSS/Atom 订阅源地址（可重复）', (v, prev: string[] = []) => [...prev, v], [])
+  .option('--rss-opml <file>', 'OPML 订阅列表文件')
   .action(async (opts) => {
     const { spawn } = await import('child_process')
     const { existsSync, statSync } = await import('fs')
@@ -7298,6 +7304,10 @@ program
       // 与 --no-ai 不同：这一条保留判断（Jev），只关掉 LLM 的文字生成。
       if (opts.noSummary && !noAi) args.push('--no-summary')
       for (const source of opts.source || []) args.push('--source', source)
+      // 外部源直通 pipeline：无本地库时也能出完整日报（Linux 的主要路径）
+      for (const file of opts.articlesJson || []) args.push('--articles-json', file)
+      for (const url of opts.rssFeed || []) args.push('--rss-feed', url)
+      if (opts.rssOpml) args.push('--rss-opml', opts.rssOpml)
       if (opts.skipClassify) args.push('--skip-classify')
       // 只在**给了**这个旗标时才解析数字：`--prefetch-bodies`（不带数字）是合法的，
       // 而默认并发数只在 python 侧写一份（这里再写一份迟早漂移）。
@@ -7325,6 +7335,9 @@ program
     if (opts.dryRun) {
       const dryRunArgs = [bizDaily, '--date', date, '--engine', 'local', '--dry-run']
       for (const source of opts.source || []) dryRunArgs.push('--source', source)
+      for (const file of opts.articlesJson || []) dryRunArgs.push('--articles-json', file)
+      for (const url of opts.rssFeed || []) dryRunArgs.push('--rss-feed', url)
+      if (opts.rssOpml) dryRunArgs.push('--rss-opml', opts.rssOpml)
       const child = spawn(getPythonCommand(), dryRunArgs, {
         windowsHide: true,
         stdio: opts.json ? ['ignore', 'pipe', 'pipe'] : 'inherit',

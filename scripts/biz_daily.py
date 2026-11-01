@@ -1181,6 +1181,13 @@ def main():
     _has_external = bool(getattr(args, 'articles_json', None)
                          or getattr(args, 'rss_feed', None)
                          or getattr(args, 'rss_opml', None))
+    # 全新机器上"还没 init"是正常状态：说"先 init"比说"去配 passphrase"对得上号。
+    # 但**有外部源**时（纯 RSS/JSON 出日报）不需要本地库，不能拦。
+    if not config and not _has_external:
+        print('[ERROR] 还没有配置：先运行 weflow-cli init（或 weflow-cli config set ntDbPath <路径>）')
+        print('        只用外部订阅源出日报则不需要本地库：'
+              'weflow-cli daily --articles-json <文件> 或 --rss-feed <地址>')
+        sys.exit(1)
     keys = get_db_keys(config, allow_missing_biz=_has_external)
     source_filters = parse_source_filters(args.source or [config.get('dailySources', '')])
     source_categories = load_source_categories(config)

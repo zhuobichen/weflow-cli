@@ -42,6 +42,20 @@
 
 用 `python3 scripts/nt_decrypt.py key-status` 或 `weflow-cli check` 都能看到当前配置能否读库。
 
+## 拿不到密钥时的两条正路（`weflow-cli daily` 直接支持外部源）
+
+```bash
+# 外部文章 JSON / RSS / OPML —— 不需要任何本地库或密钥
+weflow-cli daily --date 2026-11-01 --articles-json articles.json
+weflow-cli daily --rss-feed https://example.com/feed.xml
+weflow-cli daily --rss-opml subs.opml
+```
+
+这三个旗标以前只存在于 `scripts/pipeline.py`，主命令传了会报 `unknown option`
+（2026-11-01 在干净 HOME 上实测）——而外部源正是 Linux 无密钥用户的唯一来源。
+
+下面两种方式也仍然可用。
+
 ## 拿不到密钥时的两条正路
 
 ### 1. 你自己提供口令（能读本地库）

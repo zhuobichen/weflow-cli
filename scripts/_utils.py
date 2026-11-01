@@ -675,8 +675,21 @@ def output_root():
 
 
 def load_config():
-    with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
-        return json.load(f)
+    """读配置；**没有配置文件时返回空 dict**，而不是抛 FileNotFoundError。
+
+    为什么：全新机器上"还没跑过 init"是**正常状态**，不是错误。
+    之前 68 处调用里有几处（例如 `biz_daily`）直接抛原始 traceback——
+    用户第一次运行 `weflow-cli daily` 看到的就是一屏 Python 栈
+    （2026-11-01 在干净 HOME 上实测）。
+
+    返回空 dict 后，各脚本会走到自己的"缺密钥/未配置"分支，给出可读的提示。
+    配置存在但**坏掉**（JSON 语法错）仍然抛——那是真的错误，不该被吞。
+    """
+    try:
+        with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return {}
 
 
 # ---- 「不说话地失败」的最小护栏 ---------------------------------------------
