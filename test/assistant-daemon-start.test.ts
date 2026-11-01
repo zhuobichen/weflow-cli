@@ -18,7 +18,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -41,7 +41,10 @@ class FakeChild extends EventEmitter {
   stderr = new EventEmitter()
 
   die(code: number, stderrLine = ''): void {
-    if (stderrLine) this.stderr.emit('data', Buffer.from(stderrLine + '\n'))
+    // 子进程的 stdout/stderr 现在是**直接写日志文件的 fd**（不是父进程的管道），
+    // 所以假子进程要模拟"往文件里写"，而不是往 EventEmitter 上 emit——
+    // 后者是旧机制，父进程已经不再监听它。
+    if (stderrLine) appendFileSync(LOG_FILE, stderrLine + '\n', 'utf8')
     this.exitCode = code
     this.emit('exit', code)
   }
@@ -80,6 +83,10 @@ test('the daemon child is spawned with --yes, because its stdin is ignored', asy
   assert.deepEqual(rec.calls[0].args.slice(-3), ['assistant', 'run', '--yes'])
   // 这条是因果，不是巧合：stdin 是 ignore，所以那个交互确认永远等不到答复。
   assert.equal(rec.calls[0].options.stdio[0], 'ignore')
+  // 输出直接写日志文件：stdio[1] 是打开的 fd（数字），不是父进程管道。
+  // 走管道时，父进程（`assistant start`）退出后日志就断了。
+  assert.equal(typeof rec.calls[0].options.stdio[1], 'number',
+    'stdout 应指向日志文件的 fd')
   assert.equal(rec.calls[0].options.detached, true)
   assert.equal(readFileSync(PID_FILE, 'utf8').trim(), '4242')
 })

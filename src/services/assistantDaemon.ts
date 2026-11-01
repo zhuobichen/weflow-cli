@@ -3,7 +3,7 @@
  * pid 文件: ~/.weflow-cli/assistant.pid, 日志: ~/.weflow-cli/assistant.log
  */
 import { join } from 'path'
-import { existsSync, readFileSync, writeFileSync, rmSync, mkdirSync, appendFileSync, statSync } from 'fs'
+import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs'
 import os from 'os'
 import { spawn, type ChildProcess } from 'child_process'
 import { resolvePackageRoot } from '../utils/packageRoot.js'
@@ -95,13 +95,36 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<{
   try {
     appendLog(`--- ${new Date().toLocaleString('zh-CN')} daemon starting ---`)
     const entryArgs = entry === sourceEntry ? ['--import', 'tsx', entry] : [entry]
-    const child: ChildProcess = spawnImpl(process.execPath,
-      [...entryArgs, 'assistant', 'run', '--yes'], {
-      detached: true,
-      stdio: ['ignore', 'pipe', 'pipe'],
-      env: createPythonProcessEnv(),
-      windowsHide: true,
-    })
+    // 子进程的 stdout/stderr **直接写日志文件**，不走父进程的管道：
+    // 父进程（`assistant start`）启动完就退出，管道读端一关，子进程之后的输出就丢了；
+    // 在 Linux 上写已关闭的管道还会拿到 EPIPE（libuv 忽略 SIGPIPE，但它会以
+    // 'error' 事件冒到 stdout 上，可能把守护进程带走）。2026-11-01 实测确认守护进程
+    // 能活下来，但日志从父进程退出那一刻起就断了。
+    // 日志目录可能不可写（只读挂载/沙箱/权限）：那种情况下**仍然要把守护进程拉起来**，
+    // 只是没有日志——不能让"打不开日志文件"变成"启动失败"。
+    let logFd: number | null = null
+    try {
+      logFd = openSync(LOG_FILE, 'a')
+    } catch {
+      logFd = null
+      appendLog('[warn] 日志文件打不开，本次守护进程的输出去向 /dev/null')
+    }
+    let child: ChildProcess
+    try {
+      child = spawnImpl(process.execPath,
+        [...entryArgs, 'assistant', 'run', '--yes'], {
+        detached: true,
+        stdio: logFd === null
+          ? ['ignore', 'ignore', 'ignore']
+          : ['ignore', logFd, logFd],
+        env: createPythonProcessEnv(),
+        windowsHide: true,
+      })
+    } finally {
+      if (logFd !== null) {
+        try { closeSync(logFd) } catch { /* 父进程这一份用完就关 */ }
+      }
+    }
 
     // spawn 失败（入口不存在、权限）是**异步**的 'error' 事件：没有监听器时它会让
     // 进程直接抛未捕获异常。收下来，等观察窗口结束一起报。
@@ -113,9 +136,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<{
       appendLog('[spawn error] ' + error.message)
     })
 
-    // 收集子进程输出写入日志
-    child.stdout?.on('data', (d: Buffer) => appendLog(d.toString().trim()))
-    child.stderr?.on('data', (d: Buffer) => appendLog('[stderr] ' + d.toString().trim()))
+    // 不再监听 stdout/stderr：它们已经直接写进日志文件（见上面的 logFd）。
     child.on('exit', (code) => {
       appendLog(`--- daemon exited (code ${code}) ---`)
       try { if (existsSync(PID_FILE)) rmSync(PID_FILE, { force: true }) } catch {}
