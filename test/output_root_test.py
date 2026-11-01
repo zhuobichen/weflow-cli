@@ -52,6 +52,26 @@ class OutputRootTests(unittest.TestCase):
         # 抓取缓存同理：不能落在 scripts/ 下
         self.assertNotIn('scripts', pathlib.Path(biz_daily.FETCH_CACHE_DIR).parts)
 
+    def test_pipeline_scripts_share_the_same_root(self):
+        """整条日报流水线的脚本必须用**同一个**可写根，否则会出现
+        "biz_daily 写到用户目录、generate_html 去包里找" 的分裂
+        （2026-11-01 在 Linux 上实测：generate_html / enrich_backlinks /
+        create_reading_notes 三个步骤全部 exit=1，只打一句 [FAIL]）。"""
+        import generate_html
+        import enrich_backlinks
+        import create_reading_notes
+        import auto_tag
+
+        base = pathlib.Path(_utils.output_root())
+        for name, value in (
+            ('generate_html.SOURCE_ROOT', generate_html.SOURCE_ROOT),
+            ('enrich_backlinks.DEFAULT_SOURCE', enrich_backlinks.DEFAULT_SOURCE),
+            ('create_reading_notes.DEFAULT_SOURCE', create_reading_notes.DEFAULT_SOURCE),
+            ('auto_tag.DEFAULT_SOURCE', auto_tag.DEFAULT_SOURCE),
+        ):
+            self.assertEqual(pathlib.Path(value), base / 'biz-daily', f'{name} 应在 output_root() 之下')
+        self.assertEqual(pathlib.Path(create_reading_notes.DEFAULT_VAULT), base / 'wechat-vault')
+
 
 if __name__ == '__main__':
     unittest.main()

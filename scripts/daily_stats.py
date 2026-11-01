@@ -22,7 +22,13 @@ except ImportError:
 
 
 def load_processed_counts(start_date: str, end_date: str) -> dict[str, int]:
-    root = Path(__file__).resolve().parent.parent / 'output' / 'biz-daily'
+    try:
+        import sys as _sys, os as _os
+        _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+        from _utils import output_root as _output_root
+        root = Path(_output_root()) / 'biz-daily'
+    except Exception:
+        root = Path(__file__).resolve().parent.parent / 'output' / 'biz-daily'
     counts: dict[str, int] = defaultdict(int)
     current = datetime.strptime(start_date, '%Y-%m-%d').date()
     end = datetime.strptime(end_date, '%Y-%m-%d').date()

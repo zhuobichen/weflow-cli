@@ -12,7 +12,12 @@ from datetime import datetime
 
 SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(SCRIPTS_DIR)
-SOURCE_ROOT = os.path.join(PROJECT_ROOT, 'output', 'biz-daily')
+# 输出根必须可写：全局安装时 PROJECT_ROOT 属于 root（Linux 实测三步骤全 exit=1）
+try:
+    from _utils import output_root as _output_root
+    SOURCE_ROOT = os.path.join(_output_root(), 'biz-daily')
+except Exception:
+    SOURCE_ROOT = os.path.join(PROJECT_ROOT, 'output', 'biz-daily')
 
 sys.path.insert(0, SCRIPTS_DIR)
 from _utils import load_config, excluded_topics  # noqa: E402

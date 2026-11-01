@@ -19,8 +19,13 @@ from datetime import datetime
 
 SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(SCRIPTS_DIR)
-DEFAULT_VAULT = os.path.join(PROJECT_ROOT, 'output', 'wechat-vault')
-DEFAULT_SOURCE = os.path.join(PROJECT_ROOT, 'output', 'biz-daily')
+try:
+    from _utils import output_root as _output_root
+    _OUT_BASE = _output_root()
+except Exception:
+    _OUT_BASE = os.path.join(PROJECT_ROOT, 'output')
+DEFAULT_VAULT = os.path.join(_OUT_BASE, 'wechat-vault')
+DEFAULT_SOURCE = os.path.join(_OUT_BASE, 'biz-daily')
 
 TOPIC_ORDER = ['AI', '学术', '新闻', '文学', '投资', '政治']
 

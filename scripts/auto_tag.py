@@ -12,7 +12,11 @@ from pathlib import Path
 
 SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(SCRIPTS_DIR)
-DEFAULT_SOURCE = os.path.join(PROJECT_ROOT, 'output', 'biz-daily')
+try:
+    from _utils import output_root as _output_root
+    DEFAULT_SOURCE = os.path.join(_output_root(), 'biz-daily')
+except Exception:
+    DEFAULT_SOURCE = os.path.join(PROJECT_ROOT, 'output', 'biz-daily')
 
 TOPIC_ORDER = ['AI', '学术', '新闻', '文学', '投资', '政治']
 
