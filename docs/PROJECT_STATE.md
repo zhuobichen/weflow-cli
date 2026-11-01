@@ -46,8 +46,11 @@ WeFlow CLI is a local-first command-line tool and MCP server for user-authorized
 
 **Linux CI 基线（2026-11-01，全绿）**：Ubuntu 上四个 job 全过。新增的 `linux-write-path`
 复制一份干净包目录并设为只读（等价于全局安装），断言 TS 与 Python 的输出根都回退到 `$HOME`，
-并用**正对照**确认“包目录可写时必须留在原地”。已知差异：CI 上 `biz_daily` 对合成库读到 0 篇，
-同代码在本机 Windows 与 Linux 服务器上都能读到 1 篇，已降级为 `::warning::` 待定位。
+并用**正对照**确认“包目录可写时必须留在原地”。
+同期定位并修复了一个**静默失败**：`linux-write-path` job 只装 `sqlcipher3-binary`、没装 `zstandard`，
+而订阅号消息体是 zstd 压缩的——`extract_article_info()` 抛 ImportError 后被取数循环的 `except: continue` 吞掉，
+输出变成"找到 0 篇文章"。现在 `biz_daily` 会在取数前显式检查该依赖并 `exit 1`（附安装命令），
+CI 也补上了依赖，端到端那步恢复为硬断言。
 
 ## Verified Capabilities
 

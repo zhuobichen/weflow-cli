@@ -124,11 +124,20 @@ Ubuntu 上有四个 job，其中两个直接覆盖 Linux 兼容：
 `linux-write-path` 的存在理由：这类 bug（输出/缓存/vault 写进包目录）在**可写的 checkout 里永远不会红**，
 只有装到 Linux 才暴露。它的判据是"造出不可写的安装"，不是"在可写环境里跑一遍"。
 
-## 已知差异（未定位，CI 里以 warning 形式显式暴露）
+## 一个踩过的坑：缺 `zstandard` 会伪装成"今天没文章"
 
-同一份合成库、同一个模块：裸查询能读到 1 行，而 CI 上 `biz_daily` 读到 0 篇；
-同样的代码在本机 Windows 与 Linux 服务器上都能读到 1 篇。CI 里该断言已降级为
-`::warning::` 而不是硬失败——**不隐藏，但也不假装通过**。
+订阅号消息体是 zstd 压缩的。缺这个依赖时 `extract_article_info()` 抛 ImportError，
+被取数循环的 `except: continue` 吞掉，输出就是**"找到 0 篇文章"**——看起来像"今天没有更新"。
+
+现在 `biz_daily` 会在正式取数前显式检查并 `exit 1`：
+
+```
+[ERROR] 缺少 zstandard：订阅号消息体是 zstd 压缩的，没它会把"解析不了"当成"今天没文章"。
+        安装: pip install zstandard   （或 python -m pip install --user zstandard）
+```
+
+按 `requirements.txt` 装齐依赖即可避免。
+
 
 ## 相关文档
 
