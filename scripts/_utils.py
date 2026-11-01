@@ -643,6 +643,37 @@ RELEVANCE_NAMES = ['低', '中', '高']
 DEFAULT_RELEVANCE = '中'
 
 
+def output_root():
+    """可写的输出根目录（`output/`）。
+
+    为什么需要它：全局安装时（Linux 的 /usr/lib/node_modules、macOS 的
+    /usr/local/lib）包目录属于 root，往里面写 `output/` 会直接 PermissionError。
+    Windows 上全局包在用户目录下，所以这个问题只在类 Unix 系统上暴露。
+
+    顺序：
+      1. `WEFLOW_OUTPUT_DIR`（显式指定，测试与定制都用它）；
+      2. 仓库/包根下的 `output/`——**可写时保持原位置**，老用户路径不变；
+      3. 都不可写就退回 `~/.weflow-cli/output`。
+    """
+    import pathlib as _pathlib
+    env = os.environ.get('WEFLOW_OUTPUT_DIR')
+    if env:
+        target = _pathlib.Path(env).expanduser()
+        target.mkdir(parents=True, exist_ok=True)
+        return str(target)
+    repo = _pathlib.Path(__file__).resolve().parent.parent / 'output'
+    try:
+        repo.mkdir(parents=True, exist_ok=True)
+        probe = repo / '.write_probe'
+        probe.write_text('', encoding='utf-8')
+        probe.unlink()
+        return str(repo)
+    except OSError:
+        fallback = _pathlib.Path.home() / '.weflow-cli' / 'output'
+        fallback.mkdir(parents=True, exist_ok=True)
+        return str(fallback)
+
+
 def load_config():
     with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
         return json.load(f)

@@ -3,6 +3,7 @@
  * 所有工具在本机执行; 结果经 PrivacyGate 脱敏后才进入 LLM 上下文。
  */
 import { chatService } from './chatService.js'
+import { resolveOutputRoot } from '../utils/outputRoot.js'
 import { configService } from './configService.js'
 import { runPythonJson } from './pythonBridge.js'
 import { exportService } from './exportService.js'
@@ -31,10 +32,10 @@ const PKG_ROOT = resolvePackageRoot(import.meta.url)
 // （同 `export_chat` 的 `WEFLOW_ASSISTANT_EXPORT_ROOT` 做法）。常量只在 import 时求值，
 // 那会让「目录不存在」这类分支永远测不到——写出来的断言就只能是摆设。
 const bizDailyDir = (): string =>
-  process.env.WEFLOW_ASSISTANT_BIZ_DAILY_DIR || join(PKG_ROOT, 'output', 'biz-daily')
+  process.env.WEFLOW_ASSISTANT_BIZ_DAILY_DIR || join(resolveOutputRoot(), 'biz-daily')
 /** 学习回顾目录。同样可注入：否则 `get_review` 的断言只能依赖这台机器上有没有跑过 `review`。 */
 const reviewsDir = (): string =>
-  process.env.WEFLOW_ASSISTANT_REVIEWS_DIR || join(PKG_ROOT, 'output', 'reviews', 'Daily')
+  process.env.WEFLOW_ASSISTANT_REVIEWS_DIR || join(resolveOutputRoot(), 'reviews', 'Daily')
 /** 单条聊天消息进上下文的字数上限（见 get_messages：引用消息要放得下正文+被引原文） */
 const MSG_BODY_CHARS = 160
 // 知识页住在哪几个目录。**两个是有意的**：文章知识库与聊天知识库分开（用户 2026-09-27
@@ -57,7 +58,7 @@ export function wikiIndexPath(conceptDir: string): string {
  * 要给它写用例，就得能把这个根换掉。（做成函数而不是常量：环境变量要在**每次调用**时读。）
  */
 const vaultDirs = (): string[] => {
-  const root = process.env.WEFLOW_ASSISTANT_VAULT_DIR || join(PKG_ROOT, 'output', 'wechat-vault')
+  const root = process.env.WEFLOW_ASSISTANT_VAULT_DIR || join(resolveOutputRoot(), 'wechat-vault')
   return [join(root, 'Wiki', 'Concepts'), join(root, 'Chat', 'Concepts')]
 }
 
@@ -2078,7 +2079,7 @@ export async function executeTool(name: string, args: Record<string, any>, ctx: 
         const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 12)
         // 目录名到秒，同一秒里导两次会撞进同一个目录——那就不是"绝不覆盖"了。撞了就往后加序号。
         // 导出根目录可用环境变量改（测试用临时目录；也方便自定义）。默认在仓库的 output/exports 下。
-        const exportRoot = process.env.WEFLOW_ASSISTANT_EXPORT_ROOT || join(PKG_ROOT, 'output', 'exports')
+        const exportRoot = process.env.WEFLOW_ASSISTANT_EXPORT_ROOT || join(resolveOutputRoot(), 'exports')
         let outDir = join(exportRoot, `${safeName}-${stamp}`)
         for (let n = 2; existsSync(outDir) && n < 100; n++) {
           outDir = join(exportRoot, `${safeName}-${stamp}-${n}`)
@@ -2093,7 +2094,7 @@ export async function executeTool(name: string, args: Record<string, any>, ctx: 
         // 两次导出会报成同一个名字——实测第二次明明是 `…-2`，消息里却是基础名（2026-09-23 验收）。
         // 根目录是默认值时按仓库相对路径报（用户照着找得到）；自定义根时只报目录名——
         // **不把绝对路径发进聊天**，那是本机路径，没必要出境。
-        const shown = exportRoot === join(PKG_ROOT, 'output', 'exports')
+        const shown = exportRoot === join(resolveOutputRoot(), 'exports')
           ? `output/exports/${basename(outDir)}`
           : basename(outDir)
         return `已导出 ${result.count ?? 0} 条消息到 ${shown}/（${format}${suffix}）`

@@ -25,6 +25,7 @@ import { getPythonCommand } from '../src/utils/python.js'
 import { createPythonProcessEnv, safeSubprocessError } from '../src/utils/pythonProcessEnv.js'
 import { DateRangeError, parseLocalDateOrIso, resolveExportDateRange } from '../src/utils/dateRange.js'
 import { resolvePackageRoot as resolvePackageRootFrom } from '../src/utils/packageRoot.js'
+import { resolveOutputRoot } from '../src/utils/outputRoot.js'
 import { WechatMessageService } from '../src/services/wechatMessageService.js'
 import { whitelistService, MAX_TEXT_LENGTH } from '../src/services/whitelistService.js'
 import { authorizeOutbound, parseOutboundPolicy, performOutbound } from '../src/services/outboundSend.js'
@@ -198,7 +199,7 @@ async function startDetachedDailyReader(script: string, date: string, port: numb
     return { success: false, started: false, code: 'DAILY_READER_PORT_IN_USE' }
   }
 
-  const dateDir = join(resolvePackageRoot(), 'output', 'biz-daily', date)
+  const dateDir = join(resolveOutputRoot(), 'biz-daily', date)
   if (!existsSync(dateDir)) return { success: false, started: false, code: 'DAILY_READER_DATE_NOT_FOUND' }
 
   const { spawn } = await import('child_process')
@@ -7264,7 +7265,7 @@ program
     const dailyLog = (...values: any[]) => opts.json ? console.error(...values) : console.log(...values)
 
     const artifactStatus = (targetDate: string) => {
-      const outputDir = join(pkgRoot, 'output', 'biz-daily', targetDate)
+      const outputDir = join(resolveOutputRoot(), 'biz-daily', targetDate)
       const hasFile = (file: string) => {
         const path = join(outputDir, file)
         try { return existsSync(path) && statSync(path).size > 0 } catch { return false }
