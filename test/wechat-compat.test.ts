@@ -10,7 +10,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import { join } from 'node:path'
-import { WECHAT_VERIFIED, compareWechatVersions, describeCompatVerdict } from '../src/services/wechatCompat.js'
+import { WECHAT_VERIFIED, compareWechatVersions, describeCompatVerdict, describeUnknownVersionReason } from '../src/services/wechatCompat.js'
 
 test('compareWechatVersions：四种判定与边界', () => {
   assert.equal(compareWechatVersions('4.1.15.56', '4.1.15.56'), 'verified')
@@ -57,4 +57,28 @@ test('capabilities --json 暴露 compatibility.wechat，与单一事实源一致
   assert.ok(compat, 'capabilities 该有 compatibility.wechat（D-130）')
   assert.equal(compat.verifiedVersion, WECHAT_VERIFIED.version, '与 wechatCompat.ts 的常量一致——两处各写一份迟早漂')
   assert.equal(compat.verifiedAt, WECHAT_VERIFIED.verifiedAt)
+})
+
+test('Linux 上版本未知不能说成"微信没在运行"（平台不支持探测是另一码事）', () => {
+  // 2026-11-01 实测：Ubuntu + 微信 4.1.13.26 正在写 biz_message_0.db，
+  // check 却报"未知（微信没在运行）"。版本探测只实现了 Windows，
+  // 于是"探测不了"被写成了"客户端没开"——这正是 D-145 要避免的假错误。
+  const linux = describeUnknownVersionReason({ platform: 'linux' })
+  assert.match(linux.reason, /版本探测仅支持 Windows/)
+  assert.match(linux.reason, /linux/)
+  assert.doesNotMatch(linux.reason, /微信没在运行/, 'Linux 上不能把原因说成没在运行')
+  assert.match(linux.compatReason, /不代表客户端没运行/)
+
+  const darwin = describeUnknownVersionReason({ platform: 'darwin' })
+  assert.doesNotMatch(darwin.reason, /微信没在运行/)
+
+  // Windows 的措辞保持不变（那里确实能探测）
+  const win = describeUnknownVersionReason({ platform: 'win32' })
+  assert.match(win.reason, /微信没在运行/)
+  assert.equal(win.compatReason, '')
+
+  // 进程视图被隔离时，优先说"隔离"——这比平台原因更具体
+  const masked = describeUnknownVersionReason({ platform: 'linux', viewFiltered: true })
+  assert.match(masked.reason, /进程视图被隔离/)
+  assert.doesNotMatch(masked.reason, /微信没在运行/)
 })

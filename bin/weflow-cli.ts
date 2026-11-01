@@ -44,7 +44,7 @@ import {
   setPluginFlags,
 } from '../src/services/pluginService.js'
 import { detectWechatClient, reportedDataDirs, samePath } from '../src/services/wechatClient.js'
-import { WECHAT_VERIFIED, compareWechatVersions, describeCompatVerdict } from '../src/services/wechatCompat.js'
+import { WECHAT_VERIFIED, compareWechatVersions, describeCompatVerdict, describeUnknownVersionReason } from '../src/services/wechatCompat.js'
 
 const program = new Command()
 
@@ -1008,8 +1008,14 @@ program
     if (version) {
       console.log(chalk.green(`✓ 检测到微信 ${version} 版本`))
     } else {
-      // 没有运行中的微信，尝试已安装的版本
-      console.log(chalk.gray('  未检测到运行中的微信进程'))
+      // 注意：null 不等于“微信没在运行”。版本探测只实现了 Windows
+      // （见 docs/VERSION_METHODS.md 里“方法只在单一平台可用”的记录），
+      // Linux 上客户端明明在跑也拿不到版本——直接写“未检测到运行中的微信进程”
+      // 会把“探测不支持”讲成“客户端没开”（D-145 要避免的假错误）。
+      // 2026-11-01 在 Ubuntu + 微信 4.1.13.26 上实测踩到。
+      console.log(chalk.gray(process.platform === 'win32'
+        ? '  未检测到运行中的微信进程'
+        : `  ${describeUnknownVersionReason({ platform: process.platform }).reason}`))
       // 检查已有配置或数据目录
       const existingPath = configService.get('dbPath')
       if (existingPath && existsSync(existingPath)) {
@@ -9210,6 +9216,10 @@ program
         if (process.platform === 'linux') {
           console.log(chalk.gray('  pip3 install --user sqlcipher3 html2text zstandard cryptography'))
           console.log(chalk.gray('  （sqlcipher3 编译需先: sudo apt install libsqlcipher-dev）'))
+          // Ubuntu 23.04+ / Debian 12+ 把系统 Python 标成 externally-managed（PEP 668），
+          // 上面那条 --user 会被直接拒绝；不给替代方案，用户会以为是自己环境坏了。
+          console.log(chalk.gray('  若提示 externally-managed-environment（PEP 668），二选一：'))
+          console.log(chalk.gray('    加 --break-system-packages，或 python3 -m venv ~/.weflow-venv'))
         } else {
           console.log(chalk.gray('  pip install sqlcipher3 html2text zstandard cryptography'))
         }
@@ -9232,14 +9242,10 @@ program
       const verdict = compareWechatVersions(client.version, WECHAT_VERIFIED.version)
       const mark = verdict === 'verified' ? chalk.green('✓') : verdict === 'newer-than-verified' ? chalk.yellow('⚠') : chalk.gray('·')
       console.log(chalk.white('\n微信版本兼容:'))
-      // **别把"看不见"讲成"没在运行"**：沙箱/容器里本进程可能连系统进程都看不到，
-      // 这时版本未知的原因是"判断不了"，不是"微信没开"（2026-10-28 实测踩过）。
-      const unknownReason = client.viewFiltered
-        ? '未知（进程视图被隔离，判断不了）'
-        : '未知（微信没在运行）'
-      const compatReason = client.viewFiltered
-        ? '本进程的进程视图被隔离，看不到主程序'
-        : ''
+        // 原因措辞的单一来源：三种“不知道”（视图隔离 / 平台不支持探测 / 客户端没开）
+        // 必须分开说，否则 Linux 上会把“探测不支持”讲成“微信没在运行”（D-145）。
+        const { reason: unknownReason, compatReason } =
+          describeUnknownVersionReason({ platform: process.platform, viewFiltered: client.viewFiltered })
       console.log(`  ${mark} ${client.version ?? unknownReason} · ${describeCompatVerdict(verdict, WECHAT_VERIFIED.version, compatReason)}`)
     }
 

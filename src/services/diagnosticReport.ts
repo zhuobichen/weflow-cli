@@ -228,7 +228,9 @@ export function renderDiagnosticReport(input: DiagnosticInput): string {
       const word = v === 'verified' ? '就是验证过的版本'
         : v === 'newer-than-verified' ? '比验证过的更新（读不出数据先怀疑这里）'
         : v === 'older-than-verified' ? '比验证过的更旧（一般兼容）'
-        : '无法判定（微信没在运行或探测失败）'
+        : (process.platform === 'win32'
+            ? '无法判定（微信没在运行或探测失败）'
+            : `无法判定（版本探测仅支持 Windows，当前平台 ${process.platform}）`)
       say(`与本版本的关系: ${word}（本版本验证过 ${client.compatibility.verifiedVersion}，${client.compatibility.verifiedAt}）`)
     }
     if (client.dataDirs?.length) say(`客户端自报数据目录: ${client.dataDirs.join('、')}`)

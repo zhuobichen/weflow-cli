@@ -21,6 +21,15 @@ WeFlow CLI is a local-first command-line tool and MCP server for user-authorized
 - npm package contents: what ships is `package.json` -> `files`, and it is an allowlist of **directories and globs** - a file added just outside a listed pattern is dropped with nothing going red. `test/pack-contents.test.ts` asserts the positive side against a real `npm pack --dry-run --json`: every tracked file under `scripts/` ships except the dev-only `.ts`/`.mjs` ones (the `.mjs` is a verification tool that needs a GPU browser), every local image the two READMEs reference ships, and no `dist/` file lacks a matching source (`tsc` never prunes, so a renamed source used to keep shipping - four such files were removed on 2026-10-11). The negative side (nothing from `output/` or `models/`, no keys) is the CI `release-consistency` job. Both halves mattered on 2026-10-11: the published `1.9.0` tarball was missing `scripts/data/wechat_emoji.json` (the emoji fallback map `scripts/wechat_emoji.py` reads) and `logo.png`, so npm installs rendered a batch of face codes as literal text and the package page showed a broken logo.
 - Downstream data contract: local JSON export is the first compatibility boundary for `she-love-me` and future consumers; see `docs/DATA_CONTRACT.md`.
 - Supported focus: Windows WeChat 4.x; Linux WeChat 4.x has an NT database path; macOS requires user-provided local access credentials for initialization.
+    **Linux 实测（2026-11-01，Ubuntu 24.04 + 微信 Linux 4.1.13.26，真实登录态）**：
+    数据目录发现、账号扫描、Python 依赖检查、`check`/`init` 流程都正常；`scan` 能列出 9 个数据库。
+    **密钥提取失败**，原因已定位为版本机制变化：4.1.12.26+ 改为「共享 passphrase + 每分片 salt 派生」
+    （PBKDF2-HMAC-SHA512 25.6 万轮），而旧实现找的是 `x'<key><salt>'` 成对字面量，结构上不可能命中。
+    同轮修正三处：`pymem` 在 4.2 上枚举不到 `Weixin.exe`（改逐 PID `OpenProcess` 兜底）；
+    Linux 用 `'wechat' in exe名` 判进程会假阳性（`notwechat-tool` 被当成微信，改正则）；
+    Linux 上「版本探测只做了 Windows」曾被写成「微信没在运行」。
+    `xwechat_files/all_users/login/<wxid>/key_info.db` 是**明文 SQLite**（`LoginKeyInfoTable`，
+    每行 180 字节 blob），但 blob 封装过，暂无解。详见 `docs/VERSION_METHODS.md` M-02/M-11/M-12/M-14/M-15。
   The version actually verified on this machine is **4.1.15.56** (2026-10-19; before it 4.1.15.53 on 2026-10-18, and
   4.1.15.13 before that) - read from the live process's `--user-lib-dir` when it is there, and otherwise from the
   `Weixin.dll` that process actually has mapped (4.1.15.53+ carries **no** switches at all - D-125), **not** from the

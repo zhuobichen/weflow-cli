@@ -72,3 +72,35 @@ export function describeCompatVerdict(verdict: CompatVerdict, verifiedVersion: s
       return `无法判定（${reason || '微信没在运行或版本探测失败'}）；本版本验证过的是 ${verifiedVersion}`
   }
 }
+
+
+/**
+ * 版本未知的**原因**要分三种说清（别把它们混成一句"微信没在运行"）：
+ *   1. 进程视图被隔离（沙箱/容器里看不到主程序）；
+ *   2. **平台不支持版本探测**——版本探测只实现了 Windows，
+ *      Linux/macOS 上客户端明明在跑也拿不到版本；
+ *   3. 客户端真的没开。
+ *
+ * 第 2 种是 2026-11-01 在 Ubuntu + 微信 4.1.13.26 上实测踩到的：
+ * `check` 报"未知（微信没在运行）"，而同一时刻微信正在写 biz_message_0.db。
+ * 这就是 D-145 要避免的假错误——把"探测不支持"讲成"客户端没开"。
+ */
+export function describeUnknownVersionReason(options: {
+  platform?: NodeJS.Platform
+  viewFiltered?: boolean
+} = {}): { reason: string; compatReason: string } {
+  const platform = options.platform ?? process.platform
+  if (options.viewFiltered) {
+    return {
+      reason: '未知（进程视图被隔离，判断不了）',
+      compatReason: '本进程的进程视图被隔离，看不到主程序',
+    }
+  }
+  if (platform !== 'win32') {
+    return {
+      reason: `未知（版本探测仅支持 Windows，当前平台 ${platform}）`,
+      compatReason: '版本探测仅支持 Windows，本平台无法判定，不代表客户端没运行',
+    }
+  }
+  return { reason: '未知（微信没在运行）', compatReason: '' }
+}
