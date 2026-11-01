@@ -186,9 +186,11 @@ jobs:
           python3 - <<'PY'
           import hashlib, json, os, sqlcipher3
           home = os.environ['HOME']
-          msg = os.path.join(home, 'synth', 'message')
+          # 目录布局要符合 find_nt_databases() 的期望：<root>/<wxid>/db_storage/message/*.db
+          # （第一版写成 <root>/message/，key-status 报 total:0，白跑一次 CI）。
+          msg = os.path.join(home, 'synth', 'wxid_demo', 'db_storage', 'message')
           os.makedirs(msg, exist_ok=True)
-          db = os.path.join(msg, 'message_0.db')
+          db = os.path.join(msg, 'biz_message_0.db')
           # 合成密钥：只用于 CI，与任何真实账号无关
           key, salt = '11' * 32, '22' * 16
           gh = 'gh_citest00000000000000000000'
@@ -200,10 +202,14 @@ jobs:
           conn.execute(f'CREATE TABLE "{tbl}" (create_time INTEGER, message_content BLOB)')
           xml = ('<msg><appmsg><title><![CDATA[CI 合成文章]]></title>'
                  '<url><![CDATA[https://mp.weixin.qq.com/s/CITEST000000000000000]]></url></appmsg></msg>')
-          conn.execute(f'INSERT INTO "{tbl}" VALUES (?, ?)', (1793500000, xml.encode()))
+          # 时间戳必须落在 --date 指定的那天（1793500000 是 10-27，会"找到 0 篇"）：
+          # 1767261600 = 2026-01-01 08:40 UTC，UTC 与东八区都还是 1 月 1 日。
+          conn.execute(f'INSERT INTO "{tbl}" VALUES (?, ?)', (1767261600, xml.encode()))
           conn.commit()
           conn.close()
-          json.dump({'ntDbPath': db, 'bizKey': key, 'bizSalt': salt},
+          # biz_daily 用 ntDbPath 的**目录**去找 biz_message_0.db，
+          # 所以这里按它期望的形态写 message_0.db
+          json.dump({'ntDbPath': os.path.join(msg, 'message_0.db'), 'bizKey': key, 'bizSalt': salt},
                     open(os.path.join(home, '.weflow-cli', 'config.json'), 'w'),
                     ensure_ascii=False)
           print('合成库已就绪')
