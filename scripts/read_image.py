@@ -38,7 +38,11 @@ import export_chat_html as E       # noqa: E402
 
 # 取到的图放在仓库的 output/.cache 下（与抓取缓存同一层），键是 (talker, local_id)。
 # 只缓存**取到的**图：取不到可能是"微信没在运行"这种会变的状态，缓存住就永远取不到了。
-CACHE_DIR = os.path.join(SCRIPT_DIR, 'output', '.cache', 'read-image')
+try:
+    from _utils import output_root as _output_root
+    CACHE_DIR = os.path.join(_output_root(), '.cache', 'read-image')
+except Exception:
+    CACHE_DIR = os.path.join(SCRIPT_DIR, 'output', '.cache', 'read-image')
 MAX_SIDE = 720
 
 

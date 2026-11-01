@@ -879,7 +879,8 @@ def fetch_article(url: str, max_retries: int = 3) -> str | None:
     return None
 
 
-FETCH_CACHE_DIR = os.path.join(SCRIPT_DIR, 'output', '.cache', 'fetch')
+# 同理：缓存也必须可写（安装目录属于 root 时写不进去）
+FETCH_CACHE_DIR = os.path.join(os.path.dirname(OUTPUT_ROOT), '.cache', 'fetch')
 
 
 def fetch_article_cached(url: str, use_cache: bool = True) -> tuple[str | None, bool]:
