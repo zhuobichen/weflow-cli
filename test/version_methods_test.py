@@ -27,7 +27,11 @@ def parse_rows(text):
         line = line.strip()
         if not line.startswith('| M-'):
             continue
-        cells = [c.strip() for c in line.strip('|').split('|')]
+        # 单元格里允许转义的竖线（正则里常有），先换占位符再切分；
+        # 否则一个正则就把整行切错位——守卫测试自己就踩过。
+        PROTECT = '\x00PIPE\x00'
+        cells = [c.strip().replace(PROTECT, '|')
+                 for c in line.replace('\\|', PROTECT).strip('|').split('|')]
         if len(cells) < 7:
             continue
         rows.append({

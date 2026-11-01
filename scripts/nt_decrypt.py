@@ -245,6 +245,8 @@ def find_weixin_pid():
 
 _LINUX_WECHAT_COMMS = {'wechat', 'wechatappex', 'weixin'}
 _LINUX_EXE_PREFIX_DENY = ('python', 'bash', 'sh', 'zsh', 'node', 'perl', 'ruby', 'electron')
+#: 可执行文件名必须形如 wechat / wechat4 / wechat-4.1.13（不允许只“包含”）
+_LINUX_EXE_OK = re.compile(r'^([\w-]+\.)*(wechat|weixin)([.-]?\d[\w.-]*)?$')
 
 
 def _is_linux_wechat_process(pid):
@@ -262,7 +264,10 @@ def _is_linux_wechat_process(pid):
         name = os.path.basename(exe).lower()
         if any(name.startswith(p) for p in _LINUX_EXE_PREFIX_DENY):
             return False
-        return 'wechat' in name or 'weixin' in name
+        # 只认“叫 wechat/weixin（可带版本后缀）”的可执行文件。
+        # 之前用 `'wechat' in name`，实测把 `notwechat-tool` 也判成微信——
+        # 假阳性会去读一个无关进程的内存，白花时间还报“没找到密钥”。
+        return bool(_LINUX_EXE_OK.match(name))
     except (PermissionError, FileNotFoundError, ProcessLookupError):
         return False
 
