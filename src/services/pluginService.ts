@@ -22,6 +22,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { writeFileAtomic } from '../utils/atomicWrite.js'
 import { resolvePackageRoot } from '../utils/packageRoot.js'
+import { resolveOutputRoot } from '../utils/outputRoot.js'
 import { runPythonJson } from './pythonBridge.js'
 
 /** 清单格式的版本。破坏性改动升 v2，并让宿主双读一个版本，否则没人敢写插件。 */
@@ -652,7 +653,9 @@ export interface SourceRunResult {
 const SOURCE_OUTPUT_CAP = 200_000
 
 function outputDirFor(id: string): string {
-  return join(resolvePackageRoot(import.meta.url), 'output', `${id}-notes`)
+  // 走可写输出根：读方是 Python 的 `compile_wiki`（默认 glob `<output_root>/*-notes`），
+  // 两边必须同根；写进包目录在全局安装时会 EACCES（2026-11-01 Linux 实测）。
+  return join(resolveOutputRoot(), `${id}-notes`)
 }
 
 /**

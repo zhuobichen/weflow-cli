@@ -369,7 +369,13 @@ def load_card_texts(card_dirs=None) -> list[dict]:
     七千张卡"快得多。
     """
     import glob as _glob
-    dirs = card_dirs or sorted(p for p in _glob.glob('output/*-notes') if os.path.isdir(p))
+    # 默认扫**可写输出根**下的 `*-notes`：写方（TS 插件 / chat_notes）也在这里。
+    try:
+        from _utils import output_root as _output_root
+        _cards_base = _output_root()
+    except Exception:
+        _cards_base = 'output'
+    dirs = card_dirs or sorted(p for p in _glob.glob(os.path.join(_cards_base, '*-notes')) if os.path.isdir(p))
     cards = []
     for directory in dirs:
         for path in Path(directory).rglob('*.md'):

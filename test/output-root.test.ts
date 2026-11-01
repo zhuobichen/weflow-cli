@@ -64,3 +64,16 @@ test('qchat 导入存储也落在可写输出根之下（写入方与读取方�
   const { importRoot } = await import('../src/services/qchatImport.ts')
   assert.equal(importRoot(), join(resolveOutputRoot(), 'imports', 'qq'))
 })
+
+test('媒体落地目录也落在可写输出根之下', async () => {
+  const { resolveOutputRoot } = await load('media-root')
+  const { wechatMediaDir } = await import('../src/services/wechatMedia.ts')
+  // 环境变量必须为空才能测默认值
+  const saved = process.env.WEFLOW_WECHAT_MEDIA_DIR
+  delete process.env.WEFLOW_WECHAT_MEDIA_DIR
+  try {
+    assert.equal(wechatMediaDir(), join(resolveOutputRoot(), 'wechat-media'))
+  } finally {
+    if (saved !== undefined) process.env.WEFLOW_WECHAT_MEDIA_DIR = saved
+  }
+})

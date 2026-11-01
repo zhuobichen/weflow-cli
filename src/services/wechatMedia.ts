@@ -15,6 +15,7 @@
  * 2. **文件名永远由本地决定** —— 服务端给的名字只取 basename 并过滤字符，`../` 之类必须在这里被吃掉；
  * 3. **超过上限就不写**（`WECHAT_MEDIA_MAX_BYTES`），失败不留半个文件 —— 半个文件比没有更难查。
  */
+import { resolveOutputRoot } from '../utils/outputRoot.js'
 import { basename, join } from 'path'
 import { mkdir, writeFile } from 'fs/promises'
 
@@ -24,7 +25,8 @@ export const WECHAT_MEDIA_MAX_BYTES = 25 * 1024 * 1024
 /** 落地目录：默认仓库相对 `output/wechat-media/`（`output/` 已在 .gitignore 里），可用环境变量改（测试用临时目录） */
 export function wechatMediaDir(env: NodeJS.ProcessEnv = process.env): string {
   const fromEnv = env.WEFLOW_WECHAT_MEDIA_DIR
-  return fromEnv && fromEnv.trim() ? fromEnv : join('output', 'wechat-media')
+  // 默认落在可写输出根（cwd 可能是只读目录，包目录在全局安装时也不可写）
+  return fromEnv && fromEnv.trim() ? fromEnv : join(resolveOutputRoot(), 'wechat-media')
 }
 
 export type InboundMediaType = 'image' | 'record' | 'file' | 'video'

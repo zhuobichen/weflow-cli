@@ -33,6 +33,10 @@
 ~/.weflow-cli/output/biz-daily/<日期>/    日报（index.html / article.html / 分类目录）
 ~/.weflow-cli/output/wechat-vault/        Vault（002_Literature/WeChat/<日期>/）
 ~/.weflow-cli/output/knowledge-graph-3d.html
+~/.weflow-cli/output/chat-notes/          会话卡片（compile_wiki 读它）
+~/.weflow-cli/output/article-notes/       文章卡片
+~/.weflow-cli/output/wechat-media/        入站媒体落地
+~/.weflow-cli/output/imports/qq/          import qchat 的存储
 ~/.weflow-cli/output/.cache/              抓取缓存
 ```
 

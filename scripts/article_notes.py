@@ -40,7 +40,11 @@ import compile_wiki  # noqa: E402  （用它的 concept_body / _extract_summary�
 
 TZ = timezone(timedelta(hours=8))
 SOURCE_ROOT = 'output/wechat-vault/002_Literature'
-OUTPUT_ROOT = 'output/article-notes'
+try:
+    from _utils import output_root as _output_root
+    OUTPUT_ROOT = os.path.join(_output_root(), 'article-notes')
+except Exception:
+    OUTPUT_ROOT = 'output/article-notes'
 DEFAULT_LIMIT = 30
 # 进提示词的字数上限。文章笔记本身已经是提炼过的一千多字，3000 足够，超出只是保险。
 MAX_ARTICLE_CHARS = 3000

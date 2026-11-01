@@ -54,7 +54,11 @@ import nt_decrypt  # noqa: E402
 import wechat_voice  # noqa: E402
 
 TZ = timezone(timedelta(hours=8))
-OUTPUT_ROOT = 'output/chat-notes'
+try:
+    from _utils import output_root as _output_root
+    OUTPUT_ROOT = os.path.join(_output_root(), 'chat-notes')
+except Exception:
+    OUTPUT_ROOT = 'output/chat-notes'
 DEFAULT_DAYS = 30
 # 分页的**页大小**。以前这个值就是"每个会话取多少条"的上限（120），而那是错的：
 # 实测窗口内 138 个会话共 **8 万条**，而它只送了 **9,010 条（约 19%）**——每个会话

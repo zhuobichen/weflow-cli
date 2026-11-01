@@ -95,6 +95,19 @@ class OutputRootTests(unittest.TestCase):
         finally:
             os.environ.pop('WEFLOW_IMPORT_ROOT', None)
 
+    def test_notes_dirs_share_the_root(self):
+        """卡片目录（chat/article-notes）必须与读取方同根。
+
+        写方是 TS 插件（`<output_root>/<id>-notes`）与这两个脚本；
+        读方是 `compile_wiki` 默认 glob `<output_root>/*-notes`。
+        2026-11-01 在 Linux 安装版上发现三处都指向包目录，写进去读不到。
+        """
+        import chat_notes
+        import article_notes
+        base = pathlib.Path(_utils.output_root())
+        self.assertEqual(pathlib.Path(chat_notes.OUTPUT_ROOT), base / 'chat-notes')
+        self.assertEqual(pathlib.Path(article_notes.OUTPUT_ROOT), base / 'article-notes')
+
 
 if __name__ == '__main__':
     unittest.main()
