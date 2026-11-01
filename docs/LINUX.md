@@ -145,6 +145,19 @@ Ubuntu 上有四个 job，其中两个直接覆盖 Linux 兼容：
 `linux-write-path` 的存在理由：这类 bug（输出/缓存/vault 写进包目录）在**可写的 checkout 里永远不会红**，
 只有装到 Linux 才暴露。它的判据是"造出不可写的安装"，不是"在可写环境里跑一遍"。
 
+## 权限：库打不开时会明确说"打不开"，不会说成"口令错"
+
+Linux 上文件属主/权限比 Windows 更容易踩。这两类错误被刻意分开了：
+
+| 场景 | 输出 |
+| --- | --- |
+| 一个库都没找到（路径错/目录不可读） | `key-status` → `verdict: no-databases`；人类可读输出 `未找到可读的数据库（检查数据目录路径与文件权限）` |
+| 库找到但打不开（属主/chmod/被独占） | `[ERROR] 无法打开订阅号数据库: <路径>` + `OperationalError: unable to open database file` + 权限排查提示，退出码 1 |
+| 密钥真的不对 | `verdict: mismatch`，提示"口令/密钥与这些库都不匹配" |
+
+之前的实现把前两种都报成 `mismatch`（"口令不对"），而 `daily` 直接抛 traceback——
+排查时很容易往错的方向找。
+
 ## 一个踩过的坑：缺 `zstandard` 会伪装成"今天没文章"
 
 订阅号消息体是 zstd 压缩的。缺这个依赖时 `extract_article_info()` 抛 ImportError，

@@ -2175,14 +2175,19 @@ def main():
         else:
             detail = '配置里没有密钥/口令'
 
-        verdict = ('ok' if mode != 'none' and matched == total and total > 0
+        # total==0 与 mismatch 是两件事：一个是"一个库都没找到"（路径/权限问题），
+        # 一个是"找到了但密钥不对"。混为一谈会把权限问题报成"口令错"。
+        verdict = ('no-databases' if total == 0
+                   else 'ok' if mode != 'none' and matched == total and total > 0
                    else 'none' if mode == 'none'
                    else 'partial' if matched else 'mismatch')
         if args.json:
             print(json.dumps({'mode': mode, 'total': total, 'matched': matched,
                               'verdict': verdict, 'detail': detail}, ensure_ascii=True))
         else:
-            if mode == 'none':
+            if verdict == 'no-databases':
+                print('未找到可读的数据库（检查数据目录路径与文件权限）')
+            elif mode == 'none':
                 print(f'未配置凭据：{detail}；{total} 个库都无法读取')
             else:
                 label = '口令' if mode == 'passphrase' else '密钥'

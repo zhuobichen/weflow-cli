@@ -1219,9 +1219,19 @@ def main():
     # Connect biz db（没有密钥且只跑外部源时跳过：conn/c 置 None 即可）
     if keys['biz_db']:
         raw_key = f"x'{keys['biz_key']}{keys['biz_salt']}'"
-        conn = sqlcipher.connect(keys['biz_db'])
-        c = conn.cursor()
-        c.execute(f'PRAGMA key = "{raw_key}";')
+        # 打不开库是**环境问题**（路径/权限/被独占），不是密钥问题。
+        # 之前这里直接抛 traceback，用户在 Linux 上只看到一句
+        # `OperationalError: unable to open database file`，看不出该改什么。
+        try:
+            conn = sqlcipher.connect(keys['biz_db'])
+            c = conn.cursor()
+            c.execute(f'PRAGMA key = "{raw_key}";')
+        except Exception as exc:
+            print(f'[ERROR] 无法打开订阅号数据库: {keys["biz_db"]}')
+            print(f'        {type(exc).__name__}: {exc}')
+            print('        常见原因：文件不存在、权限不足（属主/chmod）、或库正被其他程序独占。')
+            print('        排查：ls -l 上面这个路径；若属主不是当前用户，用 chown 或改用有权限的账号运行。')
+            sys.exit(1)
     else:
         conn = None
         c = None
