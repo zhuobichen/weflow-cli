@@ -226,6 +226,27 @@ export class DbPathService {
         possiblePaths.push(join(home, 'xwechat_files'))
         possiblePaths.push(join(home, 'Documents', 'xwechat_files'))
         possiblePaths.push(join(home, '文档', 'xwechat_files'))
+        // XDG 规定的数据目录（部分发行版/自定义安装会放这里）
+        const xdgData = process.env.XDG_DATA_HOME
+        if (xdgData) possiblePaths.push(join(xdgData, 'xwechat_files'))
+        // Flatpak 打包的微信：数据被沙箱重定向到 ~/.var/app/<id>/。
+        // 之前只列四个“常规”路径，Flatpak 用户 `init` 会直接报找不到数据目录。
+        for (const appId of ['com.tencent.wechat', 'com.tencent.WeChat', 'com.tencent.xinWeChat']) {
+          possiblePaths.push(join(home, '.var', 'app', appId, 'data', 'xwechat_files'))
+          possiblePaths.push(join(home, '.var', 'app', appId, 'xwechat_files'))
+        }
+        // 兜底：扫一遍 ~/.var/app/*/，兼容未预料到的 app id
+        try {
+          const varApp = join(home, '.var', 'app')
+          for (const entry of readdirSync(varApp)) {
+            possiblePaths.push(join(varApp, entry, 'data', 'xwechat_files'))
+            possiblePaths.push(join(varApp, entry, 'xwechat_files'))
+          }
+        } catch { }
+        // Snap 打包：~/snap/<pkg>/common/
+        for (const pkg of ['wechat', 'weixin']) {
+          possiblePaths.push(join(home, 'snap', pkg, 'common', 'xwechat_files'))
+        }
       } else {
         // Windows: 优先检测 NT 格式 (xwechat_files)
         possiblePaths.push(join(home, 'xwechat_files'))
