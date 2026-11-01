@@ -58,8 +58,10 @@ test('Vault sync previews untracked files and requires confirmation without leak
   const entry = join(process.cwd(), 'bin', 'weflow-cli.ts')
   const tsx = import.meta.resolve('tsx')
   const remote = 'https://user:secret@example.invalid/private.git'
+  // 显式给 --vault：vault 默认路径不再相对 cwd（全局安装时 cwd 不可靠），
+  // 这条用例测的是预览/确认/不泄露远端，不是默认路径解析。
   const run = (extra: string[]) => spawnSync(process.execPath, [
-    '--import', tsx, entry, 'vault', 'sync', '--repo', remote, ...extra,
+    '--import', tsx, entry, 'vault', 'sync', '--repo', remote, '--vault', vault, ...extra,
   ], {
     cwd: workspace,
     encoding: 'utf8',

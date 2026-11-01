@@ -4982,12 +4982,15 @@ program
         .option('-b, --branch <name>', '分支名', 'main')
         .option('--dry-run', '仅预览变更数量，不提交或推送')
         .option('--yes', '确认提交并推送')
+        .option('--vault <path>', 'Vault 路径', join(resolveOutputRoot(), 'wechat-vault'))
         .option('--json', '输出 JSON 格式，不返回远端地址或文件名')
         .action(async (opts) => {
           const { execFile } = await import('child_process')
           const { promisify } = await import('util')
           const execFileAsync = promisify(execFile)
-          const vaultPath = join(resolveOutputRoot(), 'wechat-vault')
+          // 支持 --vault 覆盖：默认落在可写输出根下（全局安装时包目录不可写），
+          // 但把 vault 放在别处的用户必须能指定——之前它写死推导，测试也只能靠 cwd 凑。
+          const vaultPath = opts.vault || join(resolveOutputRoot(), 'wechat-vault')
 
           const repo = opts.repo || configService.get('vaultRepo')
           if (!repo) {
