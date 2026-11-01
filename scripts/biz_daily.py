@@ -1201,6 +1201,16 @@ def main():
         engine = 'local'
         print(f'  无 API key，切换到本地引擎')
 
+    # 订阅号消息体是 zstd 压缩的；缺这个依赖时 extract_article_info 会在循环里抛 ImportError，
+    # 而那个循环是 `except: continue` —— 结果是**安静地报"找到 0 篇文章"**。
+    # 2026-11-01 在 CI 上就是这么被坑的：库里有 1 行、查询返回 1 行，最后却是 0 篇。
+    try:
+        import zstandard  # noqa: F401
+    except ImportError:
+        print('[ERROR] 缺少 zstandard：订阅号消息体是 zstd 压缩的，没它会把\u201c解析不了\u201d当成\u201c今天没文章\u201d。')
+        print('        安装: pip install zstandard   （或 python -m pip install --user zstandard）')
+        sys.exit(1)
+
     print(f'=== 公众号日报 {date_str} ===')
     print(f'Biz DB: {keys["biz_db"]}')
     if source_filters:
