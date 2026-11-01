@@ -223,9 +223,13 @@ test('真实解密链路：URL 形式 + AES-128-ECB + 去 PKCS#7（假 fetch，�
   }
 })
 
-test('落地目录：默认在 output/ 下，可用环境变量改（测试与自定义都不碰仓库）', () => {
-  assert.equal(wechatMediaDir({} as any), join('output', 'wechat-media'))
+test('落地目录：默认在可写输出根下，可用环境变量改（测试与自定义都不碰仓库）', async () => {
+  // 默认值从"cwd 相对的 output/"改成了 `resolveOutputRoot()/wechat-media`：
+  // cwd 可能是只读目录，包目录在全局安装时也不可写（2026-11-01 Linux 实测）。
+  const { resolveOutputRoot } = await import('../src/utils/outputRoot.ts')
+  const expected = join(resolveOutputRoot(), 'wechat-media')
+  assert.equal(wechatMediaDir({} as any), expected)
   assert.equal(wechatMediaDir({ WEFLOW_WECHAT_MEDIA_DIR: 'D:/media' } as any), 'D:/media')
-  assert.equal(wechatMediaDir({ WEFLOW_WECHAT_MEDIA_DIR: '  ' } as any), join('output', 'wechat-media'),
+  assert.equal(wechatMediaDir({ WEFLOW_WECHAT_MEDIA_DIR: '  ' } as any), expected,
     '空字符串不算设置过')
 })
