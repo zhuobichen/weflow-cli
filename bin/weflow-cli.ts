@@ -1217,8 +1217,14 @@ program
             } else {
               console.log(chalk.gray('  1. 确保微信已启动并完成登录（登录后才会在内存中缓存密钥）'))
               console.log(chalk.gray('  2. 确保以 root 或 CAP_SYS_PTRACE 运行（sudo setcap cap_sys_ptrace=ep $(which python3)）'))
-              console.log(chalk.gray('  3. 较新微信版本需配置全库 passphrase: weflow-cli fav set-key --passphrase <64位hex>，再重新 init 自动派生'))
-              console.log(chalk.gray('  4. 或用第三方工具提取密钥后手动配置 weflow-cli config set ntKey <密钥>'))
+                console.log(chalk.gray('  3. 较新微信版本（4.1.12.26+）改用「共享口令 + 每分片派生」，'
+                  + '内存里不再有 key/salt 成对字面量，自动提取在结构上不会命中。'))
+                console.log(chalk.gray('     拿到口令后先验证再配置：'))
+                console.log(chalk.gray('       python3 scripts/nt_decrypt.py verify-passphrase-all --passphrase <64位hex>'))
+                console.log(chalk.gray('       weflow-cli fav set-key --passphrase <64位hex> && weflow-cli init'))
+                console.log(chalk.gray('  4. 不想处理密钥：直接用外部订阅源出日报'))
+                console.log(chalk.gray('       python3 scripts/pipeline.py --rss-feeds-file output/rss-feeds.json'))
+                console.log(chalk.gray('  5. 任何时候想知道现状: python3 scripts/nt_decrypt.py key-status'))
             }
             process.exit(1)
           }
