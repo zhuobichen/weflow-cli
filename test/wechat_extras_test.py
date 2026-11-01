@@ -18,7 +18,10 @@ import json
 import os
 import sqlite3
 import sys
+import pathlib
 import unittest
+import pathlib
+import tempfile
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                                 'scripts'))
@@ -522,7 +525,9 @@ class BizSubscribeTests(unittest.TestCase):
 
 class PathTests(unittest.TestCase):
     def test_db_paths_are_derived_from_the_message_database(self):
-        msg = r'C:\acct\wxid_x\db_storage\message\message_0.db'
+        # 平台中立：POSIX 上 Path('C:\\...') 会把整串当一个文件名
+        msg = str(pathlib.Path(tempfile.gettempdir()) / 'acct' / 'wxid_x'
+                  / 'db_storage' / 'message' / 'message_0.db')
         paths = X.db_paths(msg)
         self.assertTrue(str(paths['general']).endswith(
             os.path.join('general', 'general.db')))

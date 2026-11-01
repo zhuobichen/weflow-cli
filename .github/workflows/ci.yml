@@ -71,7 +71,9 @@ jobs:
       # `backfill_articles_test` / `bonds_test` 现在 import sqlcipher3, `knowledge_line_scope_test`
       # import numpy, 两者都在 requirements.txt 里。缺了它们不是"跳过"而是整批 collection error,
       # 所以这里必须装齐(用 sqlcipher3-binary: 预编译 wheel, 不必就地编 OpenSSL)。
-      - run: python -m pip install --quiet zstandard pycryptodome numpy sqlcipher3-binary
+      # cryptography 是 requirements.txt 里的运行时依赖，wechat_emoticon 的用例要在
+      # **干净子进程**里 import 它；CI 漏装会让那条用例报红（2026-11-01 实测）。
+      - run: python -m pip install --quiet zstandard pycryptodome numpy sqlcipher3-binary cryptography
       - name: python tests
         # 与 node job 同一套路：**失败**与**跳过**都发成 annotation（日志本机读不到，annotation 能读）。
         # 跳过尤其要发：这一层有两个静默缺口叠在一起 —— `sqlcipher3-binary` 的 install 标着

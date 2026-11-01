@@ -260,6 +260,14 @@ class OcrOnlyTests(unittest.TestCase):
                              '--ocr-only 竟然被 --yes 拦住')
 
 
+try:
+    import fitz  # noqa: F401  PyMuPDF：渲染用
+    HAVE_FITZ = True
+except Exception:
+    HAVE_FITZ = False
+
+
+@unittest.skipUnless(HAVE_FITZ, 'PyMuPDF(fitz) 未安装——渲染用例跳过，不是通过')
 class RenderTests(unittest.TestCase):
     """页面渲染：**必须封顶 + 用 JPEG**。
 

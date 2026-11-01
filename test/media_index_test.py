@@ -7,6 +7,7 @@
 """
 import importlib.util
 import pathlib
+import tempfile
 import sys
 import types
 import unittest
@@ -23,9 +24,11 @@ with patch.dict(sys.modules, {'sqlcipher3': types.SimpleNamespace(dbapi2=__impor
 
 class PathTemplateTests(unittest.TestCase):
     def setUp(self):
-        self.cfg = {
-            'ntDbPath': r'D:\fake\wxid_x\db_storage\message\message_0.db',
-        }
+        # 用**当前平台**的路径：被测的 account_root()/resolve() 走 pathlib，
+        # 在 POSIX 上解析 Windows 字面量会把整串当成一个文件名（CI 上就是这样红的）。
+        self.acct = pathlib.Path(tempfile.gettempdir()) / 'fake' / 'wxid_x'
+        self.msg_db = self.acct / 'db_storage' / 'message' / 'message_0.db'
+        self.cfg = {'ntDbPath': str(self.msg_db)}
 
     def rel(self, kind, d1, d2, name):
         tmpl = mi.TABLES[kind][1]
@@ -45,14 +48,14 @@ class PathTemplateTests(unittest.TestCase):
         p = mi.resolve(self.cfg, row)
         self.assertEqual(
             str(p),
-            r'D:\fake\wxid_x\msg\file\2025-09\a.xlsx')
+            str(self.acct / 'msg' / 'file' / '2025-09' / 'a.xlsx'))
 
     def test_hardlink_path_sits_next_to_message_shards(self):
         p = mi.hardlink_path(self.cfg)
-        self.assertEqual(str(p), r'D:\fake\wxid_x\db_storage\hardlink\hardlink.db')
+        self.assertEqual(str(p), str(self.acct / 'db_storage' / 'hardlink' / 'hardlink.db'))
 
     def test_account_root_is_three_levels_up(self):
-        self.assertEqual(str(mi.account_root(self.cfg)), r'D:\fake\wxid_x')
+        self.assertEqual(str(mi.account_root(self.cfg)), str(self.acct))
 
 
 if __name__ == '__main__':

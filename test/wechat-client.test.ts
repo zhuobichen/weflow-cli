@@ -211,8 +211,11 @@ test('detectWechatClient：非 Windows 直接说平台不支持，不是"没问�
   Object.defineProperty(process, 'platform', { value: 'linux', configurable: true })
   try {
     const facts = await detectWechatClient(async () => { throw new Error('不该被调用') })
+    // Linux 现在走 detectLinuxClient()：扫 /proc 判运行、读 ~/.xwechat/uh/uh.dat 取版本。
+    // 所以"未知"的措辞不再是"只做了 Windows"——那句话在 Linux 能探测之后就成了错的。
     assert.equal(facts.version, null)
-    assert.match(facts.note, /只做了 Windows/)
+    assert.doesNotMatch(facts.note, /只做了 Windows/, 'Linux 已经能探测，不该再说只支持 Windows')
+    assert.ok(facts.note.length > 0, '必须给出"为什么未知"')
   } finally {
     Object.defineProperty(process, 'platform', { value: real, configurable: true })
   }

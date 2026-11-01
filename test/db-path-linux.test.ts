@@ -34,7 +34,9 @@ async function detectUnder(home: string): Promise<string | null> {
   try {
     const service = new DbPathService()
     const found = await service.autoDetect({})
-    return found ?? null
+    // autoDetect 返回的是 { success, path, error, source }，**不是**字符串
+    // （第一版把它当字符串，CI 的 ubuntu job 上 4 条全红）。
+    return found.success ? (found.path ?? null) : null
   } finally {
     if (saved.HOME === undefined) delete process.env.HOME
     else process.env.HOME = saved.HOME
