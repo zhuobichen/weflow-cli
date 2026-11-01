@@ -166,3 +166,62 @@ class VerifyPassphraseAllTests(unittest.TestCase):
                                       bytes.fromhex(salt), 256000, 32).hex()
         build_db(self.db, derived, salt)
         self.assertIs(self._verify('88' * 32), False, '错误口令必须被判为不可用')
+
+
+@unittest.skipUnless(HAS_SQLCIPHER, 'sqlcipher3 未安装')
+class KeyStatusTests(unittest.TestCase):
+    """`nt_decrypt.py key-status`：一句话回答"现在能不能读数据"。
+
+    Linux 上密钥拿不到是常态，用户最需要的就是这个确定结论；
+    而在 Windows 上它又必须能说"13/13 都能读"——两边都得准。
+    """
+
+    def _run(self, config_passphrase, db_passphrase=None):
+        import json as _json
+        import subprocess
+        home = tempfile.mkdtemp(prefix='wf-home-')
+        os.makedirs(os.path.join(home, '.weflow-cli'), exist_ok=True)
+        with open(os.path.join(home, '.weflow-cli', 'config.json'), 'w',
+                  encoding='utf-8') as fh:
+            _json.dump({'favPassphrase': config_passphrase}, fh)
+
+        # 用该口令派生密钥建库
+        db = os.path.join(self.root, 'wxid_demo', 'db_storage', 'message',
+                          'biz_message_0.db')
+        salt = '66' * 16
+        # 库用 db_passphrase 建；配置里放 config_passphrase。
+        # 两者分开才能表达"口令不对"这个场景（否则库和配置永远一致，测不出问题）。
+        build_pass = db_passphrase or config_passphrase
+        derived = hashlib.pbkdf2_hmac('sha512', bytes.fromhex(build_pass),
+                                      bytes.fromhex(salt), 256000, 32).hex()
+        build_db(db, derived, salt)
+
+        env = dict(os.environ)
+        env['HOME'] = home
+        env['USERPROFILE'] = home
+        p = subprocess.run(
+            [sys.executable, str(ROOT / 'scripts' / 'nt_decrypt.py'),
+             'key-status', '--root', self.root, '--json'],
+            capture_output=True, text=True, encoding='utf-8', errors='replace',
+            env=env, timeout=180)
+        shutil.rmtree(home, ignore_errors=True)
+        line = [ln for ln in (p.stdout or '').splitlines() if ln.strip().startswith('{')]
+        self.assertTrue(line, f'没有 JSON 输出: {p.stdout!r} {p.stderr[:200]!r}')
+        return _json.loads(line[-1])
+
+    def setUp(self):
+        self.root = tempfile.mkdtemp(prefix='wf-status-')
+
+    def tearDown(self):
+        shutil.rmtree(self.root, ignore_errors=True)
+
+    def test_reports_match_when_passphrase_is_correct(self):
+        got = self._run('77' * 32)
+        self.assertEqual(got['mode'], 'passphrase')
+        self.assertEqual(got['matched'], 1, got)
+        self.assertEqual(got['verdict'], 'ok', got)
+
+    def test_reports_mismatch_when_passphrase_is_wrong(self):
+        got = self._run('88' * 32, db_passphrase='77' * 32)
+        self.assertEqual(got['matched'], 0, got)
+        self.assertEqual(got['verdict'], 'mismatch', got)

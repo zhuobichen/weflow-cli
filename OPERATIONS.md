@@ -1177,6 +1177,16 @@ crontab 示例（北京时间 13:00 与 23:30）：
 > 输出形如 `共 13 个数据库，口令可解开 13 个`。**判据不依赖 sqlcipher3**，
 > 所以即使原生库没装好，也能分清"口令错"和"环境坏"。
 > 确认无误后再 `weflow-cli init`（或 `weflow-cli fav set-key --passphrase …`）。
+
+> **只想问"现在能不能读"**：
+>
+> ```bash
+> python3 scripts/nt_decrypt.py key-status
+> ```
+>
+> 它读配置里的凭据，逐个库回答，输出形如 `口令可解开 13/13 个库`（全通）、
+> `密钥可解开 0/9 个库` + 不匹配提示，或 `未配置凭据：…；9 个库都无法读取`。
+> 加 `--json` 给脚本用（字段 `mode` / `total` / `matched` / `verdict`）。
 > 并且会写进当天那份日志 —— 证明链路是通的）。
 
 - 查看：`Get-ScheduledTask -TaskName 'WeFlow Daily'`

@@ -2010,6 +2010,13 @@ def main():
                             help='Passphrase hex (64 chars)')
     all_parser.add_argument('--json', action='store_true')
 
+    # 一句话回答“现在能不能读数据”：把配置里的凭据与实际库对一遍。
+    # Linux 上密钥拿不到是常态，用户最需要的就是这个确定结论。
+    status_parser = sub.add_parser('key-status',
+                                   help='Report whether the configured credentials can open the databases')
+    status_parser.add_argument('--root', default=os.environ.get('WEFLOW_DB_ROOT'))
+    status_parser.add_argument('--json', action='store_true')
+
     # fav-list command
     fav_list_parser = sub.add_parser('fav-list', help='List favorite items')
     fav_list_parser.add_argument('--db', default=os.environ.get('WEFLOW_DB_PATH'), required=not os.environ.get('WEFLOW_DB_PATH'), help='Path to favorite.db')
@@ -2122,6 +2129,68 @@ def main():
                 print(f'  {mark} {r["db"]}')
             if not ok:
                 print('  口令与这些库都不匹配（或它们用的是另一套凭据）')
+        return
+
+    if args.command == 'key-status':
+        try:
+            from _utils import load_config
+            cfg = load_config()
+        except Exception:
+            cfg = {}
+        pass_enc = str(cfg.get('favPassphrase') or cfg.get('decryptKey') or '')
+        key_enc = str(cfg.get('bizKey') or cfg.get('ntKey') or '')
+        salt = str(cfg.get('bizSalt') or cfg.get('ntSalt') or '')
+
+        def _plain(v):
+            try:
+                from _utils import decrypt_lock
+                return decrypt_lock(v)
+            except Exception:
+                return v
+
+        dbs = find_nt_databases(getattr(args, 'root', None))
+        total, matched, mode, detail = len(dbs), 0, 'none', ''
+        if pass_enc:
+            mode = 'passphrase'
+            plain = _plain(pass_enc)
+            for item in dbs:
+                path = item['path'] if isinstance(item, dict) else item
+                try:
+                    if verify_passphrase_native(plain, path):
+                        matched += 1
+                except Exception:
+                    pass
+        elif key_enc and salt:
+            mode = 'key'
+            raw = f"x'{_plain(key_enc)}{salt}'"
+            for item in dbs:
+                path = item['path'] if isinstance(item, dict) else item
+                try:
+                    conn, _ = connect_nt_db(path, _plain(key_enc), salt)
+                    conn.execute('SELECT count(*) FROM sqlite_master').fetchone()
+                    conn.close()
+                    matched += 1
+                except Exception:
+                    pass
+        else:
+            detail = '配置里没有密钥/口令'
+
+        verdict = ('ok' if mode != 'none' and matched == total and total > 0
+                   else 'none' if mode == 'none'
+                   else 'partial' if matched else 'mismatch')
+        if args.json:
+            print(json.dumps({'mode': mode, 'total': total, 'matched': matched,
+                              'verdict': verdict, 'detail': detail}, ensure_ascii=True))
+        else:
+            if mode == 'none':
+                print(f'未配置凭据：{detail}；{total} 个库都无法读取')
+            else:
+                label = '口令' if mode == 'passphrase' else '密钥'
+                print(f'{label}可解开 {matched}/{total} 个库')
+                if verdict == 'mismatch':
+                    print('  当前凭据与这些库都不匹配——口令/密钥不对，或它们属于另一套凭据')
+                elif verdict == 'partial':
+                    print('  部分库可读，其余的可能是另一套凭据（多账号/多设备混装）')
         return
         print(json.dumps({"success": True, "verified": verdict}, ensure_ascii=True))
         return
