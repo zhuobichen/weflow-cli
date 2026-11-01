@@ -1999,6 +1999,17 @@ def main():
     native_parser.add_argument('--passphrase', default=os.environ.get('WEFLOW_NT_PASSPHRASE'), required=not os.environ.get('WEFLOW_NT_PASSPHRASE'), help='Passphrase hex (64 chars)')
     native_parser.add_argument('--internal-key', default=os.environ.get('WEFLOW_INTERNAL_DB_KEY', ''), help='Optional 64-char hex XOR key (some builds)')
 
+    # 一次问清“这个口令能解开多少个库”：Linux 上自动提密钥走不通时，
+    # 用户唯一可行的路径就是自己提供 passphrase，所以必须能立刻验证它对不对。
+    all_parser = sub.add_parser('verify-passphrase-all',
+                                help='Check a passphrase against every database under a root')
+    all_parser.add_argument('--root', default=os.environ.get('WEFLOW_DB_ROOT'),
+                            help='xwechat_files root (default: auto-detect)')
+    all_parser.add_argument('--passphrase', default=os.environ.get('WEFLOW_NT_PASSPHRASE'),
+                            required=not os.environ.get('WEFLOW_NT_PASSPHRASE'),
+                            help='Passphrase hex (64 chars)')
+    all_parser.add_argument('--json', action='store_true')
+
     # fav-list command
     fav_list_parser = sub.add_parser('fav-list', help='List favorite items')
     fav_list_parser.add_argument('--db', default=os.environ.get('WEFLOW_DB_PATH'), required=not os.environ.get('WEFLOW_DB_PATH'), help='Path to favorite.db')
@@ -2089,6 +2100,29 @@ def main():
                               "error": "无法判定（文件不可读、过短，或 passphrase 不是 64 位 hex）"},
                              ensure_ascii=True))
             return
+
+    if args.command == 'verify-passphrase-all':
+        dbs = find_nt_databases(getattr(args, 'root', None))
+        results = []
+        for item in dbs:
+            path = item['path'] if isinstance(item, dict) else item
+            try:
+                verdict = verify_passphrase_native(args.passphrase, path)
+            except Exception:
+                verdict = None
+            results.append({'db': path, 'verified': verdict})
+        ok = [r for r in results if r['verified'] is True]
+        if args.json:
+            print(json.dumps({'total': len(results), 'matched': len(ok),
+                              'results': results}, ensure_ascii=True))
+        else:
+            print(f'共 {len(results)} 个数据库，口令可解开 {len(ok)} 个')
+            for r in results:
+                mark = '✓' if r['verified'] is True else ('✗' if r['verified'] is False else '?')
+                print(f'  {mark} {r["db"]}')
+            if not ok:
+                print('  口令与这些库都不匹配（或它们用的是另一套凭据）')
+        return
         print(json.dumps({"success": True, "verified": verdict}, ensure_ascii=True))
         return
 

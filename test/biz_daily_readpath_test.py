@@ -124,3 +124,45 @@ class PassphraseDerivationTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+@unittest.skipUnless(HAS_SQLCIPHER, 'sqlcipher3 未安装')
+class VerifyPassphraseAllTests(unittest.TestCase):
+    """`nt_decrypt.py verify-passphrase-all` 的判据：口令对不对要能一句话说清。
+
+    Linux 上自动提密钥走不通（4.1.12.26+ 用口令 + 每分片派生），
+    用户唯一可行的路径就是自己提供口令——那就必须能立刻验证它对不对，
+    而不是等到 `init` 之后读数据时才报"file is not a database"。
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix='wf-vpa-')
+        self.db = os.path.join(self.tmp, 'wxid_demo', 'db_storage', 'message',
+                               'biz_message_0.db')
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _verify(self, passphrase_hex):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            'ntd', str(ROOT / 'scripts' / 'nt_decrypt.py'))
+        ntd = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(ntd)
+        return ntd.verify_passphrase_native(passphrase_hex, self.db)
+
+    def test_correct_passphrase_is_recognised(self):
+        passphrase = '77' * 32
+        salt = '66' * 16
+        derived = hashlib.pbkdf2_hmac('sha512', bytes.fromhex(passphrase),
+                                      bytes.fromhex(salt), 256000, 32).hex()
+        build_db(self.db, derived, salt)
+        self.assertIs(self._verify(passphrase), True, '正确口令必须被判为可用')
+
+    def test_wrong_passphrase_is_rejected(self):
+        passphrase = '77' * 32
+        salt = '66' * 16
+        derived = hashlib.pbkdf2_hmac('sha512', bytes.fromhex(passphrase),
+                                      bytes.fromhex(salt), 256000, 32).hex()
+        build_db(self.db, derived, salt)
+        self.assertIs(self._verify('88' * 32), False, '错误口令必须被判为不可用')

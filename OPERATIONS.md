@@ -1166,6 +1166,17 @@ crontab 示例（北京时间 13:00 与 23:30）：
 > （`weflow-cli fav set-key --passphrase <64位hex>` 后重新 `init` 派生），
 > 要么改走外部源（`--articles-json` / `--rss-feed` / `--rss-opml`）——那条路
 > 在 Linux 上验证可用，无需任何本地密钥。详见 `docs/VERSION_METHODS.md` 的 M-11/M-15。
+
+> **拿到口令后先验一遍**（Linux 上尤其值得，因为这是唯一可行的路径）：
+>
+> ```bash
+> python3 scripts/nt_decrypt.py verify-passphrase-all --passphrase <64位hex>
+> ```
+>
+> 它会遍历数据目录下的所有库，逐个用 SQLCipher 首页 HMAC 判据回答"这个口令能解开几个"，
+> 输出形如 `共 13 个数据库，口令可解开 13 个`。**判据不依赖 sqlcipher3**，
+> 所以即使原生库没装好，也能分清"口令错"和"环境坏"。
+> 确认无误后再 `weflow-cli init`（或 `weflow-cli fav set-key --passphrase …`）。
 > 并且会写进当天那份日志 —— 证明链路是通的）。
 
 - 查看：`Get-ScheduledTask -TaskName 'WeFlow Daily'`
