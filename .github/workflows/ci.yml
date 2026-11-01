@@ -237,6 +237,9 @@ jobs:
           conn.close()
           PY
 
+          echo "--- 直接跑脚本（对照：绕过 CLI 的取数链）---"
+          python3 scripts/biz_daily.py --date 2026-01-01 --dry-run --no-ai 2>&1 | tail -6 || true
+
           echo "--- CLI daily（包目录只读）---"
           chmod -R a-w dist scripts bin
           node dist/bin/weflow-cli.js daily --date 2026-01-01 --dry-run --no-ai | tee /tmp/daily.log
