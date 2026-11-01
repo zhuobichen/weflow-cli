@@ -75,6 +75,9 @@ def main():
                         help='订阅源配置文件，原样转发给 biz_daily（默认 output/rss-feeds.json）')
     parser.add_argument('--rss-opml', default=None, metavar='PATH',
                         help='OPML 订阅文件，原样转发给 biz_daily：一次导入几十上百个源')
+    parser.add_argument('--articles-json', action='append', default=None, metavar='PATH',
+                        help='外部文章 JSON（可重复），原样转发给 biz_daily：'
+                             '协议中立入口；Linux/macOS 上不依赖本地密钥也能出日报')
     args = parser.parse_args()
 
     if args.yesterday:
@@ -126,6 +129,8 @@ def main():
         step1_args += ['--rss-feeds-file', args.rss_feeds_file]
     if args.rss_opml:
         step1_args += ['--rss-opml', args.rss_opml]
+    for art_path in (getattr(args, 'articles_json', None) or []):
+        step1_args += ['--articles-json', art_path]
     if args.no_ai:
         step1_args += ['--no-ai']
     if args.no_summary and not args.no_ai:

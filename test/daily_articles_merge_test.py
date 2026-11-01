@@ -468,3 +468,34 @@ class ArticlesJsonTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class MissingBizKeyTests(unittest.TestCase):
+    """没有本地库密钥时：只有外部源也不该被挡住（Linux/macOS 的常见形态）。
+
+    背景（2026-11-01 实测，Ubuntu + 微信 Linux 4.1.13.26）：
+    `biz_daily` 在 `get_db_keys` 里对 RuntimeError 直接 `SystemExit`，
+    于是"数据全来自 --articles-json / --rss-feed"的运行也会被拒——
+    而在 Linux 上拿不到密钥时，这正是唯一能出日报的形态。
+    """
+
+    def setUp(self):
+        import sys as _sys
+        from pathlib import Path as _Path
+        scripts = _Path(__file__).resolve().parent.parent / 'scripts'
+        _sys.path.insert(0, str(scripts))
+        import biz_daily as _bd
+        self.bd = _bd
+
+    def test_missing_key_is_fatal_when_nothing_external(self):
+        with self.assertRaises(SystemExit):
+            self.bd.get_db_keys({}, allow_missing_biz=False)
+
+    def test_missing_key_is_tolerated_for_external_sources(self):
+        keys = self.bd.get_db_keys({}, allow_missing_biz=True)
+        self.assertEqual(keys['biz_db'], '', '没有密钥时 biz_db 应为空')
+        self.assertEqual(keys['biz_key'], '')
+        self.assertEqual(keys['biz_salt'], '')
+        # 其余键位必须还在，下游按名字取值
+        for field in ('contact_db', 'contact_key', 'contact_salt', 'msg_db'):
+            self.assertIn(field, keys)

@@ -706,7 +706,7 @@ SUMMARY_ONLY_PROMPT = f"""为文章写深度摘要、打标签，并抽取概念
 # ====== Helpers ======
 
 
-def get_db_keys(config):
+def get_db_keys(config, allow_missing_biz=False):
     """Extract all needed DB paths and keys from config."""
     nt_db = config.get('ntDbPath', '')
     msg_key_enc = config.get('ntKey', '')
@@ -730,7 +730,14 @@ def get_db_keys(config):
     try:
         biz_db, biz_key, biz_salt = biz_message_db(config)
     except RuntimeError as exc:
-        raise SystemExit(str(exc))
+        # 没有本地库密钥不该挡住“数据全从外部源来”的运行：
+        # --articles-json / --rss-feed 的路径本来就不需要 SQLCipher。
+        # Linux/macOS 上（密钥往往拿不到）这是唯一能出日报的形态。
+        if not allow_missing_biz:
+            raise SystemExit(str(exc))
+        print(f'[WARN] {exc}')
+        print('       本次只使用外部文章源，不读本地订阅号库')
+        biz_db, biz_key, biz_salt = '', '', ''
 
     return {
         'biz_db': biz_db, 'biz_key': biz_key, 'biz_salt': biz_salt,
@@ -1164,7 +1171,10 @@ def main():
     config = load_config()
     if str(config.get('dailyAiEnabled', 'true')).strip().lower() == 'false':
         args.no_ai = True
-    keys = get_db_keys(config)
+    _has_external = bool(getattr(args, 'articles_json', None)
+                         or getattr(args, 'rss_feed', None)
+                         or getattr(args, 'rss_opml', None))
+    keys = get_db_keys(config, allow_missing_biz=_has_external)
     source_filters = parse_source_filters(args.source or [config.get('dailySources', '')])
     source_categories = load_source_categories(config)
 
@@ -1173,7 +1183,10 @@ def main():
     api_key = args.api_key or os.environ.get('DEEPSEEK_API_KEY', '') or get_api_key(config)
     # `--no-summary` 下不生成任何文字，也就不需要 LLM key——这条校验是"要调 LLM"的前提，
     # 不是"要跑 Phase 2"的前提。不改这一句，"没有 DeepSeek 也能只用 Jev 分类"会被它挡死。
-    if not args.dry_run and not args.no_summary and engine in ('deepseek', 'claude') and not api_key:
+    # `--no-ai` 表示整轮不调 AI，那就没有任何理由再要 API key——
+    # 缺了它“本机没 key 也能跑”就是空话（Linux 上尤其常见）。
+    if (not args.dry_run and not args.no_ai and not args.no_summary
+            and engine in ('deepseek', 'claude') and not api_key):
         print(f'[ERROR] --engine {engine} 需要 API key。请通过 --api-key、环境变量或配置文件提供')
         sys.exit(1)
     # Auto-detect local engine if no api_key and engine is deepseek
@@ -1186,11 +1199,15 @@ def main():
     if source_filters:
         print(f'公众号筛选: {", ".join(source_filters)}')
 
-    # Connect biz db
-    raw_key = f"x'{keys['biz_key']}{keys['biz_salt']}'"
-    conn = sqlcipher.connect(keys['biz_db'])
-    c = conn.cursor()
-    c.execute(f'PRAGMA key = "{raw_key}";')
+    # Connect biz db（没有密钥且只跑外部源时跳过：conn/c 置 None 即可）
+    if keys['biz_db']:
+        raw_key = f"x'{keys['biz_key']}{keys['biz_salt']}'"
+        conn = sqlcipher.connect(keys['biz_db'])
+        c = conn.cursor()
+        c.execute(f'PRAGMA key = "{raw_key}";')
+    else:
+        conn = None
+        c = None
 
     # Load contact names
     name_map = {}
@@ -1207,8 +1224,11 @@ def main():
             pass
 
     # Find today's articles
-    c.execute("SELECT user_name FROM Name2Id WHERE user_name LIKE 'gh_%'")
-    biz_users = [row[0] for row in c.fetchall()]
+    if c is not None:
+        c.execute("SELECT user_name FROM Name2Id WHERE user_name LIKE 'gh_%'")
+        biz_users = [row[0] for row in c.fetchall()]
+    else:
+        biz_users = []
     if source_filters:
         filter_keys = {item.casefold() for item in source_filters}
         biz_users = [
@@ -1353,7 +1373,8 @@ def main():
 
     # Sort by time
     articles.sort(key=lambda a: a['timestamp'])
-    conn.close()
+    if conn is not None:
+        conn.close()
 
     # === Incremental dedup: load previous run state ===
     out_dir = Path(OUTPUT_ROOT) / date_str
@@ -1627,7 +1648,7 @@ def main():
     try:
         merged_articles = merge_articles_json(
             json_path, date_str, serializable, decision_model,
-            session_activity(config, keys['biz_db']))
+            session_activity(config, keys['biz_db']) if keys['biz_db'] else {})
         print(f'  ✓ 结构化数据: {json_path} ({len(merged_articles)} 篇，本次新增 {len(serializable)} 篇)')
     except Exception as e:
         print(f'  [WARN] JSON 写入失败: {e}')
