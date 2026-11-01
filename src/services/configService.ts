@@ -1,5 +1,5 @@
 import { join } from 'path'
-import { chmodSync, existsSync, readFileSync, writeFileSync, mkdirSync, renameSync } from 'fs'
+import { chmodSync, existsSync, readFileSync, statSync, writeFileSync, mkdirSync, renameSync } from 'fs'
 import { homedir, hostname, userInfo } from 'os'
 import crypto from 'crypto'
 import { expandHomePath } from '../utils/pathUtils.js'
@@ -219,7 +219,16 @@ export class ConfigService {
       // `mode` 只在**新建**时生效；旧版本建的 775 目录不会自动收紧，
       // 而同组可写意味着别人能替换里面的 config.json。POSIX 上每次保存顺手收紧。
       if (process.platform !== 'win32') {
-        try { chmodSync(CONFIG_DIR, 0o700) } catch { /* 不是自己的目录就算了 */ }
+        // **只收紧带组/其他位的目录**（例如旧版本留下的 775）。
+        // 如果用户刻意把目录设成 555（去掉 owner 写位），这里不能把它改回可写——
+        // 那等于无视用户的意图，还会让"目录不可写"这个场景悄悄通过。
+        try {
+          const st = statSync(CONFIG_DIR)
+          // 判据是"owner 还能写" + "给了组/其他权限"：
+          //   775 → 收紧；555（用户刻意去掉了 owner 写位）→ 不动，让写入失败并报错；
+          //   700 → 已经够紧，不动。
+          if ((st.mode & 0o200) !== 0 && (st.mode & 0o077) !== 0) chmodSync(CONFIG_DIR, 0o700)
+        } catch { /* 不是自己的目录就算了 */ }
       }
       // 多进程安全 (守护进程与 CLI 并发): 只回写本进程修改过的字段,
       // 其余字段以磁盘最新值保留, 避免旧内存快照覆盖他人写入 (幽灵回写)。
@@ -239,7 +248,11 @@ export class ConfigService {
       // 那里重试并兜底，所以配置不会因为一个索引器扫过就静默没存上
       writeFileAtomic(CONFIG_FILE, JSON.stringify(merged, null, 2), { mode: 0o600 })
       this.dirty.clear()
+      this.lastSaveError = null
     } catch (e) {
+      // 以前这里只打一行日志，调用方照样打印"✓ 已设置"——**假成功**。
+      // 现在把错误留下来，set() 会据此抛异常，CLI 才能给出退出码 1。
+      this.lastSaveError = e instanceof Error ? e : new Error(String(e))
       console.error('保存配置失败:', e)
     }
   }
@@ -255,6 +268,9 @@ export class ConfigService {
     return raw
   }
 
+  /** 最近一次保存的失败原因（null=成功）。见 save()：静默失败会变成假成功。 */
+  private lastSaveError: Error | null = null
+
   set<K extends keyof CliConfig>(key: K, value: CliConfig[K]): void {
     if (ENCRYPTED_KEYS.has(key) && typeof value === 'string' && value) {
       this.config[key] = this.lockEncrypt(value) as CliConfig[K]
@@ -265,6 +281,11 @@ export class ConfigService {
     }
     this.dirty.add(key)
     this.save()
+    if (this.lastSaveError) {
+      const err = this.lastSaveError
+      this.lastSaveError = null
+      throw new Error(`配置没有写进磁盘（${CONFIG_FILE}）：${err.message}`)
+    }
   }
 
   getAll(): ConfigData {

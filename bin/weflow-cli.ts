@@ -1474,7 +1474,15 @@ function setConfigValue(key: string, value: string, quiet = false): void {
   const configValue = key === 'dailySourceCategories' && value.startsWith('base64:')
     ? Buffer.from(value.slice('base64:'.length), 'base64').toString('utf8')
     : value
-  configService.set(key as any, configValue)
+  try {
+    configService.set(key as any, configValue)
+  } catch (e: any) {
+    // 写盘失败时必须失败退出：以前 save() 只打日志，这里照样打印"✓ 已设置"，
+    // 用户以为改成功了（2026-11-01 在只读的 ~/.weflow-cli 上实测踩到）。
+    console.error(chalk.red(`\n✗ 配置没有保存成功: ${e?.message || e}`))
+    console.error(chalk.gray('  常见原因：~/.weflow-cli 目录不可写（权限/只读挂载），或磁盘已满。'))
+    process.exit(1)
+  }
   if (!quiet) console.log(chalk.green(`✓ 已设置 ${key}`))
 }
 
