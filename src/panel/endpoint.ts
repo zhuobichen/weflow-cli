@@ -27,7 +27,7 @@
  * 它**挡不住**以同一用户身份运行、且愿意翻 `~/.weflow-cli/` 的程序——那种程序本来就能直接读库。
  * 这是这条设计的真实边界，别把它说成比这更强。
  */
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs'
+import { existsSync, mkdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'fs'
 import { writeFileAtomic } from '../utils/atomicWrite.js'
 import { randomBytes, timingSafeEqual } from 'crypto'
 import { join } from 'path'
@@ -127,7 +127,9 @@ export function isProcessAlive(pid: number): boolean {
  * 不要指望它在崩溃/被 SIGTERM 时被调用——见文件头第 3 条。
  */
 export function clearEndpoint(): void {
-  try { rmSync(endpointFile(), { force: true }) } catch { /* 删不掉不影响正确性：读取端会探活 */ }
+  // 用 unlinkSync：某些环境（本机沙箱实测）下 `rmSync(file)` 会"成功"却不真的删，
+  // 而它在这里的语义就是"把这个文件删掉"。删不掉也不影响正确性：读取端会探活。
+  try { if (existsSync(endpointFile())) unlinkSync(endpointFile()) } catch { /* 同上 */ }
 }
 
 /**

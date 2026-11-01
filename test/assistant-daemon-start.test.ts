@@ -167,3 +167,18 @@ test('the daemon log records the start and the exit of a child that died', async
   assert.match(log, /daemon starting/)
   assert.match(log, /daemon exited \(code 2\)/)
 })
+
+test('自己收到信号时的清理：pid 与端点文件都要删掉', async () => {
+  // `assistant stop` 是外部替子进程删文件；`systemctl stop`/`kill` 发 SIGTERM 时
+  // 没有那个外部，子进程必须自己清（2026-11-01 在 Linux 上实测：pid 文件曾残留）。
+  cleanup()
+  const { cleanupDaemonFiles } = await import('../src/services/assistantDaemon.js')
+  const endpoint = join(STATE_DIR, 'assistant_endpoint.json')
+  writeFileSync(join(STATE_DIR, 'assistant.pid'), '4242', 'utf8')
+  writeFileSync(endpoint, '{"port":8766}', 'utf8')
+
+  cleanupDaemonFiles()
+
+  assert.equal(existsSync(join(STATE_DIR, 'assistant.pid')), false, 'pid 文件应被删除')
+  assert.equal(existsSync(endpoint), false, '端点文件应被删除')
+})

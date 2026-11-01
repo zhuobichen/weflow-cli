@@ -4468,12 +4468,15 @@ program
       console.log(chalk.gray(`[${time}]`) + ` ${chalk.blue(msg.senderNickname || '未知发送者')}:${kind} ${msg.messageStr}`)
     })
 
-    // Graceful shutdown
-    process.on('SIGINT', async () => {
-      console.log(chalk.gray('\n正在停止监听...'))
-      await service.stop()
-      process.exit(0)
-    })
+    // Graceful shutdown：Linux 上 systemd/`kill` 用 SIGTERM，Ctrl+C 才是 SIGINT，
+    // 两个都要处理，否则被 systemctl stop 时既没日志也不清理。
+    for (const sig of ['SIGINT', 'SIGTERM'] as const) {
+      process.on(sig, async () => {
+        console.log(chalk.gray(`\n收到 ${sig}，正在停止监听...`))
+        await service.stop()
+        process.exit(0)
+      })
+    }
 
     await service.startPolling()
   })
@@ -8300,7 +8303,30 @@ assistantCmd
     }
     const { AssistantService } = await import('../src/services/assistantService.js')
     const assistant = new AssistantService()
-    console.log(chalk.cyan('第二大脑前台运行中... (Ctrl+C 退出)'))
+    console.log(chalk.cyan('第二大脑前台运行中... (Ctrl+C / systemctl stop 退出)'))
+    // Linux 上 `systemctl stop` / `kill` 发的是 **SIGTERM**，默认行为是直接终止：
+    // 不跑清理，日志里也没有一句"收到信号"。两个信号都走有序关闭，
+    // 这样 systemd 的日志能看出"是被停掉的"，端点文件与 pid 文件也会被清掉。
+    let stopping = false
+    for (const sig of ['SIGINT', 'SIGTERM'] as const) {
+      process.on(sig, async () => {
+        if (stopping) return
+        stopping = true
+        console.log(chalk.gray(`\n收到 ${sig}，正在停止助手...`))
+        try {
+          await assistant.stop()
+        } catch (e: any) {
+          console.error(chalk.gray(`停止时出错（继续退出）: ${e?.message || e}`))
+        }
+        // 自己清理 pid / 端点文件：`assistant stop` 那条路是外部替我们删的，
+        // 而 systemctl/kill 发 SIGTERM 时没有外部那一方。
+        try {
+          const { cleanupDaemonFiles } = await import('../src/services/assistantDaemon.js')
+          cleanupDaemonFiles()
+        } catch { /* 清理失败不影响退出 */ }
+        process.exit(0)
+      })
+    }
     await assistant.start((line) => console.log(chalk.gray(line)))
   })
 

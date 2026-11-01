@@ -3,7 +3,7 @@
  * pid 文件: ~/.weflow-cli/assistant.pid, 日志: ~/.weflow-cli/assistant.log
  */
 import { join } from 'path'
-import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs'
+import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, statSync, unlinkSync, writeFileSync } from 'fs'
 import os from 'os'
 import { spawn, type ChildProcess } from 'child_process'
 import { resolvePackageRoot } from '../utils/packageRoot.js'
@@ -160,6 +160,20 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<{
   } catch (e: any) {
     return { started: false, error: e.message }
   }
+}
+
+/**
+ * 守护进程**自己被停掉时**的清理（SIGTERM/SIGINT）。
+ *
+ * `stopDaemon()` 是"外面的人来停"（`assistant stop`），由它替子进程删文件；
+ * 而 `systemctl stop` 发的是 SIGTERM，子进程自己收到——那就要自己清。
+ * 否则 pid 文件会留着，`assistant status` 虽然能靠探活纠正，但日志与 `ps` 会有个空洞。
+ */
+export function cleanupDaemonFiles(): void {
+  // 用 unlinkSync 而不是 rmSync：本机沙箱下 `rmSync(file)` 会"成功"却不真的删
+  // （不抛错、文件还在），而 unlinkSync 行为确定。删不掉也不影响正确性：读取端会探活。
+  try { if (existsSync(PID_FILE)) unlinkSync(PID_FILE) } catch { /* 同上 */ }
+  try { clearEndpoint() } catch { /* 同上 */ }
 }
 
 export function stopDaemon(): { stopped: boolean; message: string } {
