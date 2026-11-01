@@ -7,3 +7,7 @@ zstandard
 scrapling
 numpy
 pycryptodome
+# 下面两个是跨平台功能依赖：PIL 用于图片/PDF/头像/表情（6 个脚本），
+# requests 用于面板帧抓取。缺它们时对应命令会直接报 ImportError。
+pillow
+requests

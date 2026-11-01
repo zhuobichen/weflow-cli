@@ -70,6 +70,24 @@ python3 scripts/pipeline.py --date 2026-11-01 --articles-json /path/to/articles.
 
 产物默认落在 `~/output/biz-daily/<日期>/`（`index.html` / `article.html` / `.articles.json`）。
 
+## 依赖：先装齐 requirements
+
+```bash
+pip install -r requirements.txt        # 或 python -m pip install --user -r requirements.txt
+```
+
+`requirements.txt` 里的跨平台硬依赖：`sqlcipher3`、`zstandard`、`cryptography`、
+`pycryptodome`、`html2text`、`numpy`、`pillow`、`requests`。
+（`pillow` 服务图片/头像/PDF/表情等 6 个脚本，`requests` 服务面板抓取——
+这两项之前不在清单里，缺了只会让**对应命令**在运行时才报 ImportError。）
+
+`weflow-cli check` 会把依赖分两组报出来：必需项缺了算红，可选依赖只提示安装命令：
+
+```
+可选依赖（按功能需要，缺了对应命令会提示安装）:
+  fitz                 ○ (pip install pymupdf)
+```
+
 ## 定时任务
 
 ```bash

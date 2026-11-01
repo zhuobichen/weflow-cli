@@ -9070,7 +9070,9 @@ program
     const collectCheckData = async () => {
       const { execFileSync } = await import('child_process')
       const requiredDependencies = ['sqlcipher3', 'html2text', 'zstandard', 'cryptography']
-      const optionalDependencies = ['scrapling']
+      // 可选依赖按功能分组：缺了只是对应功能不可用，不该让整个 check 变红。
+    // PIL / requests / fitz 分别服务图片与头像、面板抓取、PDF 渲染。
+    const optionalDependencies = ['scrapling', 'PIL', 'requests', 'fitz']
       let pythonVersion = ''
       try {
         pythonVersion = execFileSync(getPythonCommand(), ['--version'], { windowsHide: true, encoding: 'utf8', timeout: 5000 }).trim()
@@ -9235,14 +9237,21 @@ program
         }
       }
       // 可选依赖
-      const optDeps = ['scrapling']
-      console.log(chalk.white('\n可选依赖（提升抓取成功率）:'))
-      for (const dep of optDeps) {
+      // 与 optionalDependencies 同源：缺了只是对应功能不可用，
+      // 提示里要写**这个包**的安装命令（之前写死成 scrapling，扩列表时会骗人）。
+      const optDeps: Array<[string, string]> = [
+        ['scrapling', 'scrapling'],
+        ['PIL', 'pillow'],
+        ['requests', 'requests'],
+        ['fitz', 'pymupdf'],
+      ]
+      console.log(chalk.white('\n可选依赖（按功能需要，缺了对应命令会提示安装）:'))
+      for (const [dep, pkgName] of optDeps) {
         try {
           execFileSync(pythonCommand, ['-c', `import ${dep}`], { windowsHide: true, stdio: 'ignore', timeout: 5000 })
           console.log(`  ${dep.padEnd(20)} ${chalk.green('✓')}`)
         } catch {
-          console.log(`  ${dep.padEnd(20)} ${chalk.gray('○ (pip install scrapling)')}`)
+          console.log(`  ${dep.padEnd(20)} ${chalk.gray(`○ (pip install ${pkgName})`)}`)
         }
       }
     }
