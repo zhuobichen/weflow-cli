@@ -140,8 +140,12 @@ jobs:
           export PYTHONDONTWRITEBYTECODE=1
           mkdir -p "$HOME/.weflow-cli"
 
-          # 模拟全局安装：包目录属于 root，普通用户不可写
+          # 模拟全局安装：包目录属于 root，普通用户不可写。
+          # **必须连仓库根一起设只读**：只锁 dist/scripts/bin 的话，`<root>/output`
+          # 还能被创建（父目录可写），判据就形同虚设——第一次写这个 job 时正是这样，
+          # CI 上 resolveOutputRoot() 仍返回包目录（2026-11-01 失败日志）。
           chmod -R a-w dist scripts bin
+          chmod a-w .
 
           echo "--- TypeScript 侧 ---"
           out=$(node -e "import('./dist/src/utils/outputRoot.js').then(m => process.stdout.write(m.resolveOutputRoot()))")
@@ -159,7 +163,8 @@ jobs:
             *) echo "::error::Python 输出根没有回退到 HOME：$py"; exit 1 ;;
           esac
 
-          # 反例：包目录可写时必须**保持原位置**（Windows 与源码检出的老用法不变）
+          # 正对照：包目录可写时必须**保持原位置**（Windows 与源码检出的老用法不变）
+          chmod u+w .
           chmod -R u+w dist scripts bin
           out2=$(node -e "import('./dist/src/utils/outputRoot.js').then(m => process.stdout.write(m.resolveOutputRoot()))")
           echo "包目录可写时 resolveOutputRoot() = $out2"
