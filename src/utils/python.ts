@@ -1,6 +1,6 @@
 import { execFileSync } from 'child_process'
 import { delimiter, join } from 'path'
-import { accessSync, constants, existsSync } from 'fs'
+import { accessSync, constants, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'fs'
 import { homedir } from 'os'
 
 let cached: string | null = null
@@ -91,12 +91,55 @@ function detect(): string {
   return 'python'
 }
 
+/**
+ * 探测结果落盘：PATH 上常有多个 python，逐候选 spawn 两次（--version + import sqlcipher3）
+ * 在慢机器上要一两秒，而 CLI 每次调用都是新进程——只在内存里缓存等于没缓存。
+ *
+ * 缓存只存"路径 + 时间"，读回时仍要过 `isExecutable`：解释器被卸载/移动后
+ * 第一次调用就会发现并重新探测，不会把坏路径钉死。
+ */
+/** 带分隔符才说明是具体路径（裸命令名交给 detect 重新确认）。 */
+function isPathLike(cmd: string): boolean {
+  return cmd.includes('/') || cmd.includes(String.fromCharCode(92))
+}
+
+function cacheFile(): string {
+  return join(homedir(), '.weflow-cli', 'python-cmd.json')
+}
+
+function loadFromDisk(): string | null {
+  try {
+    const raw = JSON.parse(readFileSync(cacheFile(), 'utf8')) as { cmd?: string }
+    const cmd = String(raw.cmd || '')
+    if (!cmd) return null
+    // 命令名（不带分隔符）没法直接判存在性，交给 detect 重新确认
+    if (!isPathLike(cmd)) return null
+    return isExecutable(cmd) ? cmd : null
+  } catch {
+    return null
+  }
+}
+
+function saveToDisk(cmd: string): void {
+  try {
+    const dir = join(homedir(), '.weflow-cli')
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(cacheFile(), JSON.stringify({ cmd, at: new Date().toISOString() }), 'utf8')
+  } catch { /* 缓存写不进去不影响功能（只读沙箱里就是这样） */ }
+}
+
 export function getPythonCommand(): string {
-  cached ??= detect()
+  // 先看磁盘缓存：CLI 每次调用都是新进程，只靠模块级变量等于没缓存。
+  // 缓存里只有路径，读回时仍要过 isExecutable —— 解释器被卸载/移动后会重新探测。
+  cached ??= loadFromDisk() ?? detect()
+  if (isPathLike(cached)) saveToDisk(cached)
   return cached
 }
 
 /** setup 装完后清缓存，让同一进程里后续的 getPythonCommand 看见新 venv。 */
 export function clearPythonCommandCache(): void {
   cached = null
+  // 文件也删掉：setup 建好 venv 后必须让下一次调用重新探测，
+  // 否则磁盘缓存会把建 venv 之前的选择一直钉住。
+  try { unlinkSync(cacheFile()) } catch { /* 没有缓存文件是正常情况 */ }
 }
