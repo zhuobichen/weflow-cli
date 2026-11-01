@@ -95,10 +95,10 @@ export class PrivacyGate {
   audit(event: string, bytes = 0, extra = ''): void {
     try {
       const dir = join(os.homedir(), '.weflow-cli')
-      if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
+      if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 })
       const line = `[${new Date().toLocaleString('zh-CN')}] ${event}` +
         (bytes ? ` ${bytes}B` : '') + (extra ? ` ${extra}` : '')
-      appendFileSync(AUDIT_FILE, line + '\n', 'utf8')
+      appendFileSync(AUDIT_FILE, line + '\n', { encoding: 'utf8', mode: 0o600 })
     } catch { /* 审计失败不阻断主流程 */ }
   }
 }

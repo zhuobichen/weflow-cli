@@ -823,7 +823,7 @@ export async function installStubs(spec: EvalCase): Promise<() => void> {
   for (const [rel, content] of Object.entries(spec.files ?? {})) {
     const full = join(homedir(), rel)
     mkdirSync(dirname(full), { recursive: true })
-    writeFileSync(full, content, 'utf8')
+    writeFileSync(full, content, { encoding: 'utf8', mode: 0o600 })
     writtenFiles.push(full)
   }
   for (const [key, value] of Object.entries(spec.env ?? {})) {

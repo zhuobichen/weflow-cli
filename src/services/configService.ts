@@ -1,5 +1,5 @@
 import { join } from 'path'
-import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync } from 'fs'
+import { chmodSync, existsSync, readFileSync, writeFileSync, mkdirSync, renameSync } from 'fs'
 import { homedir, hostname, userInfo } from 'os'
 import crypto from 'crypto'
 import { expandHomePath } from '../utils/pathUtils.js'
@@ -211,7 +211,15 @@ export class ConfigService {
   private save(): void {
     try {
       if (!existsSync(CONFIG_DIR)) {
-        mkdirSync(CONFIG_DIR, { recursive: true })
+        // Linux 上按 umask 会落成 755/644，同机其他用户可读——配置里有凭据。
+        // Windows 上 mode 是空操作（见 panel/endpoint.ts 的说明），不影响行为。
+        mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 })
+      }
+
+      // `mode` 只在**新建**时生效；旧版本建的 775 目录不会自动收紧，
+      // 而同组可写意味着别人能替换里面的 config.json。POSIX 上每次保存顺手收紧。
+      if (process.platform !== 'win32') {
+        try { chmodSync(CONFIG_DIR, 0o700) } catch { /* 不是自己的目录就算了 */ }
       }
       // 多进程安全 (守护进程与 CLI 并发): 只回写本进程修改过的字段,
       // 其余字段以磁盘最新值保留, 避免旧内存快照覆盖他人写入 (幽灵回写)。
@@ -229,7 +237,7 @@ export class ConfigService {
       // 原子写入: 先写临时文件再改名, 防止进程中途被杀导致配置损坏。
       // 改名在 Windows 上会因"文件正被别的句柄打开"而 EPERM（见 atomicWrite 的注释），
       // 那里重试并兜底，所以配置不会因为一个索引器扫过就静默没存上
-      writeFileAtomic(CONFIG_FILE, JSON.stringify(merged, null, 2))
+      writeFileAtomic(CONFIG_FILE, JSON.stringify(merged, null, 2), { mode: 0o600 })
       this.dirty.clear()
     } catch (e) {
       console.error('保存配置失败:', e)

@@ -168,7 +168,7 @@ export class AssistantScenes {
   save(): void {
     try {
       const dir = join(homedir(), '.weflow-cli')
-      if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
+      if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 })
       const payload: ScenesFile = {
         version: SCENES_FORMAT_VERSION,
         scenes: this.scenes,

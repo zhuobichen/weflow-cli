@@ -88,7 +88,7 @@ function trimIfLarge(): void {
   try {
     if (!existsSync(TRACE_FILE) || statSync(TRACE_FILE).size <= TRACE_MAX_BYTES) return
     const lines = readFileSync(TRACE_FILE, 'utf8').split('\n').filter(Boolean)
-    writeFileSync(TRACE_FILE, lines.slice(-TRACE_KEEP).join('\n') + '\n', 'utf8')
+    writeFileSync(TRACE_FILE, lines.slice(-TRACE_KEEP).join('\n') + '\n', { encoding: 'utf8', mode: 0o600 })
   } catch { /* 裁剪失败不该影响记录 */ }
 }
 

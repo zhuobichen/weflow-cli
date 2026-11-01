@@ -149,6 +149,25 @@ Ubuntu 上有四个 job，其中两个直接覆盖 Linux 兼容：
 `linux-write-path` 的存在理由：这类 bug（输出/缓存/vault 写进包目录）在**可写的 checkout 里永远不会红**，
 只有装到 Linux 才暴露。它的判据是"造出不可写的安装"，不是"在可写环境里跑一遍"。
 
+## 状态文件的权限：600 / 700
+
+Linux 上按默认 umask，配置与状态文件会落成 644、目录 755——**同机其他用户可读**，
+而 775 的目录甚至允许同组用户替换里面的 `config.json`（里面有凭据）。
+
+现在保存配置时会：
+
+- `~/.weflow-cli` → `drwx------`（700）。注意 `mkdir` 的 mode 只在**新建**时生效，
+  所以每次保存都会对已存在的目录补一次 `chmod`（仅 POSIX；Windows 上 chmod 只映射只读位，不做）。
+- `config.json` → `-rw-------`（600），经 `writeFileAtomic(..., { mode: 0o600 })`。
+- 助手记忆 / 场景 / 审计与 trace 文件同样 600，目录 700。
+
+Linux 实测（保存前 775 → 保存后）：
+
+```
+drwx------  ~/.weflow-cli
+-rw-------  ~/.weflow-cli/config.json
+```
+
 ## 权限：库打不开时会明确说"打不开"，不会说成"口令错"
 
 Linux 上文件属主/权限比 Windows 更容易踩。这两类错误被刻意分开了：
