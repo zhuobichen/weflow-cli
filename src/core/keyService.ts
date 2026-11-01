@@ -148,6 +148,9 @@ export class KeyService {
   }
 
   private async findPidByImageName(imageName: string): Promise<number | null> {
+    // `tasklist` 只存在于 Windows。Linux/macOS 上继续调它只会得到 ENOENT，
+    // 白白多一次进程创建；那边用 detectLinuxClient()（/proc + uh.dat）判断。
+    if (process.platform !== 'win32') return null
     try {
       const { stdout } = await execFileAsync('tasklist', ['/FI', `IMAGENAME eq ${imageName}`, '/FO', 'CSV', '/NH'])
       const lines = stdout.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
@@ -167,6 +170,11 @@ export class KeyService {
 
   private async isProcessRunning(pid: number): Promise<boolean> {
     if (this.exitedPids.has(pid)) return false
+    if (process.platform !== 'win32') {
+      // POSIX 上 `kill(pid, 0)` 就是存在性探测：在 → 不抛；不在 → ESRCH。
+      // 比 spawn 一个必然失败的 powershell 准确得多，也快得多。
+      try { process.kill(pid, 0); return true } catch { this.exitedPids.add(pid); return false }
+    }
     try {
       const command = `$process = Get-Process -Id ${pid} -ErrorAction SilentlyContinue; if ($process -and -not $process.HasExited) { 'running' }`
       const { stdout } = await execFileAsync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command])
