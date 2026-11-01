@@ -79,3 +79,8 @@ qq-idx-*/
 
 # 数据库缓存的产物目录（`WEFLOW_CACHE_DIR` 缺省落在 %TEMP%，不可写时才回退到仓库根）
 weflow-cli-cache/
+# 测试在"系统临时目录不可写"时会退回 cwd 建目录（见 test/_tmpenv.py）；
+# 这是兜底，正常运行不应产生它们。
+/weflow-*/
+/qq-idx-*/
+/test_cache*/

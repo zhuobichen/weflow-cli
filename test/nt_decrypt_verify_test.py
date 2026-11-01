@@ -25,6 +25,7 @@ nt = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(nt)
 
 import make_synthetic_nt as fixture  # noqa: E402  (needs fixtures/ on sys.path)
+from _tmpenv import mkdtemp  # noqa: E402  临时目录不许落在仓库里
 
 
 class PassphraseVerificationTests(unittest.TestCase):
@@ -73,7 +74,7 @@ class PassphraseVerificationTests(unittest.TestCase):
         fixture.SYNTHETIC_KEY = bytes(
             a ^ b for a, b in zip(bytes.fromhex(original), xor_key)).hex()
         try:
-            root = tempfile.mkdtemp(prefix='weflow-xor-')
+            root = mkdtemp('weflow-xor-')
             fixture.build(root, 'wxid_synthetic_contact', per_shard=1, shards=1)
             db = os.path.join(root, 'db_storage', 'message', 'message_0.db')
             # With the XOR key supplied the original passphrase verifies...
@@ -91,7 +92,7 @@ class PassphraseVerificationTests(unittest.TestCase):
         the shard-key derivation depends on.
         """
         # A fresh root: setUp already built one shard here.
-        root = tempfile.mkdtemp(prefix='weflow-multi-')
+        root = mkdtemp('weflow-multi-')
         fixture.build(root, 'wxid_synthetic_contact', per_shard=1, shards=3)
         message_dir = os.path.join(root, 'db_storage', 'message')
         shards = sorted(name for name in os.listdir(message_dir)

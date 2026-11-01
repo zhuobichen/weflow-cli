@@ -17,6 +17,7 @@ import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from _tmpenv import mkdtemp  # noqa: E402  临时目录不许落在仓库里
 
 SCRIPTS = Path(__file__).resolve().parents[1] / 'scripts'
 sys.path.insert(0, str(SCRIPTS))
@@ -203,7 +204,7 @@ class SemanticImportTests(unittest.TestCase):
         saved = (ss.INDEX_DIR, ss.VECTORS_FILE, ss.META_FILE,
                  ss.OUTPUT_ROOT, ss.load_config, ss.get_embeddings)
         try:
-            root = Path(tempfile.mkdtemp(prefix='qq-idx-'))
+            root = Path(mkdtemp('qq-idx-'))
             ss.INDEX_DIR = root
             ss.VECTORS_FILE = root / 'vectors.npy'
             ss.META_FILE = root / 'meta.json'
