@@ -112,3 +112,96 @@ jobs:
             echo "::error::npm 包中包含敏感或体积过大的文件"; exit 1
           fi
           echo "包内容检查通过"
+
+  # Linux 全局安装后的"写路径"回归：把包目录设成只读，模拟 /usr/lib/node_modules。
+  #
+  # 为什么单开一个 job：2026-11-01 在 Ubuntu 上实测，全局安装后 `weflow-cli daily`
+  # 直接 PermissionError——输出根落在包目录里。CI 的 checkout 是**可写**的，
+  # 所以在默认环境里这个 bug 永远不会红。这里的判据是"包目录不可写时还能不能跑"。
+  linux-write-path:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22.13'
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+      - run: python -m pip install --quiet sqlcipher3-binary
+      - run: npm ci
+      - run: npm run build
+      - name: 包目录只读时，输出根必须回退到 HOME
+        run: |
+          set -euo pipefail
+          export HOME="$(mktemp -d)"
+          export PYTHONDONTWRITEBYTECODE=1
+          mkdir -p "$HOME/.weflow-cli"
+
+          # 模拟全局安装：包目录属于 root，普通用户不可写
+          chmod -R a-w dist scripts bin
+
+          echo "--- TypeScript 侧 ---"
+          out=$(node -e "import('./dist/src/utils/outputRoot.js').then(m => process.stdout.write(m.resolveOutputRoot()))")
+          echo "resolveOutputRoot() = $out"
+          case "$out" in
+            "$HOME"/*) echo "  ✓ 落在 HOME 之下" ;;
+            *) echo "::error::输出根没有回退到 HOME：$out"; exit 1 ;;
+          esac
+
+          echo "--- Python 侧 ---"
+          py=$(python3 -c "import sys; sys.path.insert(0,'scripts'); import _utils; print(_utils.output_root())")
+          echo "_utils.output_root() = $py"
+          case "$py" in
+            "$HOME"/*) echo "  ✓ 落在 HOME 之下" ;;
+            *) echo "::error::Python 输出根没有回退到 HOME：$py"; exit 1 ;;
+          esac
+
+          # 反例：包目录可写时必须**保持原位置**（Windows 与源码检出的老用法不变）
+          chmod -R u+w dist scripts bin
+          out2=$(node -e "import('./dist/src/utils/outputRoot.js').then(m => process.stdout.write(m.resolveOutputRoot()))")
+          echo "包目录可写时 resolveOutputRoot() = $out2"
+          case "$out2" in
+            "$HOME"/*) echo "::error::包目录可写时不应再回退到 HOME"; exit 1 ;;
+            *) echo "  ✓ 仍在包目录（老路径不变）" ;;
+          esac
+      - name: 合成加密库 + CLI 端到端（Linux）
+        run: |
+          set -euo pipefail
+          export HOME="$(mktemp -d)"
+          export PYTHONDONTWRITEBYTECODE=1
+          mkdir -p "$HOME/.weflow-cli"
+          python3 - <<'PY'
+          import hashlib, json, os, sqlcipher3
+          home = os.environ['HOME']
+          msg = os.path.join(home, 'synth', 'message')
+          os.makedirs(msg, exist_ok=True)
+          db = os.path.join(msg, 'message_0.db')
+          # 合成密钥：只用于 CI，与任何真实账号无关
+          key, salt = '11' * 32, '22' * 16
+          gh = 'gh_citest00000000000000000000'
+          conn = sqlcipher3.connect(db)
+          conn.execute(f"PRAGMA key = \"x'{key}{salt}'\"")
+          conn.execute('CREATE TABLE Name2Id (user_name TEXT)')
+          conn.execute('INSERT INTO Name2Id VALUES (?)', (gh,))
+          tbl = 'Msg_' + hashlib.md5(gh.encode()).hexdigest()
+          conn.execute(f'CREATE TABLE "{tbl}" (create_time INTEGER, message_content BLOB)')
+          xml = ('<msg><appmsg><title><![CDATA[CI 合成文章]]></title>'
+                 '<url><![CDATA[https://mp.weixin.qq.com/s/CITEST000000000000000]]></url></appmsg></msg>')
+          conn.execute(f'INSERT INTO "{tbl}" VALUES (?, ?)', (1793500000, xml.encode()))
+          conn.commit()
+          conn.close()
+          json.dump({'ntDbPath': db, 'bizKey': key, 'bizSalt': salt},
+                    open(os.path.join(home, '.weflow-cli', 'config.json'), 'w'),
+                    ensure_ascii=False)
+          print('合成库已就绪')
+          PY
+          echo "--- key-status（应报可解开 1 个库）---"
+          python3 scripts/nt_decrypt.py key-status --root "$HOME/synth" --json | tee /tmp/ks.json
+          python3 -c "import json;d=json.load(open('/tmp/ks.json'));assert d['matched']>=1, d;print('  ✓ 凭据可解开合成库')"
+
+          echo "--- CLI daily（包目录只读）---"
+          chmod -R a-w dist scripts bin
+          node dist/bin/weflow-cli.js daily --date 2026-01-01 --dry-run --no-ai | tee /tmp/daily.log
+          grep -q 'CI 合成文章' /tmp/daily.log || { echo "::error::没有读出合成文章"; exit 1; }
+          echo "  ✓ Linux 端到端通过"
