@@ -9259,6 +9259,38 @@ program
       console.log(chalk.yellow('  ○ 未初始化 — 运行 weflow-cli init'))
     }
 
+
+      // 4.5 数据可读性：把“配置对不对”升级成“到底能读几个库”。
+      // Linux 上自动提密钥走不通（4.1.12.26+ 用口令 + 每分片派生），用户最需要的
+      // 就是这句话；没有凭据时安静跳过，不制造无谓的 Python 冷启动。
+      // 没有凭据时**更要**说这一句：Linux 上“什么都没配”正是用户当前的处境，
+      // 安静跳过会让人以为 check 通过了、只是数据没写。key-status 在无凭据时
+      // 不跑 PBKDF2，代价只有一次 Python 启动。
+      if (!opts.json) {
+        try {
+          const { execFile } = await import('child_process')
+          const { promisify } = await import('util')
+          const { stdout } = await promisify(execFile)(
+            getPythonCommand(),
+            [join(resolvePackageRoot(), 'scripts', 'nt_decrypt.py'), 'key-status', '--json'],
+            { timeout: 180_000, maxBuffer: 5 * 1024 * 1024 })
+          const line = (stdout || '').split('\n').filter((l) => l.trim().startsWith('{')).pop()
+          if (line) {
+            const st = JSON.parse(line) as { mode: string; total: number; matched: number; verdict: string }
+            const label = st.mode === 'passphrase' ? '口令' : '密钥'
+            if (st.mode === 'none') {
+              console.log(chalk.yellow(`  数据可读性: 未配置凭据（${st.total} 个库都读不了）`))
+            } else if (st.verdict === 'ok') {
+              console.log(chalk.green(`  数据可读性: ${label}可解开 ${st.matched}/${st.total} 个库`))
+            } else {
+              console.log(chalk.yellow(`  数据可读性: 只有 ${st.matched}/${st.total} 个库可读 —— ${label}可能不对`))
+              console.log(chalk.gray('    先验证: python3 scripts/nt_decrypt.py key-status'))
+            }
+          }
+        } catch {
+          // 这一步属于“锦上添花”：跑不起来（没装依赖、脚本缺失）不能把 check 弄挂。
+        }
+      }
     // 5. Databases & extensions
     const dbRows: Array<[string, string, boolean]> = [
       ['消息数据库', configService.get('ntDbPath'), true],
