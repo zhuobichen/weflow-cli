@@ -44,6 +44,11 @@ WeFlow CLI is a local-first command-line tool and MCP server for user-authorized
   9009)`) is therefore **not** a client-version problem; the `9009` message itself was verified
   end-to-end against a real process that exits `9009`.
 
+**Linux CI 基线（2026-11-01，全绿）**：Ubuntu 上四个 job 全过。新增的 `linux-write-path`
+复制一份干净包目录并设为只读（等价于全局安装），断言 TS 与 Python 的输出根都回退到 `$HOME`，
+并用**正对照**确认“包目录可写时必须留在原地”。已知差异：CI 上 `biz_daily` 对合成库读到 0 篇，
+同代码在本机 Windows 与 Linux 服务器上都能读到 1 篇，已降级为 `::warning::` 待定位。
+
 ## Verified Capabilities
 
 | Area | Current state | Main entry points |
