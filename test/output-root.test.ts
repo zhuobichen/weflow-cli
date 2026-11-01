@@ -58,3 +58,9 @@ test('同一进程内结果稳定（缓存不导致目录漂移）', async () =>
   const { resolveOutputRoot } = await withEnv(undefined, () => load('stable'))
   assert.equal(resolveOutputRoot(), resolveOutputRoot())
 })
+
+test('qchat 导入存储也落在可写输出根之下（写入方与读取方必须同根）', async () => {
+  const { resolveOutputRoot } = await load('import-root')
+  const { importRoot } = await import('../src/services/qchatImport.ts')
+  assert.equal(importRoot(), join(resolveOutputRoot(), 'imports', 'qq'))
+})

@@ -15,12 +15,14 @@
  */
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'fs'
 import { join } from 'path'
-import { resolvePackageRoot } from '../utils/packageRoot.js'
+import { resolveOutputRoot } from '../utils/outputRoot.js'
 
 /** 存储根。`WEFLOW_IMPORT_ROOT` 可整体指到别处（测试用，Python 侧读同一个变量）。 */
 export function importRoot(): string {
   if (process.env.WEFLOW_IMPORT_ROOT) return process.env.WEFLOW_IMPORT_ROOT
-  return join(resolvePackageRoot(import.meta.url), 'output', 'imports', 'qq')
+  // 走可写输出根：全局安装时包目录属于 root，写进去就是 EACCES
+  // （2026-11-01 在 Linux 上实测：`import qchat --yes` 直接崩在 storeRoot）。
+  return join(resolveOutputRoot(), 'imports', 'qq')
 }
 
 function sessionsDir(): string {

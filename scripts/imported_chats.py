@@ -26,7 +26,15 @@ def sessions_dir(root=None):
         root = os.environ.get('WEFLOW_IMPORT_ROOT')
     if root:
         return Path(root) / 'sessions'
-    return Path('output/imports/qq/sessions')
+    # 默认必须与**写入方**一致：TS 侧写的是 `resolveOutputRoot()/imports/qq`，
+    # 而可写根在全局安装时会回退到 `~/.weflow-cli/output`。
+    # 之前这里写死 cwd 相对的 `output/imports/qq/sessions`——装到 Linux 后
+    # 写入方在用户目录、读取方在 cwd，导入的会话会"看不见"（2026-11-01 实测）。
+    try:
+        from _utils import output_root as _output_root
+        return Path(_output_root()) / 'imports' / 'qq' / 'sessions'
+    except Exception:
+        return Path('output/imports/qq/sessions')
 
 
 def sessions(root=None):

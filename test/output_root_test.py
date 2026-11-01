@@ -72,6 +72,29 @@ class OutputRootTests(unittest.TestCase):
             self.assertEqual(pathlib.Path(value), base / 'biz-daily', f'{name} 应在 output_root() 之下')
         self.assertEqual(pathlib.Path(create_reading_notes.DEFAULT_VAULT), base / 'wechat-vault')
 
+    def test_imported_chats_uses_the_same_root(self):
+        """导入存储的**读取方**必须和写入方同根。
+
+        TS 侧写 `resolveOutputRoot()/imports/qq`，Python 侧之前写死 cwd 相对的
+        `output/imports/qq/sessions`——装到 Linux 后写入在用户目录、读取在 cwd，
+        导入的会话会"看不见"（2026-11-01 实测）。
+        """
+        import imported_chats
+        os.environ.pop('WEFLOW_IMPORT_ROOT', None)
+        got = pathlib.Path(imported_chats.sessions_dir())
+        base = pathlib.Path(_utils.output_root())
+        self.assertEqual(got, base / 'imports' / 'qq' / 'sessions')
+
+    def test_import_root_env_still_wins(self):
+        """WEFLOW_IMPORT_ROOT 仍然是显式覆盖（测试与自定义布局靠它）。"""
+        import imported_chats
+        os.environ['WEFLOW_IMPORT_ROOT'] = '/tmp/explicit-import-root'
+        try:
+            self.assertEqual(pathlib.Path(imported_chats.sessions_dir()),
+                             pathlib.Path('/tmp/explicit-import-root') / 'sessions')
+        finally:
+            os.environ.pop('WEFLOW_IMPORT_ROOT', None)
+
 
 if __name__ == '__main__':
     unittest.main()
