@@ -1141,6 +1141,31 @@ powershell -NoProfile -ExecutionPolicy Bypass -File <仓库>\scripts\install_tas
 > `-Argument` 会报 `0x80004005`，而包一层脚本就不用跟引号搏斗；② 任务动作指向 CLI 那个 npm 包时，
 > 它一旦是构建产物，"改完代码没 build"就变成"任务跑的还是旧逻辑"。
 > 冒烟测试：`powershell -NoProfile -File <仓库>\scripts\daily_task.ps1 --help`（只打印帮助、零副作用，
+
+#### Linux / macOS：用 `scripts/daily_task.sh`
+
+Windows 的定时任务只认 PowerShell，所以 Linux 上另有一个行为对齐的 shell 入口
+（模式、`.noon_done`/`.night_done`/`.catchup_done` 标记、日志轮转都一致，可共用同一份输出目录）：
+
+```bash
+scripts/daily_task.sh              # catchup：补昨天
+scripts/daily_task.sh noon         # 午报：跑今天
+scripts/daily_task.sh night        # 日终：跑今天（20 点前调用会自动降级为 catchup）
+scripts/daily_task.sh catchup --no-ai   # 模式之后的参数原样转发给 pipeline.py
+```
+
+crontab 示例（北京时间 13:00 与 23:30）：
+
+```cron
+0 13 * * *  cd /path/to/weflow-cli && ./scripts/daily_task.sh noon
+30 23 * * * cd /path/to/weflow-cli && ./scripts/daily_task.sh night
+```
+
+> **Linux 上读本地微信库需要额外条件**（2026-11-01 实测）：微信 4.1.12.26+ 用
+> 「共享 passphrase + 每分片 salt 派生」，自动提取目前拿不到。要么由用户提供口令
+> （`weflow-cli fav set-key --passphrase <64位hex>` 后重新 `init` 派生），
+> 要么改走外部源（`--articles-json` / `--rss-feed` / `--rss-opml`）——那条路
+> 在 Linux 上验证可用，无需任何本地密钥。详见 `docs/VERSION_METHODS.md` 的 M-11/M-15。
 > 并且会写进当天那份日志 —— 证明链路是通的）。
 
 - 查看：`Get-ScheduledTask -TaskName 'WeFlow Daily'`

@@ -13,6 +13,7 @@
     "scripts/**/*.ps1",
     "scripts/**/*.cmd",
     "scripts/**/*.vbs",
+    "scripts/**/*.sh",
     "scripts/data/",
     "mcp-server/",
     "bin/",
