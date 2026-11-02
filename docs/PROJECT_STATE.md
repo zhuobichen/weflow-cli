@@ -5,6 +5,9 @@
 - **诊断能区分"从没跑过 init"与"跑过但失败"**：`init` 非 0 退出会把最后一条提示与退出码
   记进 `~/.weflow-cli/init-state.json`，`check` 直接展示；成功则清理。2026-11-02 加（issue #13）。
 
+- **`check --fix`**：仅在"已探测到数据目录但未初始化/上次 init 失败"时给出一条可执行命令，
+  先打印再确认（`--yes` 跳过）。探测不到目录时不猜。2026-11-02 加（issue #8 / #13）。
+
 ## Purpose
 
 WeFlow CLI is a local-first command-line tool and MCP server for user-authorized WeChat data workflows: local chat queries and exports, official-account daily reading, favorites, knowledge workflows, and an optional local assistant.

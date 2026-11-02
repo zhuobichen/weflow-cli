@@ -9098,6 +9098,8 @@ program
   .description('检查运行环境（Python、pip 依赖、数据库配置）')
   .option('--json', '输出 JSON 格式，不包含数据库路径或密钥')
   .option('--report', '输出一段可直接粘贴给 AI / 贴进 issue 的诊断结论（已脱敏：用户名与 wxid 换占位符，不含密钥与聊天内容）')
+  .option('--fix', '把能确定的一步替你执行（目前只处理"已找到数据目录但还没初始化/上次 init 失败"）：先打印命令再确认')
+  .option('--yes', '配合 --fix：跳过确认（脚本用；手动运行时别加）')
   .action(async (opts) => {
     // 微信客户端的**版本**与它自报的**数据目录**：两个分支都要用，所以在这里算一次。
     // 判据见 `wechatClient.ts`（版本取活进程的 `--user-lib-dir`；取不到就是"未知"，不是"没问题"）。
@@ -9345,13 +9347,46 @@ program
         }
       } else {
         const { readInitFailure, describeInitFailure } = await import('../src/services/initState.js')
-        const lines = describeInitFailure(readInitFailure())
+        const lastFailure = readInitFailure()
+        const lines = describeInitFailure(lastFailure)
         if (lines) {
           // 跑到这里说明用户**试过** init 但没成功。只报"未初始化"会让人以为
           // 是密钥取不到（issue #13 就是这样被理解的）。把上次的原因摆出来。
           for (const line of lines) console.log(chalk.yellow(line))
         } else {
           console.log(chalk.yellow('  ○ 未初始化 — 运行 weflow-cli init'))
+        }
+        if (opts.fix) {
+          // 推断能确定的那一步，但**先打印、再确认**（见 src/services/initFix.ts）。
+          const { planInitFix } = await import('../src/services/initFix.js')
+          const detectedRoot = (client as any)?.dataDir || configService.get('dbPath') || null
+          const plan = planInitFix({
+            configured,
+            detectedPath: detectedRoot,
+            lastInitError: lastFailure ? { message: lastFailure.message } : null,
+          })
+          if (!plan) {
+            console.log(chalk.gray('  --fix：没有可以替你执行的一步（探测不到数据目录，或配置已可用）'))
+          } else {
+            console.log(chalk.cyan('\n我准备执行：'))
+            console.log(chalk.gray(`  ${plan.command}`))
+            console.log(chalk.gray(`  原因：${plan.reason}`))
+            const { createInterface } = await import('node:readline/promises')
+            let proceed = Boolean(opts.yes)
+            if (!proceed) {
+              const rl = createInterface({ input: process.stdin, output: process.stdout })
+              const answer = (await rl.question('  继续？[y/N] ')).trim().toLowerCase()
+              rl.close()
+              proceed = answer === 'y' || answer === 'yes'
+            }
+            if (!proceed) {
+              console.log(chalk.gray('  已取消，配置未改动。'))
+            } else {
+              const { spawn } = await import('node:child_process')
+              const child = spawn(process.execPath, [process.argv[1], ...plan.args], { stdio: 'inherit' })
+              await new Promise<void>((resolve) => child.on('exit', (code) => { process.exitCode = code || 0; resolve() }))
+            }
+          }
         }
       }
 

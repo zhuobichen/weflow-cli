@@ -37,6 +37,13 @@ All notable user-facing changes are recorded here. This project follows [Semanti
     `C:\Windows\System32`，用相对路径会静默读不到（已从该目录实测验证）。
   - 不配任何源时行为不变（D-139 的低量告警、D-141 的 `--browser-history` 照旧）。
 
+- **`check --fix`：把能确定的那一步替你执行。** 诊断出"配置为空但已经找到数据目录"时，
+  它会把**按你机器上实测路径生成的命令**打印出来，确认后直接执行（`--yes` 可跳过确认）：
+  `weflow-cli init --path "C:\Users\<用户>\Documents\xwechat_files"`。
+  以前这里只说"运行 weflow-cli init"，路径要自己猜、参数要自己估——#8 就是照着自己猜的
+  命令跑，撞上 `unknown option '--path'`。
+  刻意**不做**的三件事：探测不到目录就不猜（乱写路径比不写更糟）、不删文件、不改已有配置。
+
 - **`check` 会说清"上次 init 为什么没成功"了。** 以前 `init` 中途退出、什么也没写进配置，
   `check` 只报"未初始化 — 运行 weflow-cli init"，读起来像"工具取不到密钥"。现在 `init` 的
   非 0 退出会把**最后一条提示**记到 `~/.weflow-cli/init-state.json`（不写进 `config.json`），
