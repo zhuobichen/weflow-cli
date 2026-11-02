@@ -1713,7 +1713,10 @@ program
     const limit = parseCliInteger(opts.limit, 'limit', 1, 1000, !!opts.json)
     if (!configService.isConfigured()) {
       if (opts.json) { console.log(JSON.stringify({ success: false, error: '未完成初始化' })); process.exit(1) }
-      console.log(chalk.red('请先运行 weflow-cli init'))
+      {
+        const { unconfiguredHint } = await import('../src/utils/unconfiguredHint.js')
+        console.log(chalk.red(unconfiguredHint()))
+      }
       process.exit(1)
     }
 
@@ -2650,7 +2653,10 @@ program
     const limit = parseCliInteger(opts.limit, 'limit', 1, 5000, !!opts.json)
     if (!configService.isConfigured()) {
       if (opts.json) { console.log(JSON.stringify({ success: false, error: '未完成初始化' })); process.exit(1) }
-      console.log(chalk.red('请先运行 weflow-cli init'))
+      {
+        const { unconfiguredHint } = await import('../src/utils/unconfiguredHint.js')
+        console.log(chalk.red(unconfiguredHint()))
+      }
       process.exit(1)
     }
 

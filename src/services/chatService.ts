@@ -45,7 +45,9 @@ export class ChatService {
 
     const version = this.detectVersion()
     if (!version) {
-      return { success: false, error: '请先运行 weflow-cli init 完成配置' }
+      // 按平台给答案：Linux 上 init 取不到密钥，照着"运行 init"做只会再撞一次墙。
+      const { unconfiguredHintInline } = await import('../utils/unconfiguredHint.js')
+      return { success: false, error: unconfiguredHintInline() }
     }
 
     if (version === '4.x') {
