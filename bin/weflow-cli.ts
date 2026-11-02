@@ -9458,7 +9458,11 @@ program
     if (client.version) {
       // 并列报上客户端自报的构建 token：这是"哪个构建"的第二个来源（**不用它推版本号**）
       const token = client.versionTokens.length ? chalk.gray(`  · 自报构建 ${client.versionTokens.join('、')}`) : ''
-      console.log(chalk.green(`  ✓ 运行时加载 ${client.version}`) + chalk.gray(` (${client.loadedDirs[0]})`) + token)
+      // Linux 没有"已加载的版本目录"（那是 Windows 的模块扫描结果），
+      // 以前这里会印出 `(undefined)`——真实输出里很难看。
+      const loadedDir = client.loadedDirs[0]
+      console.log(chalk.green(`  ✓ 运行时加载 ${client.version}`)
+        + (loadedDir ? chalk.gray(` (${loadedDir})`) : '') + token)
     } else {
       // **说"未知"而不是"没问题"**：取不到就说取不到，别给人一个假的安心
       console.log(chalk.gray(`  ○ 版本未知 — ${client.note}`))

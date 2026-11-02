@@ -20,6 +20,8 @@ All notable user-facing changes are recorded here. This project follows [Semanti
 
 ## 1.21.5
 
+> 验证过的微信：4.1.15.56（2026-10-26，Windows 侧沿用上一版实读结论）；另在 Linux 4.1.13.26 上实机验证了数据目录发现、读库与日报链路。
+
 - **日报能接外部 RSS 源了（`--rss-feed` / `output/rss-feeds.json`），因为 4.2.0.11 把公众号推送的落库量砍掉了约 98%。**
   2026-10-30 实测同一账号的每日落库量：10-26 / 10-27 是 **486 / 481** 行，10-28 13:16 升级到 4.2.0.11
   之后变成 **248 / 21 / 11**（10-30 那 11 行里真正的文章推送只有 7 篇）。三组对照排除了"我们读错了"：
@@ -49,6 +51,12 @@ All notable user-facing changes are recorded here. This project follows [Semanti
   非 0 退出会把**最后一条提示**记到 `~/.weflow-cli/init-state.json`（不写进 `config.json`），
   `check` 直接给出时间、退出码和那条提示；`init` 成功后自动清掉。
   （GitHub issue #13：用户实际跑过 init，只是没成功，而诊断没告诉他这一点。）
+
+- **Linux 进程识别不再只认 `comm`。** Arch 的 AUR/Flatpak 包装下 `comm` 可能是 `bash`/`bwrap`，
+  以前会把"微信在运行"判成"没在运行"（issue #2 最新评论）。现在同时看 `cmdline` 的第一个参数与
+  常见安装路径（`/opt/wechat/wechat`、`/app/bin/wechat`），仍然**不**用"名字包含 wechat"这种宽匹配
+  （那会把 `notwechat-tool` 算成微信）；`/proc` 读不到（`hidepid`）时说"我看不见"，
+  而不是断言"微信没在运行"。顺带修掉 `check` 在 Linux 上印出 `(undefined)` 的那一行。
 
 - **Linux 现在是完整可用的一等平台（此前只保证"能跑"）。** 在 Ubuntu 24.04 + 微信 Linux
   4.1.13.26 上逐条实测补齐：
