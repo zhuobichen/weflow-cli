@@ -730,18 +730,61 @@ def match_databases_from_cache_only(databases):
 # ========== Database Operations ==========
 
 def readonly_uri(path):
-    """把库路径变成**只读、不加锁**的 SQLite URI。
+    """把库路径变成**只读、不加锁**的 SQLite URI（仅用于**没有 WAL** 的库）。
 
-    为什么必须这样：`sqlite3.connect(path)` 默认是**读写**，即使 `PRAGMA key` 用错了、
-    第一次查询就失败，SQLite 也可能先创建 `-wal` / `-shm` 侧文件。微信客户端看到这些
-    多出来的文件会判定"数据库损坏"并弹窗（2026-11-02 实测：登出状态下仍有多个库的
-    `-shm` 被刷新到当前时间，而客户端根本没在碰它们）。
+    为什么只读：`sqlite3.connect(path)` 默认读写，即使 `PRAGMA key` 用错了、第一次查询就失败，
+    SQLite 也可能先建 `-wal` / `-shm`；微信客户端看到这些多出来的文件会判定"数据库损坏"
+    （2026-11-02 实测踩到）。
 
-    `immutable=1` 还额外告诉 SQLite"这个文件不会被别人改"——于是它连共享内存都不建。
-    代价：读不到尚未 checkpoint 的 WAL 内容（微信会周期性 checkpoint，可接受）。
+    为什么 immutable 只适用于"没有 WAL"：`immutable=1` 表示"这个文件不会被别人改"，
+    SQLite 于是**连 WAL 都不看**。若旁边有 `-wal`，表结构可能整个还在 WAL 里，
+    读取会直接失败（`no such table`）。实测：
+
+        干净库            mode=ro → 1 行    immutable → 1 行
+        热 WAL（写连接在） mode=ro → 2 行    immutable → 失败 no such table
+
+    有 WAL 时请走 `connect_readonly()`——它读的是**副本**，既不碰原库也不丢 WAL 内容。
     """
     quoted = urllib.parse.quote(str(pathlib.Path(path).resolve()))
     return f'file:{quoted}?mode=ro&immutable=1'
+
+
+_CHROME_TMPDIRS = []
+
+
+def _copy_with_wal_sidecars(src, dest_dir):
+    """把库与它的 -wal / -shm 一起复制到临时目录（只复制存在的那些）。"""
+    import shutil
+    dest = pathlib.Path(dest_dir) / pathlib.Path(src).name
+    shutil.copy2(src, dest)
+    for suffix in ('-wal', '-shm'):
+        side = pathlib.Path(str(src) + suffix)
+        if side.exists():
+            shutil.copy2(side, str(dest) + suffix)
+    return dest
+
+
+def connect_readonly(db_path, key_raw):
+    """**只读**地打开一个微信库，返回 (conn, cursor)。
+
+    - 没有 `-wal`：直接 `mode=ro&immutable=1` 读原库（零副作用）
+    - 有 `-wal`：复制到临时目录再读**副本**。
+      `mode=ro` 在有 WAL 时会创建 `-shm`（SQLite 需要共享内存索引），
+      那同样会在原库旁边留下文件——所以副本是唯一既"不丢 WAL 内容"又"不碰原库"的做法。
+    """
+    src = pathlib.Path(db_path)
+    wal = pathlib.Path(str(src) + '-wal')
+    if not wal.exists():
+        conn = require_sqlcipher().connect(readonly_uri(src), uri=True)
+    else:
+        import tempfile
+        tmp = tempfile.mkdtemp(prefix='weflow-ro-')
+        _CHROME_TMPDIRS.append(tmp)
+        copy = _copy_with_wal_sidecars(src, tmp)
+        conn = require_sqlcipher().connect(str(copy))
+    cur = conn.cursor()
+    cur.execute(f'PRAGMA key = "{key_raw}";')
+    return conn, cur
 
 
 def connect_nt_db(db_path, key_hex, salt_hex):
@@ -755,10 +798,7 @@ def connect_nt_db(db_path, key_hex, salt_hex):
         c = conn.cursor()
         return conn, c
     else:
-        conn = require_sqlcipher().connect(readonly_uri(db_path), uri=True)
-        c = conn.cursor()
-        c.execute(f'PRAGMA key = "{raw_key}";')
-        return conn, c
+        return connect_readonly(db_path, raw_key)
 
 
 # WeChat rolls a conversation into a new shard over time, and every shard is

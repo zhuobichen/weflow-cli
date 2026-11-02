@@ -1230,12 +1230,11 @@ def main():
         # 之前这里直接抛 traceback，用户在 Linux 上只看到一句
         # `OperationalError: unable to open database file`，看不出该改什么。
         try:
-            # 只读 + immutable：读写模式会在微信库旁边留下 -wal/-shm，
-            # 客户端会据此判定"数据库损坏"（2026-11-02 实测）。
-            from nt_decrypt import readonly_uri
-            conn = sqlcipher.connect(readonly_uri(keys['biz_db']), uri=True)
-            c = conn.cursor()
-            c.execute(f'PRAGMA key = "{raw_key}";')
+            # 有意读**副本**：这个库通常有活动的 -wal（客户端在跑）。
+            # `mode=ro` 会在原库旁创建 -shm，`immutable=1` 又看不到 WAL 里的表结构；
+            # connect_readonly 按需复制副本，原库零副作用。
+            from nt_decrypt import connect_readonly
+            conn, c = connect_readonly(keys['biz_db'], raw_key)
         except Exception as exc:
             print(f'[ERROR] 无法打开订阅号数据库: {keys["biz_db"]}')
             print(f'        {type(exc).__name__}: {exc}')
@@ -1251,10 +1250,8 @@ def main():
     if keys['contact_key'] and os.path.exists(keys['contact_db']):
         contact_raw = f"x'{keys['contact_key']}{keys['contact_salt']}'"
         try:
-            from nt_decrypt import readonly_uri as _ro_uri
-            conn2 = sqlcipher.connect(_ro_uri(keys['contact_db']), uri=True)
-            c2 = conn2.cursor()
-            c2.execute(f'PRAGMA key = "{contact_raw}";')
+            from nt_decrypt import connect_readonly as _connect_ro
+            conn2, c2 = _connect_ro(keys['contact_db'], contact_raw)
             c2.execute("SELECT username, COALESCE(NULLIF(remark,''), NULLIF(nick_name,''), username) FROM contact")
             name_map = dict(c2.fetchall())
             conn2.close()
