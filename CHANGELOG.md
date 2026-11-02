@@ -37,6 +37,12 @@ All notable user-facing changes are recorded here. This project follows [Semanti
     `C:\Windows\System32`，用相对路径会静默读不到（已从该目录实测验证）。
   - 不配任何源时行为不变（D-139 的低量告警、D-141 的 `--browser-history` 照旧）。
 
+- **`check` 会说清"上次 init 为什么没成功"了。** 以前 `init` 中途退出、什么也没写进配置，
+  `check` 只报"未初始化 — 运行 weflow-cli init"，读起来像"工具取不到密钥"。现在 `init` 的
+  非 0 退出会把**最后一条提示**记到 `~/.weflow-cli/init-state.json`（不写进 `config.json`），
+  `check` 直接给出时间、退出码和那条提示；`init` 成功后自动清掉。
+  （GitHub issue #13：用户实际跑过 init，只是没成功，而诊断没告诉他这一点。）
+
 - **Linux 现在是完整可用的一等平台（此前只保证"能跑"）。** 在 Ubuntu 24.04 + 微信 Linux
   4.1.13.26 上逐条实测补齐：
   - **数据目录发现**：除常规四处，新增 Flatpak（`~/.var/app/<id>/`，含未预料 app id 的兜底扫描）、

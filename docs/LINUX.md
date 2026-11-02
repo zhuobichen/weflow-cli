@@ -15,7 +15,7 @@
 | `check` 环境检查 | ✅ | 依赖、目录、配置、以及**能读几个库**都会报 |
 | `init` 目录发现 / 账号扫描 | ✅ | 微信 Linux 的 `~/xwechat_files` 能自动认出 |
 | 进程识别 | ✅ | 只认 `wechat`/`weixin`（含 `com.tencent.wechat` 这类前缀） |
-| 版本探测 | ❌ | **只实现了 Windows**；Linux 上会明说"探测不了"，不再假报"微信没在运行" |
+| 版本探测 | ✅ | 读客户端自己的记录 `~/.xwechat/uh/uh.dat`（没有 WMI/模块表可查）；读不到时明说"版本未知"，不会假报"微信没在运行" |
 | 读本地微信库 | ⚠️ | **有凭据就能读**（已用合成库+真实库验证）；自动提取拿不到 |
 | 公众号日报（外部源） | ✅ | `--articles-json` / `--rss-feed` / `--rss-opml`，端到端跑通 |
 | 定时任务 | ✅ | `scripts/daily_task.sh`（cron / systemd timer 都能调） |
@@ -42,20 +42,6 @@
 
 用 `python3 scripts/nt_decrypt.py key-status` 或 `weflow-cli check` 都能看到当前配置能否读库。
 
-## 拿不到密钥时的两条正路（`weflow-cli daily` 直接支持外部源）
-
-```bash
-# 外部文章 JSON / RSS / OPML —— 不需要任何本地库或密钥
-weflow-cli daily --date 2026-11-01 --articles-json articles.json
-weflow-cli daily --rss-feed https://example.com/feed.xml
-weflow-cli daily --rss-opml subs.opml
-```
-
-这三个旗标以前只存在于 `scripts/pipeline.py`，主命令传了会报 `unknown option`
-（2026-11-01 在干净 HOME 上实测）——而外部源正是 Linux 无密钥用户的唯一来源。
-
-下面两种方式也仍然可用。
-
 ## 拿不到密钥时的两条正路
 
 ### 1. 你自己提供口令（能读本地库）
@@ -79,6 +65,17 @@ python3 scripts/nt_decrypt.py key-status
 ```
 
 ### 2. 不碰本地库，走外部源（不需要任何密钥）
+
+主命令原生支持（2026-11-01 起；此前这三个旗标只在 `scripts/pipeline.py` 里，主命令传了会报
+`unknown option`，而外部源正是 Linux 无密钥用户的唯一来源）：
+
+```bash
+weflow-cli daily --date 2026-11-01 --articles-json articles.json
+weflow-cli daily --date 2026-11-01 --rss-feed https://example.com/feed.xml
+weflow-cli daily --date 2026-11-01 --rss-opml subs.opml
+```
+
+同一条链路也能用脚本跑：
 
 ```bash
 # 订阅源：RSS/Atom 列表、OPML、或任意来源整理好的 JSON

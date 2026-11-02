@@ -980,8 +980,17 @@ program
       return
     }
     if (opts.json) {
+      // 这条路径最容易让人误以为"已经在初始化了"：--json 只输出预览。
+      // 先记账再退出，`check` 才能告诉用户"上次 init 根本没真正开始"。
+      const { recordInitFailure } = await import('../src/services/initState.js')
+      recordInitFailure(1, '--json 只输出预览，不会真正初始化；去掉 --json 在交互终端里运行')
       console.log(JSON.stringify({ ...preview, success: false, dryRun: false, code: 'INTERACTIVE_REQUIRED' }))
       process.exit(1)
+    }
+    // 从这里开始，任何非 0 退出都会把"最后一条提示"记下来（见 initState.trackInitRun）。
+    {
+      const { trackInitRun } = await import('../src/services/initState.js')
+      trackInitRun()
     }
     console.log(chalk.cyan('🔧 WeFlow CLI 初始化\n'))
 
@@ -9335,7 +9344,15 @@ program
           console.log(chalk.green('  ✓ 已初始化 — 可以运行 weflow-cli'))
         }
       } else {
-        console.log(chalk.yellow('  ○ 未初始化 — 运行 weflow-cli init'))
+        const { readInitFailure, describeInitFailure } = await import('../src/services/initState.js')
+        const lines = describeInitFailure(readInitFailure())
+        if (lines) {
+          // 跑到这里说明用户**试过** init 但没成功。只报"未初始化"会让人以为
+          // 是密钥取不到（issue #13 就是这样被理解的）。把上次的原因摆出来。
+          for (const line of lines) console.log(chalk.yellow(line))
+        } else {
+          console.log(chalk.yellow('  ○ 未初始化 — 运行 weflow-cli init'))
+        }
       }
 
 
