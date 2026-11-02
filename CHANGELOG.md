@@ -37,6 +37,34 @@ All notable user-facing changes are recorded here. This project follows [Semanti
     `C:\Windows\System32`，用相对路径会静默读不到（已从该目录实测验证）。
   - 不配任何源时行为不变（D-139 的低量告警、D-141 的 `--browser-history` 照旧）。
 
+- **Linux 现在是完整可用的一等平台（此前只保证"能跑"）。** 在 Ubuntu 24.04 + 微信 Linux
+  4.1.13.26 上逐条实测补齐：
+  - **数据目录发现**：除常规四处，新增 Flatpak（`~/.var/app/<id>/`，含未预料 app id 的兜底扫描）、
+    Snap、`$XDG_DATA_HOME`；符号链接、同机多账号、**家目录含中文与空格**都验证过。
+  - **版本探测**：读客户端自己的记录 `~/.xwechat/uh/uh.dat`，`check` 从此在 Linux 上报得出具体版本
+    与兼容性判断（以前一律"未知"）。
+  - **报错归因**：库"打不开"（权限/属主）与"密钥不对"分开报；一个库都没找到时不再说成"密钥可能不对"；
+    从 Windows 拷过来的配置（`C:\…` 路径）会明说"数据目录在本机不存在"。
+  - **`weflow-cli daily` 直接支持外部源**：`--articles-json` / `--rss-feed` / `--rss-opml`。
+    以前这些旗标只在 `scripts/pipeline.py` 里，主命令传了会报 `unknown option`——而外部源正是
+    Linux 上拿不到本地库密钥时唯一的日报来源。
+  - **首次运行**：没有配置文件时不再抛 `FileNotFoundError` 栈，改为提示先 `init`，并同时给出
+    "只用外部源"的另一条路。
+- **安全修复：读微信库改为只读（`mode=ro&immutable=1`）。** 之前的连接是读写模式，即使密钥传错、
+  第一次查询就失败，SQLite 也会先在库旁边建 `-wal` / `-shm`；微信客户端看到这些多出来的文件会判定
+  **"数据库损坏"** 并弹窗（2026-11-02 在 Linux 上实测踩到，已备份后交由客户端修复）。
+  现在读库不落任何侧文件、不接受写入，有 3 条测试锁住。
+- **全局安装不再有"写不进去"的问题。** 输出、缓存、vault、知识图谱、导入存储、卡片目录统一落到
+  可写目录（`~/.weflow-cli/output`，可用 `WEFLOW_OUTPUT_DIR` 覆盖）；配置与状态文件权限收紧到
+  600、目录 700（同机其他用户不再能读配置，775 的目录也不再让他们替换它）。
+- **systemd 部署**：新增 `deploy/systemd/`（助手常驻 + 日报定时器 + 安装脚本），
+  用 `systemd-analyze verify` 校验过；助手改为前台运行，`systemctl stop`（SIGTERM）会走有序关闭。
+- **不再静默失败**：缺 `zstandard` 时过去会把"解析不了"显示成"今天没有文章"，现在直接报错并给安装命令；
+  依赖声明由 `test/dependency_declared_test.py` 守住（漏声明会让 CI 红）。
+
+    验证版本：微信 **Linux 4.1.13.26**（Ubuntu 24.04 实机；Windows 侧仍以 4.1.15.56 为准）。
+    测试：Linux 相关的 `linux-write-path` CI job（只读包目录下仍可运行）+ Python 全量 1368 项。
+
     验证版本：微信 4.2.0.11。测试：`test/daily_articles_merge_test.py` 15 → **23** 条
     （`RssFeedTests` 8 条：只取当天/只取公众号、Atom、坏源隔离、空源、无日期跳过、配置三种写法、
     配置缺失或损坏、去重保序）。
