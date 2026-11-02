@@ -5,6 +5,8 @@ Uses sqlcipher3 to decrypt and query NT-format databases.
 """
 import sys
 import os
+import pathlib
+import urllib.parse
 import json
 import html
 import re
@@ -727,6 +729,21 @@ def match_databases_from_cache_only(databases):
 
 # ========== Database Operations ==========
 
+def readonly_uri(path):
+    """把库路径变成**只读、不加锁**的 SQLite URI。
+
+    为什么必须这样：`sqlite3.connect(path)` 默认是**读写**，即使 `PRAGMA key` 用错了、
+    第一次查询就失败，SQLite 也可能先创建 `-wal` / `-shm` 侧文件。微信客户端看到这些
+    多出来的文件会判定"数据库损坏"并弹窗（2026-11-02 实测：登出状态下仍有多个库的
+    `-shm` 被刷新到当前时间，而客户端根本没在碰它们）。
+
+    `immutable=1` 还额外告诉 SQLite"这个文件不会被别人改"——于是它连共享内存都不建。
+    代价：读不到尚未 checkpoint 的 WAL 内容（微信会周期性 checkpoint，可接受）。
+    """
+    quoted = urllib.parse.quote(str(pathlib.Path(path).resolve()))
+    return f'file:{quoted}?mode=ro&immutable=1'
+
+
 def connect_nt_db(db_path, key_hex, salt_hex):
     """Connect to an NT database using sqlcipher3."""
     from database_cache import DatabaseCache
@@ -738,7 +755,7 @@ def connect_nt_db(db_path, key_hex, salt_hex):
         c = conn.cursor()
         return conn, c
     else:
-        conn = require_sqlcipher().connect(db_path)
+        conn = require_sqlcipher().connect(readonly_uri(db_path), uri=True)
         c = conn.cursor()
         c.execute(f'PRAGMA key = "{raw_key}";')
         return conn, c

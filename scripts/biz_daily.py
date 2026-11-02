@@ -1230,7 +1230,10 @@ def main():
         # 之前这里直接抛 traceback，用户在 Linux 上只看到一句
         # `OperationalError: unable to open database file`，看不出该改什么。
         try:
-            conn = sqlcipher.connect(keys['biz_db'])
+            # 只读 + immutable：读写模式会在微信库旁边留下 -wal/-shm，
+            # 客户端会据此判定"数据库损坏"（2026-11-02 实测）。
+            from nt_decrypt import readonly_uri
+            conn = sqlcipher.connect(readonly_uri(keys['biz_db']), uri=True)
             c = conn.cursor()
             c.execute(f'PRAGMA key = "{raw_key}";')
         except Exception as exc:
@@ -1248,7 +1251,8 @@ def main():
     if keys['contact_key'] and os.path.exists(keys['contact_db']):
         contact_raw = f"x'{keys['contact_key']}{keys['contact_salt']}'"
         try:
-            conn2 = sqlcipher.connect(keys['contact_db'])
+            from nt_decrypt import readonly_uri as _ro_uri
+            conn2 = sqlcipher.connect(_ro_uri(keys['contact_db']), uri=True)
             c2 = conn2.cursor()
             c2.execute(f'PRAGMA key = "{contact_raw}";')
             c2.execute("SELECT username, COALESCE(NULLIF(remark,''), NULLIF(nick_name,''), username) FROM contact")
