@@ -9383,7 +9383,7 @@ program
               console.log(chalk.gray('  已取消，配置未改动。'))
             } else {
               const { spawn } = await import('node:child_process')
-              const child = spawn(process.execPath, [process.argv[1], ...plan.args], { stdio: 'inherit' })
+              const child = spawn(process.execPath, [process.argv[1], ...plan.args], { stdio: 'inherit', windowsHide: true })
               await new Promise<void>((resolve) => child.on('exit', (code) => { process.exitCode = code || 0; resolve() }))
             }
           }
