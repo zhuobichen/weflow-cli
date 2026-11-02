@@ -439,6 +439,35 @@ const defaultRunner: PowershellRunner = async (command) => {
  * 为什么不复用 Windows 那条：那边依赖 PowerShell 的 `Win32_Process` 与
  * `Weixin.dll` 映射信息，Linux 上都没有。
  */
+/**
+ * 判断一个 Linux 进程是不是微信主程序。
+ *
+ * 为什么不只看 `comm`：各家发行版的打包方式差别很大——
+ * - deb/rpm 官方包：`comm` 就是 `wechat`，没问题；
+ * - **AUR / 手动装的 tarball**：可能通过包装脚本启动，`comm` 是 `bash`/`sh`；
+ * - **Flatpak**：外层是 `bwrap` 沙箱，`comm` 不是微信；
+ * - 有些构建把它改名成 `weixin`。
+ *
+ * 所以在 `comm` 之外还看 cmdline 的第一个参数 / 常见安装路径。
+ * 只加"能对应上真实二进制"的判据，不用"名字包含 wechat"这种宽匹配——
+ * 那会把 `notwechat-tool` 也算成微信（M-12 记的那个假阳性）。
+ */
+export function isWechatLinuxProcess(comm: string, cmdline: string): boolean {
+  const name = (comm || '').trim().toLowerCase()
+  if (name === 'wechat' || name === 'weixin') return true
+
+  const argv = (cmdline || '').split('\0')
+  const argv0 = (argv[0] || '').trim().toLowerCase()
+  const base = argv0.split('/').pop() || ''
+  if (base === 'wechat' || base === 'weixin') return true
+
+  // 官方安装位置（Arch AUR / 手动解包都常见这个前缀）
+  if (/\/opt\/wechat\/wechat$/.test(argv0)) return true
+  // Flatpak：可执行在沙箱内，仍然能从这里看出来
+  if (/\/app\/bin\/wechat$/.test(argv0)) return true
+  return false
+}
+
 export function detectLinuxClient(homeDir: string = homedir()): WechatClientFacts {
   const root = join(homeDir, '.xwechat')
   const facts: WechatClientFacts = {
@@ -452,6 +481,7 @@ export function detectLinuxClient(homeDir: string = homedir()): WechatClientFact
   }
 
   // 1) 运行状态
+  let procReadable = true
   try {
     for (const entry of readdirSync('/proc')) {
       if (!/^\d+$/.test(entry)) continue
@@ -459,17 +489,20 @@ export function detectLinuxClient(homeDir: string = homedir()): WechatClientFact
       try {
         comm = readFileSync(`/proc/${entry}/comm`, 'utf8').trim().toLowerCase()
       } catch { continue }
-      if (comm !== 'wechat' && comm !== 'weixin') continue
+      let cmdlineForMatch = ''
+      try {
+        cmdlineForMatch = readFileSync(`/proc/${entry}/cmdline`, 'utf8')
+      } catch { /* 读不到就用 comm 判断 */ }
+      if (!isWechatLinuxProcess(comm, cmdlineForMatch)) continue
       facts.running = true
       // 数据目录：客户端命令行里自带（`--wechat-files-path=`）
       try {
-        const cmdline = readFileSync(`/proc/${entry}/cmdline`, 'utf8')
-        const m = cmdline.match(/--wechat-files-path=([^\0\s]+)/)
+        const m = cmdlineForMatch.match(/--wechat-files-path=([^\0\s]+)/)
         if (m) facts.dataDirs.push(m[1])
       } catch { /* 读不到不影响结论 */ }
       break
     }
-  } catch { /* /proc 不可读 */ }
+  } catch { procReadable = false /* /proc 不可读（hidepid 等） */ }
 
   // 2) 版本：客户端自己的记录
   try {
@@ -482,7 +515,10 @@ export function detectLinuxClient(homeDir: string = homedir()): WechatClientFact
     ? `版本取自客户端自身记录 ~/.xwechat/uh/uh.dat（Linux 无 WMI/模块表可查）`
     : facts.running
       ? `客户端在跑，但读不到 ~/.xwechat/uh/uh.dat 里的版本记录 ⇒ 版本未知`
-      : `客户端没在运行，也没有版本记录 ⇒ 版本未知`
+      : procReadable
+        ? `客户端没在运行，也没有版本记录 ⇒ 版本未知`
+        // /proc 读不到时说"我看不见"，而不是断言"微信没在运行"——后者是假错误
+        : `读不到 /proc 进程列表（可能被 hidepid 限制）⇒ 无法判断微信是否在运行`
   return facts
 }
 
