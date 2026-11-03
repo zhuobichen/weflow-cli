@@ -14,6 +14,7 @@ import { dbPathService } from '../src/core/dbPathService.js'
 import { keyService } from '../src/core/keyService.js'
 import { NtCore } from '../src/core/ntCore.js'
 import { configService } from '../src/services/configService.js'
+import { redactForReport } from '../src/services/diagnosticReport.js'
 import { renderDiagnosticReport } from '../src/services/diagnosticReport.js'
 import { chatService } from '../src/services/chatService.js'
 import { emptyMessagesNote, looksLikeTalkerId } from '../src/services/messageQuery.js'
@@ -1072,7 +1073,7 @@ program
       console.log(chalk.cyan('=============================='))
       console.log(chalk.white(`数据目录: ${wxDir}`))
       console.log(chalk.white(`消息数据库: ${msg0Path}`))
-      console.log(chalk.white(`账号: ${wxid}`))
+      console.log(chalk.white(redactForReport(`账号: ${wxid}`)))
       console.log(chalk.white('密钥: 已安全保存'))
 
     } else {
@@ -1122,7 +1123,7 @@ program
       // **说清是怎么找到的**：来源不同，可信度与后续排查都不同（"客户端自己说的"最硬）
       const howFound = detected.source === 'client' ? '（客户端自己报的）'
         : detected.source === 'scan' ? '（全盘扫描找到的）' : ''
-      console.log(chalk.green(`✓ 检测到数据目录: ${detected.path}${howFound}`))
+      console.log(chalk.green(redactForReport(`✓ 检测到数据目录: ${detected.path}${howFound}`)))
       configService.set('dbPath', detected.path)
       configService.set('dataVersion', '4.x')
 
@@ -1139,7 +1140,7 @@ program
       for (const w of wxids) {
         const marker = w === selectedWxid ? chalk.green(' → ') : '   '
         const nickname = w.nickname ? ` (${w.nickname})` : ''
-        console.log(`${marker}${w.wxid}${nickname}`)
+        console.log(redactForReport(`${marker}${w.wxid}${nickname}`))
       }
       configService.set('wxid', selectedWxid.wxid)
 
