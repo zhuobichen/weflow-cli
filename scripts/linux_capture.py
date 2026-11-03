@@ -168,8 +168,21 @@ def capture(timeout: int, log_path: Path) -> str:
     print(f'  请在微信里**退出登录 → 重新登录**（口令只在登录时派生一次）', flush=True)
     print(f'  等待最多 {timeout} 秒…', flush=True)
 
-    proc = subprocess.Popen(['gdb', '-p', str(pid), '-x', str(script_path), '-batch'],
-                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    # 先普通身份试；被 Yama 挡住时（非子进程需要 CAP_SYS_PTRACE）自动用 sudo 重试。
+    # 用户端只该扫码——权限这一步不该让他知道。
+    def _spawn(cmd):
+        return subprocess.Popen(cmd, stdout=subprocess.DEVNULL,
+                                stderr=subprocess.PIPE, text=True, encoding='utf-8',
+                                errors='replace')
+
+    base_cmd = ['gdb', '-p', str(pid), '-x', str(script_path), '-batch']
+    proc = _spawn(base_cmd)
+    time.sleep(3)
+    if proc.poll() is not None and not (log_path.exists() and log_path.stat().st_size):
+        err = (proc.stderr.read() if proc.stderr else '') or ''
+        if 'ptrace' in err.lower() or 'permission' in err.lower() or 'Operation not permitted' in err:
+            print('  权限不足，改用 sudo 重试…', flush=True)
+            proc = _spawn(['sudo', '-n'] + base_cmd)
     deadline = time.time() + timeout
     while time.time() < deadline:
         if log_path.exists() and log_path.stat().st_size > 0:
