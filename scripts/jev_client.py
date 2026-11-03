@@ -28,8 +28,32 @@ import time
 import urllib.error
 import urllib.request
 
-ENDPOINT = 'https://api.typesafe.ai/v1/systemone'
-MODELS_ENDPOINT = 'https://api.typesafe.ai/v1/models'
+# 端点可覆盖：官方 `api.typesafe.ai` 在中国地区不可用，而第三方中转
+# （例如 302.AI 的 `api.302ai.cn/typesafeai/v1/systemone`）用的是**同一套
+# systemone 协议**，只是 host 不同。写死官方端点等于把这条路堵死。
+# 优先级：环境变量 > 配置（judgeEndpoint）> 官方默认。
+_DEFAULT_HOST = 'https://api.typesafe.ai'
+
+
+def _resolve_host():
+    host = (os.environ.get('JEV_BASE_URL') or '').strip()
+    if not host:
+        try:
+            sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+            from _utils import load_config
+            host = (load_config() or {}).get('judgeEndpoint', '') or ''
+        except Exception:
+            host = ''
+    host = (host or _DEFAULT_HOST).rstrip('/')
+    # 允许直接给到 `/systemone` 的全路径
+    if host.endswith('/systemone'):
+        host = host[: -len('/systemone')]
+    return host
+
+
+_HOST = _resolve_host()
+ENDPOINT = _HOST + '/systemone'
+MODELS_ENDPOINT = _HOST + '/models'
 DEFAULT_MODEL = 'jev-latest'
 # 瞬时故障：官方参考实现（AI SDK 的 evaluate）默认对它们重试 2 次，这里同样。
 # 实测遇到过 529 `system_overloaded`——服务 2026-09-15 才发布，被打满是常态。

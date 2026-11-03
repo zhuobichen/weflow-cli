@@ -18,6 +18,30 @@ purpose** - a hand-written "latest is X" is exactly the claim that goes stale he
 
 All notable user-facing changes are recorded here. This project follows [Semantic Versioning](https://semver.org/).
 
+## 1.21.6
+
+> 验证过的微信：Windows 4.1.15.56；**Linux 4.1.13.26**（Ubuntu 24.04 实机，真实账号登录态）。
+
+- **Linux 现在能读本地数据库了 —— 聊天记录、公众号、联系人、朋友圈、收藏全部可用。**
+  在此之前 Linux 只能"发现目录、认出账号"，读库那一步一直停住。现在实测：
+  `sessions` 出真实会话、`messages` 出真实消息正文、`daily` 一天解析出 198 篇公众号文章。
+  前提是**用户提供那串共享口令**（`weflow-cli fav set-key --passphrase <64位hex>`）；
+  4.1.12.26+ 的密钥体系决定了没有它读不了，这一点没有绕过的办法。
+- **修掉三个 Linux 专属 bug**，它们共同表现为"口令对了也读不出来"：
+  - Python 侧用 `USERNAME` 判断机器标识——那是 Windows 变量，Linux 上通常为空，
+    于是任何加密保存的配置字段（API key、数据库密钥）在 Linux 上都解不开；
+  - 派生密钥时信任扫描到的 salt，而不是数据库文件头里的 salt；
+  - 硬绑第一个消息分片：同一口令下 `message_1.db` 能用、`message_0.db` 不能用时，
+    整条链路直接失败。现在会退到能验证通过的分片。
+- **日报默认走并发预取正文。** 以前要手动加 `--prefetch-bodies` 才快，不加就是逐篇串行
+  （450 篇约 75 分钟）。现在默认开启（8 并发），需要时用 `--no-prefetch-bodies` 关掉。
+  对上游的请求次数不变，只是把它们压进更短的时间窗。
+- **分类用的决策模型（Jev）支持第三方中转端点**：官方 `api.typesafe.ai` 在中国地区不可用，
+  而第三方中转提供同一套协议。新增配置键 `judgeEndpoint`（或环境变量 `JEV_BASE_URL`），
+  不配置时仍走官方默认。实测一篇分类约 **$0.00003**。
+- 顺带明确了一件事：**只有「AI」「学术」两类会进 AI 解析**，其余题材（新闻/文学/投资/政治）
+  只打标签、不消耗生成模型的 token。
+
 ## 1.21.5
 
 > 验证过的微信：4.1.15.56（2026-10-26，Windows 侧沿用上一版实读结论）；另在 Linux 4.1.13.26 上实机验证了数据目录发现、读库与日报链路。

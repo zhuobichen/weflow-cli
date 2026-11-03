@@ -1463,7 +1463,7 @@ const configurableKeys = [
   'ntDbPath', 'ntKey', 'ntSalt', 'contactDbPath', 'contactKey', 'contactSalt',
   'vaultRepo', 'aiEngine', 'aiBaseUrl', 'aiModel', 'deepseekApiKey', 'typesafeApiKey',
   'dashscopeApiKey', 'favPassphrase',
-  'judgeProvider', 'openrouterApiKey', 'openrouterJudgeModel', 'judgeLocalUrl',
+  'judgeProvider', 'openrouterApiKey', 'openrouterJudgeModel', 'judgeLocalUrl', 'judgeEndpoint',
   'wereadApiKey',
   'assistantPrivacy', 'assistantWhitelist', 'assistantGroupWhitelist',
   'assistantGroupRequireMention', 'assistantFastRoute', 'assistantPanelUser', 'quickReplyContacts',
@@ -7266,6 +7266,7 @@ program
   .option('--no-ai', '关闭本次日报的所有 AI 处理')
   .option('--no-summary', '只判断不生成：不调 LLM 写摘要/标签/简报（主题与相关度仍由 Jev 判断），无需 DeepSeek key')
   .option('--prefetch-bodies [n]', '抓取之前先并发把当天正文抓进缓存（n=并发数，默认 8）：抓取阶段于是全部命中缓存、不再逐篇 sleep 8-12 秒（450 篇约 75 分钟 → 秒级）。对上游的请求次数不变，只是压进更短的时间窗')
+  .option('--no-prefetch-bodies', '关闭并发预取正文（默认开启）')
   .option('--json', '输出机器可读的最终结果；运行日志写入 stderr')
   .option('--email', '生成后把日报按主题（AI / 文学 / 学术）发到邮箱（每个主题附一段 AI 综述，逐篇给要点）')
   .option('--mail-to <address>', '邮件收件人；缺省用配置 dailyMailTo，再缺省发给自己')

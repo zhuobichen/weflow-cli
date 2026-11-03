@@ -137,8 +137,16 @@ class PipelineForwardingTests(unittest.TestCase):
         args = self.child_args(['--prefetch-bodies', '3'])
         self.assertEqual(args[args.index('--prefetch-bodies') + 1], '3')
 
-    def test_没给就不转发(self):
-        self.assertNotIn('--prefetch-bodies', self.child_args([]))
+    def test_默认就转发_因为默认开启(self):
+        """默认是**开启**的（450 篇 75 分钟 → 秒级），所以不带任何旗标也要转发。
+
+        2026-11-03 改：默认值从 0 改成 8。旧断言"没给就不转发"钉的是"默认关闭"，
+        那正是用户踩的坑——少带一个参数就掉进串行慢车道。
+        """
+        self.assertIn('--prefetch-bodies', self.child_args([]))
+
+    def test_显式关闭时不转发(self):
+        self.assertNotIn('--prefetch-bodies', self.child_args(['--no-prefetch-bodies']))
 
     def test_yesterday_折成具体的日期传下去(self):
         """计划任务用 `--yesterday`：它必须在下游变成**具体的日期**（biz_daily 只认 --date）。"""
