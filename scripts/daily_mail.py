@@ -35,6 +35,20 @@ sys.path.insert(0, str(SCRIPT_DIR))
 from _utils import get_api_key, load_config  # noqa: E402
 
 ROOT = SCRIPT_DIR.parent
+
+
+def _daily_root() -> pathlib.Path:
+    """日报产物所在根目录。
+
+    必须与 `biz_daily` 写盘时用的同一个根（`_utils.output_root()`）：
+    包目录在系统级安装时是**只读**的，按 `ROOT/output` 找必然找不到
+    （2026-11-03 在服务器上实测：`daily_mail --date` 报"没有这一天的数据"）。
+    """
+    try:
+        from _utils import output_root
+        return pathlib.Path(output_root()) / 'biz-daily'
+    except Exception:
+        return ROOT / 'output' / 'biz-daily'
 #: **政治不进默认**：2026-10-26 实测，含政治题材的邮件被 QQ SMTP 直接拒收
 #: （`550 The mail may contain inappropriate words or content.`），去掉后同一封信
 #: 立刻发出。政治类仍然在本地阅读器里（`daily-server`），只是不走邮件。
@@ -49,7 +63,7 @@ SMTP_CONFIG = pathlib.Path(os.path.expanduser('~/.weflow-issue-watch.json'))
 
 
 def articles_path(date: str) -> pathlib.Path:
-    return ROOT / 'output' / 'biz-daily' / date / '.articles.json'
+    return _daily_root() / date / '.articles.json'
 
 
 def load_articles(date: str, topics):
@@ -193,7 +207,7 @@ def body_index(date: str) -> dict:
     标题里有 `/`、`:` 或超长名字时会被改写，按名字匹配会静默丢文章。
     """
     index = {}
-    for md in (ROOT / 'output' / 'biz-daily' / date).glob('*/*.md'):
+    for md in (_daily_root() / date).glob('*/*.md'):
         try:
             text = md.read_text(encoding='utf-8', errors='replace')
         except OSError:
@@ -623,7 +637,7 @@ def main():
     to = args.to or str(cfg.get('dailyMailTo') or '') or user
     print(f'收件人: {to}  主题: {subject}  正文字符: {len(text_body)}')
     if args.dry_run:
-        out = ROOT / 'output' / f'daily-mail-{args.date}.html'
+        out = _daily_root().parent / f'daily-mail-{args.date}.html'
         out.write_text(html_body, encoding='utf-8')
         print(f'[dry-run] 已渲染到 {out}')
         return

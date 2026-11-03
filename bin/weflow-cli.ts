@@ -5354,7 +5354,8 @@ program
   ) => {
     const pkgRoot = resolvePackageRoot()
     const args = ['--vault', opts.vault]
-    const apiKey = opts.apiKey || process.env.DEEPSEEK_API_KEY
+    // 也读配置：`config set deepseekApiKey` 之后不该还要求传参或设环境变量
+    const apiKey = opts.apiKey || process.env.DEEPSEEK_API_KEY || configService.get('deepseekApiKey') || ''
     if (opts.withAi && !opts.dryRun) {
       if (!apiKey) {
         if (opts.json) console.log(JSON.stringify({ success: false, code: 'AI_KEY_REQUIRED', action }))
@@ -7297,7 +7298,7 @@ program
     const date = opts.date || (opts.yesterday
       ? isoDate(new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1))
       : localDate)
-    const apiKey = opts.apiKey || process.env.DEEPSEEK_API_KEY || ''
+    const apiKey = opts.apiKey || process.env.DEEPSEEK_API_KEY || configService.get('deepseekApiKey') || ''
     const noAi = opts.ai === false || configService.get('dailyAiEnabled') === 'false'
     const dailyLog = (...values: any[]) => opts.json ? console.error(...values) : console.log(...values)
 

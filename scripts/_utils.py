@@ -109,6 +109,55 @@ CONFIG_PATH = os.path.join(os.path.expanduser('~'), '.weflow-cli', 'config.json'
 # AI Engine 抽象
 # ======================================================================
 
+# ======================================================================
+# 本次运行的 AI 用量（供日报尾部展示"这次花了多少"）
+# ======================================================================
+# 为什么统计：日报每天自动跑，用户看不到"这次用了多少 token / 多少钱"。
+# DeepSeek 的响应里有 usage.prompt_tokens / completion_tokens，Jev 的响应里有 usage.cost，
+# 之前都被丢掉了——累计起来就能在日报/邮件末尾写一行，成本变成可见的。
+USAGE = {
+    'chat_calls': 0, 'input_tokens': 0, 'output_tokens': 0,
+    'jev_calls': 0, 'jev_input_tokens': 0, 'jev_output_tokens': 0, 'jev_cost_usd': 0.0,
+}
+
+
+def record_chat_usage(usage):
+    """记录一次生成模型调用的 token 用量。"""
+    if not usage:
+        return
+    USAGE['chat_calls'] += 1
+    USAGE['input_tokens'] += int(usage.get('prompt_tokens') or 0)
+    USAGE['output_tokens'] += int(usage.get('completion_tokens') or 0)
+
+
+def record_jev_usage(usage):
+    """记录一次决策模型（Jev）调用的用量与费用。"""
+    if not usage:
+        return
+    USAGE['jev_calls'] += 1
+    USAGE['jev_input_tokens'] += int(usage.get('input_tokens') or 0)
+    USAGE['jev_output_tokens'] += int(usage.get('output_tokens') or 0)
+    try:
+        USAGE['jev_cost_usd'] += float(usage.get('cost') or 0)
+    except (TypeError, ValueError):
+        pass
+
+
+def usage_line(config=None):
+    """给日报/邮件末尾的一行成本说明；什么都没用就当没有。"""
+    if not USAGE['chat_calls'] and not USAGE['jev_calls']:
+        return ''
+    parts = []
+    if USAGE['chat_calls']:
+        parts.append(f"生成 {USAGE['chat_calls']} 次（输入 {USAGE['input_tokens']:,} / 输出 {USAGE['output_tokens']:,} tokens）")
+    if USAGE['jev_calls']:
+        cost = USAGE['jev_cost_usd']
+        # 单次分类约 $0.00003，四位小数会显示成 $0.0000 —— 小额时多留两位
+        shown = f'${cost:.6f}' if cost < 0.01 else f'${cost:.4f}'
+        parts.append(f"分类 {USAGE['jev_calls']} 次（{shown}）")
+    return '本次生成：' + '；'.join(parts)
+
+
 class AIEngine:
     """OpenAI-compatible API 引擎基类。"""
     def __init__(self, api_key: str, base_url: str, model: str, timeout=60):
@@ -135,6 +184,11 @@ class AIEngine:
         )
         with urllib.request.urlopen(req, timeout=self.timeout) as resp:
             data = json.loads(resp.read())
+        # 记录用量（DeepSeek/OpenAI 兼容接口都带 usage），日报末尾据此展示成本
+        try:
+            record_chat_usage(data.get('usage') or {})
+        except NameError:
+            pass
         return data['choices'][0]['message']['content']
 
 

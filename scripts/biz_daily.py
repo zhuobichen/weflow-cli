@@ -467,7 +467,14 @@ def _classify_with_jev(client, title, body, topics, noise=None):
     if client is None:
         return None
     try:
-        return client.decide_article(title, body, topics)
+        result = client.decide_article(title, body, topics)
+        # 决策模型按 token 计费，响应里带 usage.cost；累计起来供日报末尾展示
+        try:
+            from _utils import record_jev_usage
+            record_jev_usage((result or {}).get('usage') or {})
+        except Exception:
+            pass
+        return result
     except Exception as error:
         signature = (type(error).__name__, str(error)[:200])
         if noise is not None and signature in noise['seen']:
@@ -1985,6 +1992,38 @@ def main():
             for source, topic, ratio, total in rows[:5]:
                 print(f'    {source} → {topic}（{total} 篇里 {round(ratio * total)} 篇'
                       f' = {ratio:.0%}）')
+
+
+    # === 本次生成的成本（让"花了多少"可见）===
+    # DeepSeek 的 token 与 Jev 的 cost 在调用时已累加进 _utils.USAGE；
+    # 这里统一落到三处：控制台一行、README 末尾、HTML 页脚（邮件读 README，因此一并带上）。
+    try:
+        from _utils import usage_line, USAGE
+        line = usage_line()
+        if line:
+            print(f'  {line}')
+            readme = out_dir / 'README.md'
+            if readme.is_file():
+                with open(readme, 'a', encoding='utf-8') as fh:
+                    fh.write(f'\n---\n\n{line}\n')
+            try:
+                (out_dir / '.usage.json').write_text(
+                    json.dumps(USAGE, ensure_ascii=False, indent=2), encoding='utf-8')
+            except Exception:
+                pass
+            for html_file in out_dir.glob('*.html'):
+                try:
+                    text = html_file.read_text(encoding='utf-8')
+                    if '</body>' in text and 'usage-line' not in text:
+                        text = text.replace(
+                            '</body>',
+                            f'<p class="usage-line" style="margin:24px;color:#888;font-size:13px">'
+                            f'{line}</p>\n</body>', 1)
+                        html_file.write_text(text, encoding='utf-8')
+                except Exception:
+                    pass
+    except Exception:
+        pass
 
 
 if __name__ == '__main__':
