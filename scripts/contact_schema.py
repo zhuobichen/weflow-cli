@@ -188,7 +188,7 @@ def decode_contact(blob):
 
 def load_rows(args):
     from _utils import get_db_config  # noqa: E402
-    from nt_decrypt import require_sqlcipher  # noqa: E402
+    from nt_decrypt import connect_encrypted_readonly  # noqa: E402
 
     cfg = get_db_config()
     db = args.db or cfg['contact_db']
@@ -198,9 +198,8 @@ def load_rows(args):
         raise SystemExit('找不到 contact 库：%s' % (db or '(未配置)'))
     if not key or not salt:
         raise SystemExit('缺少库密钥（先跑 weflow-cli init，或显式给 --key/--salt）')
-    conn = require_sqlcipher().connect(db)
-    cur = conn.cursor()
-    cur.execute('PRAGMA key = "x\'%s%s\'";' % (key, salt))
+    # 只读打开：写模式会在微信的库旁留下 -wal/-shm，客户端会判定"数据库损坏"
+    conn, cur = connect_encrypted_readonly(db, "x'%s%s'" % (key, salt))
     sql = ('SELECT id, username, owner, ext_buffer FROM chat_room '
            'WHERE ext_buffer IS NOT NULL AND length(ext_buffer) > 0')
     params = []
@@ -216,7 +215,7 @@ def load_rows(args):
 
 def load_contacts(args):
     from _utils import get_db_config  # noqa: E402
-    from nt_decrypt import require_sqlcipher  # noqa: E402
+    from nt_decrypt import connect_encrypted_readonly  # noqa: E402
 
     cfg = get_db_config()
     db = args.db or cfg['contact_db']
@@ -226,9 +225,8 @@ def load_contacts(args):
         raise SystemExit('找不到 contact 库：%s' % (db or '(未配置)'))
     if not key or not salt:
         raise SystemExit('缺少库密钥（先跑 weflow-cli init，或显式给 --key/--salt）')
-    conn = require_sqlcipher().connect(db)
-    cur = conn.cursor()
-    cur.execute('PRAGMA key = "x\'%s%s\'";' % (key, salt))
+    # 只读打开：写模式会在微信的库旁留下 -wal/-shm，客户端会判定"数据库损坏"
+    conn, cur = connect_encrypted_readonly(db, "x'%s%s'" % (key, salt))
     sql = ('SELECT id, username, local_type, extra_buffer FROM contact '
            'WHERE extra_buffer IS NOT NULL AND length(extra_buffer) > 0')
     params = []

@@ -62,8 +62,7 @@ def open_database_with_cache(db_path, key, use_cache=True):
     # 先检查环境变量
     if not use_cache or not cache_enabled:
         # 缓存关闭，走原路径
-        conn = require_sqlcipher().connect(db_path)
-        conn.execute(f'PRAGMA key = "x\'{key}\'";')
+        conn, _cur = connect_encrypted_readonly(db_path, f"x'{key}'")
         return conn, False
 
     cache = _get_db_cache()
@@ -73,9 +72,8 @@ def open_database_with_cache(db_path, key, use_cache=True):
         # 缓存命中，直接打开明文
         return sqlite3.connect(cached_path), True
 
-    # 缓存 miss，打开加密数据库
-    conn_encrypted = require_sqlcipher().connect(db_path)
-    conn_encrypted.execute(f'PRAGMA key = "x\'{key}\'";')
+    # 缓存 miss，只读打开加密数据库（写模式会在微信库旁留下 -wal/-shm）
+    conn_encrypted, _cur = connect_encrypted_readonly(db_path, f"x'{key}'")
 
     # 导出明文到缓存
     try:
@@ -600,8 +598,7 @@ def load_contact_names(contact_db_path, contact_key_hex, contact_salt_hex):
         if cache_enabled:
             conn, _ = open_database_with_cache(contact_db_path, raw_key, use_cache=True)
         else:
-            conn = require_sqlcipher().connect(contact_db_path)
-            conn.execute(f'PRAGMA key = "{raw_key}";')
+            conn, _cur = connect_encrypted_readonly(contact_db_path, raw_key)
 
         # contact.db schema: username, alias, remark, nick_name, ...
         c.execute("SELECT username, COALESCE(NULLIF(remark,''), NULLIF(nick_name,''), NULLIF(alias,''), username) FROM contact")
@@ -786,6 +783,16 @@ def connect_readonly(db_path, key_raw):
     cur.execute(f'PRAGMA key = "{key_raw}";')
     return conn, cur
 
+
+def connect_encrypted_readonly(db_path, key_raw):
+    """只读打开加密库并设好 key，专供缓存导出这类"只需要读"的场景。
+
+    为什么不能直接用 `sqlcipher3.connect(path)`：它默认**读写**，会在微信的库
+    旁边创建 `-wal` / `-shm`。客户端下次启动做完整性检查时就会判定"数据库损坏"，
+    然后重建库——2026-11-03 在服务器上真踩到过（message_0.db 被移进
+    `message_0.db.factory/`）。缓存导出只读不写，没有理由为此付这个代价。
+    """
+    return connect_readonly(db_path, key_raw)
 
 def connect_nt_db(db_path, key_hex, salt_hex):
     """Connect to an NT database using sqlcipher3."""
@@ -1018,8 +1025,7 @@ def get_fav_schema(db_path, key_hex):
         if cache_enabled:
             conn, _ = open_database_with_cache(db_path, raw_key, use_cache=True)
         else:
-            conn = require_sqlcipher().connect(db_path)
-            conn.execute(f'PRAGMA key = "{raw_key}";')
+            conn, _cur = connect_encrypted_readonly(db_path, raw_key)
         tables = conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
         ).fetchall()
@@ -1100,8 +1106,7 @@ def get_favorites(db_path, key_hex, limit=100, offset=0, keyword=None, fav_type=
         if cache_enabled:
             conn, _ = open_database_with_cache(db_path, raw_key, use_cache=True)
         else:
-            conn = require_sqlcipher().connect(db_path)
-            conn.execute(f'PRAGMA key = "{raw_key}";')
+            conn, _cur = connect_encrypted_readonly(db_path, raw_key)
         
         c = conn.cursor()
 
