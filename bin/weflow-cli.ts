@@ -951,6 +951,27 @@ importCmd
 
 // ==================== init ====================
 program
+  .command('capture-passphrase')
+  .description('（Linux）自动捕获微信共享口令：会等你在微信里退出登录、再重新登录')
+  .option('--timeout <sec>', '等待登录的秒数', '300')
+  .option('--db-dir <path>', '库目录；缺省自动找 ~/xwechat_files/*/db_storage')
+  .option('--json', '输出机器可读结果')
+  .action(async (opts) => {
+    if (process.platform !== 'linux') {
+      console.log(chalk.yellow('这条命令只用于 Linux：Windows 的密钥提取由 init 自动完成。'))
+      process.exit(1)
+    }
+    const { spawn } = await import('child_process')
+    const script = join(resolvePackageRoot(), 'scripts', 'linux_capture.py')
+    const args = [script, '--timeout', String(parseCliInteger(opts.timeout, 'timeout', 30, 3600, !!opts.json))]
+    if (opts.dbDir) args.push('--db-dir', opts.dbDir)
+    if (opts.json) args.push('--json')
+    args.push('--write-config')
+    const child = spawn(getPythonCommand(), args, { stdio: 'inherit', windowsHide: true })
+    child.on('exit', (code) => process.exit(code || 0))
+  })
+
+program
   .command('init')
   .description('自动检测微信数据目录并提取解密密钥')
   .option('-p, --path <path>', '微信数据目录、账号目录或 db_storage 目录')
@@ -1226,6 +1247,8 @@ program
               console.log(chalk.gray('  2. 或用 sudo 运行: sudo weflow-cli init'))
               console.log(chalk.gray('     （sudo 后需修复配置属主: sudo chown -R $(id -u):$(id -g) ~/.weflow-cli）'))
             } else {
+              console.log(chalk.gray('  0. 一条命令自动捕获（会等你在微信里退出登录、再重新登录）：'))
+              console.log(chalk.gray('       weflow-cli capture-passphrase --write-config'))
               console.log(chalk.gray('  1. 确保微信已启动并完成登录（登录后才会在内存中缓存密钥）'))
               console.log(chalk.gray('  2. 确保以 root 或 CAP_SYS_PTRACE 运行（sudo setcap cap_sys_ptrace=ep $(which python3)）'))
                 console.log(chalk.gray('  3. 较新微信版本（4.1.12.26+）改用「共享口令 + 每分片派生」，'
