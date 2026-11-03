@@ -16,6 +16,7 @@
 import { mkdirSync, unlinkSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { randomUUID } from 'node:crypto'
 
 import { resolvePackageRoot } from './packageRoot.js'
 
@@ -25,9 +26,20 @@ let cached: string | null = null
 function isWritable(dir: string): boolean {
   try {
     mkdirSync(dir, { recursive: true })
-    const probe = join(dir, '.write_probe')
-    writeFileSync(probe, '')
-    unlinkSync(probe)
+    // probe 文件名**必须唯一**：并发探测（`node --test` 每个测试文件一个子进程，
+    // 都在探测同一个输出根）会互相 unlink 对方的 probe —— 固定名时后者的
+    // `unlinkSync` 抛 ENOENT，被下面的 catch 吞成"不可写"，于是输出根在
+    // 竞态窗口里漂到家目录回退，测试与真实行为一起变得不可预测。
+    // 2026-11-03 实测：8 路并发探测 1600 次里 1400 次被误判为不可写。
+    const probe = join(dir, `.write_probe.${process.pid}.${randomUUID()}`)
+    try {
+      writeFileSync(probe, '')
+      unlinkSync(probe)
+    } catch (error) {
+      // 写成功但删失败（不该发生）也别当成"不可写"——那是清理问题，不是权限问题。
+      try { unlinkSync(probe) } catch { /* 已经被别的进程删了 */ }
+      throw error
+    }
     return true
   } catch {
     return false
