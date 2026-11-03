@@ -864,6 +864,21 @@ def source_prior_candidates(store, exclude, **kwargs):
             rows.append((source, stable[0], stable[1], stable[2]))
     return sorted(rows, key=lambda row: (-row[3], row[0]))
 
+def _machine_username():
+    """与 TS 侧 `os.userInfo().username` 对齐的当前用户名。
+
+    为什么不是 `os.environ['USERNAME']`：那是 Windows 的变量，Linux 上通常**不存在**
+    （Linux 用 USER/LOGNAME）。2026-11-03 在 Ubuntu 上实测：CLI 用 TS 写的
+    `lock:` 字段，Python 侧一律抛 `InvalidTag` ——因为两边算出的 machineId 不同。
+    Windows 有 USERNAME，所以这个 bug 只在 Linux/macOS 暴露。
+    """
+    try:
+        import pwd
+        return pwd.getpwuid(os.getuid()).pw_name
+    except (ImportError, KeyError, OSError):
+        return os.environ.get('USERNAME') or os.environ.get('USER') or ''
+
+
 def decrypt_lock(locked_str: str) -> str:
     if not locked_str or not locked_str.startswith('lock:'):
         return locked_str
@@ -874,7 +889,7 @@ def decrypt_lock(locked_str: str) -> str:
 
     raw = base64.b64decode(locked_str[5:])
     salt, iv, auth_tag, ciphertext = raw[:16], raw[16:28], raw[28:44], raw[44:]
-    machine_id = f'{socket.gethostname()}-{os.environ.get("USERNAME", "")}-weflow-cli'
+    machine_id = f'{socket.gethostname()}-{_machine_username()}-weflow-cli'
     kdf = PBKDF2HMAC(algorithm=hashes.SHA256(), length=32, salt=salt, iterations=100000,
                      backend=default_backend())
     key = kdf.derive(machine_id.encode('utf-8'))

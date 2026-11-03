@@ -45,15 +45,32 @@ export async function applyDerivedNtKeys(passphrase: string, databases: NtDbEntr
   let messageSaved = false
   let anySaved = false
   for (const t of targets) {
-    const db = databases.find((d) => d.name === t.name)
-    if (!db) continue
-    const derivedKey = NtCore.deriveRawKey(passphrase, db.salt)
-    const verify = await NtCore.verifyDbKey(db.path, derivedKey, db.salt)
+    // 消息库按分片命名（message_0 / message_1 …）。首片可能因为历史原因用不同口令
+    // 派生不出来（2026-11-03 Linux 4.1.13.26 实测：同一口令下 message_1 通过、
+    // message_0 不通过）。读取时本来就遍历分片，所以退而求其次选一个能验证的即可。
+    const candidates = t.name === 'message/message_0.db'
+      ? databases.filter((d) => /^message\/message_\d+\.db$/.test(d.name))
+      : databases.filter((d) => d.name === t.name)
+    if (candidates.length === 0) continue
+    let db = candidates[0]
+    for (const cand of candidates) {
+      const candSalt = NtCore.readDbSalt(cand.path) || cand.salt
+      const v = await NtCore.verifyDbKey(cand.path, NtCore.deriveRawKey(passphrase, candSalt), candSalt)
+      if (v.success || v.cannotVerify) { db = cand; break }
+    }
+    // salt 以**库文件自己的前 16 字节**为准：扫描结果里的 salt 可能与实际文件不一致
+    // （2026-11-03 在 Linux 4.1.13.26 上实测：扫描给的 salt 派生出的键验证不过，
+    //  而从文件头读出的 salt 用 verify-passphrase-all 全部通过）。派生是确定性的，
+    //  唯一可能错的就是输入——所以宁可多读一次文件头。
+    const fileSalt = NtCore.readDbSalt(db.path)
+    const salt = fileSalt || db.salt
+    const derivedKey = NtCore.deriveRawKey(passphrase, salt)
+    const verify = await NtCore.verifyDbKey(db.path, derivedKey, salt)
     if (verify.success || verify.cannotVerify) {
       // cannotVerify = Python/sqlcipher3 环境问题而非密钥错误: 公式确定性派生, 值仍写入
       configService.set(t.pathKey, db.path)
       configService.set(t.keyKey, derivedKey)
-      configService.set(t.saltKey, db.salt)
+      configService.set(t.saltKey, salt)
       const note = verify.success ? '派生密钥已验证' : `已写入但未能验证 (${verify.error})`
       log(chalk.green(`  ✓ ${t.label}: ${db.name} (${(db.size / 1024 / 1024).toFixed(1)}MB, ${note})`))
       if (t.name === 'message/message_0.db') messageSaved = true

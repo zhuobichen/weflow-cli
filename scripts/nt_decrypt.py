@@ -876,6 +876,42 @@ def verify_passphrase_native(passphrase_hex, db_path, internal_key_hex=''):
     return hmac.compare_digest(mac.digest(), page[body_end:body_end + 64])
 
 
+def verify_raw_key_native(key_hex, salt_hex, db_path):
+    """Check an **already-derived** raw key against a database, without sqlcipher3.
+
+    与 `verify_passphrase_native` 的区别：这里不再派生 key，直接用它算 mac_key
+    并比对首页 HMAC。存在的理由是 2026-11-03 在 Linux 4.1.13.26 上实测到的情况——
+    库正被客户端写（活动 WAL）时，读副本可能不一致，sqlcipher 会报
+    "file is not a database"，而密钥其实是对的。校验只需要首页，所以这条纯 stdlib
+    的路不受影响。
+
+    返回 True / False / None（输入不合法或文件太小，无法判断）。
+    """
+    try:
+        key = bytes.fromhex(key_hex)
+        salt = bytes.fromhex(salt_hex)
+    except (TypeError, ValueError):
+        return None
+    if len(key) != 32 or len(salt) != 16:
+        return None
+    try:
+        with open(db_path, 'rb') as handle:
+            page = handle.read(4096)
+    except OSError:
+        return None
+    if len(page) < 4096 or page[:16] == b'\x00' * 16:
+        return None
+
+    mac_salt = bytes(byte ^ 0x3a for byte in salt)
+    mac_key = hashlib.pbkdf2_hmac('sha512', key, mac_salt, 2, 32)
+    reserve = 16 + 64
+    reserve = ((reserve + 15) // 16) * 16
+    body_end = 4096 - reserve + 16
+    mac = hmac.new(mac_key, page[16:body_end], hashlib.sha512)
+    mac.update(struct.pack('<I', 1))
+    return hmac.compare_digest(mac.digest(), page[body_end:body_end + 64])
+
+
 def connect_message_shards_detailed(db_path, key_hex, salt_hex, passphrase=''):
     """Open every shard and report what happened to each one.
 
@@ -2153,7 +2189,25 @@ def main():
             conn.close()
             print(json.dumps({"success": n > 0, "tables": n}, ensure_ascii=True))
         except Exception as e:
-            print(json.dumps({"success": False, "error": str(e).split('\n')[0][:200]}, ensure_ascii=True))
+            msg = str(e).split('\n')[0][:200]
+            # 密钥对但库**正被客户端写**时，副本可能不一致，sqlcipher 会误报
+            # "file is not a database"（2026-11-03 Linux 4.1.13.26 实测：
+            #  message_0.db 有活动 WAL，复制副本校验失败，而纯文件头 HMAC 通过）。
+            # 校验收只需要首页，所以这里回退到不依赖 sqlcipher 的纯 HMAC 校验。
+            native = None
+            if 'not a database' in msg.lower():
+                try:
+                    native = verify_raw_key_native(args.key, args.salt, args.db)
+                except Exception:
+                    native = None
+            if native is True:
+                print(json.dumps({"success": True, "tables": 0, "native": True,
+                                  "note": "sqlcipher 校验失败（热 WAL 副本不一致），已用文件头 HMAC 确认"}, ensure_ascii=True))
+            elif native is False:
+                print(json.dumps({"success": False, "native": False,
+                                  "error": "文件头 HMAC 不匹配：密钥或 salt 不对"}, ensure_ascii=True))
+            else:
+                print(json.dumps({"success": False, "error": msg}, ensure_ascii=True))
         return
 
     if args.command == 'verify-native':
