@@ -14,7 +14,7 @@ Commander 命令注册、参数校验、交互式菜单。所有用户可见命�
 
 ## 对外接口
 
-- 命令共 138 处 `.command(` 调用（含子命令），以 `weflow-cli --help` 为准。
+- 命令共 146 处 `.command(` 调用（含子命令），以 `weflow-cli --help` 为准。
 - 交互式菜单 `showInteractiveMenu()` 与其 `switch (action)` 一一对应。
 - 约定：可被脚本或 AI 驱动的命令提供 `--json`；破坏性操作为 `--dry-run` 预览后 `--yes` 确认。
 

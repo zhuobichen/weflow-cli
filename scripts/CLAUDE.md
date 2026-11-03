@@ -6,7 +6,7 @@
 
 耗时或依赖 Python 生态的工作流：NT 数据读取与解密、日报与报告、知识卡（文章 / 聊天 / 收藏 / 自写笔记）、概念页编译与体检、图谱页面、RAG 与语义搜索、面板立绘帧校验。
 
-约 79 个 `.py` 文件，另有 3 个 TypeScript 与 2 个 MJS 辅助脚本（`assistant_eval.ts`、`assistant_route_probe.ts`、`capture_favorite_schema.ts`、`graph3d_check.mjs`、`json_surface_probe.mjs`）等探针。
+约 82 个 `.py` 文件，另有 3 个 TypeScript 与 2 个 MJS 辅助脚本（`assistant_eval.ts`、`assistant_route_probe.ts`、`capture_favorite_schema.ts`、`graph3d_check.mjs`、`json_surface_probe.mjs`）等探针。
 
 ## 入口与启动
 
