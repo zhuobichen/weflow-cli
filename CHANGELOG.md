@@ -20,6 +20,9 @@ All notable user-facing changes are recorded here. This project follows [Semanti
 
 ## 1.21.7
 
+- **README 架构图重画**：四区十三卡（INPUTS / CORE / DATA / OUTPUTS），由 gpt-image-2.5 生成；
+  仓库里同时保留可维护的矢量源 `docs/images/weflow-architecture.svg`。
+
 > 验证过的微信：Windows 4.1.15.56；Linux 4.1.13.26（Ubuntu 24.04 实机，真实登录态）。
 
 - **Linux 一条命令就能初始化。** `weflow-cli capture-passphrase` 会等你在微信里退出登录、再重新登录一次，

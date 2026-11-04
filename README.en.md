@@ -354,7 +354,6 @@ python scripts/fav_server.py --date YYYY-MM-DD
 ## Architecture
 
 ![WeFlow CLI architecture](./docs/images/weflow-architecture.png)
-> Illustrative only: [`ARCHITECTURE.md`](./ARCHITECTURE.md) is authoritative for links, ports and authentication — this figure is model-generated, so its fine detail is not word-for-word reliable.
 
 The project is split into five clearly bounded parts:
 

@@ -383,7 +383,6 @@ python scripts/fav_server.py --date YYYY-MM-DD
 ## 架构
 
 ![WeFlow CLI architecture](./docs/images/weflow-architecture.png)
-> 示意图：链路、端口与鉴权以 [`ARCHITECTURE.md`](./ARCHITECTURE.md) 为准 —— 这张图是生图模型画的，细节文字不逐字采信。模块级关系见 [`ARCHITECTURE.md`](./ARCHITECTURE.md) 与 [`docs/images/weflow-architecture.svg`](./docs/images/weflow-architecture.svg)（可维护的矢量源）。
 
 项目分为五个边界清晰的部分：
 
