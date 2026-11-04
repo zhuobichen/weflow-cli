@@ -78,7 +78,7 @@ weflow-cli timeline --source "某号"     # 这个号历次说法的时间线
 | 能力 | Windows | macOS | Linux |
 | --- | --- | --- | --- |
 | 数据目录自动发现 | ✅ | ✅ | ✅ |
-| 本地数据初始化 | ✅ 自动发现/验证 | ❌ 需手动提供凭据 | ⚠️ 取决于发行版与权限 |
+| 本地数据初始化 | ✅ 自动发现/验证 | ❌ 需手动提供凭据 | ✅ 登录授权后自动 |
 | 聊天记录查询（NT / 本地数据库） | ✅ | ✅ | ✅ |
 | WCDB 数据服务（联系人昵称等） | ✅ | ⚠️ 依赖原生库 | ⚠️ 依赖原生库 |
 | 公众号日报 / 知识库 / MCP | ✅ | ✅ | ✅ |
@@ -96,17 +96,20 @@ pip3 install --user sqlcipher3 cryptography html2text zstandard
 
 # 3. 安装 CLI 并初始化
 npm install -g weflow-cli
-weflow-cli init    # 按提示完成本地初始化
+weflow-cli capture-passphrase   # 按提示在微信里完成一次登录授权
+weflow-cli init                 # 派生各库密钥并写好配置
 ```
 
-Linux 的自动初始化能力取决于微信发行版、Python 依赖和当前用户权限；请先运行 `weflow-cli check`，按系统安全策略配置，不要为了排障降低整机权限。
+`capture-passphrase` 会等你在微信里退出登录、再重新登录，然后校验拿到的东西是否真的能打开数据库（逐个库做首页校验），通过才写入配置。一次登录授权即可，之后不必重复。
+
+Linux 的可用性仍取决于微信发行版、Python 依赖和当前用户权限；请先运行 `weflow-cli check`，按系统安全策略配置，不要为了排障降低整机权限。
 
 ## 你可以做什么
 
 | 场景 | 能力 |
 | --- | --- |
 | 聊天记录 | 查询会话、联系人和消息；导出 **Markdown / JSON / TXT / HTML / Excel**。Markdown 导出把图片**落盘**到 `<会话>_assets/`、正文用相对路径引用（喂给编辑器或别的工具时这才是能用的形态）；**文档本体**（微信里的 Word/Excel/PDF/PPT 等）按原名与扩展名拷进 `<会话>_assets/files/`，正文里按原名链接到 `files/` 下；HTML 导出内嵌图片并给出一份媒体覆盖报告（哪些没嵌上、为什么）。**匹配只做一遍**：Markdown 导出写下清单，之后 JSON/TXT/Excel 导出（或 `--media`）会自动带上同样的图片与文档路径。 |
-| 公众号日报 | 抓取文章、AI 摘要与分类、生成本地阅读页，保留收藏和已读状态。 |
+| 公众号日报 | 抓取文章、AI 摘要与分类、生成本地阅读页，保留收藏和已读状态。可挂在 `systemd` 定时任务上每天自动生成并**邮件推送**；每期结尾会写明**这一期花了多少**（生成调用的 token 数与决策模型的实际费用）。 |
 | 个人知识库 | 同步微信读书笔记、构建 Obsidian Vault、语义搜索、RAG 问答和概念 Wiki，以及**双击就能打开**的概念图谱页面（`weflow-cli wiki graph --open` 出 3D、加 `--flat` 出 2D；自包含、不联网、不需要服务器；`--min-degree N` 只看枢纽、`--line wiki\|chat` 只看一条线；**2D 页里点一条边能看到它凭什么连着**——两页的共同来源卡片，没有共同来源的边也会如实说来自正文链接）。 |
 | AI 协作 | 通过 MCP 把文章、知识库、日报和受控的本地数据能力交给兼容客户端；工具清单以 `weflow-cli mcp-config` 和 `docs/MCP.md` 为准。 |
 | 个人回顾 | 聊天月报、年度报告、待办提取与朋友圈本地缓存查询。 |
@@ -379,8 +382,8 @@ python scripts/fav_server.py --date YYYY-MM-DD
 
 ## 架构
 
-![WeFlow CLI architecture](./docs/images/weflow-architecture-gpt-image-2.png)
-> 示意图：链路、端口与鉴权以 [`ARCHITECTURE.md`](./ARCHITECTURE.md) 为准 —— 这张图是生图模型画的，细节文字不逐字采信。
+![WeFlow CLI architecture](./docs/images/weflow-architecture.png)
+> 示意图：链路、端口与鉴权以 [`ARCHITECTURE.md`](./ARCHITECTURE.md) 为准 —— 这张图是生图模型画的，细节文字不逐字采信。模块级关系见 [`ARCHITECTURE.md`](./ARCHITECTURE.md) 与 [`docs/images/weflow-architecture.svg`](./docs/images/weflow-architecture.svg)（可维护的矢量源）。
 
 项目分为五个边界清晰的部分：
 
@@ -397,6 +400,7 @@ python scripts/fav_server.py --date YYYY-MM-DD
 ## 隐私与安全
 
 - 数据库、密钥配置和导出文件默认保留在本机；密钥字段以机器绑定的加密形式存储。
+- **对微信数据库一律只读**：没有 `-wal` 时以 `immutable` 方式直接读，有 `-wal` 时读临时副本——两条路径都不会在微信的库旁写入 `-wal` / `-shm`，也不会改变客户端状态。
 - 涉及 DeepSeek、公众号抓取、微信读书或 MCP 的联网请求仅在你执行相应工作流时发生。
 - 使用 `whitelist`、`blacklist` 和 `audit` 管理或审计消息发送；发送前请确认目标联系人与内容。
 - 升级微信、切换账号或迁移电脑后，可能需要重新初始化或扫描 NT 密钥。

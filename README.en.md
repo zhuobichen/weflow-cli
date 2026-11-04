@@ -78,7 +78,7 @@ weflow-cli timeline --source "account" # one account's articles laid out in time
 | Capability | Windows | macOS | Linux |
 | --- | --- | --- | --- |
 | Data-directory discovery | ✅ | ✅ | ✅ |
-| Local data initialization | ✅ auto-discover/verify | ❌ credentials must be supplied manually | ⚠️ depends on distro and permissions |
+| Local data initialization | ✅ auto-discover/verify | ❌ credentials must be supplied manually | ✅ automatic after a one-time login authorization |
 | Chat history query (NT / local databases) | ✅ | ✅ | ✅ |
 | WCDB data service (contact nicknames, etc.) | ✅ | ⚠️ needs the native library | ⚠️ needs the native library |
 | Official-account digest / knowledge base / MCP | ✅ | ✅ | ✅ |
@@ -96,10 +96,13 @@ pip3 install --user sqlcipher3 cryptography html2text zstandard
 
 # 3. Install the CLI and initialize
 npm install -g weflow-cli
-weflow-cli init    # follow the prompts
+weflow-cli capture-passphrase   # sign out and back in once in WeChat when prompted
+weflow-cli init                 # derive per-database keys and write the config
 ```
 
-Automatic initialization on Linux depends on the WeChat distribution, the Python dependencies, and your user's permissions. Run `weflow-cli check` first and configure within your system's security policy; do not lower machine-wide permissions just to troubleshoot.
+`capture-passphrase` waits for that one re-login, then checks whether what it captured can actually open the databases (a page-level check per database) and only writes it when the check passes. One authorization is enough; you do not repeat it every run.
+
+Availability on Linux still depends on the WeChat distribution, the Python dependencies, and your user's permissions. Run `weflow-cli check` first and configure within your system's security policy; do not lower machine-wide permissions just to troubleshoot.
 
 ## What You Can Do
 
@@ -350,7 +353,7 @@ python scripts/fav_server.py --date YYYY-MM-DD
 
 ## Architecture
 
-![WeFlow CLI architecture](./docs/images/weflow-architecture-gpt-image-2.png)
+![WeFlow CLI architecture](./docs/images/weflow-architecture.png)
 > Illustrative only: [`ARCHITECTURE.md`](./ARCHITECTURE.md) is authoritative for links, ports and authentication — this figure is model-generated, so its fine detail is not word-for-word reliable.
 
 The project is split into five clearly bounded parts:

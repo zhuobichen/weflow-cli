@@ -18,6 +18,25 @@ purpose** - a hand-written "latest is X" is exactly the claim that goes stale he
 
 All notable user-facing changes are recorded here. This project follows [Semantic Versioning](https://semver.org/).
 
+## 1.21.7
+
+> 验证过的微信：Windows 4.1.15.56；Linux 4.1.13.26（Ubuntu 24.04 实机，真实登录态）。
+
+- **Linux 一条命令就能初始化。** `weflow-cli capture-passphrase` 会等你在微信里退出登录、再重新登录一次，
+  然后校验拿到的东西是否真能打开数据库（逐库比对首页完整性，实测 21 个库中 20 个通过），通过才写进配置；
+  之后 `init` 派生各库密钥，`sessions` / `messages` / `daily` 都能出真实数据。实测当天日报 506 篇，
+  含 AI 摘要、HTML 阅读器与邮件推送。
+- **对微信数据库一律只读。** 没有 `-wal` 时以 `immutable` 方式直读，有 `-wal` 时读临时副本，两条路径都不在
+  微信的库旁写任何文件。修复前仍有四处以写模式打开原始库（缓存导出、缓存关闭分支、联系人 schema），
+  会在库旁留下 `-wal` / `-shm`，客户端下次启动会判定"数据库损坏"并重建库。
+- **日报默认并发预取正文**（8 并发，`--no-prefetch-bodies` 可关）。实测 510 篇的抓取从一小时以上降到约两分钟；
+  对上游的请求次数不变，只是压进更短的时间窗。
+- **日报结尾写明这一期花了多少**：生成调用的 token 数与决策模型（Jev）的实际费用，写进 README、HTML 页脚
+  和邮件正文，另存一份 `.usage.json`。
+- **`init` 的输出脱敏**：路径里的用户名与账号换成占位符，用户可以直接把输出贴出来求助。
+- **`daily` 会读配置里的 DeepSeek key**（此前只认命令行参数与环境变量，`config set` 后照样报"缺少 key"）。
+- **`daily_mail` 找对了日报目录**：按包目录找在系统级安装下必然落空，邮件永远发不出去。
+
 ## 1.21.6
 
 > 验证过的微信：Windows 4.1.15.56；**Linux 4.1.13.26**（Ubuntu 24.04 实机，真实账号登录态）。
