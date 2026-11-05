@@ -5,6 +5,9 @@ Uses sqlcipher3 to decrypt and query NT-format databases.
 """
 import sys
 import os
+import time
+import tempfile
+import atexit
 import pathlib
 import urllib.parse
 import json
@@ -746,11 +749,130 @@ def readonly_uri(path):
     return f'file:{quoted}?mode=ro&immutable=1'
 
 
-_CHROME_TMPDIRS = []
+_CHROME_TMPDIRS = []          # 仅在关闭缓存时使用：退出时删掉
+
+#: 只读副本的缓存策略（2026-11-05 修 #14）。
+#:
+#: 有 `-wal` 的库必须复制一份才能读（见 connect_readonly），单库 0.3~1GB。
+#: 轮询式调用（脚本 / 定时任务 / agent 监听）若每次新建临时目录，
+#: 几分钟就能填满系统盘——issue #14 的真实事故是 45 秒轮询 15 小时。
+#:
+#: 三个开关（都可用环境变量覆盖）：
+#:   WEFLOW_RO_CACHE=off     用完即删（调试或磁盘极紧张时）
+#:   WEFLOW_RO_TTL_SECONDS   副本存活多久（默认 3600）
+#:   WEFLOW_RO_MAX_MB        缓存总容量上限（默认 2048），超了按最旧删
+_RO_CACHE_ENV = 'WEFLOW_RO_CACHE'
+_RO_TTL_SECONDS = int(os.environ.get('WEFLOW_RO_TTL_SECONDS', '3600'))
+_RO_MAX_BYTES = int(os.environ.get('WEFLOW_RO_MAX_MB', '2048')) * 1024 * 1024
+_SWEPT = False
+
+
+def _ro_cache_enabled():
+    return os.environ.get(_RO_CACHE_ENV, '').strip().lower() not in ('off', '0', 'false', 'no')
+
+
+def _ro_cache_root():
+    root = pathlib.Path(tempfile.gettempdir()) / 'weflow-ro'
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def _ro_dir_size(path):
+    total = 0
+    for f in pathlib.Path(path).rglob('*'):
+        try:
+            if f.is_file():
+                total += f.stat().st_size
+        except OSError:
+            pass
+    return total
+
+
+def _ro_cache_key(src):
+    """按"库 + 它的 sidecar"的大小与 mtime 生成 key：内容一变就换目录。"""
+    h = hashlib.sha1()
+    src = pathlib.Path(src)
+    for suffix in ('', '-wal', '-shm'):
+        f = pathlib.Path(str(src) + suffix)
+        try:
+            st = f.stat()
+            h.update(('%s:%d:%d;' % (suffix, st.st_size, st.st_mtime_ns)).encode())
+        except OSError:
+            h.update(('%s:missing;' % suffix).encode())
+    return h.hexdigest()[:16]
+
+
+def sweep_readonly_cache(now=None, ttl=None, max_bytes=None):
+    """删掉过期副本；仍超容量就按最旧删。返回删除的目录数。"""
+    import shutil
+    ttl = _RO_TTL_SECONDS if ttl is None else ttl
+    max_bytes = _RO_MAX_BYTES if max_bytes is None else max_bytes
+    now = time.time() if now is None else now
+    try:
+        root = _ro_cache_root()
+    except OSError:
+        return 0
+    entries = []
+    for d in root.iterdir():
+        if not d.is_dir():
+            continue
+        try:
+            entries.append((d.stat().st_mtime, _ro_dir_size(d), d))
+        except OSError:
+            continue
+    removed = 0
+    for mtime, _size, d in entries:
+        if now - mtime > ttl:
+            shutil.rmtree(d, ignore_errors=True)
+            removed += 1
+    alive = sorted((m, sz, d) for m, sz, d in entries if d.exists())
+    total = sum(sz for _m, sz, _d in alive)
+    # 永远保留**最新**的那一个：容量再紧也要留一份能用的，
+    # 否则每次调用都得从零复制一遍——那等于把缓存关掉了。
+    for _mtime, size, d in alive[:-1]:
+        if total <= max_bytes:
+            break
+        shutil.rmtree(d, ignore_errors=True)
+        total -= size
+        removed += 1
+    return removed
+
+
+def _ro_copy(src):
+    """取（或建）一份只读副本，返回副本里那个 .db 的路径。"""
+    global _SWEPT
+    root = _ro_cache_root()
+    if not _SWEPT:
+        try:
+            sweep_readonly_cache()
+        except OSError:
+            pass
+        _SWEPT = True
+    key = _ro_cache_key(src)
+    target = root / key
+    copy = target / pathlib.Path(src).name
+    if copy.exists():
+        try:
+            os.utime(target, None)      # 命中即续期，避免正在用的副本被 TTL 扫掉
+        except OSError:
+            pass
+        return copy
+    import shutil
+    staging = pathlib.Path(tempfile.mkdtemp(prefix='tmp-', dir=str(root)))
+    try:
+        _copy_with_wal_sidecars(src, staging)
+        if target.exists():
+            shutil.rmtree(target, ignore_errors=True)
+        os.replace(str(staging), str(target))
+        staging = None
+    finally:
+        if staging is not None:
+            shutil.rmtree(staging, ignore_errors=True)
+    return copy
 
 
 def _copy_with_wal_sidecars(src, dest_dir):
-    """把库与它的 -wal / -shm 一起复制到临时目录（只复制存在的那些）。"""
+    """把库与它的 -wal / -shm 一起复制到目录（只复制存在的那些）。"""
     import shutil
     dest = pathlib.Path(dest_dir) / pathlib.Path(src).name
     shutil.copy2(src, dest)
@@ -761,26 +883,34 @@ def _copy_with_wal_sidecars(src, dest_dir):
     return dest
 
 
+def _cleanup_tmpdirs():
+    import shutil
+    while _CHROME_TMPDIRS:
+        shutil.rmtree(_CHROME_TMPDIRS.pop(), ignore_errors=True)
+
+
+atexit.register(_cleanup_tmpdirs)
+
+
 def connect_readonly(db_path, key_raw):
     """**只读**地打开一个微信库，返回 (conn, cursor)。
 
     - 没有 `-wal`：直接 `mode=ro&immutable=1` 读原库（零副作用）
-    - 有 `-wal`：复制到临时目录再读**副本**。
-      `mode=ro` 在有 WAL 时会创建 `-shm`（SQLite 需要共享内存索引），
-      那同样会在原库旁边留下文件——所以副本是唯一既"不丢 WAL 内容"又"不碰原库"的做法。
+    - 有 `-wal`：读**副本**（原库旁边不写任何文件）；副本进共享缓存，按 TTL / 容量回收。
     """
     src = pathlib.Path(db_path)
     wal = pathlib.Path(str(src) + '-wal')
     if not wal.exists():
         conn = require_sqlcipher().connect(readonly_uri(src), uri=True)
+    elif _ro_cache_enabled():
+        conn = require_sqlcipher().connect(str(_ro_copy(src)))
     else:
-        import tempfile
         tmp = tempfile.mkdtemp(prefix='weflow-ro-')
-        _CHROME_TMPDIRS.append(tmp)
+        _CHROME_TMPDIRS.append(tmp)          # 退出时由 _cleanup_tmpdirs 删掉
         copy = _copy_with_wal_sidecars(src, tmp)
         conn = require_sqlcipher().connect(str(copy))
     cur = conn.cursor()
-    cur.execute(f'PRAGMA key = "{key_raw}";')
+    cur.execute('PRAGMA key = "%s";' % key_raw)
     return conn, cur
 
 
