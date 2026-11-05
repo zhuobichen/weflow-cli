@@ -18,6 +18,21 @@ purpose** - a hand-written "latest is X" is exactly the claim that goes stale he
 
 All notable user-facing changes are recorded here. This project follows [Semantic Versioning](https://semver.org/).
 
+## 1.21.12
+
+> 验证过的微信：Windows 4.1.15.56；Linux 4.1.13.26。
+
+- **检索评测改用自然问句**：让一个只看得到标题、看不到正文的 agent 写了 30 道问题，
+  题面与答案原文零重叠。真实水平是 **hit@1 0.81 / recall@10 0.90**（含重排），
+  而不是此前自造题的 0.99——那批题面里就含答案原文，把 BM25 的贡献放大了。
+- **记录一个反直觉结论**：混合检索在自然问句上比纯向量差（recall@5 0.700 vs 0.800），
+  稀有词会让 BM25 把只是提到该词的文章顶上来；而调权重/加惩罚又会打掉精确片段题
+  （正确答案常常只有 BM25 命中）。两类问法方向相反，**重排才是杠杆**（hit@1 0.667 → 0.81）。
+  数据与取舍见 D-148。
+- `fuse_hybrid()` 把融合逻辑收成一处，权重与惩罚作为环境变量实验旋钮
+  （`WEFLOW_HYBRID_VEC_WEIGHT` / `WEFLOW_HYBRID_PENALTY`），**默认值与历史行为完全一致**；
+  新增 `test/hybrid_fuse_test.py`（4 项）钉住"默认等价"这条。
+
 ## 1.21.11
 
 > 验证过的微信：Windows 4.1.15.56；Linux 4.1.13.26。

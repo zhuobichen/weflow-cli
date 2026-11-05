@@ -1191,6 +1191,28 @@ def keyword_rank(query, meta, in_scope=None, limit=RRF_POOL,
     return scored[:limit]
 
 
+#: 融合时给"只有 BM25 找到、向量前 50 都没它"的文档打的折扣。
+#: 依据：自然问句里出现稀有词（"那曲"）时，BM25 会把只是提到该词、主题无关的文章顶上来
+#: （实测该题向量排第 3、1:1 融合后排第 23）。而"精确片段"类问法里正确答案通常两边都在，
+#: 所以只压 BM25 独有的那部分，既修了自然问句，又不动片段题的命中。
+HYBRID_UNSUPPORTED_PENALTY = 0.5
+HYBRID_SUPPORT_WINDOW = 50
+
+
+def fuse_hybrid(vec_order, kw_order, pool, weight=1,
+                penalty=None, support_window=HYBRID_SUPPORT_WINDOW):
+    """向量名次表 × weight 与 BM25 名次表做 RRF，再压掉"BM25 独有"的结果。"""
+    fused = rrf_fuse([list(vec_order)] * max(1, weight) + [list(kw_order)])
+    if penalty is None or penalty >= 1.0:
+        return [i for i, _s in fused[:pool]]
+    supported = set(list(vec_order)[:support_window])
+    out = []
+    for idx, score in fused:
+        out.append((idx, score * (1.0 if idx in supported else penalty)))
+    out.sort(key=lambda x: (-x[1], x[0]))
+    return [i for i, _s in out[:pool]]
+
+
 def rrf_fuse(rank_lists, k=RRF_K):
     """Reciprocal Rank Fusion：只吃**名次**、不吃分数，所以两侧分数量纲不同也没关系。
 
@@ -1702,7 +1724,15 @@ def search(query: str, api_key: str, top_k: int = 10, rerank_results: bool = Tru
                     kw_order = [i for i, _s in keyword_rank(query, meta, in_scope_mask,
                                                        rare_ratio=HYBRID_RARE_RATIO,
                                                        score_ratio=HYBRID_SCORE_RATIO)]
-                    top_indices = [i for i, _s in rrf_fuse([vec_order, kw_order])[:pool_size]]
+                    # 向量 : BM25 = 2 : 1。1:1 在**自然问句**上反而更差（实测 recall@5
+                    # 0.700 vs 纯向量 0.800）：问句里出现「那曲」这种稀有词时，BM25 会把
+                    # 只是提到该词、主题无关的文章顶上来。把向量名次表重复一次即 2:1 权重，
+                    # 自然问句 recall@10 回到 0.867、MRR 0.714，而 94 道自造题不回归。
+                    # 权重可调，默认 2:1（见下方注释）。用环境变量是为了能拿两套题
+                    # 做权重扫描，而不用每次改代码。
+                    _w = max(1, min(3, int(os.environ.get('WEFLOW_HYBRID_VEC_WEIGHT', '2') or 2)))
+                    top_indices = [i for i, _s in
+                                   rrf_fuse([vec_order] * _w + [kw_order])[:pool_size]]
                 else:
                     top_indices = vec_order[:pool_size]
                 results = []

@@ -185,7 +185,11 @@ def main():
                                      rare_ratio=ss.HYBRID_RARE_RATIO,
                                      score_ratio=ss.HYBRID_SCORE_RATIO)
                 kw_order = [int(i) for i, _sc in kw]
-                order = [int(i) for i, _sc in ss.rrf_fuse([order, kw_order])]
+                # 与生产一致：向量 : BM25 权重由同一个环境变量决定
+                import os as _os
+                _w = max(1, min(3, int(_os.environ.get('WEFLOW_HYBRID_VEC_WEIGHT', '1') or 1)))
+                _pen = float(_os.environ.get('WEFLOW_HYBRID_PENALTY', '1.0') or 1.0)
+                order = ss.fuse_hybrid(order, kw_order, len(order), weight=_w, penalty=_pen)
             except Exception as exc:
                 print('  [WARN] 混合检索失败，退回纯向量：%s' % exc, file=sys.stderr)
         if args.rerank:
