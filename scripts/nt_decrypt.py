@@ -748,6 +748,49 @@ def readonly_uri(path):
 
 _CHROME_TMPDIRS = []
 
+# 进程退出时清掉所有只读副本——否则每次调用都会在临时目录留下 0.3~1 GB 的
+# 解密副本，任何轮询式使用都会填满系统盘。注册在 import 时即可覆盖所有入口。
+import atexit as _atexit
+_atexit.register(lambda: cleanup_tmpdirs())
+
+
+def _temp_root():
+    """临时根目录。优先用 WEFLOW_TMPDIR，其次 tempfile 默认值。
+
+    单独抽出来是因为 tempfile.mkdtemp() 不带 dir 时走 tempfile.gettempdir()，
+    而 gettempdir() 在进程内会缓存第一次取值的结果——设 TEMP 环境变量必须
+    在进程启动前生效才可靠。
+    """
+    import os
+    env = os.environ.get('WEFLOW_TMPDIR') or os.environ.get('TMPDIR')
+    if env:
+        try:
+            os.makedirs(env, exist_ok=True)
+            return env
+        except Exception:
+            pass
+    import tempfile
+    return tempfile.gettempdir()
+
+
+def cleanup_tmpdirs():
+    """清掉本次进程创建的所有只读副本目录。
+
+    这些副本是「库 + -wal + -shm」的完整拷贝，单个 0.3~1 GB。之前只 append
+    从不清理，任何轮询式调用都会以极高速度填满系统盘（实测 45 秒轮询 15 小时
+    产生 1220 个副本 = 267 GB，进而导致微信写盘失败、数据库重建、读取全部失效）。
+    """
+    import shutil
+    for d in list(_CHROME_TMPDIRS):
+        try:
+            shutil.rmtree(d, ignore_errors=True)
+        except Exception:
+            pass
+        try:
+            _CHROME_TMPDIRS.remove(d)
+        except ValueError:
+            pass
+
 
 def _copy_with_wal_sidecars(src, dest_dir):
     """把库与它的 -wal / -shm 一起复制到临时目录（只复制存在的那些）。"""
@@ -775,7 +818,7 @@ def connect_readonly(db_path, key_raw):
         conn = require_sqlcipher().connect(readonly_uri(src), uri=True)
     else:
         import tempfile
-        tmp = tempfile.mkdtemp(prefix='weflow-ro-')
+        tmp = tempfile.mkdtemp(prefix='weflow-ro-', dir=_temp_root())
         _CHROME_TMPDIRS.append(tmp)
         copy = _copy_with_wal_sidecars(src, tmp)
         conn = require_sqlcipher().connect(str(copy))
