@@ -270,20 +270,26 @@ jobs:
       # 命令面必须在 darwin 上也注册成功（capture-passphrase 的 macOS 分支就在这条路径上）
       - name: CLI help on darwin
         run: node dist/bin/weflow-cli.js --help > /dev/null
-      # 伪造一个 Containers 布局，确认路径发现认得出 macOS 的位置
+      # 伪造一个 Containers 布局，断言 macOS 分支的默认路径真的落在 Containers 下。
+      # 这里直接调 dbPathService，而不是解析 `check --json` —— 未初始化时那份输出里
+      # 没有数据目录，按它断言等于什么都没测（2026-11-05 第一次跑 CI 就是这么挂的）。
       - name: macOS path discovery
         run: |
           export MACOS_FAKE_HOME="$RUNNER_TEMP/fakehome"
           mkdir -p "$MACOS_FAKE_HOME/Library/Containers/com.tencent.xinWeChat/Data/Documents/xwechat_files/wxid_example/db_storage"
-          HOME="$MACOS_FAKE_HOME" node dist/bin/weflow-cli.js check --json > check.json || true
-          python - <<'PY'
-          import json, os
-          from pathlib import Path
-          data = json.loads(Path('check.json').read_text(encoding='utf-8'))
-          text = json.dumps(data, ensure_ascii=False)
-          assert 'xwechat_files' in text or 'Containers' in text or 'dataRoot' in text, text[:400]
-          print('path discovery reported:', text[:200])
-          PY
+          HOME="$MACOS_FAKE_HOME" node --input-type=module -e '
+            const { dbPathService } = await import(process.cwd() + "/dist/src/core/dbPathService.js");
+            const p = dbPathService.getDefaultPath();
+            console.log("getDefaultPath:", p);
+            if (!p.includes("Library/Containers") || !p.includes("xwechat_files")) {
+              console.error("darwin default path did not land under Containers");
+              process.exit(1);
+            }
+            const fake = process.env.MACOS_FAKE_HOME + "/Library/Containers/com.tencent.xinWeChat/Data/Documents/xwechat_files";
+            const resolved = dbPathService.resolveDataRoot(fake);
+            console.log("resolveDataRoot:", resolved);
+            if (!resolved) process.exit(1);
+          '
       # 捕获脚本的静态断言：两套寄存器、日志路径、非 darwin 拒绝
       - name: capture script static tests
         run: python -m unittest discover -s test -p 'macos_capture_test.py' -v
