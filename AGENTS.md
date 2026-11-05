@@ -10,6 +10,7 @@ Read this file and [docs/PROJECT_STATE.md](docs/PROJECT_STATE.md) before changin
 - Do not present local processing as a legal, account-safety, or platform-compatibility guarantee. Follow [SECURITY.md](SECURITY.md).
 - Do not expand process-memory, key-extraction, or platform-automation details in public documentation without a security review.
 - For future architecture-diagram visual assets, use GPT-image-2 as requested by the project owner, while keeping a maintainable source representation when practical and checking text, dimensions, and repository references after generation.
+- **Push only after the user says so, and squash first.** Local commits may be numerous while a change is in progress; before pushing, fold them into one or a few meaningful commits. Do not rewrite already-published history unless the user explicitly asks - and then tag a backup (`backup-before-rebase`) and use `--force-with-lease`, never `--force`.
 
 ## Project Map
 
