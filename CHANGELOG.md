@@ -18,6 +18,26 @@ purpose** - a hand-written "latest is X" is exactly the claim that goes stale he
 
 All notable user-facing changes are recorded here. This project follows [Semantic Versioning](https://semver.org/).
 
+## 1.21.8
+
+> 验证过的微信：Windows 4.1.15.56；Linux 4.1.13.26。
+
+- **只读命令不再在临时目录里堆积解密副本。** 有 `-wal` 的库必须复制一份才能读，
+  但副本过去**从不清理**：轮询 45 秒、跑 15 小时就能把系统盘填满（issue #14）。
+  现在同一份库复用同一个副本目录（按库与 sidecar 的大小 + mtime 取 key），
+  过期按 TTL（默认 1 小时）回收、超容量（默认 2GB）按最旧删且**永远保留最新一份**；
+  `WEFLOW_RO_CACHE=off` 时退回一次性目录并在进程退出时删除。
+  三个环境变量可调：`WEFLOW_RO_CACHE` / `WEFLOW_RO_TTL_SECONDS` / `WEFLOW_RO_MAX_MB`。
+- **`init --test-missing-keys` 在 Windows 上不再误报"缺 Python"。**
+  该标志原本会把 Python 探测整段跳过，而探测结果的初值在 Windows 上是 false，
+  于是这条**测试命令**必然报错退出——机器上 Python 与 sqlcipher3 其实都正常。
+- **Linux 文档改成问答结构**：`docs/LINUX.md` 的小标题从"能力矩阵 / 产物在哪里"
+  换成用户真正会问的问题（怎么导出、怎么读库、要不要 root），每个问题下面
+  先给结论与命令，再给细节。内容没有删减。
+- 评测台 `recall_eval.py` 新增 `--hybrid`：此前它只做纯向量排序，而 `search()`
+  默认走向量 + BM25 的门控融合，口径不一致导致读数偏低（同一批 94 题：
+  recall@10 0.78 → 0.96）。
+
 ## 1.21.7
 
 - **README 架构图重画**：四区十三卡（INPUTS / CORE / DATA / OUTPUTS），由 gpt-image-2.5 生成；
