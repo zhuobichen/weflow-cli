@@ -1172,8 +1172,14 @@ program
       // 以前不看，于是 Python 不可用时还要先等 120 秒 hook 超时，然后把用户引向
       // "退出微信重试"——而真正的原因（商店占位程序 / 缺 sqlcipher3）一个字都没提。
       // 2026-10-19 用一台"PATH 里没有 python"的机器实测，2 分钟换来一条误导性建议。
+      //
+      // 2026-11-05 修：这里原本写作 `process.platform === 'win32' && !opts.testMissingKeys`，
+      // 于是 `--test-missing-keys` 把探测整段跳过，而 `pythonUsable` 的初值在 Windows 上是
+      // false（`process.platform !== 'win32'`）——结果这个**测试标志**在 Windows 上
+      // 必然报"缺 Python"并以 exit 1 退出，看起来像环境坏了。探测本身只是跑一次
+      // `python --version`，与是否屏蔽密钥无关，所以照常执行。
       let pythonUsable = process.platform !== 'win32'
-      if (process.platform === 'win32' && !opts.testMissingKeys) {
+      if (process.platform === 'win32') {
         try {
           const { execFileSync } = await import('node:child_process')
           execFileSync(getPythonCommand(), ['--version'], { windowsHide: true, stdio: 'ignore', timeout: 5000 })
