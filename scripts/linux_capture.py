@@ -143,7 +143,7 @@ def validate(passphrase_hex: str, db_dir: Path) -> tuple[int, int, str]:
     return ok, total, first
 
 
-def capture(timeout: int, log_path: Path) -> str:
+def capture(timeout: int, log_path: Path, allow_sudo: bool = True) -> str:
     """挂调试器，等一次登录，返回捕获到的口令（hex）。"""
     pid = find_wechat_pid()
     if pid is None:
@@ -180,7 +180,8 @@ def capture(timeout: int, log_path: Path) -> str:
     time.sleep(3)
     if proc.poll() is not None and not (log_path.exists() and log_path.stat().st_size):
         err = (proc.stderr.read() if proc.stderr else '') or ''
-        if 'ptrace' in err.lower() or 'permission' in err.lower() or 'Operation not permitted' in err:
+        if allow_sudo and ('ptrace' in err.lower() or 'permission' in err.lower()
+                           or 'Operation not permitted' in err):
             print('  权限不足，改用 sudo 重试…', flush=True)
             proc = _spawn(['sudo', '-n'] + base_cmd)
     deadline = time.time() + timeout
@@ -218,6 +219,8 @@ def main() -> int:
     ap.add_argument('--timeout', type=int, default=300, help='等待登录的秒数（默认 300）')
     ap.add_argument('--db-dir', default='', help='库目录；缺省自动找 ~/xwechat_files/*/db_storage')
     ap.add_argument('--json', action='store_true', help='输出机器可读结果')
+    ap.add_argument('--no-sudo', action='store_true',
+                    help='提权被拒时不自动重试 sudo，直接失败（不想让本工具提权时用）')
     ap.add_argument('--write-config', action='store_true',
                     help='验证通过后写进配置（favPassphrase）并派生出各库密钥')
     args = ap.parse_args()
@@ -230,7 +233,7 @@ def main() -> int:
         db_dir = candidates[0]
 
     log_path = Path(tempfile.mkdtemp(prefix='weflow-capture-')) / 'hits.log'
-    passphrase = capture(args.timeout, log_path)
+    passphrase = capture(args.timeout, log_path, allow_sudo=not args.no_sudo)
     ok, total, first = validate(passphrase, db_dir)
 
     result = {'success': ok > 0, 'passphrase': passphrase, 'matched': ok, 'total': total,

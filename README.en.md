@@ -102,7 +102,7 @@ weflow-cli init                 # derive per-database keys and write the config
 
 `capture-passphrase` waits for that one re-login, then checks whether what it captured can actually open the databases (a page-level check per database) and only writes it when the check passes. One authorization is enough; you do not repeat it every run.
 
-Availability on Linux still depends on the WeChat distribution, the Python dependencies, and your user's permissions. Run `weflow-cli check` first and configure within your system's security policy; do not lower machine-wide permissions just to troubleshoot.
+Availability on Linux still depends on the WeChat distribution, the Python dependencies, and your user's permissions. See [docs/LINUX.en.md](./docs/LINUX.en.md) for the question-and-answer version (export, database access, root, outputs). Run `weflow-cli check` first and configure within your system's security policy; do not lower machine-wide permissions just to troubleshoot.
 
 ## What You Can Do
 

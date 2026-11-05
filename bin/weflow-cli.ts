@@ -956,6 +956,7 @@ program
   .option('--timeout <sec>', '等待登录的秒数', '300')
   .option('--db-dir <path>', '库目录；缺省自动找 ~/xwechat_files/*/db_storage')
   .option('--json', '输出机器可读结果')
+  .option('--no-sudo', '提权被拒时不自动重试 sudo（不想让本工具提权时用）')
   .action(async (opts) => {
     if (process.platform !== 'linux') {
       console.log(chalk.yellow('这条命令只用于 Linux：Windows 的密钥提取由 init 自动完成。'))
@@ -966,6 +967,7 @@ program
     const args = [script, '--timeout', String(parseCliInteger(opts.timeout, 'timeout', 30, 3600, !!opts.json))]
     if (opts.dbDir) args.push('--db-dir', opts.dbDir)
     if (opts.json) args.push('--json')
+    if (opts.sudo === false) args.push('--no-sudo')
     args.push('--write-config')
     const child = spawn(getPythonCommand(), args, { stdio: 'inherit', windowsHide: true })
     child.on('exit', (code) => process.exit(code || 0))

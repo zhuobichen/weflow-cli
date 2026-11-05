@@ -18,6 +18,25 @@ purpose** - a hand-written "latest is X" is exactly the claim that goes stale he
 
 All notable user-facing changes are recorded here. This project follows [Semantic Versioning](https://semver.org/).
 
+## 1.21.9
+
+> 验证过的微信：Windows 4.1.15.56；Linux 4.1.13.26。
+> 1.21.8 未单独发布，本条包含它的全部改动。
+
+- **README 补上「AI 能力与成本」**：四类 AI 用途分别走什么服务、能不能换、没有 key 时
+  退化成什么；附一次真实日报的用量（生成 512 次 / 分类 511 次 $0.0626），以及
+  "价格以供应商当期价目为准，本项目不代收不加价"。
+- **README 补上「验证状态」表**：分别写清 Windows / Linux / macOS 验证到哪一步，
+  并显式列出**没有验证过**的环境（其他发行版、Windows ARM、微信 4.2+）。
+  这是回应外部"跨平台初始化到底稳不稳"的说法——不是承诺，是可核对的事实。
+- **显式声明提权行为**：`capture-passphrase` 在 Yama 限制下会请求一次 `sudo`，
+  原因、范围（只读一个寄存器、不写微信目录）都写进 README 与 `docs/LINUX.md`；
+  新增 `--no-sudo`，不想让工具提权时让它直接失败而不是升级权限。
+- **新增英文版 Linux 文档** `docs/LINUX.en.md`（问答结构：能不能导出、怎么读库、
+  要不要 root、产物在哪），README 中英两版都已链接。
+- 1.21.8 的改动：只读副本共享缓存（issue #14）、`init --test-missing-keys` 在 Windows
+  上不再误报缺 Python、`docs/LINUX.md` 改成问答结构、评测台 `--hybrid`。
+
 ## 1.21.8
 
 > 验证过的微信：Windows 4.1.15.56；Linux 4.1.13.26。
