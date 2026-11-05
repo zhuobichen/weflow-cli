@@ -39,6 +39,8 @@ scripts/regen_wsl_keys.mjs
 !docs/DECISIONS.md
 !docs/VERSION_METHODS.md
 !docs/LINUX.md
+!docs/LINUX.en.md
+!docs/MACOS.md
 !docs/EVIDENCE_GUIDE.md
 !docs/DATA_CONTRACT.md
 !docs/AI_INTERFACE.md
