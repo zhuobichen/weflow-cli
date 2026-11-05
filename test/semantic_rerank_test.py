@@ -214,7 +214,9 @@ class IndexWindowTests(unittest.TestCase):
             seen['chat'] = days
             return []
 
-        def fake_articles(article_days=30):
+        # 签名跟着 collect_articles 走：2026-11-05 起它多了 chunk_chars / chunk_overlap，
+        # 桩不接受就会 TypeError（这正是这条测试当时红掉的原因）。
+        def fake_articles(article_days=30, chunk_chars=0, chunk_overlap=60):
             seen['articles'] = article_days
             return []
 

@@ -67,7 +67,10 @@ from _utils import (load_config, decrypt_lock, get_dashscope_key, get_api_key,  
 from nt_common import decode_content  # noqa: E402
 from jev_client import create_client
 
-OUTPUT_ROOT = 'output'
+# `WEFLOW_OUTPUT_DIR` 要生效：只写死 'output' 会让所有"换个根目录做对照/实验"的用法
+# 悄悄写进生产索引（2026-11-05 做分块对照时就这么踩了一次，把 60 篇样本灌进了真索引）。
+# 默认值不变，只是不再忽略环境变量。
+OUTPUT_ROOT = os.environ.get('WEFLOW_OUTPUT_DIR') or 'output'
 INDEX_DIR = Path(OUTPUT_ROOT) / '.semantic_index'
 VECTORS_FILE = INDEX_DIR / 'vectors.npy'
 META_FILE = INDEX_DIR / 'meta.json'
@@ -356,7 +359,56 @@ def extract_article_body(content, limit=500):
             break
     return '\n'.join(kept)[:limit]
 
-def collect_articles(article_days=30):
+#: 文章分块的默认大小与重叠（字符）。400 字 ≈ 一段，60 字重叠足以跨句衔接。
+DEFAULT_CHUNK_CHARS = 400
+DEFAULT_CHUNK_OVERLAP = 60
+
+
+def split_for_index(text, size=DEFAULT_CHUNK_CHARS, overlap=DEFAULT_CHUNK_OVERLAP):
+    """把长文切成块：优先按段落，其次按中文句末标点，最后才硬切。
+
+    为什么不用固定窗口硬切：中文文章的句末标点（。！？；…）是天然的语义边界，
+    切在句子中间会让两块都"半句话"，两边都召不回来。
+    """
+    text = (text or '').strip()
+    if not text:
+        return []
+    if len(text) <= size:
+        return [text]
+    paras = [p for p in re.split(r'\n\s*\n', text) if p.strip()]
+    chunks, buf = [], ''
+    for para in paras:
+        para = para.strip()
+        if len(buf) + len(para) <= size:
+            buf = (buf + '\n' + para).strip()
+            continue
+        if buf:
+            chunks.append(buf)
+        while len(para) > size:
+            cut = -1
+            for m in re.finditer(r'[。！？；…]', para[:size]):
+                cut = m.end()
+            if cut <= 0:
+                cut = size
+            chunks.append(para[:cut].strip())
+            para = para[cut:].strip()
+            if not para:
+                break
+        buf = para
+    if buf:
+        chunks.append(buf)
+    if overlap and len(chunks) > 1:
+        merged = []
+        for i, c in enumerate(chunks):
+            if i:
+                c = (chunks[i - 1][-overlap:] + c).strip()
+            merged.append(c)
+        chunks = merged
+    return [c for c in chunks if c]
+
+
+def collect_articles(article_days=30, chunk_chars=0,
+                    chunk_overlap=DEFAULT_CHUNK_OVERLAP):
     """Collect articles from biz-daily.
 
     `article_days` = 取最近多少个**日期目录**（原来写死 30）。可调是必要的：
@@ -397,11 +449,30 @@ def collect_articles(article_days=30):
                     # 2026-10-16 试过改成「与正文缓存取更长的那份」，实测**没有增益**（DECISIONS D-118）：
                     # 100 条自造题里唯一中立的一组（标题）持平；两组碎片题各自跟着「题是从谁的文本里
                     # 抠的」走，方向相反 —— 自造题裁判不了这件事。正文缓存留给 `--with-text`，索引不吃它。
-                    body = ('\n'.join(lines[body_start:body_start + 50]) if body_start
-                            else extract_article_body(content))
-                    if title:
+                    body = ('\n'.join(lines[body_start:]) if body_start
+                            else extract_article_body(content, limit=10 ** 9))
+                    if not title:
+                        continue
+                    rel = f.relative_to(daily_dir)
+                    if chunk_chars and chunk_chars > 0:
+                        # 分块模式：读全篇、按语义边界切块，每块一条记录。
+                        # parent 指回父文档，检索时按它聚合（同一篇只出一条）。
+                        pieces = split_for_index(body, chunk_chars, chunk_overlap)
+                        for idx, piece in enumerate(pieces):
+                            items.append({
+                                "id": f"article:{rel}#c{idx}",
+                                "parent": f"article:{rel}",
+                                "type": "article",
+                                "title": title,
+                                "date": date_dir.name,
+                                "topic": topic_dir.name,
+                                "chunkIndex": idx,
+                                "chunkCount": len(pieces),
+                                "text": f"{title}\n{piece}",
+                            })
+                    else:
                         items.append({
-                            "id": f"article:{f.relative_to(daily_dir)}",
+                            "id": f"article:{rel}",
                             "type": "article",
                             "title": title,
                             "date": date_dir.name,
@@ -539,7 +610,9 @@ def _save_index(base_vectors, base_meta, pairs):
     return len(meta)
 
 def build_index(api_key: str, full: bool = False, days: int = 90, article_days: int = 30,
-                include_imports: bool = False, use_cache: bool = False, pdf_chunks: int = 0):
+                include_imports: bool = False, use_cache: bool = False, pdf_chunks: int = 0,
+                article_chunk_chars: int = 0, article_chunk_overlap: int = DEFAULT_CHUNK_OVERLAP,
+                include_chat: bool = True):
     """Build or update the semantic index.
 
     `days` / `article_days` 决定这个索引**记多久**：它们原先写死在两处调用里
@@ -591,13 +664,17 @@ def build_index(api_key: str, full: bool = False, days: int = 90, article_days: 
         # 收完直接走同一个收尾（嵌入与写盘），不在这里复制粘贴后半段。
         if include_imports:
             items.extend(collect_imported_chat_items(days=days))
-        items.extend(collect_articles(article_days=article_days))
+        items.extend(collect_articles(article_days=article_days,
+                                      chunk_chars=article_chunk_chars,
+                                      chunk_overlap=article_chunk_overlap))
         items.extend(collect_pdf_text(pdf_chunks=pdf_chunks))
         new_items = [item for item in items if item['id'] not in existing_ids]
         print(f"总数据: {len(items)} 条, 新数据: {len(new_items)} 条", file=sys.stderr)
         return _build_embed_and_write(api_key, items, new_items, existing_ids,
                                    full, days, article_days, shards_failed=[])
     try:
+        if not include_chat:
+            raise RuntimeError('skip-chat')
         import nt_decrypt  # 懒加载：纯逻辑路径（关键词/重排/测试）不该被它拖住
         passphrase = decrypt_lock(config.get('favPassphrase') or config.get('decryptKey') or '')
         pairs, failures = nt_decrypt.connect_message_shards_detailed(
@@ -623,7 +700,9 @@ def build_index(api_key: str, full: bool = False, days: int = 90, article_days: 
         items.extend(imported)
         print(f"导入会话: +{len(imported)} 条", file=sys.stderr)
 
-    article_items = collect_articles(article_days=article_days)
+    article_items = collect_articles(article_days=article_days,
+                                      chunk_chars=article_chunk_chars,
+                                      chunk_overlap=article_chunk_overlap)
     items.extend(article_items)
     pdf_items = collect_pdf_text(pdf_chunks=pdf_chunks)
     items.extend(pdf_items)
@@ -1525,6 +1604,33 @@ def phrase_search(query, limit: int = 20, line: str = 'all', from_source: str = 
     return result
 
 
+def collapse_chunks(results, top_k=10):
+    """把同一父文档的多个块合并成一条：留最高分那块，并记下块数。
+
+    为什么要合并：分块之后一篇长文会贡献 N 条记录，直接返回 top-k 会被同一篇灌满
+    （用户看到的是「同一篇文章的 10 个片段」而不是 10 篇文章）。这里按 parent 聚合，
+    保留分数最高的那块作为代表，同时把 `matchedChunk` 带出去——RAG 只喂命中的那一段。
+    """
+    best = {}
+    order = []
+    for item in results:
+        key = item.get('parent') or item.get('id')
+        prev = best.get(key)
+        if prev is None:
+            best[key] = item
+            order.append(key)
+        else:
+            if float(item.get('score') or 0) > float(prev.get('score') or 0):
+                best[key] = item
+    merged = []
+    for key in order:
+        item = dict(best[key])
+        if item.get('parent'):
+            item['chunkCount'] = item.get('chunkCount') or 1
+        merged.append(item)
+    return merged[:top_k]
+
+
 def search(query: str, api_key: str, top_k: int = 10, rerank_results: bool = True,
            line: str = 'all', hybrid: bool = True, from_source: str = None,
            rerank_pool: int = RERANK_CANDIDATES,
@@ -1616,6 +1722,9 @@ def search(query: str, api_key: str, top_k: int = 10, rerank_results: bool = Tru
                 for _item in results:                 # `_row` 只是内部用的，别漏进输出
                     _item.pop('_row', None)
                 VECTOR_STATE['used'] = True
+                # 分块索引：同一篇只留最高分那块（见 collapse_chunks）
+                if any(r.get('parent') for r in results):
+                    results = collapse_chunks(results, top_k)
                 return results[:top_k]
         except Exception as error:
             # **显式降级**，原因留下来。原来是裸 `except: pass`：向量路径任何异常都会变成
@@ -1697,6 +1806,12 @@ def add_window_args(parser):
                         help='日报文章收最近多少个日期目录（默认 30）')
     parser.add_argument('--pdf-chunks', type=int, default=0,
                         help='每个 PDF 最多收多少块（默认 0=不限）；PDF 文字来自 output/pdf-text')
+    parser.add_argument('--article-chunk-chars', type=int, default=0,
+                        help='文章按多少字符切块后分别嵌入（默认 0=不切，只取前 500 字）')
+    parser.add_argument('--no-chat', action='store_true',
+                        help='不收聊天记录（只建文章/PDF 半边；做对照实验或只想搜文章时用）')
+    parser.add_argument('--article-chunk-overlap', type=int, default=60,
+                        help='切块重叠字符数（默认 60）')
     parser.add_argument('--no-pdf', action='store_true',
                         help='不收 PDF 文字（默认收：每份 PDF 按页切块进索引）')
 
@@ -1781,13 +1896,19 @@ def main():
                              article_days=args.article_days,
                              include_imports=getattr(args, 'include_imports', False),
                              use_cache=use_cache,
-                             pdf_chunks=0 if getattr(args, 'no_pdf', False) else getattr(args, 'pdf_chunks', 0))
+                             pdf_chunks=0 if getattr(args, 'no_pdf', False) else getattr(args, 'pdf_chunks', 0),
+                             article_chunk_chars=getattr(args, 'article_chunk_chars', 0),
+                             article_chunk_overlap=getattr(args, 'article_chunk_overlap', 60),
+                             include_chat=not getattr(args, 'no_chat', False))
     elif args.command == 'update':
         result = build_index(api_key, full=False, days=args.days,
                              article_days=args.article_days,
                              include_imports=getattr(args, 'include_imports', False),
                              use_cache=use_cache,
-                             pdf_chunks=0 if getattr(args, 'no_pdf', False) else getattr(args, 'pdf_chunks', 0))
+                             pdf_chunks=0 if getattr(args, 'no_pdf', False) else getattr(args, 'pdf_chunks', 0),
+                             article_chunk_chars=getattr(args, 'article_chunk_chars', 0),
+                             article_chunk_overlap=getattr(args, 'article_chunk_overlap', 60),
+                             include_chat=not getattr(args, 'no_chat', False))
     elif args.command == 'phrase-build':
         result = build_phrase_index(line=args.line)
         result['success'] = 'error' not in result

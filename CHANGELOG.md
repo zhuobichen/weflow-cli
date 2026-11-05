@@ -18,6 +18,21 @@ purpose** - a hand-written "latest is X" is exactly the claim that goes stale he
 
 All notable user-facing changes are recorded here. This project follows [Semantic Versioning](https://semver.org/).
 
+## 1.21.11
+
+> 验证过的微信：Windows 4.1.15.56；Linux 4.1.13.26。
+
+- **文章分块检索（可选）**：`search-index --article-chunk-chars 400` 会按语义边界把文章
+  切块、每块单独嵌入，检索时同一篇只留最高分那块并带回命中段落（RAG 只喂这一段）。
+  默认**关闭**——两次对照实验都显示分块更好，但幅度只有 recall@10 +1.6～+5 点，
+  而索引体积约 ×6；当前混合检索的 recall@10 已经 0.96。数据与取舍见 D-147。
+- **`WEFLOW_OUTPUT_DIR` 现在真的生效**：`semantic_search` 的 `OUTPUT_ROOT` 此前写死为
+  `output`，换个根目录做对照实验会**悄悄写进生产索引**（这次实测把 60 篇样本灌了进去，
+  23,899 → 44,574 条，已按 `parent` 字段精确剔除）。
+- **`search-index --no-chat`**：只建文章/PDF 半边，做实验或只想搜文章时用。
+- 新增 `test/chunking_test.py`（7 项）：切块不丢内容、优先切在中文句末标点、
+  空文本返回空、父文档聚合只留最高分、无 parent 的记录照常保留。
+
 ## 1.21.10
 
 > 验证过的微信：Windows 4.1.15.56；Linux 4.1.13.26。
