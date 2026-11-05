@@ -1,30 +1,39 @@
-# Linux 上的 WeFlow：能用什么、不能用什么
+# Linux 版微信怎么导出聊天记录
 
-> 最后核对：2026-11-01，Ubuntu 24.04 / Python 3.12 / Node 22，
-> 微信 Linux **4.1.13.26**（真实登录态，真实数据目录）。
+> 最后核对：2026-11-05，Ubuntu 24.04 / Python 3.12 / Node 22，
+> 微信 Linux **4.1.13.26**（真实登录态、真实数据目录）。
 
-## 一句话结论
+## Linux 版微信能导出聊天记录吗？
 
-**除"自动获取数据库密钥"外，其余链路在 Linux 上都可用**；拿到凭据后读库也是通的。
-拿不到密钥时，用外部订阅源仍能出完整日报。
+**能。** 支持 HTML / Markdown / JSON / TXT / Excel 五种格式：
 
-## 能力矩阵
+```bash
+weflow-cli export "联系人A" html        # 也可 markdown / json / txt / excel
+```
 
-| 能力 | Linux | 说明 |
-| --- | --- | --- |
-| `check` 环境检查 | ✅ | 依赖、目录、配置、以及**能读几个库**都会报 |
-| `init` 目录发现 / 账号扫描 | ✅ | 微信 Linux 的 `~/xwechat_files` 能自动认出 |
-| 进程识别 | ✅ | 只认 `wechat`/`weixin`（含 `com.tencent.wechat` 这类前缀） |
-| 版本探测 | ✅ | 读客户端自己的记录 `~/.xwechat/uh/uh.dat`（没有 WMI/模块表可查）；读不到时明说"版本未知"，不会假报"微信没在运行" |
-| 读本地微信库 | ⚠️ | **有凭据就能读**（已用合成库+真实库验证）；自动提取拿不到 |
-| 公众号日报（外部源） | ✅ | `--articles-json` / `--rss-feed` / `--rss-opml`，端到端跑通 |
-| 定时任务 | ✅ | `scripts/daily_task.sh`（cron / systemd timer 都能调） |
-| 知识库 / MCP / 导出 | ✅ | 不依赖 Windows |
-| 日报 HTML（index/article） | ✅ | 2026-11-01 实测产出 30KB + 65KB |
-| 双向链接 / 阅读笔记 | ✅ | `enrich_backlinks`、`create_reading_notes` 实跑通过 |
-| 概念图谱 `wiki graph` | ✅ | 3D 与 `--flat` 2D 都实跑通过 |
+前提两条：微信 Linux 4.x（本文实测 4.1.13.26），以及**一次登录授权**拿到那串共享口令
+（见下文「怎么拿到口令」）。导出产物落在 `~/.weflow-cli/output/`，不写回微信目录。
 
-## 产物在哪里
+## 微信 Linux 4.x 的数据库怎么读取？
+
+4.1.12.26 之后微信改用「**共享口令 + 每库 salt 派生**」，内存里不再有每库一对 key/salt。
+所以流程是：拿口令 → 派生各库密钥 → 逐库校验 → 之后直接读。
+
+```bash
+weflow-cli capture-passphrase    # 一次登录授权，自动拿口令并逐库校验
+weflow-cli init                  # 派生各库密钥，写进配置
+weflow-cli sessions              # 验证：能列出会话才说明真的读到了
+```
+
+**对微信数据库一律只读**：没有 `-wal` 时以 `immutable` 直读，有 `-wal` 时读临时副本；
+两条路径都不在微信的库旁写 `-wal` / `-shm`，也不改变客户端状态。
+
+## Linux 上需要 root 吗？
+
+读库不需要。只有**捕获口令**那一步要 attach 到微信进程，普通用户在 Yama 限制下会被拒，
+工具会自动用 `sudo` 重试一次并说明；除此之外全程普通用户即可。
+
+## 导出后数据存在哪里？
 
 输出根**必须可写**，按优先级：`WEFLOW_OUTPUT_DIR` → 包目录下的 `output/`（可写时）
 → `~/.weflow-cli/output`。全局安装时包目录属于 root，所以实际落在后者：
@@ -42,7 +51,23 @@
 
 用 `python3 scripts/nt_decrypt.py key-status` 或 `weflow-cli check` 都能看到当前配置能否读库。
 
-## 自动捕获口令（一条龙）
+## Linux 上还能做什么？
+
+| 能力 | Linux | 说明 |
+| --- | --- | --- |
+| `check` 环境检查 | ✅ | 依赖、目录、配置、以及**能读几个库**都会报 |
+| `init` 目录发现 / 账号扫描 | ✅ | 微信 Linux 的 `~/xwechat_files` 能自动认出 |
+| 进程识别 | ✅ | 只认 `wechat`/`weixin`（含 `com.tencent.wechat` 这类前缀） |
+| 版本探测 | ✅ | 读客户端自己的记录 `~/.xwechat/uh/uh.dat`（没有 WMI/模块表可查）；读不到时明说"版本未知"，不会假报"微信没在运行" |
+| 读本地微信库 | ✅ | 有口令即可读到真实数据：`sessions` / `messages` / `daily` 实测通过 |
+| 公众号日报（本地库或外部源） | ✅ | 本地库直读；没有口令时可用 `--articles-json` / `--rss-feed` / `--rss-opml` |
+| 定时任务 | ✅ | `scripts/daily_task.sh`，cron / systemd timer 都能调 |
+| 知识库 / MCP / 导出 | ✅ | 不依赖 Windows |
+| 日报 HTML（index/article） | ✅ | 2026-11-01 实测产出 30KB + 65KB |
+| 双向链接 / 阅读笔记 | ✅ | `enrich_backlinks`、`create_reading_notes` 实跑通过 |
+| 概念图谱 `wiki graph` | ✅ | 3D 与 `--flat` 2D 都实跑通过 |
+
+## 怎么拿到口令（一条龙）
 
 ```bash
 weflow-cli capture-passphrase
