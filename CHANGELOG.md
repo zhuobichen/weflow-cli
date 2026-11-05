@@ -34,6 +34,11 @@ All notable user-facing changes are recorded here. This project follows [Semanti
   新增 `--no-sudo`，不想让工具提权时让它直接失败而不是升级权限。
 - **新增英文版 Linux 文档** `docs/LINUX.en.md`（问答结构：能不能导出、怎么读库、
   要不要 root、产物在哪），README 中英两版都已链接。
+- **采纳 PR #15 的两点**（@fcmyoo）：`WEFLOW_TMPDIR` 指定副本根目录
+  （`tempfile.gettempdir()` 在进程内缓存首次取值，运行中设 `TEMP` 不一定生效），
+  以及公开的 `cleanup_tmpdirs()`。他们提供的现场数据也写进了文档：
+  45 秒轮询 15 小时累积 **1220 个副本 / 267 GB**，磁盘写满后微信新建分片、
+  所有会话读不出来——这条链路过去只能靠猜。
 - 1.21.8 的改动：只读副本共享缓存（issue #14）、`init --test-missing-keys` 在 Windows
   上不再误报缺 Python、`docs/LINUX.md` 改成问答结构、评测台 `--hybrid`。
 

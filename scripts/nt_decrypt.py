@@ -771,10 +771,32 @@ def _ro_cache_enabled():
     return os.environ.get(_RO_CACHE_ENV, '').strip().lower() not in ('off', '0', 'false', 'no')
 
 
+def temp_root():
+    """只读副本的临时根目录。优先 `WEFLOW_TMPDIR`，其次 `TMPDIR`，最后系统默认。
+
+    为什么单独抽出来（@fcmyoo 在 PR #15 指出）：`tempfile.mkdtemp()` 不传 `dir` 时走
+    `tempfile.gettempdir()`，而它在进程内**缓存第一次取值**——所以运行中再设 `TEMP`
+    不一定生效。`WEFLOW_TMPDIR` 是显式且确定的入口，适合把副本放到别的盘。
+    """
+    env = (os.environ.get('WEFLOW_TMPDIR') or os.environ.get('TMPDIR') or '').strip()
+    if env:
+        try:
+            pathlib.Path(env).mkdir(parents=True, exist_ok=True)
+            return pathlib.Path(env)
+        except OSError:
+            pass
+    return pathlib.Path(tempfile.gettempdir())
+
+
 def _ro_cache_root():
-    root = pathlib.Path(tempfile.gettempdir()) / 'weflow-ro'
+    root = temp_root() / 'weflow-ro'
     root.mkdir(parents=True, exist_ok=True)
     return root
+
+
+#: 公开别名：调用方可以在退出前主动清理本次创建的只读副本。
+cleanup_tmpdirs = None      # 在 _cleanup_tmpdirs 定义后赋值（见下）
+
 
 
 def _ro_dir_size(path):
@@ -887,6 +909,10 @@ def _cleanup_tmpdirs():
     import shutil
     while _CHROME_TMPDIRS:
         shutil.rmtree(_CHROME_TMPDIRS.pop(), ignore_errors=True)
+
+
+#: 公开别名（PR #15 的建议）：调用方可在退出前主动清掉本次创建的一次性副本。
+cleanup_tmpdirs = _cleanup_tmpdirs
 
 
 atexit.register(_cleanup_tmpdirs)
