@@ -78,12 +78,12 @@ weflow-cli timeline --source "某号"     # 这个号历次说法的时间线
 | 能力 | Windows | macOS | Linux |
 | --- | --- | --- | --- |
 | 数据目录自动发现 | ✅ | ✅ | ✅ |
-| 本地数据初始化 | ✅ 自动发现/验证 | ❌ 需手动提供凭据 | ✅ 登录授权后自动 |
+| 本地数据初始化 | ✅ 自动发现/验证 | ⚠️ 自动捕获已实现但未在真机验证；口令自助可用 | ✅ 登录授权后自动 |
 | 聊天记录查询（NT / 本地数据库） | ✅ | ✅ | ✅ |
 | WCDB 数据服务（联系人昵称等） | ✅ | ⚠️ 依赖原生库 | ⚠️ 依赖原生库 |
 | 公众号日报 / 知识库 / MCP | ✅ | ✅ | ✅ |
 
-macOS：当前不提供自动初始化；如你已通过官方或其他经授权的方式取得本地数据访问凭据，请按 `weflow-cli init --path` 和 `config` 的帮助完成配置。
+macOS：`capture-passphrase` 已有 macOS 路径（断在 CommonCrypto 的派生函数上，不需版本偏移），但**未在真机验证**，且 attach 需要 macOS 允许（SIP 相关）；拿不到时用口令自助：`weflow-cli fav set-key --passphrase <64位hex>` 然后 `init`。详见 [docs/MACOS.md](./docs/MACOS.md)。
 
 ### Linux 快速上手（微信 4.x Linux 原生版）
 

@@ -952,15 +952,26 @@ importCmd
 // ==================== init ====================
 program
   .command('capture-passphrase')
-  .description('（Linux）自动捕获微信共享口令：会等你在微信里退出登录、再重新登录')
+  .description('（Linux / macOS）自动捕获微信共享口令：会等你在微信里退出登录、再重新登录')
   .option('--timeout <sec>', '等待登录的秒数', '300')
-  .option('--db-dir <path>', '库目录；缺省自动找 ~/xwechat_files/*/db_storage')
+  .option('--db-dir <path>', '库目录；缺省自动找微信的默认位置')
   .option('--json', '输出机器可读结果')
   .option('--no-sudo', '提权被拒时不自动重试 sudo（不想让本工具提权时用）')
   .action(async (opts) => {
-    if (process.platform !== 'linux') {
-      console.log(chalk.yellow('这条命令只用于 Linux：Windows 的密钥提取由 init 自动完成。'))
+    if (process.platform !== 'linux' && process.platform !== 'darwin') {
+      console.log(chalk.yellow('这条命令用于 Linux / macOS：Windows 的密钥提取由 init 自动完成。'))
       process.exit(1)
+    }
+    if (process.platform === 'darwin') {
+      const { spawn: spawnMac } = await import('child_process')
+      const macScript = join(resolvePackageRoot(), 'scripts', 'macos_capture.py')
+      const macArgs = [macScript, '--timeout',
+        String(parseCliInteger(opts.timeout, 'timeout', 30, 3600, !!opts.json))]
+      if (opts.json) macArgs.push('--json')
+      macArgs.push('--write-config')
+      const macChild = spawnMac(getPythonCommand(), macArgs, { stdio: 'inherit', windowsHide: true })
+      macChild.on('exit', (code) => process.exit(code || 0))
+      return
     }
     const { spawn } = await import('child_process')
     const script = join(resolvePackageRoot(), 'scripts', 'linux_capture.py')

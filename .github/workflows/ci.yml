@@ -251,3 +251,41 @@ jobs:
 
           grep -q 'CI 合成文章' /tmp/daily.log || { echo "::error::没有读出合成文章"; exit 1; }
           echo "  ✓ Linux 端到端通过"
+
+  # macOS：只验"不需要微信客户端"的那部分。真机端到端仍需一位 Mac 用户（见 docs/MACOS.md）。
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22.13'
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+      - run: python -m pip install --quiet sqlcipher3-binary
+        continue-on-error: true
+      - run: npm ci --no-audit --no-fund
+      - run: npm run build
+      # 命令面必须在 darwin 上也注册成功（capture-passphrase 的 macOS 分支就在这条路径上）
+      - name: CLI help on darwin
+        run: node dist/bin/weflow-cli.js --help > /dev/null
+      # 伪造一个 Containers 布局，确认路径发现认得出 macOS 的位置
+      - name: macOS path discovery
+        run: |
+          export MACOS_FAKE_HOME="$RUNNER_TEMP/fakehome"
+          mkdir -p "$MACOS_FAKE_HOME/Library/Containers/com.tencent.xinWeChat/Data/Documents/xwechat_files/wxid_example/db_storage"
+          HOME="$MACOS_FAKE_HOME" node dist/bin/weflow-cli.js check --json > check.json || true
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          data = json.loads(Path('check.json').read_text(encoding='utf-8'))
+          text = json.dumps(data, ensure_ascii=False)
+          assert 'xwechat_files' in text or 'Containers' in text or 'dataRoot' in text, text[:400]
+          print('path discovery reported:', text[:200])
+          PY
+      # 捕获脚本的静态断言：两套寄存器、日志路径、非 darwin 拒绝
+      - name: capture script static tests
+        run: python -m unittest discover -s test -p 'macos_capture_test.py' -v
+      - name: lldb present
+        run: lldb --version | head -1
