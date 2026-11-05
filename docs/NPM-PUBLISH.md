@@ -61,6 +61,27 @@ print('目标版本存在:', os.environ['V'] in d['versions'])" V="$V"
 > **404 / 409 / ETARGET 在发布后的几分钟内都是传播现象，不是错误。**
 > 唯一例外：`403` 和发布时的 `E404`。
 
+### 实测：`409 ... previously staged version` 出现时，发布其实已经成功（2026-11-05）
+
+这条单独写出来是因为**它连续误判了三次**（1.21.8 / 1.21.9 / 1.21.10），
+每次都以为「发布失败、需要人工批准」，实际都是**几分钟后自己上线**：
+
+```
+20:19  npm publish           → 409 Cannot publish over previously staged version "1.21.10"
+20:25  registry 查 1.21.10   → 404（此时看起来确实像失败）
+20:32  收到 npm 邮件          → "Successfully published weflow-cli@1.21.10"
+20:39  registry 再查         → HTTP 200，dist-tags.latest = 1.21.10
+```
+
+结论（给未来的自己）：
+
+- 看到 409 staged：**不要重发**，也不要向用户要验证码 / 让用户去点邮件批准——
+  这个账号的发布本来就会自动完成，只需要等（实测 5–15 分钟）。
+- 判据是**两件事同时成立**才算成功：registry 上 `GET /weflow-cli/<version>` 返回 200，
+  且 `dist-tags.latest` 指向它。`npm view` 命中的可能是本地缓存，不可靠。
+- 等待期间该干别的：CI、文档、下一件事。不要在这个点上反复轮询或打扰用户。
+
+
 ## 3. 凭据自检
 
 不打印 token 本身：
