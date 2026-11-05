@@ -2,6 +2,26 @@
 
 本文面向用户和维护 Agent。所有命令都应在项目目录或已安装 CLI 的终端中执行；示例中的路径、联系人和密钥均为占位符。
 
+
+## 拿不到密钥时的口令自助（Windows / macOS）
+
+自动提取依赖客户端行为，微信换版本或 hook 失败时会取不到。这时如果你的环境里
+**有那串共享口令**（64 位十六进制），可以直接用它初始化，不必等自动提取：
+
+```bash
+weflow-cli init --passphrase <64位hex>
+# 或：先写进配置，再 init
+weflow-cli fav set-key --passphrase <64位hex>
+weflow-cli init
+# 也可以走环境变量，避免留在 shell 历史里
+WEFLOW_PASSPHRASE=<64位hex> weflow-cli init
+```
+
+`init --passphrase` 会跳过自动提取，直接按口令派生各库密钥并**逐库校验**；
+校验不通过会明确报错，不会写入一份用不了的配置。
+
+Linux 上不用这一步：`weflow-cli capture-passphrase` 会自己拿到口令。
+
 ## 1. 环境
 
 | 依赖 | 用途 | 检查 |

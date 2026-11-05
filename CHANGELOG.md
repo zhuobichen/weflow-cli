@@ -18,6 +18,21 @@ purpose** - a hand-written "latest is X" is exactly the claim that goes stale he
 
 All notable user-facing changes are recorded here. This project follows [Semantic Versioning](https://semver.org/).
 
+## 1.21.10
+
+> 验证过的微信：Windows 4.1.15.56；Linux 4.1.13.26。
+
+- **拿不到密钥时可以自己给口令**：`weflow-cli init --passphrase <64位hex>`，
+  也可用 `WEFLOW_PASSPHRASE` 环境变量（避免留在 shell 历史里）。
+  hook 或自动提取失败时，这条是唯一还能走通的路——此前 Windows 用户会直接卡在
+  「取不到密钥」，没有任何自助入口。代码会先校验 64 位十六进制，再逐库校验派生结果，
+  不通过就不写配置。
+- **README 新增「直接回答」问答节**（中英两版）：导出成什么格式、4.x 数据库怎么读、
+  公众号日报怎么做、会不会上传、要不要 root、从哪开始。外部实测过一件事——
+  AI 引擎在"推荐工具"类问法里会提到我们，在"怎么做"类问法里完全缺席；
+  缺的就是这种问题式段落。
+- **OPERATIONS.md 新增「拿不到密钥时的口令自助」**一节，把三条命令与前提写清楚。
+
 ## 1.21.9
 
 > 验证过的微信：Windows 4.1.15.56；Linux 4.1.13.26。

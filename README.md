@@ -73,6 +73,56 @@ weflow-cli network --with "联系人A"     # 我和他共同在哪些群；--int
 weflow-cli timeline --source "某号"     # 这个号历次说法的时间线
 ```
 
+## 直接回答
+
+**怎么把微信聊天记录导出成 HTML / Excel？**
+
+```bash
+weflow-cli export "联系人A" html      # 也支持 markdown / json / txt / excel
+```
+
+导出落在 `~/.weflow-cli/output/`，不写回微信目录；HTML 会内嵌本地缓存的图片与表情。
+Markdown 导出会把图片落盘到 `<会话>_assets/`，json/txt/excel 加 `--media` 也能带图。
+
+**微信 4.x 的本地数据库能读吗？**
+
+能。4.x 用的是 SQLCipher，密钥由客户端在登录时派生：
+
+```bash
+weflow-cli init        # Windows：自动发现与提取
+weflow-cli sessions    # 能列出会话就说明真的读到了
+```
+
+Linux 上多一步一次登录授权（`weflow-cli capture-passphrase`），macOS 目前请用
+`weflow-cli fav set-key --passphrase <64位hex>` 再 `init`。
+**数据库一律只读打开**，不会在微信的库旁留下文件。
+
+**公众号文章能做成带 AI 摘要的日报吗？**
+
+```bash
+weflow-cli daily --date YYYY-MM-DD    # 抓取 → 分类 → 摘要 → HTML 阅读器
+weflow-cli daily --no-ai              # 只要抓取与本地索引，不调模型
+```
+
+只有「AI」「学术」两类会被送去生成摘要，其余只打标签。日报结尾会写这一期花了多少。
+
+**会不会把我的聊天记录上传？**
+
+不会自动上传。本地处理是默认；只有你显式启用的功能会联网：公众号抓取、微信读书同步、
+你配置的云端 AI、以及可选的 Bot 通道。数据库本身从不作为整体上传。
+
+**需要 root / 管理员权限吗？**
+
+读库、查询、导出、日报都不需要。只有 Linux 上「捕获口令」那一步会请求一次 `sudo`
+（attach 到微信进程），可以用 `--no-sudo` 禁掉。
+
+**不知道从哪开始？**
+
+```bash
+weflow-cli check           # 环境体检：依赖、目录、能读几个库
+weflow-cli check --report  # 脱敏结论，可直接贴给别人看
+```
+
 ## 平台支持
 
 | 能力 | Windows | macOS | Linux |

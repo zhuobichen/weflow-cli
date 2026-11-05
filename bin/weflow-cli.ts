@@ -992,6 +992,7 @@ program
   .option('--full-scan', '目录名被修改时，使用深度磁盘结构扫描（耗时较长）')
   .option('--refresh', '忽略已有配置并重新初始化')
   .option('--test-missing-keys', '仅在本次运行模拟密钥缺失，不修改已保存配置')
+  .option('--passphrase <hex>', '直接用这串共享口令初始化（64 位 hex），跳过自动提取；也可用环境变量 WEFLOW_PASSPHRASE')
   .option('--dry-run', '仅预览，不连接数据库、扫描磁盘、捕获密钥或修改配置')
   .option('--json', '输出机器可读预览；实际初始化必须在交互终端执行')
   .action(async (opts) => {
@@ -1209,7 +1210,19 @@ program
 
       // 优先尝试从 WeFlow 配置读取
       console.log(chalk.gray('  尝试从 WeFlow 桌面版配置读取...'))
-      let extractedKey = opts.testMissingKeys ? '' : tryReadWeFlowKey()
+      // 口令来源优先级：显式 --passphrase > WEFLOW_PASSPHRASE > hook/已配置。
+      // 为什么要有这条路：hook 在新版本上可能失败，用户此时没有任何自助入口，
+      // 只能卡在"取不到密钥"（issue #9）。有了口令就能直接派生，与 Linux 的
+      // `capture-passphrase` 之后那一步等价。
+      const cliPassphrase = String(opts.passphrase || process.env.WEFLOW_PASSPHRASE || '').trim()
+      if (cliPassphrase && !/^[0-9a-fA-F]{64}$/.test(cliPassphrase)) {
+        console.log(chalk.red('  ✗ --passphrase / WEFLOW_PASSPHRASE 必须是 64 位十六进制'))
+        process.exit(1)
+      }
+      let extractedKey = opts.testMissingKeys ? (cliPassphrase || '') : (cliPassphrase || tryReadWeFlowKey())
+      if (cliPassphrase) {
+        console.log(chalk.gray('  使用你提供的口令（跳过自动提取）'))
+      }
       let linuxNtKey = ''
       /** 密钥是本次从 hook 捕获的, 还是沿用已有的 - 摘要要说准, 不能一律报"获取成功" */
       let keyCaptured = false
@@ -1477,7 +1490,11 @@ program
         console.log(chalk.yellow('  1) 在这个终端里运行 `python --version`，要能打出版本号'))
         console.log(chalk.yellow('     （Windows 上最常见的问题是只装了商店的 python 占位程序）'))
         console.log(chalk.yellow('  2) `pip install sqlcipher3`'))
-        console.log(chalk.yellow('  3) `weflow-cli config forget-keys`，然后重新 `weflow-cli init`'))
+        console.log(chalk.yellow('  3) 有共享口令的话，最省事的是直接用它：'))
+        console.log(chalk.cyan('       weflow-cli init --passphrase <64位hex>'))
+        console.log(chalk.yellow('     （或先 `weflow-cli fav set-key --passphrase <64位hex>` 再 init；'))
+        console.log(chalk.yellow('      也可以用环境变量 WEFLOW_PASSPHRASE 传，避免留在 shell 历史里）'))
+        console.log(chalk.yellow('  4) `weflow-cli config forget-keys`，然后重新 `weflow-cli init`'))
         // 这三步是"最常见的原因"，不是诊断结论。真卡住时让用户拿到一份**已经判定过**的事实，
         // 而不是再让他把现象口头描述一遍（那正是 issue #3/#9/#10 每次都要重来一遍的原因）。
         console.log(chalk.yellow('\n想先看清到底卡在哪一步，运行：'))

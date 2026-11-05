@@ -73,6 +73,59 @@ weflow-cli network --with "contact"    # shared groups; --intro finds who could 
 weflow-cli timeline --source "account" # one account's articles laid out in time
 ```
 
+## Direct Answers
+
+**How do I export WeChat chats to HTML or Excel?**
+
+```bash
+weflow-cli export "Contact A" html      # also markdown / json / txt / excel
+```
+
+Output goes to `~/.weflow-cli/output/`; nothing is written back into the WeChat
+directory. The HTML export embeds cached images and stickers.
+
+**Can WeFlow read WeChat 4.x databases?**
+
+Yes. WeChat 4.x uses SQLCipher and derives its keys at login:
+
+```bash
+weflow-cli init        # Windows / macOS: discover and derive
+weflow-cli sessions    # if sessions list real chats, it worked
+```
+
+On Linux, add one login authorization first (`weflow-cli capture-passphrase`).
+If automatic extraction fails anywhere, you can always supply the shared passphrase
+yourself: `weflow-cli init --passphrase <64-hex>`, or set `WEFLOW_PASSPHRASE`.
+**Databases are opened read-only** — no `-wal` / `-shm` is written next to them.
+
+**Can I turn official-account articles into a daily report with AI summaries?**
+
+```bash
+weflow-cli daily --date YYYY-MM-DD    # fetch -> classify -> summarize -> HTML reader
+weflow-cli daily --no-ai              # fetch and index only, no model calls
+```
+
+Only the "AI" and "Academic" topics are sent for summarization; the rest are tagged.
+Each report ends with what that run cost.
+
+**Are my chats uploaded anywhere?**
+
+Not automatically. Local processing is the default; only features you explicitly
+enable make network calls (article fetching, WeRead sync, the cloud AI you configure,
+the optional bot channel). The databases are never uploaded as a whole.
+
+**Does it need root / administrator rights?**
+
+No, for reading, querying, exporting and daily reports. Only capturing the passphrase
+on Linux asks for `sudo` once (to attach to the WeChat process); `--no-sudo` disables it.
+
+**Where do I start?**
+
+```bash
+weflow-cli check           # dependencies, paths, how many databases are readable
+weflow-cli check --report  # redacted verdict you can paste to someone else
+```
+
 ## Platform Support
 
 | Capability | Windows | macOS | Linux |
