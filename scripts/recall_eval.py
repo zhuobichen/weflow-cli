@@ -133,6 +133,8 @@ def main():
     ap.add_argument('--top-k', type=int, default=10)
     ap.add_argument('--seed', type=int, default=7)
     ap.add_argument('--dedup', action='store_true', help='排名前把同文本记录合并')
+    ap.add_argument('--hybrid', action='store_true',
+                    help='走与 search() 相同的混合检索（向量 + BM25 经门控 RRF 融合）；不加则只测向量')
     ap.add_argument('--rerank', action='store_true',
                     help='调真正的重排（先试 Jev 契约，再退到已配置的对话模型）')
     ap.add_argument('--mmr', action='store_true', help='排名后做 MMR 去冗余（λ=0.7）')
@@ -172,6 +174,20 @@ def main():
             sims = np.where(np.array([str(m.get('type', '')) in types for m in meta]), sims, -np.inf)
         order = [int(i) for i in np.argsort(sims)[::-1]]
         order = [i for i in order if np.isfinite(sims[i])]
+        if args.hybrid:
+            # 与 search() 同一条路：关键词侧先门控（稀有词比例 + 分数比例），再 RRF 融合。
+            # 不加这个开关时评测只走向量 —— 那测的不是用户实际用的东西（D-110/D-111）。
+            mask = None
+            if types is not None:
+                mask = np.array([str(m.get('type', '')) in types for m in meta])
+            try:
+                kw = ss.keyword_rank(c['query'], meta, mask,
+                                     rare_ratio=ss.HYBRID_RARE_RATIO,
+                                     score_ratio=ss.HYBRID_SCORE_RATIO)
+                kw_order = [int(i) for i, _sc in kw]
+                order = [int(i) for i, _sc in ss.rrf_fuse([order, kw_order])]
+            except Exception as exc:
+                print('  [WARN] 混合检索失败，退回纯向量：%s' % exc, file=sys.stderr)
         if args.rerank:
             # 与 `search()` 同一条路：先按原契约（Jev）排，失败再退到已配置的对话模型
             pool = [{**meta[i], '_idx': i, 'score': float(sims[i])}
