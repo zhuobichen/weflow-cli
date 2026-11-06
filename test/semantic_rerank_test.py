@@ -34,7 +34,7 @@ class StubClient:
         self.error = error
         self.calls = []
 
-    def decide(self, state, questions):
+    def decide(self, state, questions, strict_sum=True):
         self.calls.append({'state': state, 'questions': questions})
         if self.error is not None:
             raise self.error
@@ -136,13 +136,16 @@ class FailSoftTests(unittest.TestCase):
         self.assertEqual(out_buf.getvalue(), '', 'stdout 是机器在读的那一份，不许混进告警')
 
     def test_a_disagreeing_self_check_is_reported_but_does_not_reorder(self):
-        """逐条打分与单选对不上，通常意味着编号被搞混了——必须说出来。"""
+        """逐条打分与单选对不上——必须说出来（但不是错位，别误报成 WARN）。"""
         pool = items('甲', '乙', '丙')
         client = StubClient(scores={'c0': .1, 'c1': .2, 'c2': .9}, best='候选0')
         out_buf, err_buf = io.StringIO(), io.StringIO()
         with redirect_stdout(out_buf), redirect_stderr(err_buf):
             out = ss.rerank('问题', pool, client)
-        self.assertIn('自检不一致', err_buf.getvalue())
+        # 两路不一致本身是正常噪声（模型既逐条打分又做单选，两路可以不一致）；
+        # 真正的编号错位是"逐条打分缺候选"，那才升成 WARN。
+        self.assertIn('重排两路输出不一致', err_buf.getvalue())
+        self.assertNotIn('[WARN]', err_buf.getvalue())
         self.assertEqual(out_buf.getvalue(), '', 'stdout 是机器在读的那一份，不许混进告警')
         # 顺序仍按逐条打分——单选只用来报警，不参与排序（否则一次错答就全盘换序）。
         self.assertEqual(out[0]['title'], '丙')
@@ -280,3 +283,40 @@ class IndexWindowTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class ArticleTextCapTests(unittest.TestCase):
+    """文章正文塞进向量的上限必须真的可调（2026-11-06 之前写死 500）。
+
+    500 字只覆盖长文的 7%~30%，正文中段根本进不了向量——这是"知识库构建"层面的
+    召回损失，和排序算法无关。默认改成 6000，并由 `ARTICLE_TEXT_CHARS` 控制。
+    """
+
+    def test_cap_is_respected(self):
+        import tempfile
+        from pathlib import Path
+        import json as _json
+        import sys as _sys
+        _sys.path.insert(0, str(Path(__file__).resolve().parent.parent / 'scripts'))
+        import semantic_search as ss2
+
+        body = '正文句子。' * 400                      # ~2000 字
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            day = root / 'biz-daily' / '2026-01-01' / 'AI'
+            day.mkdir(parents=True)
+            (day / '测试文章.md').write_text(
+                '---\ntitle: 测试标题\n---\n\n## 正文\n' + body, encoding='utf-8')
+            old_root, old_cap = ss2.OUTPUT_ROOT, ss2.ARTICLE_TEXT_CHARS
+            try:
+                ss2.OUTPUT_ROOT = str(root)
+                ss2.ARTICLE_TEXT_CHARS = 800
+                items = ss2.collect_articles(article_days=1)
+            finally:
+                ss2.OUTPUT_ROOT, ss2.ARTICLE_TEXT_CHARS = old_root, old_cap
+
+        self.assertEqual(len(items), 1, items)
+        text = items[0]['text']
+        # 标题一行 + 不超过上限的正文
+        self.assertLessEqual(len(text), 800 + 20, len(text))
+        self.assertGreater(len(text), 400, len(text))

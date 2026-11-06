@@ -18,6 +18,25 @@ purpose** - a hand-written "latest is X" is exactly the claim that goes stale he
 
 All notable user-facing changes are recorded here. This project follows [Semantic Versioning](https://semver.org/).
 
+## 1.21.13
+
+> 验证过的微信：Windows 4.1.15.56；Linux 4.1.13.26。
+
+- **知识库不再只索引文章前 500 字**：`ARTICLE_TEXT_CHARS` 默认从 500 改为 6000，
+  索引里的文章正文长度中位数从 500 → 2,931 字。实测原先只有 **7%~30%** 的正文进了向量，
+  正文中段的内容**从未参与过检索**——这是"文章明明存了却搜不到"的根因。
+  可用 `WEFLOW_ARTICLE_TEXT_CHARS` 调整。
+- **重排恢复工作**：Jev 的 `choice` 校验原先要求"概率和 ≈ 1"（±0.02），但重排返回的是
+  **相对分数**（实测和常在 0.89~1.77），于是每一批重排都被判成"契约变了"并静默退回
+  融合顺序——"默认开启重排"实际上长期没有运行。现在按调用点区分：分类那条路保持
+  严格（它的"和≈1"是真契约），重排这条路只归一化、不校验和。归一化不改变大小关系，
+  所以"choice 必须是 argmax"这条最危险的断言强度不变。
+  修复后逐题对比：30 道自然问句里**变好 8 题、变差 3 题**。
+- **重排自检告警分级**：两路输出不一致是正常噪声（模型既逐条打分又做单选），
+  现在记 INFO；只有"逐条打分缺候选"（真正的编号错位）才升 WARN。
+- 评测补强：新增 `test/jev_tolerance_test.py`（概率和的容差行为）、文章正文上限的
+  单测，以及"逐条打分与单选不一致"的既有测试按新分级更新。
+
 ## 1.21.12
 
 > 验证过的微信：Windows 4.1.15.56；Linux 4.1.13.26。

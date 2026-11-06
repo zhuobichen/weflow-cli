@@ -359,6 +359,10 @@ def extract_article_body(content, limit=500):
             break
     return '\n'.join(kept)[:limit]
 
+#: 文章正文塞进向量的上限（字符）。500 是历史默认值；实测它只覆盖长文的 7%~30%，
+#: 正文中段的内容根本进不了向量。用环境变量可做对照实验（6000 ≈ 覆盖绝大多数文章）。
+ARTICLE_TEXT_CHARS = int(os.environ.get('WEFLOW_ARTICLE_TEXT_CHARS', '6000') or 6000)
+
 #: 文章分块的默认大小与重叠（字符）。400 字 ≈ 一段，60 字重叠足以跨句衔接。
 DEFAULT_CHUNK_CHARS = 400
 DEFAULT_CHUNK_OVERLAP = 60
@@ -477,7 +481,7 @@ def collect_articles(article_days=30, chunk_chars=0,
                             "title": title,
                             "date": date_dir.name,
                             "topic": topic_dir.name,
-                            "text": f"{title}\n{body[:500]}",
+                            "text": f"{title}\n{body[:ARTICLE_TEXT_CHARS]}",
                         })
                 except:
                     pass
@@ -1029,7 +1033,9 @@ def rerank(query, results, client=None, pool_size=RERANK_CANDIDATES):
     }
 
     try:
-        answers, _usage = client.decide(state, questions)
+        # 重排拿到的是**相对分数**（实测和常常 0.89~1.77），不该套用分类那条
+        # 「和必须≈1」的契约校验——否则每一批都判死，重排静默退回融合顺序。
+        answers, _usage = client.decide(state, questions, strict_sum=False)
     except Exception as error:
         # `file=sys.stderr`：`--json` 时 stdout 是机器在解析的那一份（同文件其它 WARN 早就这样）
         print('  [WARN] 重排失败（%s），保持原检索顺序：%s' % (type(error).__name__, error),
@@ -1058,8 +1064,16 @@ def rerank(query, results, client=None, pool_size=RERANK_CANDIDATES):
     best = (answers.get('best') or {}).get('choice')
     top = scored[0]
     if best is not None and best != '候选%d' % top[1]:
-        print('  [WARN] 重排自检不一致：逐条打分最高的是候选%d，单选却答 %s'
-              % (top[1], best), file=sys.stderr)
+        # 两路输出不一致本身**不是**编号错位——模型给每个候选独立打分（noul）和
+        # 做一次单选，本来就可能给出不同答案。实测 30 题里出现 3 次，属正常噪声。
+        # 真正的编号错位是"两路都指向同一个编号、但内容对不上"，那要看 scores 的键集。
+        _scored_keys = {k for k in (answers or {}) if k.startswith('c')}
+        if len(_scored_keys) != len(pool):
+            print('  [WARN] 重排逐条打分缺候选（拿到 %d 条，候选 %d 条）——编号可能错位'
+                  % (len(_scored_keys), len(pool)), file=sys.stderr)
+        else:
+            print('  [INFO] 重排两路输出不一致：逐条最高是候选%d，单选答 %s'
+                  % (top[1], best), file=sys.stderr)
 
     ordered = []
     for value, i, item in scored:

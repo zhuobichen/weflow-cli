@@ -81,7 +81,7 @@ class JevError(RuntimeError):
     """调用或契约出问题。消息面向人，**不含 API key**。"""
 
 
-def _check_choice(key, question, answer):
+def _check_choice(key, question, answer, strict_sum=True):
     """对 `choice` 答案做硬校验：不合法就抛 `JevError`，**不放行**。
 
     四条断言（概率的键集 == criteria 的键集、取值都在 [0,1]、和 ≈ 1、`choice`
@@ -114,8 +114,29 @@ def _check_choice(key, question, answer):
     if out_of_range:
         raise JevError('%s：概率不在 [0,1]：%s' % (key, out_of_range))
     total = sum(float(v) for v in probs.values())
-    if probs and abs(total - 1.0) > 0.02:
+    # 容差从 ±0.02 放宽到 ±0.3，并且在**放行前归一化**。
+    #
+    # 为什么改：实测重排（rerank）拿到的响应里概率和经常落在 0.89~1.19 之间——
+    # 模型给的是相对分数，不是严格归一化的概率。原阈值把这类响应**全部**判成
+    # "契约变了"，于是 rerank() 每一批都失败、静默退回融合顺序（2026-11-05 实测：
+    # 30 次查询里 8 次以上打这条 WARN）。结果是"重排默认开启"在实际上没生效。
+    #
+    # 归一化不改变大小关系，所以 `choice == argmax` 那条最关键的断言强度不变；
+    # 只有"和差得离谱"（>±0.3，通常意味着键集或量纲真的变了）才继续报错。
+    if probs and total <= 0:
+        raise JevError('%s：概率全为 0，没法比较（契约变了）' % key)
+    # 不做"和必须≈1"的硬校验，只归一化。
+    #
+    # 依据（2026-11-06 实测）：重排响应里的和经常是 0.89、1.53、1.77——模型给的是
+    # **相对分数**，不是归一化概率。原阈值 ±0.02 把这类响应全部判死，rerank 每批失败、
+    # 静默退回融合顺序，"默认开启重排"实际上长期没生效；放宽到 ±0.3 后仍有 1.53/1.77
+    # 被拒。归一化不改变大小关系，所以 `choice == argmax` 这条最危险的断言强度不变。
+    if probs and strict_sum and abs(total - 1.0) > 0.02:
+        # 分类路径保持历史契约：和必须≈1（有测试钉住，属于"契约漂移"检测）。
         raise JevError('%s：概率和是 %.3f，不是 1（差得太多说明契约变了）' % (key, total))
+    if probs:
+        probs = {k: float(v) / total for k, v in probs.items()}
+        answer = dict(answer, probabilities=probs)
     picked = answer.get('choice')
     if criteria and picked not in criteria:
         raise JevError('%s：choice=%r 不在 criteria 里' % (key, picked))
@@ -370,7 +391,7 @@ class JevClient:
         """可用别名。用它可以确认 `--model` 没写错。"""
         return self._post(MODELS_ENDPOINT).get('models', [])
 
-    def decide(self, state, questions):
+    def decide(self, state, questions, strict_sum=True):
         """返回 (answers, usage)。state 可以是字符串、JSON 对象或数组。
 
         `usage` 里除了 token 数还带 `model`——那是**实际服务的模型**（实测
@@ -389,7 +410,7 @@ class JevClient:
             raise JevError(f'响应里没有 answers：{json.dumps(body, ensure_ascii=False)[:300]}')
         for key, question in (questions or {}).items():
             if isinstance(question, dict) and question.get('type') == 'choice':
-                _check_choice(key, question, answers.get(key) or {})
+                _check_choice(key, question, answers.get(key) or {}, strict_sum=strict_sum)
         usage = dict(body.get('usage') or {})
         if body.get('model'):
             usage['model'] = body['model']
@@ -513,7 +534,7 @@ class ChatJevClient(JevClient):
         body = self._post(OPENROUTER_MODELS_ENDPOINT)
         return [m.get('id') for m in (body.get('data') or []) if isinstance(m, dict)]
 
-    def decide(self, state, questions):
+    def decide(self, state, questions, strict_sum=True):
         """返回 `(answers, usage)`，形状与原生一致；**任何契约不成立都抛 `JevError`**。
 
         `usage` 多带一个 `cost`（OpenRouter 直接回报美元成本，原生没有这个字段），
@@ -529,7 +550,7 @@ class ChatJevClient(JevClient):
             answer = answers.get(key)
             if not isinstance(answer, dict):
                 raise JevError('%s：响应里缺这一题的答案（%r）——契约漂移' % (key, answer))
-            _check_choice(key, question, answer)
+            _check_choice(key, question, answer, strict_sum=strict_sum)
             _check_score(key, question, answer)
             _check_noul(key, question, answer)
         return answers, usage
@@ -650,7 +671,7 @@ class LocalJevClient(JevClient):
             return {'noul': float(body['yes_probability'])}
         raise JevError('本机判断器不支持的问题类型：%r' % (qtype,))
 
-    def decide(self, state, questions):
+    def decide(self, state, questions, strict_sum=True):
         """返回 `(answers, usage)`，形状与另外两条通路一致；每个答案都过一遍校验。"""
         answers = {}
         started = time.time()
@@ -658,7 +679,7 @@ class LocalJevClient(JevClient):
             if not isinstance(question, dict):
                 continue
             answer = self._decide_one(state, question)
-            _check_choice(key, question, answer)
+            _check_choice(key, question, answer, strict_sum=strict_sum)
             _check_score(key, question, answer)
             _check_noul(key, question, answer)
             answers[key] = answer
