@@ -18,6 +18,20 @@ purpose** - a hand-written "latest is X" is exactly the claim that goes stale he
 
 All notable user-facing changes are recorded here. This project follows [Semantic Versioning](https://semver.org/).
 
+## 1.21.14
+
+> 验证过的微信：Windows 4.1.15.56；Linux 4.1.13.26。
+
+- **修「同一个输出根」在两台机器上不一致的问题**：`semantic_search` 用的是相对路径
+  `output`，而其余脚本用 `_utils.output_root()`。在 Linux 上全局安装时包目录属于
+  root、不可写，`output_root()` 会退回 `~/.weflow-cli/output`——于是**同一台机器上
+  出现两个输出根**：日报产物在 `~/.weflow-cli/output`，而检索索引建到了别处，
+  索引里只有 1 天的文章。现在统一走 `output_root()`。
+- **`index_dir()` 会跟着环境变量走**：`WEFLOW_OUTPUT_DIR` 改��后索引位置不再停留在
+  导入时算出的旧值（"换个根目录做对照实验"以前会悄悄写回旧目录）。
+- `keyword_search` 的日报目录也改成跟随输出根，不再写死 `output/biz-daily`。
+- `search-index --article-chunk-chars` 的帮助文案更正（不再说"只取前 500 字"）。
+
 ## 1.21.13
 
 > 验证过的微信：Windows 4.1.15.56；Linux 4.1.13.26。

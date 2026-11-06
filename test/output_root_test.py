@@ -9,6 +9,7 @@ import pathlib
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / 'scripts'))
@@ -111,3 +112,38 @@ class OutputRootTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class SemanticSearchRootConsistencyTests(unittest.TestCase):
+    """semantic_search 的输出根必须和其余脚本一致（2026-11-06 实测踩出来的）。
+
+    服务器上的事故：日报产物在 `~/.weflow-cli/output`（全局包目录属于 root、不可写，
+    `output_root()` 退回了家目录），而 `semantic_search.py` 用的是**相对路径** `'output'`，
+    于是索引建到了另一个目录——那边只有 1 天文章、索引 876 条，而真实语料 2,683 篇
+    在 `~/.weflow-cli/output/biz-daily`。同一台机器上出现两个"输出根"。
+    """
+
+    def test_env_var_wins(self):
+        import semantic_search as ss
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.dict(os.environ, {'WEFLOW_OUTPUT_DIR': tmp}):
+                self.assertEqual(ss._resolve_output_root(), tmp)
+
+    def test_falls_back_to_utils_output_root(self):
+        """没设环境变量时，必须与 `_utils.output_root()` 给出同一个目录。"""
+        import semantic_search as ss
+        from _utils import output_root
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop('WEFLOW_OUTPUT_DIR', None)
+            self.assertEqual(ss._resolve_output_root(), output_root())
+
+    def test_index_dir_is_derived_not_frozen(self):
+        """INDEX_DIR 必须由输出根推导，而不是在 import 时就冻住。
+
+        原来 `INDEX_DIR = Path(OUTPUT_ROOT) / '.semantic_index'` 在模块加载时算一次，
+        于是运行中改 `WEFLOW_OUTPUT_DIR` 不生效——"换个根目录做实验"悄悄写回旧目录。
+        """
+        import semantic_search as ss
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.dict(os.environ, {'WEFLOW_OUTPUT_DIR': tmp}):
+                self.assertEqual(str(ss.index_dir()), str(pathlib.Path(tmp) / '.semantic_index'))

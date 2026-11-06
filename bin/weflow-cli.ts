@@ -6067,7 +6067,7 @@ program
     .option('--article-days <n>', '日报文章收最近多少个日期目录（默认 30）')
     .option('--include-imports', '把 weflow-cli import qchat 导入的 QQ 会话也收进索引（聊天半边）')
     .option('--pdf-chunks <n>', '每个 PDF 最多收多少块（默认 0=不限）；文字来自 output/pdf-text')
-  .option('--article-chunk-chars <n>', '文章按多少字符切块后分别嵌入（默认 0=不切，只取前 500 字）')
+  .option('--article-chunk-chars <n>', '文章按多少字符切块后分别嵌入（默认 0=不切，整篇进向量）')
   .option('--article-chunk-overlap <n>', '切块重叠字符数（默认 60）')
     .option('--no-pdf', '不收 PDF 文字（默认收）')
     .option('--dry-run', '仅预览，不读取数据库、调用网络或写入索引')

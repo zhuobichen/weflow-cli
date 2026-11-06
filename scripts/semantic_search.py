@@ -70,8 +70,49 @@ from jev_client import create_client
 # `WEFLOW_OUTPUT_DIR` 要生效：只写死 'output' 会让所有"换个根目录做对照/实验"的用法
 # 悄悄写进生产索引（2026-11-05 做分块对照时就这么踩了一次，把 60 篇样本灌进了真索引）。
 # 默认值不变，只是不再忽略环境变量。
-OUTPUT_ROOT = os.environ.get('WEFLOW_OUTPUT_DIR') or 'output'
+# 输出根必须用 `_utils.output_root()`，不能写死相对路径 'output'。
+#
+# 依据（2026-11-06 实测）：服务器上日报的产物在 `~/.weflow-cli/output`（因为全局包目录
+# 属于 root、不可写，`output_root()` 退回了家目录），而本脚本用相对路径 'output'，
+# 于是索引建到了**另一个目录**去——那条路上只有 1 天文章，索引只有 876 条，
+# 而真实语料（2,683 篇）在 `~/.weflow-cli/output/biz-daily`。同一台机器上两个"输出根"。
+def _resolve_output_root():
+    env = os.environ.get('WEFLOW_OUTPUT_DIR')
+    if env:
+        return env
+    try:
+        from _utils import output_root as _or
+        return _or()
+    except Exception:
+        return 'output'
+
+
+OUTPUT_ROOT = _resolve_output_root()
 INDEX_DIR = Path(OUTPUT_ROOT) / '.semantic_index'
+VECTORS_FILE = INDEX_DIR / 'vectors.npy'
+META_FILE = INDEX_DIR / 'meta.json'
+
+
+def index_dir():
+    """索引目录——按当前输出根算，**根变了就刷新模块级路径**。
+
+    为什么不能是纯常量：原来 `INDEX_DIR = Path(OUTPUT_ROOT)/'.semantic_index'`
+    在 import 时算一次，于是运行中改 `WEFLOW_OUTPUT_DIR` 不会生效——"换个根目录做
+    对照实验"会悄悄写回旧目录（2026-11-06 在服务器上就是这么建错位置的）。
+
+    为什么不是每次都重算并覆盖：测试（和某些调用方）会直接把 `ss.META_FILE`
+    指向临时目录，每次覆盖会把那些打桩冲掉——改这一处时打碎了 14 个既有测试。
+    """
+    global INDEX_DIR, VECTORS_FILE, META_FILE
+    d = Path(_resolve_output_root()) / '.semantic_index'
+    if d != INDEX_DIR:
+        INDEX_DIR = d
+        VECTORS_FILE = d / 'vectors.npy'
+        META_FILE = d / 'meta.json'
+    return d
+
+
+INDEX_DIR = index_dir()
 VECTORS_FILE = INDEX_DIR / 'vectors.npy'
 META_FILE = INDEX_DIR / 'meta.json'
 EMBEDDING_DIM = 1024  # 阿里云 text-embedding-v4
@@ -585,6 +626,7 @@ def merge_page_chunks(pages, chunk_chars=1200):
 # ====== Index Operations ======
 
 def _save_index(base_vectors, base_meta, pairs):
+    index_dir()
     """把「旧索引 + 这一批已经嵌好的」写出去，供中途落盘与收尾共用。
 
     两处讲究都是实测出来的：
@@ -613,10 +655,12 @@ def _save_index(base_vectors, base_meta, pairs):
     os.replace(tmp_m, META_FILE)
     return len(meta)
 
-def build_index(api_key: str, full: bool = False, days: int = 90, article_days: int = 30,
+def build_index(
+                api_key: str, full: bool = False, days: int = 90, article_days: int = 30,
                 include_imports: bool = False, use_cache: bool = False, pdf_chunks: int = 0,
                 article_chunk_chars: int = 0, article_chunk_overlap: int = DEFAULT_CHUNK_OVERLAP,
                 include_chat: bool = True):
+    index_dir()
     """Build or update the semantic index.
 
     `days` / `article_days` 决定这个索引**记多久**：它们原先写死在两处调用里
@@ -808,7 +852,7 @@ def keyword_search(query: str, top_k: int = 10, root=None, line: str = 'all'):
     want_chat = types is None or 'chat' in types
 
     # Scan biz-daily articles
-    biz_dir = Path(root or 'output/biz-daily')
+    biz_dir = Path(root) if root else (Path(_resolve_output_root()) / 'biz-daily')
     if want_article and biz_dir.exists():
         for md_file in sorted(biz_dir.rglob('*.md'), reverse=True):
             # **只收真文章。** 日报目录里还躺着 <天>/README.md、<天>/行动建议.md
@@ -1667,7 +1711,8 @@ def collapse_chunks(results, top_k=10):
     return merged[:top_k]
 
 
-def search(query: str, api_key: str, top_k: int = 10, rerank_results: bool = True,
+def search(
+           query: str, api_key: str, top_k: int = 10, rerank_results: bool = True,
            line: str = 'all', hybrid: bool = True, from_source: str = None,
            rerank_pool: int = RERANK_CANDIDATES,
            dedup: bool = True, with_text: int = 0,
