@@ -21,6 +21,19 @@
 | `draft/*` | 探索性草稿，允许与主线脱节 | 按需清理 |
 | `feat/*`、`fix/*` | 从**当前** `master` 切出的工作分支 | 合并后删除 |
 
+> **2026-11-09 同步后的实际状态**（`origin` 与 `upstream` 均已 fetch）：
+>
+> | 分支 | 位置 | 跟踪 | 说明 |
+> | --- | --- | --- | --- |
+> | `master` | `679edbd` | `origin/master` | = 上游 `cfd2f92`（v1.21.8）+ 1 个本地提交 |
+> | `docs/architecture-counts-guard` | `679edbd` | `origin/...` | 已对齐 master（内容全在 master，`git cherry` 无独有） |
+> | `fix/temp-copy-leak` | `679edbd` | `origin/...` | 已对齐 master（同上） |
+> | `backup/architecture-counts-guard-2026-11-03` | `c7459aa` | 无 | **历史快照，不对齐**（见下节） |
+>
+> 三个活跃分支现在**内容完全一致**（同一提交 `679edbd`），差别只在分支名与远端存在性。
+> 它们各自保留了「分支」这一形态，以便将来某条线要单独演进时可直接开分支，
+> 而不必先把主线与旧分支的差异重新梳理一遍。
+
 > **约定**：`feat/*` 与 `fix/*` 必须从最新的 `master` 切出。`draft/*` 无此要求，
 > 但**合并前必须先把 `master` 合进来**（见下方「并行开发」）。
 > **清理节奏（2026-10-01 起）**：一条特性一条分支，切之前先 `git fetch` 并从最新 `master` 切；
@@ -137,7 +150,103 @@ git merge-tree --write-tree origin/master HEAD   # 预看冲突
 - 若用户明确要求重写：先打 `backup-before-rebase` tag，再用 `--force-with-lease`
   （别人推过就失败，而不是覆盖），并只重写最近 N 条。
 
+## 远程仓库角色与同步流程（2026-11-09）
+
+本仓是**上游的 fork**，两个 remote 各有明确角色，不能混：
+
+| remote | URL | 角色 | fetch | push |
+| --- | --- | --- | --- | --- |
+| `origin` | `https://github.com/fcmyoo/weflow-cli.git` | **自己的 fork**（推送到这里） | ✅ | ✅ |
+| `upstream` | `https://github.com/zhuobichen/weflow-cli.git` | **上游作者原仓**（只读来源） | ✅ | ❌ 已禁用 |
+
+`upstream` 的 push URL 被设为 `DISABLED`（`git remote set-url --push upstream DISABLED`）——
+**误 push 到上游会被直接拒绝**，这是比"记在心里"更可靠的保护。
+
+### 各分支跟踪谁
+
+**所有本地分支都跟踪 `origin/*`，不跟踪 `upstream/*`。**
+
+```bash
+git branch --set-upstream-to=origin/master master
+```
+
+理由：`git pull` 默认拉的是「跟踪分支」。若 `master` 跟踪 `upstream/master`，
+一次 `git pull` 就会把**上游作者的历史**混进自己的 fork 主线，而 fork 的主线还带着
+本地定制提交——那是个必然出事的组合。拉上游要走显式命令（见下）。
+
+### 同步上游的标准步骤
+
+```bash
+# 1) 拉上游最新（fetch 到 upstream/master，不动工作区）
+git fetch upstream --prune
+
+# 2) 看上游比自己新了多少
+git log --oneline upstream/master..master        # 我领先的
+git log --oneline master..upstream/master        # 上游领先的
+
+# 3) 把上游更新并进主线
+git merge upstream/master          # 或 git rebase upstream/master
+
+# 4) 推到自己的 fork
+git push origin master
+```
+
+**推之前必须 squash**（见「提交与推送约定」）：本地开发期间的碎提交要先折叠。
+
+### 判断"某分支是否已并入 master"——用 `git cherry`，不要用 `--merged`
+
+```bash
+git cherry master <分支>          # '-' = 内容已在 master；'+' = 独有内容
+```
+
+本仓主线被改写过（见文首说明），`git branch --merged` 在这里**失效**——
+它依赖祖先链，而改写后的主线与旧分支已无共同祖先。`git cherry` 按 **patch-id** 比对，
+不依赖祖先链，才是这仓该用的判据。
+
+### 分支与上游"对齐"的两条路，要选对
+
+某分支落后上游几十个提交、但它的独有内容**已全部在 master 里**时（`git cherry` 全是 `-`）：
+
+- **路 A（rebase）**：把分支重放到 `upstream/master`。分支历史保住，但**在 master 之外
+  又造一份同样内容**——两份真源，以后必然有一处漏改。
+- **路 B（对齐 master）**：分支直接指向 master 的提交。内容一致、含上游最新、
+  **无重复历史**。
+
+**优先路 B**，前提是 `git cherry` 证明独有内容为 0。判断依据是「是否还需要独立演进」：
+分支若还要继续做，走 A；若内容已全部并入主线、只当历史留存，走 B。
+
+`backup/*` 分支**不对齐**——它的价值就是「当时的原始状态」，对齐反而抹掉了它的意义。
+
+### 今天踩到的坑：rebase 会把上游历史搬两遍
+
+本地线的祖先还在旧上游基线上时，`git rebase upstream/master` 会把上游那几十个提交
+**重新搬运一遍**，在 `CHANGELOG.md`、`package-lock.json`、`package.json` 上连环冲突。
+
+**更稳的做法**：在 `upstream/master` 上直接应用净差异补丁。
+
+```bash
+git diff upstream/master master > /tmp/net.patch   # 本地独有的净效果
+git checkout -B tmp upstream/master
+git apply --index /tmp/net.patch
+git commit -m "..."
+```
+
+1292 行补丁干净应用、零冲突。**关键验证**：折叠前后树必须逐字节相同——
+
+```bash
+git diff <折叠前的HEAD> <折叠后的HEAD> | wc -l      # 必须是 0
+```
+
+这一条是折叠历史的安全网：最危险的失败是「提交少了但文件没少」的静默丢失，
+而 diff 输出 0 行才能证明内容零丢失。
+
 ## 强推与清理
 
 - **禁止对 `master` 强推。** 若推送被拒，一律先 `git fetch` 查明主线新增内容。
 - 工作分支合并后应删除本地与远端副本；`draft/*` 保留至内容确认无用为止。
+- 确需强推工作分支时，用**显式 lease**锁定远端基线，不要用裸 `--force-with-lease`
+  （那会与并发推送打架），更不要用 `--force`：
+  ```bash
+  git push --force-with-lease=<分支>:<远端当前commit> origin <分支>
+  ```
+  推之前先 `git tag -f backup-<分支>-<日期> <远端commit>` 留后路。

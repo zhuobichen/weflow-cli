@@ -26,6 +26,33 @@ npm run dev -- daily --no-ai
 npm run dev -- daily-server --date YYYY-MM-DD --open
 ```
 
+## Git 远程与同步
+
+本仓是**上游的 fork**，两个 remote 角色固定，不要混：
+
+| remote | 指向 | 用途 |
+| --- | --- | --- |
+| `origin` | `fcmyoo/weflow-cli`（自己的 fork） | **推送目标**；所有本地分支都跟踪 `origin/*` |
+| `upstream` | `zhuobichen/weflow-cli`（上游作者原仓） | **只读来源**；push URL 已设为 `DISABLED`，误推会被拒 |
+
+```bash
+git fetch upstream --prune        # 拉上游最新
+git log --oneline master..upstream/master   # 上游比我新的
+git merge upstream/master          # 并进主线
+git push origin master             # 推到自己的 fork（推前先 squash）
+```
+
+**三条易踩的规矩**：
+
+1. **本地分支一律跟踪 `origin/*`**，不跟踪 `upstream/*`——否则 `git pull` 会把上游历史
+   混进带本地定制的主线。
+2. **判断"某分支是否已并入 master"用 `git cherry`**，不用 `git branch --merged`——
+   本仓主线被改写过，祖先链已失效，`git cherry` 按 patch-id 比对才准。
+3. **折叠历史后必须验证树逐字节未变**：`git diff <折叠前> <折叠后> | wc -l` 必须是 0。
+   这是防「提交少了但文件没少」静默丢失的唯一办法。
+
+完整流程、分支对齐的两条路径及取舍，见 **`docs/BRANCHES.md` 的「远程仓库角色与同步流程」**。
+
 ## 维护原则
 
 - 仅处理用户本人或明确获授权的数据。
