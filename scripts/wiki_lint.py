@@ -236,7 +236,49 @@ def inspect(pages: list, exists, card_links=()) -> dict:
             'crossLineSameName': cross_line,
             'ambiguousLinks': ambiguous_links,
             'degenerateFields': degenerate_fields(pages),
-            'nearDuplicates': near_duplicate_titles(pages)}
+            'nearDuplicates': near_duplicate_titles(pages),
+            'freshness': freshness(pages)}
+
+
+# 概念页来源日期落后多少天算「停止更新」。
+# 日报是每天跑的，wiki 是按需编译的——两者节奏本来就不同，所以阈值给宽一点。
+STALE_AFTER_DAYS = 30
+
+
+def freshness(pages: list, today=None) -> dict:
+    """这套 wiki 的内容有多新：最新来源日期、落后天数、是否已停更。
+
+    为什么要它：lint 原来只查死链/孤儿/空页/重复，而「知识库停止更新」是**另一种**
+    失效——页面全都合法，但讲的全是上个月的事。2026-11-09 实测：来源停在
+    2026-09-28，之后 6 周一条没进，而当时没有任何一项会报出来。用 11 月的自然问句
+    去测召回只有 1/30 命中，看起来像内容质量差，实际是没编译。
+
+    日期从 `sources` 的卡片名里取（`2026-09-28-标题`）。取不到日期的来源跳过——
+    老格式没有日期前缀，把它们算成「最旧」会把结论带偏。
+    """
+    import datetime as _dt
+    import re as _re
+    dates = []
+    for page in pages:
+        for src in (page.get('sources') or []):
+            m = _re.match(r'(\d{4}-\d{2}-\d{2})', str(src))
+            if m:
+                dates.append(m.group(1))
+    if not dates:
+        return {'latest': None, 'daysBehind': None,
+                'staleAfterDays': STALE_AFTER_DAYS, 'stale': None,
+                'datedSources': 0}
+    latest = max(dates)
+    base = today or _dt.date.today()
+    try:
+        behind = (base - _dt.date.fromisoformat(latest)).days
+    except ValueError:
+        return {'latest': latest, 'daysBehind': None,
+                'staleAfterDays': STALE_AFTER_DAYS, 'stale': None,
+                'datedSources': len(dates)}
+    return {'latest': latest, 'daysBehind': behind,
+            'staleAfterDays': STALE_AFTER_DAYS, 'stale': behind > STALE_AFTER_DAYS,
+            'datedSources': len(dates)}
 
 
 # 一个字段有 ≥ 这么多页、且某一个值占了 ≥ 这个比例，就当成"退化了"（等于没携带信息）
@@ -404,6 +446,8 @@ def collect(pages_dir: str, card_dirs) -> list:
                       # 建议再跑 compile" —— 而它们已经有页了。
                       'aliases': [str(a).strip() for a in raw_aliases],
                       'links': extract_links(body),
+                      # 时效检查要看来源日期（`2026-09-28-标题` 这种卡片名）。
+                      'sources': [str(x) for x in (frontmatter.get('sources') or [])],
                       'body': body})
     return pages
 
@@ -459,6 +503,18 @@ def main():
         return 0
 
     print('概念页 %d 张（卡片侧入链 %d 条）' % (report['pages'], report['cardLinks']))
+    # 时效放最前面：它决定后面所有数字还有多少意义（一套停更两个月的 wiki，
+    # 死链为 0 也不值得高兴）。
+    _fr = report.get('freshness') or {}
+    if _fr.get('latest'):
+        _flag = '**已停更**' if _fr.get('stale') else '正常'
+        print('内容时效：最新来源 %s，落后 %s 天（阈值 %s 天）— %s'
+              % (_fr['latest'], _fr.get('daysBehind'), _fr.get('staleAfterDays'), _flag))
+        if _fr.get('stale'):
+            print('  → 之后的新文章没进 wiki：跑一次 wiki compile 补上，'
+                  '否则用它测召回只会得到"内容不好"的错觉')
+    elif _fr.get('datedSources') == 0:
+        print('内容时效：来源里没有日期前缀，无法判断（老格式卡片）')
     if report['broken']:
         print('\n**断链 %d 条**（指向不存在的卡片——卡片删了或改名了）：' % len(report['broken']))
         for item in report['broken'][:10]:
