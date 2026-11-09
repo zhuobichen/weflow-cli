@@ -7,7 +7,16 @@ zstandard
 scrapling
 numpy
 pycryptodome
-# 下面两个是跨平台功能依赖：PIL 用于图片/PDF/头像/表情（6 个脚本），
-# requests 用于面板帧抓取。缺它们时对应命令会直接报 ImportError。
+
+# 跨平台功能依赖：
+#   pillow  —— PIL 用于图片/PDF/头像/表情（6 个脚本）；
+#   requests —— 面板帧抓取。
+# 缺它们时对应命令会直接报 ImportError。
 pillow
 requests
+
+# PDF 与图片处理：`pdf_notes.py`（PDF → 知识卡）、`export_chat_html.py`、
+# `read_image.py`、`wechat_image.py`、`wechat_emoticon.py`、`panel_frames.py`。
+# 之前没声明，装完 setup 也跑不了 pdf-notes —— 缺包时脚本自己抛 ModuleNotFoundError。
+# PyMuPDF 提供 `fitz`（新版本建议 `import pymupdf`）；Pillow 提供 `PIL`。
+PyMuPDF

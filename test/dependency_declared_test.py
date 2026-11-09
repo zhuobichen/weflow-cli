@@ -46,7 +46,6 @@ ALLOWED_UNDECLARED = {
     'psutil': '3.x 密钥提取辅助，可选',
     'pywxdump': '3.x 密钥提取，可选',
     'win32crypt': 'Windows DPAPI，仅 Windows 有意义',
-    'fitz': 'PDF 渲染，可选（check 里作为可选依赖提示）',
 }
 
 # 已声明但可能被误加进名单的包

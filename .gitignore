@@ -36,6 +36,7 @@ scripts/regen_wsl_keys.mjs
 !OPERATIONS.md
 !docs/PROJECT_STATE.md
 !docs/NT_DATABASES.md
+!docs/SNS_GUIDE.md
 !docs/DECISIONS.md
 !docs/VERSION_METHODS.md
 !docs/LINUX.md

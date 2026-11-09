@@ -931,7 +931,7 @@ def connect_readonly(db_path, key_raw):
     elif _ro_cache_enabled():
         conn = require_sqlcipher().connect(str(_ro_copy(src)))
     else:
-        tmp = tempfile.mkdtemp(prefix='weflow-ro-')
+        tmp = tempfile.mkdtemp(prefix='weflow-ro-', dir=temp_root())
         _CHROME_TMPDIRS.append(tmp)          # 退出时由 _cleanup_tmpdirs 删掉
         copy = _copy_with_wal_sidecars(src, tmp)
         conn = require_sqlcipher().connect(str(copy))
