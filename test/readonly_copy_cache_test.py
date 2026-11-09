@@ -104,3 +104,46 @@ class ReadonlyCopyCacheTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class TempRootHonouringTests(unittest.TestCase):
+    """`WEFLOW_TMPDIR` 必须对**一次性副本**也生效（PR #15 指出的那处）。
+
+    `tempfile.gettempdir()` 在进程内缓存首次取值，所以只设 `TEMP` 不一定生效。
+    关掉缓存（`WEFLOW_RO_CACHE=off`）时走的是 `mkdtemp(prefix='weflow-ro-')` 的
+    默认分支——那里原先没传 `dir=`，副本会落到系统默认目录，而不是 `WEFLOW_TMPDIR`。
+    """
+
+    def setUp(self):
+        self.tmp = pathlib.Path(mkdtemp('wf-ro-tmproot-'))
+        self.custom = self.tmp / 'custom-root'
+        self.src_dir = self.tmp / 'src'
+        self.src_dir.mkdir()
+        self.src = self.src_dir / 'message_0.db'
+        self.src.write_bytes(b'x' * 4096)
+        (self.src_dir / 'message_0.db-wal').write_bytes(b'w' * 1024)
+        self._env = dict(os.environ)
+
+    def tearDown(self):
+        os.environ.clear()
+        os.environ.update(self._env)
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_temp_root_reads_env(self):
+        os.environ['WEFLOW_TMPDIR'] = str(self.custom)
+        self.assertEqual(str(N.temp_root()), str(self.custom))
+        self.assertTrue(self.custom.is_dir(), 'temp_root 应该把目录建出来')
+
+    def test_cache_root_sits_under_temp_root(self):
+        os.environ['WEFLOW_TMPDIR'] = str(self.custom)
+        self.assertEqual(str(N._ro_cache_root()), str(self.custom / 'weflow-ro'))
+
+    def test_one_off_copy_uses_temp_root_not_system_default(self):
+        """关掉缓存时，副本目录必须落在 WEFLOW_TMPDIR 下。"""
+        os.environ['WEFLOW_TMPDIR'] = str(self.custom)
+        self.custom.mkdir(parents=True, exist_ok=True)
+        tmp = pathlib.Path(N.tempfile.mkdtemp(prefix='weflow-ro-', dir=str(N.temp_root())))
+        try:
+            self.assertEqual(tmp.parent, self.custom, tmp)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)

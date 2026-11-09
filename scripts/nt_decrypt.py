@@ -931,7 +931,10 @@ def connect_readonly(db_path, key_raw):
     elif _ro_cache_enabled():
         conn = require_sqlcipher().connect(str(_ro_copy(src)))
     else:
-        tmp = tempfile.mkdtemp(prefix='weflow-ro-')
+        # 关掉缓存时的一次性副本也要落在 `temp_root()` 里，不能走 `mkdtemp()` 的默认值。
+        # 理由同 `_ro_cache_root()`：`tempfile.gettempdir()` 在进程内缓存首次取值，
+        # 只设 `TEMP` 不一定生效；`WEFLOW_TMPDIR` 才是确定的（@fcmyoo 在 PR #15 指出）。
+        tmp = tempfile.mkdtemp(prefix='weflow-ro-', dir=str(temp_root()))
         _CHROME_TMPDIRS.append(tmp)          # 退出时由 _cleanup_tmpdirs 删掉
         copy = _copy_with_wal_sidecars(src, tmp)
         conn = require_sqlcipher().connect(str(copy))

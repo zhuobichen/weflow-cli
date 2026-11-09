@@ -77,3 +77,37 @@ test('媒体落地目录也落在可写输出根之下', async () => {
     if (saved !== undefined) process.env.WEFLOW_WECHAT_MEDIA_DIR = saved
   }
 })
+
+test('并发探测不会互相删 probe（固定名会误判为不可写）', async () => {
+  // 这条是 PR #15 的实测结论：`.write_probe` 固定名时，并发探测会互相 unlink
+  // 对方的文件，后者的 `unlinkSync` 抛 ENOENT 被吞成"不可写"，于是输出根漂移。
+  // 他的实测：8 路并发 1600 次里 1400 次误判。
+  //
+  // 用**多进程**而不是 Promise.all：Node 是单线程，同进程内根本撞不上。
+  // 子进程跑 `dist/` 的编译产物（spawn 里没法走 tsx 的 loader）。
+  const { spawn } = await import('node:child_process')
+  const { mkdtempSync, rmSync, readdirSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const tmp = mkdtempSync(join(tmpdir(), 'wf-probe-'))
+  const { pathToFileURL } = await import('node:url')
+  // Windows 上 ESM 的 import() 不认裸盘符路径，必须给 file:// URL。
+  const entry = pathToFileURL(join(process.cwd(), 'dist', 'src', 'utils', 'outputRoot.js')).href
+  const code = `import(${JSON.stringify(entry)}).then(m => console.log(m.resolveOutputRoot()))`
+  try {
+    const runs = Array.from({ length: 12 }, () => new Promise<string>((res) => {
+      const child = spawn(process.execPath, ['--input-type=module', '-e', code], {
+        env: { ...process.env, WEFLOW_OUTPUT_DIR: tmp },
+      })
+      let out = ''
+      child.stdout.on('data', (d) => { out += d })
+      child.on('close', () => res(out.trim()))
+    }))
+    const outs = await Promise.all(runs)
+    assert.deepEqual([...new Set(outs)], [tmp], `并发探测结果不一致: ${[...new Set(outs)].join(' | ')}`)
+    const leftovers = readdirSync(tmp).filter((n) => n.startsWith('.write_probe'))
+    assert.deepEqual(leftovers, [], `probe 文件残留: ${leftovers.join(',')}`)
+  } finally {
+    rmSync(tmp, { recursive: true, force: true })
+  }
+})
