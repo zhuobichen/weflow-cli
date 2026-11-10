@@ -319,7 +319,15 @@ def create_engine(engine_type: str, api_key: str = '') -> AIEngine:
 
 
 def _custom_endpoint():
-    """读取 config.json 的 aiBaseUrl/aiModel; 未配置返回 (None, None)。"""
+    """读取自定义 OpenAI 兼容端点; 未配置返回 (None, None)。
+
+    优先级：环境变量 `WEFLOW_AI_BASE_URL` / `WEFLOW_AI_MODEL` > 配置 `aiBaseUrl` / `aiModel`。
+    环境变量先于配置，是为了"临时换端点做一次对照"时不改用户的持久配置——
+    改 config 会让所有走这条路的功能（日报摘要、概念生成…）一起改口径。
+    """
+    env_base = (os.environ.get('WEFLOW_AI_BASE_URL') or '').strip().rstrip('/')
+    if env_base:
+        return env_base, ((os.environ.get('WEFLOW_AI_MODEL') or '').strip() or 'deepseek-chat')
     try:
         with open(CONFIG_PATH, encoding='utf-8') as f:
             cfg = json.load(f)
@@ -331,8 +339,16 @@ def _custom_endpoint():
 
 
 def call_deepseek(prompt: str, api_key: str, max_tokens=2000, timeout=60) -> str:
-    """向后兼容：调用 DeepSeek API。"""
-    return DeepSeekEngine(api_key, timeout=timeout).chat(prompt, max_tokens=max_tokens)
+    """向后兼容：调用 DeepSeek API。
+
+    **配置了 `aiBaseUrl` 时走自定义 OpenAI 兼容端点**（302/中转站等）。
+    此前这里直接 new `DeepSeekEngine`，等于绕过了 `create_engine()` 对 `aiBaseUrl` 的支持——
+    表现是"改配置没生效、请求仍然发去 api.deepseek.com"，不报错，只是账单落在别处。
+    """
+    engine = create_engine('deepseek', api_key)
+    if timeout:
+        engine.timeout = timeout
+    return engine.chat(prompt, max_tokens=max_tokens)
 
 
 def call_ai(prompt: str, engine_type: str = 'local', api_key: str = '', max_tokens=2000) -> str:
