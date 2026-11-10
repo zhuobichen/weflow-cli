@@ -21,6 +21,7 @@
 （fail-soft）。分类被问不出来，不该让整天的日报崩掉；但客户端自己不许把失败
 伪装成一个看起来正常的答案。
 """
+import http.client
 import json
 import os
 import sys
@@ -385,6 +386,19 @@ class JevClient:
         except urllib.error.URLError as error:
             failure = JevError(f'连不上 {url}: {error.reason}')
             failure.retryable = True   # 连接层失败通常是瞬时的
+            raise failure
+        except (OSError, http.client.HTTPException) as error:
+            # `RemoteDisconnected` 这两类**都不属于**：它不是 URLError，也不是 HTTPError。
+            # 它继承自 `ConnectionResetError`（→ OSError）和 `BadStatusLine`
+            # （→ http.client.HTTPException），所以上面的 except 一条都接不住——
+            # 异常会**原样穿出 `_post_once`**，而 `_post` 的重试循环只捕获 `JevError`，
+            # 于是这类连接中断**跳过了全部 3 次重试**，直接让调用方降级。
+            #
+            # 实测（2026-11-09 日报）：485 篇里有 1 篇打 `Jev 分类失败（RemoteDisconnected），
+            # 退回 LLM 解析`——几秒钟的网络抖动就吃掉了一次重试机会。
+            # 把它归进"连接层、可重试"这一类，失败率才与真实网络状况相符。
+            failure = JevError(f'连接中断 {url}: {type(error).__name__}: {error}')
+            failure.retryable = True
             raise failure
 
     def models(self):
