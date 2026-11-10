@@ -16,6 +16,16 @@
   漏掉的 `dir=temp_root()`，否则副本会退回系统盘而不是 `WEFLOW_TMPDIR`。
   2026-11-09 合入上游时同步，附 `test/readonly_copy_cache_test.py`（5 项）。
 
+- **验证状态（2026-11-10 合入上游 v1.21.15 之后）**：上游采纳了 PR #15 的剩余部分
+  （`99220b5` 两处修复 + 附带的回归测试、`dddeeb4` 架构计数守卫与 SNS 指南），
+  本地以合并提交 `7cea389` 跟进。`npm run build` 通过；`npm test` **1049 项全过**
+  （比此前多 1 项——上游补的 output-root 并发探测测试）；Python `unittest discover`
+  **1406 项全过**（比此前多 3 项——上游补的 `TempRootHonouringTests`）。
+  此前的 emoticon 失败项（`test_scenarios_in_a_clean_interpreter`）**在本次合并后转绿**——
+  很可能与上游 `99220b5` 把一次性副本目录改为 `dir=str(temp_root())` 后子进程
+  临时目录解析行为变化有关；机制未逐一坐实，但单测复跑确认通过。
+  计数基线不变（test/ 195、scripts/ 84、bin/ 147）。
+
 - **验证状态（2026-11-09 合入上游 v1.21.8 之后）**：`npm run build` 通过；`npm test`
   1048 项全过（此前 4 项失败是「架构计数守卫」——上游新增文件后 `ARCHITECTURE.md` 的计数
   还是旧基线，已按磁盘实数校准为 test/ 195 个文件（107 TS / 88 Python）、scripts/ 84 个
@@ -24,6 +34,7 @@
   `test_scenarios_in_a_clean_interpreter` 期望来源为 `config-invalid`、实际为 `memory`。
   **该失败在上游 master 的干净检出上同样存在**（已单独复现验证），与本次合并无关，
   是上游 emoticon seed 改动的语义偏差，待上游修复。
+  ~~此条已被 2026-11-10 的合并解决，见上。~~
 
 - **朋友圈（`sns`）只读本地 `sns.db` 缓存，不联网、也不支持导出**。硬前提是
   **微信客户端先打开过朋友圈**让动态落盘，否则查到的就是空缓存。两条读库路径由

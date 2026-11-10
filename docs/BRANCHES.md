@@ -72,6 +72,7 @@
 | 2026-09-10 | `draft/weflow-cli-improvements` | — | **未合并，已作废** | 基于过期 master；独有功能已移植，见下方「2026-09-10」条目 |
 | 2026-09-30 | `feat/assistant-skills-scenes-tool-surface` | `master` | 合并提交 `1b14c35` | 技能包与场景；工具面 21→31 并与 MCP 上限对齐；`wiki lint` 9 分 29 秒→3.4 秒 |
 | 2026-09-30 | `feat/panel-eye-follow` | `master` | 合并提交 `1e4c305` | 悬浮球眼珠跟随鼠标；半隐（推到屏幕边就躲起来探头） |
+| 2026-11-10 | `upstream/master`（上游采纳 PR #15 剩余部分） | `master` | 合并提交 `7cea389` | 上游 `99220b5`（temp_root 兜底 / probe 并发误判两处修复，附回归测试）+ `dddeeb4`（架构计数守卫 + SNS 指南）。冲突 3 处全在本地已改过的文件：`nt_decrypt.py` / `outputRoot.ts` 取上游（等价实现 + 更规范的注释），`ARCHITECTURE.md` 保留本地（实测 41,328 行，"4.0 万"比上游抄的"2.8 万"准）。`.gitignore` 自动合并出重复白名单行，已去重。合并后 emoticon 那项历史失败也顺带转绿（1403→1406 全过） |
 
 两处说明（这次合并**不是快进**，有手工解冲突，记下来免得下次当成"随手拼的"）：
 
