@@ -18,6 +18,8 @@ import { TOOL_DEFS, availableToolDefs, unavailableCapabilities, unavailableToolR
 import type { AttachedImage, ToolContext } from './assistantTools.js'
 import { producedContent } from './assistantTools.js'
 import { recordTurn, describeForChat, summarizeArgs, clipReasoning } from './assistantTrace.js'
+import { appendTurn as appendTranscriptTurn } from './assistantTranscript.js'
+import { reconcileFacts } from './assistantReconcile.js'
 import type { StopReason, TurnTrace } from './assistantTrace.js'
 import { appendLog } from './assistantDaemon.js'
 import type { Message, WechatInboundMessage } from '../types.js'
@@ -745,6 +747,8 @@ export class AssistantService {
 
     // === ReAct 主循环 ===
     this.memory.addTurn(userId, 'user', t)
+    // L1 底账：原话按天追加（best-effort，失败不影响本轮）
+    appendTranscriptTurn({ ts: Date.now(), role: 'user', content: t, session: userId })
     // 显式场景只覆盖这一轮，不写入绑定或最近使用；否则沿用绑定 → 关键词 → 上次用过的。
     const picked = explicitScene ?? assistantScenes.resolve(userId, t)
     const scene = picked.match?.scene ?? null
@@ -800,11 +804,15 @@ export class AssistantService {
 
     // === 记忆更新 (L2 压缩 + L3 提取) ===
     this.memory.addTurn(userId, 'assistant', reply)
+    appendTranscriptTurn({ ts: Date.now(), role: 'assistant', content: reply, session: userId })
     const llm = (msgs: ChatTurn[], maxTokens?: number) =>
       this.callLLM(msgs as ApiMessage[], undefined, maxTokens).then(
         (d: any) => d.choices?.[0]?.message?.content || '')
     try { await this.memory.compressIfNeeded(userId, llm) } catch { /* 压缩失败不阻断 */ }
     try { await this.memory.extractFactsIfNeeded(userId, llm) } catch { /* 提取失败不阻断 */ }
+    // 提取之后顺手对账：拿 sourceQuote 回原始流水找原话，给每条事实标「有没有依据」。
+    // 只读本地文件、纯子串查找，几十毫秒级；失败同样不阻断这一轮。
+    try { reconcileFacts(this.memory, userId) } catch { /* 对账失败不影响答复 */ }
     this.memory.save()
     privacyGate.audit('TURN_DONE', reply.length, `tools=${toolCalls}`)
     finish(reply)

@@ -484,3 +484,44 @@ test('with nothing relevant, the most recent few are still injected', async () =
   assert.match(selected[selected.length - 1].content, /第 19 号/, '兜底给的是最近的')
 })
 
+
+// ── P0：事实分类（profile / rule / lesson）与可信度 ────────────────────────────
+//
+// 为什么要分类：30 条上限 + 1200 字符预算下，"偏好"和"教训"一起排队时，
+// 先被裁掉的往往是最该留的那条。文章里那句"强模型不要被死板规则限制"说的是**记什么**，
+// 而这里管的是**留什么**——两件事。
+
+test('提取提示词要求分类，并给出对象形状（不再是纯字符串数组）', () => {
+  const prompt = buildFactPrompt([{ role: 'user', content: '以后回复先读 REPLY-RULES' }])
+  assert.match(prompt, /rule/)
+  assert.match(prompt, /lesson/)
+  assert.match(prompt, /"k"/, '必须给出对象形状，否则模型仍会回字符串数组')
+  assert.match(prompt, /找不到原话就不要提/, 'rule/lesson 必须有原话依据')
+})
+
+test('预算只够一条时，隐性规则优先于同等相关的偏好', () => {
+  const facts: any[] = [
+    { content: '微信 主题偏好深色', ts: 1, kind: 'profile' },
+    { content: '微信 回复先读规则', ts: 1, kind: 'rule' },
+  ]
+  const { selected } = selectFactsForInjection(facts, '微信', 16)
+  assert.equal(selected.length, 1)
+  assert.equal(selected[0].kind, 'rule', '规则该先占掉仅有的预算')
+})
+
+test('同等相关时已核实的结论优先于未核实的', () => {
+  const facts: any[] = [
+    { content: '微信 未核实的说法', ts: 1, kind: 'profile', verified: false },
+    { content: '微信 已核实的结论', ts: 1, kind: 'profile', verified: true },
+  ]
+  const { selected } = selectFactsForInjection(facts, '微信', 16)
+  assert.equal(selected.length, 1)
+  assert.equal(selected[0].verified, true)
+})
+
+test('旧记忆里没有 kind 字段也不影响注入（按 profile 处理）', () => {
+  const facts: any[] = [{ content: '微信 旧格式事实没有类别', ts: 1 }]
+  const { selected } = selectFactsForInjection(facts, '微信', 1200)
+  assert.equal(selected.length, 1)
+  assert.equal(selected[0].kind, undefined, '不就地改写旧数据，只按缺省语义处理')
+})

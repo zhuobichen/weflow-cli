@@ -58,9 +58,20 @@ const FACT_SAME_RATIO = 0.5
 
 export interface ChatTurn { role: 'user' | 'assistant'; content: string }
 
+/** 事实的类别。`profile` 是原有关注点（背景/偏好/项目/关系）；
+ *  `rule` 与 `lesson` 是**隐性规则**——它们不写进「用户是谁」，而是「以后该怎么做 / 别再怎么做」。
+ *  分开的理由：30 条上限 + 预算裁切下，"偏好"和"教训"一起排队时，先被丢的往往是最该留的。 */
+export type FactKind = 'profile' | 'rule' | 'lesson'
+
 export interface Fact {
   content: string
   ts: number
+  /** 缺省视为 `profile`（旧文件没有这个字段） */
+  kind?: FactKind
+  /** 是否被原始对话复核过。缺省 false：**没核过的不等于错的，但也不该被当成结论** */
+  verified?: boolean
+  /** 复核依据（轮次号 / 原话片段）。`verified` 为真时才有意义 */
+  evidence?: string
   /** 从第几个用户轮抽出来的；与 `sourceQuote` 一起，为"这条记忆对不对"留核对依据 */
   sourceTurn?: number
   /** 触发这条事实的那句用户话（截断） */
@@ -256,6 +267,26 @@ export class AssistantMemory {
 
   summary(userId: string): string { return this.state(userId).summary }
   facts(userId: string): Fact[] { return this.state(userId).facts }
+
+  /**
+   * 对账回写：把一条事实标成「已核验 / 没找到依据」。返回是否真的改了。
+   *
+   * 为什么按 content 定位而不是下标：事实会因去重被顶掉、被 30 条上限裁掉，
+   * 下标在两次调用之间不稳定；content 是去重判据本身，用它定位最不会错位。
+   */
+  markFactVerification(userId: string, content: string, verified: boolean, evidence: string): boolean {
+    const s = this.state(userId)
+    const target = normalizeFact(content)
+    for (const f of s.facts) {
+      if (normalizeFact(f.content) !== target) continue
+      if (f.verified === verified && (f.evidence ?? '') === evidence) return false
+      f.verified = verified
+      f.evidence = evidence
+      this.dirtyUsers.add(userId)
+      return true
+    }
+    return false
+  }
   userCount(): number { return Object.keys(this.states).length }
 
   /** 是哪道闸要压：条数（短轮次堆多了）还是预算（长轮次把窗口撑爆了） */
@@ -341,8 +372,14 @@ export class AssistantMemory {
       const items: unknown[] = JSON.parse(m[0])
       let added = 0
       for (const item of items) {
-        if (typeof item !== 'string' || !item.trim()) continue
-        if (this.rememberFact(s, item.trim().slice(0, 60), { sourceTurn, sourceQuote })) added++
+        // 模型两种形状都见过：新提示词给对象 {k,t}，旧记忆/别的模型可能仍给字符串
+        const text = typeof item === 'string' ? item
+          : (item && typeof item === 'object' && typeof (item as any).t === 'string') ? (item as any).t
+          : ''
+        if (!text.trim()) continue
+        const rawKind = (item && typeof item === 'object') ? String((item as any).k ?? '') : ''
+        const kind: FactKind = rawKind === 'rule' || rawKind === 'lesson' ? rawKind : 'profile'
+        if (this.rememberFact(s, text.trim().slice(0, 60), { sourceTurn, sourceQuote }, kind)) added++
       }
       if (s.facts.length > FACTS_MAX) s.facts = s.facts.slice(-FACTS_MAX)
       return added
@@ -386,7 +423,7 @@ export class AssistantMemory {
    * 包含式去重的固有模糊写在测试里：两个恰好互为前缀的短事实（`事实1` 与 `事实10`），
    * 长的那条会顶掉短的。真实事实极少这样，而"更具体的胜出"在真实场景里是对的。
    */
-  private rememberFact(s: UserMemory, content: string, source?: { sourceTurn?: number; sourceQuote?: string }): boolean {
+  private rememberFact(s: UserMemory, content: string, source?: { sourceTurn?: number; sourceQuote?: string }, kind: FactKind = 'profile'): boolean {
     const text = content.trim()
     if (!text) return false
     const norm = normalizeFact(text)
@@ -407,12 +444,12 @@ export class AssistantMemory {
       if (ratio < FACT_SAME_RATIO) continue          // 只是碰巧包含，算两条
       if (norm.length > other.length) {
         // 新的更具体 → 顶掉旧的，保留它最早的时间戳
-        s.facts[i] = { content: text, ts: existing.ts || Date.now(), ...(source ?? {}) }
+        s.facts[i] = { content: text, ts: existing.ts || Date.now(), kind: existing.kind ?? kind, ...(source ?? {}) }
         return true
       }
       return false                                    // 旧的已经更具体，不动
     }
-    s.facts.push({ content: text, ts: Date.now(), ...(source ?? {}) })
+    s.facts.push({ content: text, ts: Date.now(), kind, ...(source ?? {}) })
     return true
   }
 }
@@ -451,9 +488,15 @@ ${transcript}`
 /** L3 的抽取提示词。要求可核对：每条事实都能在对话里指出来源 */
 export function buildFactPrompt(recent: ChatTurn[]): string {
   const transcript = recent.map(t => `${t.role === 'user' ? '用户' : '助手'}: ${t.content}`).join('\n')
-  return `从对话中提取关于用户的持久事实(背景/偏好/项目/人际关系/惯例)。每条不超过40字。
+  return `从对话中提取关于用户的持久事实。每条不超过40字，并**分类**：
+- profile: 用户背景/偏好/项目/人际关系
+- rule:    用户明确说过的长期规则（"以后……""一律……""不要……"）
+- lesson:  踩过的坑或已确证的结论（"X 会失败，因为 Y"）
+
 只提取**用户自己说过的、长期成立的**信息；助手自己的推测不算。
-只输出 JSON 字符串数组,最多3条,没有则输出 []。不要提取临时性内容。
+rule / lesson 必须能指向一句用户原话；**找不到原话就不要提**。
+只输出 JSON 对象数组，形如 [{"k":"rule","t":"回复前先读 REPLY-RULES"}],最多3条,没有则输出 []。
+不要提取临时性内容。
 
 [对话]
 ${transcript}`
@@ -498,7 +541,11 @@ export function selectFactsForInjection(facts: Fact[], question: string,
     const direct = qText.length >= 2 && (fText.includes(qText) || qText.includes(fText))
     const sim = direct ? 1 : overlap(q, bigrams(f.content))
     // sim 单独留着：闸门按它判，排序才用 rank（后者含「最近用过」与时间的权重）
-    return { fact: f, index, sim, rank: sim * 10 + (f.usedAt ? 0.5 : 0) + (f.ts ? 0.1 : 0) }
+    // 隐性规则与已核实的结论优先入预算：相关度相同时，该先留"以后该怎么做"。
+    // 只动 rank（排序），不动 sim（闸门）——无关的规则仍不该因为"它是规则"就硬塞进来。
+    const kindBoost = (f.kind === 'rule' || f.kind === 'lesson') ? 1.5 : 0
+    const verifiedBoost = f.verified ? 0.3 : 0
+    return { fact: f, index, sim, rank: sim * 10 + kindBoost + verifiedBoost + (f.usedAt ? 0.5 : 0) + (f.ts ? 0.1 : 0) }
   })
 
   scored.sort((a, b) => b.rank - a.rank || a.index - b.index)

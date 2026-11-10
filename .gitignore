@@ -44,6 +44,7 @@ scripts/regen_wsl_keys.mjs
 !docs/SNS_GUIDE.md
 !docs/EVIDENCE_GUIDE.md
 !docs/DATA_CONTRACT.md
+!docs/ASSISTANT_MEMORY_PLAN.md
 !docs/AI_INTERFACE.md
 !docs/EXTENDING.md
 !docs/PLUGIN.md

@@ -8,6 +8,10 @@
 - **`check --fix`**：仅在"已探测到数据目录但未初始化/上次 init 失败"时给出一条可执行命令，
   先打印再确认（`--yes` 跳过）。探测不到目录时不猜。2026-11-02 加（issue #8 / #13）。
 
+- **助手会留一份本地对话流水**：`~/.weflow-cli/assistant_transcript/YYYY-MM-DD.jsonl`，
+  只追加、保留 7 天、目录 0700 / 文件 0600。用途是给「事实对账」留证据（D-150），
+  不参与推理；删掉它只会丢掉对账能力，不影响助手正常工作。2026-11-11 加。
+
 ## Purpose
 
 WeFlow CLI is a local-first command-line tool and MCP server for user-authorized WeChat data workflows: local chat queries and exports, official-account daily reading, favorites, knowledge workflows, and an optional local assistant.
