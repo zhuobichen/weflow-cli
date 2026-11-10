@@ -36,12 +36,12 @@ scripts/regen_wsl_keys.mjs
 !OPERATIONS.md
 !docs/PROJECT_STATE.md
 !docs/NT_DATABASES.md
+!docs/SNS_GUIDE.md
 !docs/DECISIONS.md
 !docs/VERSION_METHODS.md
 !docs/LINUX.md
 !docs/LINUX.en.md
 !docs/MACOS.md
-!docs/SNS_GUIDE.md
 !docs/EVIDENCE_GUIDE.md
 !docs/DATA_CONTRACT.md
 !docs/AI_INTERFACE.md

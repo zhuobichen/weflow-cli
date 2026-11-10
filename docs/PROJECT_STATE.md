@@ -8,6 +8,54 @@
 - **`check --fix`**：仅在"已探测到数据目录但未初始化/上次 init 失败"时给出一条可执行命令，
   先打印再确认（`--yes` 跳过）。探测不到目录时不猜。2026-11-02 加（issue #8 / #13）。
 
+- **只读副本已改为共享缓存（上游 v1.21.8 采纳 PR #15 后）**：`connect_readonly()` 遇到带
+  `-wal` 的库时，副本进 `weflow-ro/<key>/` **共享缓存**，按「库 + sidecar 的大小与 mtime」
+  取 key —— 同一份库复用同一个目录，不再每次拷贝 1 GB。回收走 TTL（`WEFLOW_RO_TTL_SECONDS`，
+  默认 3600 秒）+ 容量上限（`WEFLOW_RO_MAX_MB`，默认 2048 MB）按最旧删，**永远保留最新的一个**；
+  `WEFLOW_RO_CACHE=off` 退回一次性目录并在 `atexit` 时删干净。本地保留了上游 else 分支里
+  漏掉的 `dir=temp_root()`，否则副本会退回系统盘而不是 `WEFLOW_TMPDIR`。
+  2026-11-09 合入上游时同步，附 `test/readonly_copy_cache_test.py`（5 项）。
+
+- **验证状态（2026-11-10 合入上游 v1.21.15 之后）**：上游采纳了 PR #15 的剩余部分
+  （`99220b5` 两处修复 + 附带的回归测试、`dddeeb4` 架构计数守卫与 SNS 指南），
+  本地以合并提交 `7cea389` 跟进。`npm run build` 通过；`npm test` **1049 项全过**
+  （比此前多 1 项——上游补的 output-root 并发探测测试）；Python `unittest discover`
+  **1406 项全过**（比此前多 3 项——上游补的 `TempRootHonouringTests`）。
+  此前的 emoticon 失败项（`test_scenarios_in_a_clean_interpreter`）**在本次合并后转绿**——
+  很可能与上游 `99220b5` 把一次性副本目录改为 `dir=str(temp_root())` 后子进程
+  临时目录解析行为变化有关；机制未逐一坐实，但单测复跑确认通过。
+  计数基线不变（test/ 195、scripts/ 84、bin/ 147）。
+
+- **验证状态（2026-11-09 合入上游 v1.21.8 之后）**：`npm run build` 通过；`npm test`
+  1048 项全过（此前 4 项失败是「架构计数守卫」——上游新增文件后 `ARCHITECTURE.md` 的计数
+  还是旧基线，已按磁盘实数校准为 test/ 195 个文件（107 TS / 88 Python）、scripts/ 84 个
+  Python 工作流、bin/ 147 处 `.command(`）。
+  Python 侧 `unittest discover` 1403 项中 **1 项失败**：`wechat_emoticon_test.py` 的
+  `test_scenarios_in_a_clean_interpreter` 期望来源为 `config-invalid`、实际为 `memory`。
+  **该失败在上游 master 的干净检出上同样存在**（已单独复现验证），与本次合并无关，
+  是上游 emoticon seed 改动的语义偏差，待上游修复。
+  ~~此条已被 2026-11-10 的合并解决，见上。~~
+
+- **朋友圈（`sns`）只读本地 `sns.db` 缓存，不联网、也不支持导出**。硬前提是
+  **微信客户端先打开过朋友圈**让动态落盘，否则查到的就是空缓存。两条读库路径由
+  `chatService.isSnsSupported()` 分流：传统 4.x 走 WCDB dll 导出函数；NT 路径要求
+  `snsDbPath` + `snsKey` + `snsSalt` **三项齐全** —— `init` 即便路径与盐值都发现了，
+  **密钥仍可能是空的**（`bin/weflow-cli.ts` 的"密钥未匹配"分支只设路径与盐值），
+  所以 `init` 成功 ≠ 朋友圈可用，需要 `sns capture-key`（Windows + 管理员 + 30 秒内
+  在微信里开朋友圈；JSON 模式返回 `INTERACTIVE_REQUIRED`，不扫进程）。
+  两项限制写在这里以免被当成 bug：**AI 工具 `get_sns` 的 `users` 模式不是读
+  `sns users` 名单，而是拉最近 200 条时间线在本地按昵称聚合计数**（反映最近窗口的
+  相对热度，不是历史总量）；**朋友圈没有任何导出入口** —— `export` 命令只接受
+  `<talker> <format>`，时间线里的图片只有 `media_count` 数字、没有媒体本体。
+  **不自动刷新，且两张表新鲜度不同**（2026-11-03 本机实测）：写入方**只有微信客户端**，
+  由**用户刷新朋友圈这个动作**触发（60 秒被动观察：客户端在跑但 mtime 不动 → 不是
+  定时轮询），工具侧全部是 `SELECT` 且以 `mode=ro&immutable=1` 读原库，**不改原库**
+  （实测查询前后 mtime 不变）。而且 `sns stats` 读 `SnsTopItem_1`（仅元数据，
+  `summary` 100% 为空，17,484 行 / 109 天），`sns timeline` 读 `SnsTimeLine`
+  （正文，7,818 行 / 1,153 天），**同一时刻前者最新到 13:04:49、后者停在 12:06:51**，
+  且前者的新 `tid` 在后者中对应 0 行 —— 所以「stats 在涨」**不等于**「正文在更新」。
+  完整说明与排查清单见 [SNS_GUIDE.md](SNS_GUIDE.md)。2026-11-03 补。
+
 ## Purpose
 
 WeFlow CLI is a local-first command-line tool and MCP server for user-authorized WeChat data workflows: local chat queries and exports, official-account daily reading, favorites, knowledge workflows, and an optional local assistant.
