@@ -18,6 +18,17 @@ purpose** - a hand-written "latest is X" is exactly the claim that goes stale he
 
 All notable user-facing changes are recorded here. This project follows [Semantic Versioning](https://semver.org/).
 
+## 1.21.15
+
+> 验证过的微信：Windows 4.1.15.56；Linux 4.1.13.26。
+
+- **关掉缓存时的一次性副本也用 `temp_root()`**（采纳 PR #15 的那 1 行）：此前只有
+  共享缓存那条路走了 `WEFLOW_TMPDIR`，`WEFLOW_RO_CACHE=off` 的兜底分支仍用
+  `mkdtemp()` 的默认目录——而 `tempfile.gettempdir()` 在进程内缓存首次取值，
+  只设 `TEMP` 不一定生效。现在两条路都认 `WEFLOW_TMPDIR`。
+- 新增 3 项测试钉住这件事（`temp_root()` 读环境变量、缓存根位于其下、
+  一次性副本的父目录就是它）。
+
 ## 1.21.14
 
 > 验证过的微信：Windows 4.1.15.56；Linux 4.1.13.26。
