@@ -1529,7 +1529,7 @@ const configurableKeys = [
   'assistantGroupRequireMention', 'assistantFastRoute', 'assistantPanelUser', 'quickReplyContacts',
   'skillDirs', 'skillDisabled',
   'dailySources', 'dailySourceCategories',
-  'dailyExcludeTopics', 'dailyAiEnabled', 'dailyMailTo',
+  'dailyExcludeTopics', 'dailyAiEnabled', 'dailyKeepImages', 'dailyMailTo',
   'wechatMediaDownload',
   'emoticonSeed',
 ] as const
