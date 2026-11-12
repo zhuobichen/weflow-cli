@@ -918,6 +918,39 @@ python scripts/wechat_voice.py --db "<message_0.db>" --key <key> --salt <salt> `
 
 ## 5. 公众号日报与阅读器
 
+### 当天的 `images/` 默认会被删掉
+
+日报跑完会把 `output/biz-daily/<日期>/images/` 删掉——它每天 0.6–1.3G，而日报主页与
+所有 md 都**不引用**它（正文图片是远程 URL），只有单篇阅读视图 `article.html` 用得上。
+想过几天还能在本地翻图，就关掉这个清理：
+
+```powershell
+weflow-cli daily --keep-images            # 只这一次
+weflow-cli config set dailyKeepImages true  # 以后都保留
+```
+
+删的时候会打印「清理了 N 个文件，释放 X MB」。
+
+### 刚登录完，先别急着跑日报
+
+客户端**刚登录时会回填当天历史**，而回填不是瞬间完成的：先有会话，再有关注号的消息落盘。
+在这两分钟里跑 `daily`，读到的就是「回填到一半」的库——产出可能是半天、四成的量，
+而且**不会报错**：数量看着合理，邮件照常发出，README 照常生成，看不出少了什么。
+
+顺序固定为：
+
+1. 登录（扫码 / 手机确认）
+2. 等回填落盘。判据是 `db_storage/message/` 下 `message_*.db` 的 mtime **停止变化**，
+   而不是等固定秒数；保守再等一两分钟，或先跑一次 `weflow-cli sessions` 看会话数是否正常
+3. 再跑 `daily`
+
+跑完顺手对一眼量：当天日报的文章数如果明显低于历史同期（比如不到七成），
+先别当成「今天冷清」，按上面查一遍是不是抢在回填之前读了库。
+
+补跑是安全的：`.run_state.json` 按 URL 指纹跳过已处理（不重复花 AI 的钱），
+`.articles.json` 是合并写、不覆盖，README 与 `index.html` 从磁盘上的 md 重建——
+所以补跑只会追加缺的那部分，不会把上一轮已有的条目挤掉（见 D-151）。
+
 生成今天的日报：
 
 ```powershell

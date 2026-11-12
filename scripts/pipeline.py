@@ -54,6 +54,10 @@ def main():
     parser.add_argument('--with-vault', action='store_true',
                         help='把当天的内容副本同步进 Obsidian Vault（Sources/WeChat/<日期>/）。**默认不做**')
     parser.add_argument('--skip-html', action='store_true', help='跳过 HTML 生成')
+    parser.add_argument('--keep-images', action='store_true',
+                        help='保留当天的 images/ 目录（**默认删**：它每天 0.6–1.3G，'
+                             '而日报主页与 md 都不引用它，只有单篇阅读视图用得上）。'
+                             '等价配置：dailyKeepImages=true')
     parser.add_argument('--skip-ai-report', action='store_true', help='跳过 AI 深度阅读报告')
     parser.add_argument('--no-ai', action='store_true', help='关闭所有 AI 调用，但保留抓取和本地输出')
     parser.add_argument('--no-summary', action='store_true',
@@ -224,6 +228,19 @@ def main():
         run_step('generate_ai_report — AI 阅读日报', step8_args)
 
     elapsed = time.time() - started
+
+    # Step 9: 清理当天的 images/（**默认删**，见 `_utils.keep_daily_images`）。
+    # 必须排在 HTML 生成之后：`article.html` 靠 `.image_map.json` 引本地图，
+    # 提前删会让它在生成那一刻就指向一堆不存在的文件。
+    # 关掉的办法有两个：`--keep-images`，或配置 `dailyKeepImages=true`。
+    from _utils import cleanup_day_images, output_root
+    day_dir = os.path.join(output_root(), 'biz-daily', date_str)
+    stats = cleanup_day_images(day_dir, cli_flag=getattr(args, 'keep_images', False), config=config)
+    if stats.get('kept'):
+        print('  images/ 已保留（--keep-images 或 dailyKeepImages=true）')
+    elif stats.get('removed'):
+        print(f'  images/ 已清理：{stats["removed"]:,} 个文件，释放 {stats["bytes"]/1024/1024:.0f} MB')
+
     print(f'\n{"="*50}')
     print(f'  流水线完成！耗时 {elapsed/60:.1f} 分钟')
     print(f'{"="*50}')
