@@ -19,7 +19,16 @@
 
 </div>
 
-**WeFlow CLI turns WeChat into your local second brain**: read and query chat history locally with one command, export readable HTML; turn official-account articles into AI-digested daily reports (optionally mailed to you); read your WeChat favorites; build a semantic-searchable knowledge base — voice messages included — and plug it all into MCP-compatible AI editors like Claude Code. Works on Windows and Linux.
+**WeFlow CLI turns WeChat into your local second brain.** Four things, all on your own machine — no account login, no chat content uploaded:
+
+| | What you get | Start with |
+| --- | --- | --- |
+| 💬 **Chat history** | Query and search by person, group or date; export to readable HTML (images and voice transcripts included) | `weflow-cli export` |
+| 📰 **Official accounts** | Subscribed articles turned into an AI-digested daily report, optionally mailed to you | `weflow-cli daily` |
+| ⭐ **Favorites** | Read the local favorites store; filter by type and search by keyword | `weflow-cli fav list` |
+| 🧠 **Knowledge base** | Articles and chats distilled into semantic-searchable notes and a concept graph | `weflow-cli search` · `weflow-cli wiki` |
+
+Works on Windows and Linux, with an MCP interface for AI editors like Claude Code.
 
 It is built to answer **questions WeChat itself cannot**: who is waiting on a reply, what I promised someone and whether I followed through, which relationships are cooling, how an account's position shifted over time, and what we were talking about on this day in earlier years.
 
