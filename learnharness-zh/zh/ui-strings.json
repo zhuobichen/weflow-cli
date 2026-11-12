@@ -1,0 +1,3154 @@
+{
+  "generatedAt": "2026-11-12T11:17:42.767Z",
+  "source": "../../learnharness",
+  "scannedFiles": 138,
+  "totalStrings": 468,
+  "files": [
+    {
+      "file": "components\\graph-view.tsx",
+      "count": 36
+    },
+    {
+      "file": "components\\settings\\agent-section.tsx",
+      "count": 28
+    },
+    {
+      "file": "components\\settings\\keys-section.tsx",
+      "count": 26
+    },
+    {
+      "file": "components\\sidebar.tsx",
+      "count": 23
+    },
+    {
+      "file": "components\\settings\\chatgpt-connection.tsx",
+      "count": 21
+    },
+    {
+      "file": "components\\chat.tsx",
+      "count": 18
+    },
+    {
+      "file": "components\\settings\\subscription-connections.tsx",
+      "count": 17
+    },
+    {
+      "file": "components\\settings\\appearance-section.tsx",
+      "count": 16
+    },
+    {
+      "file": "components\\plan-block.tsx",
+      "count": 14
+    },
+    {
+      "file": "components\\side-thread.tsx",
+      "count": 14
+    },
+    {
+      "file": "components\\settings\\settings-dialog.tsx",
+      "count": 13
+    },
+    {
+      "file": "components\\settings\\plugins-section.tsx",
+      "count": 10
+    },
+    {
+      "file": "components\\practice-cards.tsx",
+      "count": 9
+    },
+    {
+      "file": "components\\session-find.tsx",
+      "count": 9
+    },
+    {
+      "file": "components\\setup-dialog.tsx",
+      "count": 9
+    },
+    {
+      "file": "components\\dictation.tsx",
+      "count": 8
+    },
+    {
+      "file": "components\\session-overlay.tsx",
+      "count": 8
+    },
+    {
+      "file": "components\\artifacts\\visual-card.tsx",
+      "count": 7
+    },
+    {
+      "file": "components\\extraction-coverage.tsx",
+      "count": 7
+    },
+    {
+      "file": "components\\settings\\claude-code-status.tsx",
+      "count": 7
+    },
+    {
+      "file": "components\\md-blocks.tsx",
+      "count": 6
+    },
+    {
+      "file": "components\\plugin-chrome.tsx",
+      "count": 6
+    },
+    {
+      "file": "components\\plugin-question-dock.tsx",
+      "count": 6
+    },
+    {
+      "file": "components\\question-dock.tsx",
+      "count": 6
+    },
+    {
+      "file": "components\\source-folder-tree.tsx",
+      "count": 6
+    },
+    {
+      "file": "components\\activity-dock.tsx",
+      "count": 5
+    },
+    {
+      "file": "components\\answered-card.tsx",
+      "count": 5
+    },
+    {
+      "file": "components\\artifacts\\demo-card.tsx",
+      "count": 5
+    },
+    {
+      "file": "components\\artifacts\\image-card.tsx",
+      "count": 5
+    },
+    {
+      "file": "components\\chain-table.tsx",
+      "count": 5
+    },
+    {
+      "file": "components\\plugin-view.tsx",
+      "count": 5
+    },
+    {
+      "file": "components\\settings\\keyboard-section.tsx",
+      "count": 5
+    },
+    {
+      "file": "components\\settings\\model-menu.tsx",
+      "count": 5
+    },
+    {
+      "file": "components\\stats-bar.tsx",
+      "count": 5
+    },
+    {
+      "file": "components\\citation-comment-editor.tsx",
+      "count": 4
+    },
+    {
+      "file": "components\\delete-source-dialog.tsx",
+      "count": 4
+    },
+    {
+      "file": "components\\settings\\update-settings.tsx",
+      "count": 4
+    },
+    {
+      "file": "components\\ai-elements\\reasoning.tsx",
+      "count": 3
+    },
+    {
+      "file": "components\\artifacts\\steer-card.tsx",
+      "count": 3
+    },
+    {
+      "file": "components\\attach-files-button.tsx",
+      "count": 3
+    },
+    {
+      "file": "components\\minimal-home.tsx",
+      "count": 3
+    },
+    {
+      "file": "components\\model-picker.tsx",
+      "count": 3
+    },
+    {
+      "file": "components\\notes-import.tsx",
+      "count": 3
+    },
+    {
+      "file": "components\\plugin-knowledge-picker.tsx",
+      "count": 3
+    },
+    {
+      "file": "components\\practice-dock.tsx",
+      "count": 3
+    },
+    {
+      "file": "components\\settings\\plugin-settings-page.tsx",
+      "count": 3
+    },
+    {
+      "file": "components\\ai-elements\\message.tsx",
+      "count": 2
+    },
+    {
+      "file": "components\\composer.tsx",
+      "count": 2
+    },
+    {
+      "file": "components\\delete-node-dialog.tsx",
+      "count": 2
+    },
+    {
+      "file": "components\\delete-session-dialog.tsx",
+      "count": 2
+    },
+    {
+      "file": "components\\dictation-language.tsx",
+      "count": 2
+    },
+    {
+      "file": "components\\keyboard-shortcuts.tsx",
+      "count": 2
+    },
+    {
+      "file": "components\\plugin-composer.tsx",
+      "count": 2
+    },
+    {
+      "file": "components\\plugin-model-picker.tsx",
+      "count": 2
+    },
+    {
+      "file": "components\\plugin-problem-dock.tsx",
+      "count": 2
+    },
+    {
+      "file": "components\\plugin-problem-submitted.tsx",
+      "count": 2
+    },
+    {
+      "file": "components\\plugin-question-slots.tsx",
+      "count": 2
+    },
+    {
+      "file": "components\\plugin-renderers.tsx",
+      "count": 2
+    },
+    {
+      "file": "components\\plugin-surface-shell.tsx",
+      "count": 2
+    },
+    {
+      "file": "components\\plugin-ui-host.tsx",
+      "count": 2
+    },
+    {
+      "file": "components\\settings\\theme-cards.tsx",
+      "count": 2
+    },
+    {
+      "file": "components\\submitted-images.tsx",
+      "count": 2
+    },
+    {
+      "file": "components\\ai-elements\\conversation.tsx",
+      "count": 1
+    },
+    {
+      "file": "components\\artifacts\\job-card.tsx",
+      "count": 1
+    },
+    {
+      "file": "components\\artifacts\\live-tool-card.tsx",
+      "count": 1
+    },
+    {
+      "file": "components\\artifacts\\plugin-worker-card.tsx",
+      "count": 1
+    },
+    {
+      "file": "components\\artifacts\\probe-done-card.tsx",
+      "count": 1
+    },
+    {
+      "file": "components\\artifacts\\svg-image.tsx",
+      "count": 1
+    },
+    {
+      "file": "components\\braille-spinner.tsx",
+      "count": 1
+    },
+    {
+      "file": "components\\citation-comment-popover.tsx",
+      "count": 1
+    },
+    {
+      "file": "components\\file-path-drop-zone.tsx",
+      "count": 1
+    },
+    {
+      "file": "components\\graph-context-card.tsx",
+      "count": 1
+    },
+    {
+      "file": "components\\home.tsx",
+      "count": 1
+    },
+    {
+      "file": "components\\host-markdown.tsx",
+      "count": 1
+    },
+    {
+      "file": "components\\menu-shell.tsx",
+      "count": 1
+    },
+    {
+      "file": "components\\plugin-question-part.tsx",
+      "count": 1
+    },
+    {
+      "file": "components\\plugin-settings-rows.tsx",
+      "count": 1
+    },
+    {
+      "file": "components\\plugins.tsx",
+      "count": 1
+    },
+    {
+      "file": "components\\reading-thinking.tsx",
+      "count": 1
+    },
+    {
+      "file": "components\\selection-toolbar.tsx",
+      "count": 1
+    },
+    {
+      "file": "components\\settings\\appearance.tsx",
+      "count": 1
+    },
+    {
+      "file": "components\\settings\\cache-retention-menu.tsx",
+      "count": 1
+    },
+    {
+      "file": "components\\thinking-block.tsx",
+      "count": 1
+    },
+    {
+      "file": "components\\update-banner.tsx",
+      "count": 1
+    }
+  ],
+  "strings": [
+    {
+      "file": "components\\activity-dock.tsx",
+      "line": 385,
+      "kind": "title",
+      "text": "Total running cost (inferred)"
+    },
+    {
+      "file": "components\\activity-dock.tsx",
+      "line": 501,
+      "kind": "jsx-text",
+      "text": "Cost"
+    },
+    {
+      "file": "components\\activity-dock.tsx",
+      "line": 507,
+      "kind": "jsx-text",
+      "text": "Context"
+    },
+    {
+      "file": "components\\activity-dock.tsx",
+      "line": 516,
+      "kind": "jsx-text",
+      "text": "Model"
+    },
+    {
+      "file": "components\\activity-dock.tsx",
+      "line": 522,
+      "kind": "jsx-text",
+      "text": "Steps"
+    },
+    {
+      "file": "components\\ai-elements\\conversation.tsx",
+      "line": 45,
+      "kind": "title",
+      "text": "No messages yet"
+    },
+    {
+      "file": "components\\ai-elements\\message.tsx",
+      "line": 273,
+      "kind": "aria-label",
+      "text": "Previous branch"
+    },
+    {
+      "file": "components\\ai-elements\\message.tsx",
+      "line": 296,
+      "kind": "aria-label",
+      "text": "Next branch"
+    },
+    {
+      "file": "components\\ai-elements\\reasoning.tsx",
+      "line": 139,
+      "kind": "jsx-text",
+      "text": "Thinking..."
+    },
+    {
+      "file": "components\\ai-elements\\reasoning.tsx",
+      "line": 141,
+      "kind": "jsx-text",
+      "text": "AGENT’S THINKING"
+    },
+    {
+      "file": "components\\ai-elements\\reasoning.tsx",
+      "line": 178,
+      "kind": "label",
+      "text": "Thinking"
+    },
+    {
+      "file": "components\\answered-card.tsx",
+      "line": 58,
+      "kind": "label",
+      "text": "YOUR THINKING"
+    },
+    {
+      "file": "components\\answered-card.tsx",
+      "line": 184,
+      "kind": "jsx-text",
+      "text": "Answered “I don't know”."
+    },
+    {
+      "file": "components\\answered-card.tsx",
+      "line": 194,
+      "kind": "label",
+      "text": "YOUR THINKING"
+    },
+    {
+      "file": "components\\answered-card.tsx",
+      "line": 219,
+      "kind": "jsx-text",
+      "text": "Why:"
+    },
+    {
+      "file": "components\\answered-card.tsx",
+      "line": 233,
+      "kind": "jsx-text",
+      "text": "The answer:"
+    },
+    {
+      "file": "components\\artifacts\\demo-card.tsx",
+      "line": 188,
+      "kind": "label",
+      "text": "Invert demo brightness"
+    },
+    {
+      "file": "components\\artifacts\\demo-card.tsx",
+      "line": 189,
+      "kind": "title",
+      "text": "Invert colors"
+    },
+    {
+      "file": "components\\artifacts\\demo-card.tsx",
+      "line": 194,
+      "kind": "aria-label",
+      "text": "Download demo as HTML"
+    },
+    {
+      "file": "components\\artifacts\\demo-card.tsx",
+      "line": 195,
+      "kind": "title",
+      "text": "Download as HTML"
+    },
+    {
+      "file": "components\\artifacts\\demo-card.tsx",
+      "line": 253,
+      "kind": "jsx-text",
+      "text": "This demo threw an error"
+    },
+    {
+      "file": "components\\artifacts\\image-card.tsx",
+      "line": 94,
+      "kind": "jsx-text",
+      "text": "Image"
+    },
+    {
+      "file": "components\\artifacts\\image-card.tsx",
+      "line": 104,
+      "kind": "aria-label",
+      "text": "Download image"
+    },
+    {
+      "file": "components\\artifacts\\image-card.tsx",
+      "line": 105,
+      "kind": "title",
+      "text": "Download image"
+    },
+    {
+      "file": "components\\artifacts\\image-card.tsx",
+      "line": 115,
+      "kind": "aria-label",
+      "text": "Open image fullscreen"
+    },
+    {
+      "file": "components\\artifacts\\image-card.tsx",
+      "line": 116,
+      "kind": "title",
+      "text": "Open fullscreen"
+    },
+    {
+      "file": "components\\artifacts\\job-card.tsx",
+      "line": 100,
+      "kind": "jsx-text",
+      "text": "Sources"
+    },
+    {
+      "file": "components\\artifacts\\live-tool-card.tsx",
+      "line": 58,
+      "kind": "jsx-text",
+      "text": "Input (streaming)"
+    },
+    {
+      "file": "components\\artifacts\\plugin-worker-card.tsx",
+      "line": 34,
+      "kind": "jsx-text",
+      "text": "Task details"
+    },
+    {
+      "file": "components\\artifacts\\probe-done-card.tsx",
+      "line": 46,
+      "kind": "jsx-text",
+      "text": "Probe assessment"
+    },
+    {
+      "file": "components\\artifacts\\steer-card.tsx",
+      "line": 46,
+      "kind": "jsx-text",
+      "text": "Background job recovery/delivery failed"
+    },
+    {
+      "file": "components\\artifacts\\steer-card.tsx",
+      "line": 104,
+      "kind": "jsx-text",
+      "text": "PDF"
+    },
+    {
+      "file": "components\\artifacts\\steer-card.tsx",
+      "line": 125,
+      "kind": "jsx-text",
+      "text": "Research"
+    },
+    {
+      "file": "components\\artifacts\\svg-image.tsx",
+      "line": 19,
+      "kind": "alt",
+      "text": "Figure"
+    },
+    {
+      "file": "components\\artifacts\\visual-card.tsx",
+      "line": 143,
+      "kind": "jsx-text",
+      "text": "Figure"
+    },
+    {
+      "file": "components\\artifacts\\visual-card.tsx",
+      "line": 151,
+      "kind": "label",
+      "text": "Invert figure brightness"
+    },
+    {
+      "file": "components\\artifacts\\visual-card.tsx",
+      "line": 152,
+      "kind": "title",
+      "text": "Invert colors"
+    },
+    {
+      "file": "components\\artifacts\\visual-card.tsx",
+      "line": 158,
+      "kind": "aria-label",
+      "text": "Download figure as SVG"
+    },
+    {
+      "file": "components\\artifacts\\visual-card.tsx",
+      "line": 159,
+      "kind": "title",
+      "text": "Download as SVG"
+    },
+    {
+      "file": "components\\artifacts\\visual-card.tsx",
+      "line": 169,
+      "kind": "aria-label",
+      "text": "Open figure fullscreen"
+    },
+    {
+      "file": "components\\artifacts\\visual-card.tsx",
+      "line": 170,
+      "kind": "title",
+      "text": "Open fullscreen"
+    },
+    {
+      "file": "components\\attach-files-button.tsx",
+      "line": 163,
+      "kind": "aria-label",
+      "text": "Attach files"
+    },
+    {
+      "file": "components\\attach-files-button.tsx",
+      "line": 187,
+      "kind": "jsx-text",
+      "text": "Files"
+    },
+    {
+      "file": "components\\attach-files-button.tsx",
+      "line": 189,
+      "kind": "jsx-text",
+      "text": "Folder"
+    },
+    {
+      "file": "components\\braille-spinner.tsx",
+      "line": 39,
+      "kind": "label",
+      "text": "Working"
+    },
+    {
+      "file": "components\\chain-table.tsx",
+      "line": 324,
+      "kind": "aria-label",
+      "text": "Add folder"
+    },
+    {
+      "file": "components\\chain-table.tsx",
+      "line": 333,
+      "kind": "placeholder",
+      "text": "Search nodes…"
+    },
+    {
+      "file": "components\\chain-table.tsx",
+      "line": 334,
+      "kind": "aria-label",
+      "text": "Search nodes"
+    },
+    {
+      "file": "components\\chain-table.tsx",
+      "line": 343,
+      "kind": "aria-label",
+      "text": "Close chains"
+    },
+    {
+      "file": "components\\chain-table.tsx",
+      "line": 619,
+      "kind": "aria-label",
+      "text": "Delete selected sources and folders"
+    },
+    {
+      "file": "components\\chat.tsx",
+      "line": 167,
+      "kind": "jsx-text",
+      "text": "Promise"
+    },
+    {
+      "file": "components\\chat.tsx",
+      "line": 330,
+      "kind": "jsx-text",
+      "text": "PluginSubmission | Promise"
+    },
+    {
+      "file": "components\\chat.tsx",
+      "line": 330,
+      "kind": "jsx-text",
+      "text": "Promise"
+    },
+    {
+      "file": "components\\chat.tsx",
+      "line": 937,
+      "kind": "jsx-text",
+      "text": "Array.from(document.querySelectorAll"
+    },
+    {
+      "file": "components\\chat.tsx",
+      "line": 1665,
+      "kind": "aria-label",
+      "text": "Session title"
+    },
+    {
+      "file": "components\\chat.tsx",
+      "line": 1666,
+      "kind": "title",
+      "text": "Rename this session"
+    },
+    {
+      "file": "components\\chat.tsx",
+      "line": 1678,
+      "kind": "label",
+      "text": "Rename session"
+    },
+    {
+      "file": "components\\chat.tsx",
+      "line": 1703,
+      "kind": "label",
+      "text": "Open the full plan"
+    },
+    {
+      "file": "components\\chat.tsx",
+      "line": 1753,
+      "kind": "title",
+      "text": "New session"
+    },
+    {
+      "file": "components\\chat.tsx",
+      "line": 1868,
+      "kind": "jsx-text",
+      "text": "You"
+    },
+    {
+      "file": "components\\chat.tsx",
+      "line": 2001,
+      "kind": "label",
+      "text": "Compacting context"
+    },
+    {
+      "file": "components\\chat.tsx",
+      "line": 2002,
+      "kind": "jsx-text",
+      "text": "COMPACTING CONTEXT…"
+    },
+    {
+      "file": "components\\chat.tsx",
+      "line": 2849,
+      "kind": "jsx-text",
+      "text": "Could not sync the saved session."
+    },
+    {
+      "file": "components\\chat.tsx",
+      "line": 2849,
+      "kind": "jsx-text",
+      "text": "Retry syncing"
+    },
+    {
+      "file": "components\\chat.tsx",
+      "line": 2891,
+      "kind": "jsx-text",
+      "text": "Preparing question…"
+    },
+    {
+      "file": "components\\chat.tsx",
+      "line": 2892,
+      "kind": "jsx-text",
+      "text": "Question unavailable"
+    },
+    {
+      "file": "components\\chat.tsx",
+      "line": 2892,
+      "kind": "jsx-text",
+      "text": "Dismiss question"
+    },
+    {
+      "file": "components\\chat.tsx",
+      "line": 2977,
+      "kind": "label",
+      "text": "Open the full plan"
+    },
+    {
+      "file": "components\\citation-comment-editor.tsx",
+      "line": 56,
+      "kind": "aria-label",
+      "text": "Comment on selected text"
+    },
+    {
+      "file": "components\\citation-comment-editor.tsx",
+      "line": 58,
+      "kind": "placeholder",
+      "text": "Add an optional comment..."
+    },
+    {
+      "file": "components\\citation-comment-editor.tsx",
+      "line": 72,
+      "kind": "jsx-text",
+      "text": "Comments can contain up to 8,000 characters."
+    },
+    {
+      "file": "components\\citation-comment-editor.tsx",
+      "line": 75,
+      "kind": "jsx-text",
+      "text": "Cancel"
+    },
+    {
+      "file": "components\\citation-comment-popover.tsx",
+      "line": 99,
+      "kind": "aria-label",
+      "text": "Edit citation comment"
+    },
+    {
+      "file": "components\\composer.tsx",
+      "line": 117,
+      "kind": "placeholder",
+      "text": "Ask, answer, or steer the lesson…"
+    },
+    {
+      "file": "components\\composer.tsx",
+      "line": 219,
+      "kind": "aria-label",
+      "text": "Next problem"
+    },
+    {
+      "file": "components\\delete-node-dialog.tsx",
+      "line": 55,
+      "kind": "aria-label",
+      "text": "Delete node"
+    },
+    {
+      "file": "components\\delete-node-dialog.tsx",
+      "line": 155,
+      "kind": "jsx-text",
+      "text": "Promise"
+    },
+    {
+      "file": "components\\delete-session-dialog.tsx",
+      "line": 139,
+      "kind": "aria-label",
+      "text": "Delete session"
+    },
+    {
+      "file": "components\\delete-session-dialog.tsx",
+      "line": 144,
+      "kind": "jsx-text",
+      "text": "Delete session?"
+    },
+    {
+      "file": "components\\delete-source-dialog.tsx",
+      "line": 14,
+      "kind": "aria-label",
+      "text": "Delete sources"
+    },
+    {
+      "file": "components\\delete-source-dialog.tsx",
+      "line": 16,
+      "kind": "jsx-text",
+      "text": "Delete selected sources and folders?"
+    },
+    {
+      "file": "components\\delete-source-dialog.tsx",
+      "line": 31,
+      "kind": "jsx-text",
+      "text": "Cancel"
+    },
+    {
+      "file": "components\\delete-source-dialog.tsx",
+      "line": 39,
+      "kind": "jsx-text",
+      "text": "Promise"
+    },
+    {
+      "file": "components\\dictation-language.tsx",
+      "line": 18,
+      "kind": "label",
+      "text": "Language"
+    },
+    {
+      "file": "components\\dictation-language.tsx",
+      "line": 97,
+      "kind": "placeholder",
+      "text": "Search languages…"
+    },
+    {
+      "file": "components\\dictation.tsx",
+      "line": 172,
+      "kind": "jsx-text",
+      "text": "Promise"
+    },
+    {
+      "file": "components\\dictation.tsx",
+      "line": 175,
+      "kind": "jsx-text",
+      "text": "Promise"
+    },
+    {
+      "file": "components\\dictation.tsx",
+      "line": 251,
+      "kind": "jsx-text",
+      "text": "Promise"
+    },
+    {
+      "file": "components\\dictation.tsx",
+      "line": 302,
+      "kind": "jsx-text",
+      "text": "Promise"
+    },
+    {
+      "file": "components\\dictation.tsx",
+      "line": 323,
+      "kind": "jsx-text",
+      "text": "Promise"
+    },
+    {
+      "file": "components\\dictation.tsx",
+      "line": 520,
+      "kind": "call",
+      "text": "Deepgram reconnect failed"
+    },
+    {
+      "file": "components\\dictation.tsx",
+      "line": 840,
+      "kind": "label",
+      "text": "Stop dictation (Esc)"
+    },
+    {
+      "file": "components\\dictation.tsx",
+      "line": 845,
+      "kind": "aria-label",
+      "text": "Stop dictation"
+    },
+    {
+      "file": "components\\extraction-coverage.tsx",
+      "line": 306,
+      "kind": "label",
+      "text": "How much of this session isn't mapped yet"
+    },
+    {
+      "file": "components\\extraction-coverage.tsx",
+      "line": 373,
+      "kind": "jsx-text",
+      "text": "Uncovered"
+    },
+    {
+      "file": "components\\extraction-coverage.tsx",
+      "line": 379,
+      "kind": "jsx-text",
+      "text": "Covered"
+    },
+    {
+      "file": "components\\extraction-coverage.tsx",
+      "line": 385,
+      "kind": "jsx-text",
+      "text": "Messages"
+    },
+    {
+      "file": "components\\extraction-coverage.tsx",
+      "line": 391,
+      "kind": "jsx-text",
+      "text": "Chunk threshold"
+    },
+    {
+      "file": "components\\extraction-coverage.tsx",
+      "line": 397,
+      "kind": "jsx-text",
+      "text": "Last extraction"
+    },
+    {
+      "file": "components\\extraction-coverage.tsx",
+      "line": 404,
+      "kind": "jsx-text",
+      "text": "Status"
+    },
+    {
+      "file": "components\\file-path-drop-zone.tsx",
+      "line": 113,
+      "kind": "aria-label",
+      "text": "Dismiss attachment notice"
+    },
+    {
+      "file": "components\\graph-context-card.tsx",
+      "line": 36,
+      "kind": "jsx-text",
+      "text": "Graph context"
+    },
+    {
+      "file": "components\\graph-view.tsx",
+      "line": 318,
+      "kind": "label",
+      "text": "Graph costs — click for details"
+    },
+    {
+      "file": "components\\graph-view.tsx",
+      "line": 435,
+      "kind": "label",
+      "text": "Graph display settings"
+    },
+    {
+      "file": "components\\graph-view.tsx",
+      "line": 468,
+      "kind": "label",
+      "text": "Node size"
+    },
+    {
+      "file": "components\\graph-view.tsx",
+      "line": 478,
+      "kind": "label",
+      "text": "Edge width"
+    },
+    {
+      "file": "components\\graph-view.tsx",
+      "line": 488,
+      "kind": "label",
+      "text": "Arrowhead size"
+    },
+    {
+      "file": "components\\graph-view.tsx",
+      "line": 498,
+      "kind": "label",
+      "text": "Label size"
+    },
+    {
+      "file": "components\\graph-view.tsx",
+      "line": 509,
+      "kind": "label",
+      "text": "Labels until zoom"
+    },
+    {
+      "file": "components\\graph-view.tsx",
+      "line": 530,
+      "kind": "jsx-text",
+      "text": "Background colors"
+    },
+    {
+      "file": "components\\graph-view.tsx",
+      "line": 543,
+      "kind": "label",
+      "text": "Dilation"
+    },
+    {
+      "file": "components\\graph-view.tsx",
+      "line": 557,
+      "kind": "label",
+      "text": "Blur"
+    },
+    {
+      "file": "components\\graph-view.tsx",
+      "line": 572,
+      "kind": "label",
+      "text": "Edge alpha"
+    },
+    {
+      "file": "components\\graph-view.tsx",
+      "line": 588,
+      "kind": "jsx-text",
+      "text": "Bitmap resolution"
+    },
+    {
+      "file": "components\\graph-view.tsx",
+      "line": 613,
+      "kind": "jsx-text",
+      "text": "Cluster labels"
+    },
+    {
+      "file": "components\\graph-view.tsx",
+      "line": 622,
+      "kind": "label",
+      "text": "Cluster label size"
+    },
+    {
+      "file": "components\\graph-view.tsx",
+      "line": 651,
+      "kind": "label",
+      "text": "Node repulsion"
+    },
+    {
+      "file": "components\\graph-view.tsx",
+      "line": 664,
+      "kind": "label",
+      "text": "Edge attraction"
+    },
+    {
+      "file": "components\\graph-view.tsx",
+      "line": 677,
+      "kind": "label",
+      "text": "Edge length"
+    },
+    {
+      "file": "components\\graph-view.tsx",
+      "line": 690,
+      "kind": "label",
+      "text": "Central pull"
+    },
+    {
+      "file": "components\\graph-view.tsx",
+      "line": 703,
+      "kind": "label",
+      "text": "Cluster pull"
+    },
+    {
+      "file": "components\\graph-view.tsx",
+      "line": 716,
+      "kind": "label",
+      "text": "Friction"
+    },
+    {
+      "file": "components\\graph-view.tsx",
+      "line": 744,
+      "kind": "jsx-text",
+      "text": "Off"
+    },
+    {
+      "file": "components\\graph-view.tsx",
+      "line": 745,
+      "kind": "jsx-text",
+      "text": "Vertical (up)"
+    },
+    {
+      "file": "components\\graph-view.tsx",
+      "line": 746,
+      "kind": "jsx-text",
+      "text": "Radial (outward)"
+    },
+    {
+      "file": "components\\graph-view.tsx",
+      "line": 750,
+      "kind": "label",
+      "text": "Depth strength"
+    },
+    {
+      "file": "components\\graph-view.tsx",
+      "line": 764,
+      "kind": "label",
+      "text": "Depth spacing"
+    },
+    {
+      "file": "components\\graph-view.tsx",
+      "line": 778,
+      "kind": "label",
+      "text": "Base ring radius"
+    },
+    {
+      "file": "components\\graph-view.tsx",
+      "line": 840,
+      "kind": "label",
+      "text": "Search nodes"
+    },
+    {
+      "file": "components\\graph-view.tsx",
+      "line": 850,
+      "kind": "placeholder",
+      "text": "Search nodes…"
+    },
+    {
+      "file": "components\\graph-view.tsx",
+      "line": 851,
+      "kind": "aria-label",
+      "text": "Search nodes"
+    },
+    {
+      "file": "components\\graph-view.tsx",
+      "line": 858,
+      "kind": "jsx-text",
+      "text": "No matching nodes."
+    },
+    {
+      "file": "components\\graph-view.tsx",
+      "line": 865,
+      "kind": "label",
+      "text": "Every reasoning chain"
+    },
+    {
+      "file": "components\\graph-view.tsx",
+      "line": 1477,
+      "kind": "jsx-text",
+      "text": "Knowledge graph"
+    },
+    {
+      "file": "components\\graph-view.tsx",
+      "line": 1479,
+      "kind": "jsx-text",
+      "text": "Start a session to begin learning."
+    },
+    {
+      "file": "components\\graph-view.tsx",
+      "line": 1480,
+      "kind": "jsx-text",
+      "text": "Attach your material with the paperclip or drag and drop."
+    },
+    {
+      "file": "components\\graph-view.tsx",
+      "line": 1634,
+      "kind": "jsx-text",
+      "text": "Sessions"
+    },
+    {
+      "file": "components\\graph-view.tsx",
+      "line": 1663,
+      "kind": "jsx-text",
+      "text": "No sessions recorded."
+    },
+    {
+      "file": "components\\home.tsx",
+      "line": 287,
+      "kind": "aria-label",
+      "text": "Start session"
+    },
+    {
+      "file": "components\\host-markdown.tsx",
+      "line": 34,
+      "kind": "jsx-text",
+      "text": "Image not available"
+    },
+    {
+      "file": "components\\keyboard-shortcuts.tsx",
+      "line": 190,
+      "kind": "jsx-text",
+      "text": "Keyboard shortcuts"
+    },
+    {
+      "file": "components\\keyboard-shortcuts.tsx",
+      "line": 191,
+      "kind": "jsx-text",
+      "text": "Esc to close"
+    },
+    {
+      "file": "components\\md-blocks.tsx",
+      "line": 210,
+      "kind": "label",
+      "text": "Copy diagram source"
+    },
+    {
+      "file": "components\\md-blocks.tsx",
+      "line": 215,
+      "kind": "label",
+      "text": "Open full-screen"
+    },
+    {
+      "file": "components\\md-blocks.tsx",
+      "line": 220,
+      "kind": "aria-label",
+      "text": "Expand diagram"
+    },
+    {
+      "file": "components\\md-blocks.tsx",
+      "line": 269,
+      "kind": "label",
+      "text": "Copy code"
+    },
+    {
+      "file": "components\\md-blocks.tsx",
+      "line": 399,
+      "kind": "label",
+      "text": "Copy table"
+    },
+    {
+      "file": "components\\md-blocks.tsx",
+      "line": 449,
+      "kind": "label",
+      "text": "Copy equation source"
+    },
+    {
+      "file": "components\\menu-shell.tsx",
+      "line": 106,
+      "kind": "jsx-text",
+      "text": "AnchorRect | null; anchorRef?: RefObject"
+    },
+    {
+      "file": "components\\minimal-home.tsx",
+      "line": 76,
+      "kind": "jsx-text",
+      "text": "Start a session to begin learning."
+    },
+    {
+      "file": "components\\minimal-home.tsx",
+      "line": 77,
+      "kind": "jsx-text",
+      "text": "Attach your material with the paperclip or drag and drop."
+    },
+    {
+      "file": "components\\minimal-home.tsx",
+      "line": 160,
+      "kind": "label",
+      "text": "Every reasoning chain"
+    },
+    {
+      "file": "components\\model-picker.tsx",
+      "line": 169,
+      "kind": "call",
+      "text": "Could not reach the server — try again."
+    },
+    {
+      "file": "components\\model-picker.tsx",
+      "line": 198,
+      "kind": "call",
+      "text": "Could not reach the server — try again."
+    },
+    {
+      "file": "components\\model-picker.tsx",
+      "line": 290,
+      "kind": "label",
+      "text": "Thinking"
+    },
+    {
+      "file": "components\\notes-import.tsx",
+      "line": 113,
+      "kind": "label",
+      "text": "Extract files into the graph"
+    },
+    {
+      "file": "components\\notes-import.tsx",
+      "line": 120,
+      "kind": "aria-label",
+      "text": "Extract files into the graph"
+    },
+    {
+      "file": "components\\notes-import.tsx",
+      "line": 121,
+      "kind": "jsx-text",
+      "text": "For lessons, attach material to a session instead."
+    },
+    {
+      "file": "components\\plan-block.tsx",
+      "line": 542,
+      "kind": "aria-label",
+      "text": "Plan diagram"
+    },
+    {
+      "file": "components\\plan-block.tsx",
+      "line": 682,
+      "kind": "label",
+      "text": "Open the full plan"
+    },
+    {
+      "file": "components\\plan-block.tsx",
+      "line": 686,
+      "kind": "aria-label",
+      "text": "Open the full plan"
+    },
+    {
+      "file": "components\\plan-block.tsx",
+      "line": 879,
+      "kind": "aria-label",
+      "text": "The full plan"
+    },
+    {
+      "file": "components\\plan-block.tsx",
+      "line": 885,
+      "kind": "jsx-text",
+      "text": "The plan"
+    },
+    {
+      "file": "components\\plan-block.tsx",
+      "line": 887,
+      "kind": "label",
+      "text": "Close"
+    },
+    {
+      "file": "components\\plan-block.tsx",
+      "line": 891,
+      "kind": "aria-label",
+      "text": "Close"
+    },
+    {
+      "file": "components\\plan-block.tsx",
+      "line": 939,
+      "kind": "jsx-text",
+      "text": "Drag to pan · scroll to zoom"
+    },
+    {
+      "file": "components\\plan-block.tsx",
+      "line": 941,
+      "kind": "label",
+      "text": "Zoom out"
+    },
+    {
+      "file": "components\\plan-block.tsx",
+      "line": 944,
+      "kind": "aria-label",
+      "text": "Zoom out"
+    },
+    {
+      "file": "components\\plan-block.tsx",
+      "line": 951,
+      "kind": "label",
+      "text": "Fit plan to screen"
+    },
+    {
+      "file": "components\\plan-block.tsx",
+      "line": 954,
+      "kind": "aria-label",
+      "text": "Fit plan to screen"
+    },
+    {
+      "file": "components\\plan-block.tsx",
+      "line": 962,
+      "kind": "label",
+      "text": "Zoom in"
+    },
+    {
+      "file": "components\\plan-block.tsx",
+      "line": 965,
+      "kind": "aria-label",
+      "text": "Zoom in"
+    },
+    {
+      "file": "components\\plugin-chrome.tsx",
+      "line": 93,
+      "kind": "aria-label",
+      "text": "Plugin graph actions"
+    },
+    {
+      "file": "components\\plugin-chrome.tsx",
+      "line": 114,
+      "kind": "jsx-text",
+      "text": "Extract"
+    },
+    {
+      "file": "components\\plugin-chrome.tsx",
+      "line": 197,
+      "kind": "label",
+      "text": "More plugin actions"
+    },
+    {
+      "file": "components\\plugin-chrome.tsx",
+      "line": 197,
+      "kind": "title",
+      "text": "More plugin actions"
+    },
+    {
+      "file": "components\\plugin-chrome.tsx",
+      "line": 197,
+      "kind": "aria-label",
+      "text": "More plugin actions"
+    },
+    {
+      "file": "components\\plugin-chrome.tsx",
+      "line": 202,
+      "kind": "aria-label",
+      "text": "More plugin actions"
+    },
+    {
+      "file": "components\\plugin-composer.tsx",
+      "line": 28,
+      "kind": "jsx-text",
+      "text": "Promise"
+    },
+    {
+      "file": "components\\plugin-composer.tsx",
+      "line": 51,
+      "kind": "placeholder",
+      "text": "Message…"
+    },
+    {
+      "file": "components\\plugin-knowledge-picker.tsx",
+      "line": 32,
+      "kind": "aria-label",
+      "text": "Search nodes"
+    },
+    {
+      "file": "components\\plugin-knowledge-picker.tsx",
+      "line": 54,
+      "kind": "aria-label",
+      "text": "Pick nodes"
+    },
+    {
+      "file": "components\\plugin-knowledge-picker.tsx",
+      "line": 193,
+      "kind": "aria-label",
+      "text": "Pick nodes"
+    },
+    {
+      "file": "components\\plugin-model-picker.tsx",
+      "line": 54,
+      "kind": "aria-label",
+      "text": "Model selector"
+    },
+    {
+      "file": "components\\plugin-model-picker.tsx",
+      "line": 95,
+      "kind": "aria-label",
+      "text": "Thinking"
+    },
+    {
+      "file": "components\\plugin-problem-dock.tsx",
+      "line": 125,
+      "kind": "jsx-text",
+      "text": "Preparing problem…"
+    },
+    {
+      "file": "components\\plugin-problem-dock.tsx",
+      "line": 126,
+      "kind": "jsx-text",
+      "text": "Problem unavailable"
+    },
+    {
+      "file": "components\\plugin-problem-submitted.tsx",
+      "line": 21,
+      "kind": "jsx-text",
+      "text": "Problem unavailable"
+    },
+    {
+      "file": "components\\plugin-problem-submitted.tsx",
+      "line": 52,
+      "kind": "label",
+      "text": "YOUR THINKING"
+    },
+    {
+      "file": "components\\plugin-question-dock.tsx",
+      "line": 153,
+      "kind": "jsx-text",
+      "text": "Preparing question…"
+    },
+    {
+      "file": "components\\plugin-question-dock.tsx",
+      "line": 154,
+      "kind": "jsx-text",
+      "text": "Question unavailable"
+    },
+    {
+      "file": "components\\plugin-question-dock.tsx",
+      "line": 162,
+      "kind": "jsx-text",
+      "text": "Your thinking"
+    },
+    {
+      "file": "components\\plugin-question-dock.tsx",
+      "line": 167,
+      "kind": "placeholder",
+      "text": "Your thinking"
+    },
+    {
+      "file": "components\\plugin-question-dock.tsx",
+      "line": 171,
+      "kind": "jsx-text",
+      "text": "Dismiss question"
+    },
+    {
+      "file": "components\\plugin-question-dock.tsx",
+      "line": 172,
+      "kind": "jsx-text",
+      "text": "Submit answer"
+    },
+    {
+      "file": "components\\plugin-question-part.tsx",
+      "line": 25,
+      "kind": "jsx-text",
+      "text": "Question dismissed"
+    },
+    {
+      "file": "components\\plugin-question-slots.tsx",
+      "line": 75,
+      "kind": "label",
+      "text": "YOUR THINKING"
+    },
+    {
+      "file": "components\\plugin-question-slots.tsx",
+      "line": 81,
+      "kind": "label",
+      "text": "YOUR THINKING"
+    },
+    {
+      "file": "components\\plugin-renderers.tsx",
+      "line": 93,
+      "kind": "jsx-text",
+      "text": "Question unavailable"
+    },
+    {
+      "file": "components\\plugin-renderers.tsx",
+      "line": 111,
+      "kind": "jsx-text",
+      "text": "Question unavailable"
+    },
+    {
+      "file": "components\\plugin-settings-rows.tsx",
+      "line": 21,
+      "kind": "call",
+      "text": "Value is outside the allowed range."
+    },
+    {
+      "file": "components\\plugin-surface-shell.tsx",
+      "line": 110,
+      "kind": "aria-label",
+      "text": "Close"
+    },
+    {
+      "file": "components\\plugin-surface-shell.tsx",
+      "line": 110,
+      "kind": "title",
+      "text": "Close"
+    },
+    {
+      "file": "components\\plugin-ui-host.tsx",
+      "line": 357,
+      "kind": "aria-label",
+      "text": "Close dialog"
+    },
+    {
+      "file": "components\\plugin-ui-host.tsx",
+      "line": 357,
+      "kind": "title",
+      "text": "Close"
+    },
+    {
+      "file": "components\\plugin-view.tsx",
+      "line": 34,
+      "kind": "label",
+      "text": "Plugin settings"
+    },
+    {
+      "file": "components\\plugin-view.tsx",
+      "line": 35,
+      "kind": "aria-label",
+      "text": "Plugin settings"
+    },
+    {
+      "file": "components\\plugin-view.tsx",
+      "line": 35,
+      "kind": "title",
+      "text": "Plugin settings"
+    },
+    {
+      "file": "components\\plugin-view.tsx",
+      "line": 42,
+      "kind": "jsx-text",
+      "text": "Loading plugin…"
+    },
+    {
+      "file": "components\\plugin-view.tsx",
+      "line": 44,
+      "kind": "jsx-text",
+      "text": "Back to home"
+    },
+    {
+      "file": "components\\plugins.tsx",
+      "line": 44,
+      "kind": "jsx-text",
+      "text": "Promise"
+    },
+    {
+      "file": "components\\practice-cards.tsx",
+      "line": 70,
+      "kind": "jsx-text",
+      "text": "Problem"
+    },
+    {
+      "file": "components\\practice-cards.tsx",
+      "line": 144,
+      "kind": "jsx-text",
+      "text": "Model solution"
+    },
+    {
+      "file": "components\\practice-cards.tsx",
+      "line": 261,
+      "kind": "jsx-text",
+      "text": "Mode"
+    },
+    {
+      "file": "components\\practice-cards.tsx",
+      "line": 263,
+      "kind": "jsx-text",
+      "text": "Targets"
+    },
+    {
+      "file": "components\\practice-cards.tsx",
+      "line": 278,
+      "kind": "jsx-text",
+      "text": "Outcome"
+    },
+    {
+      "file": "components\\practice-cards.tsx",
+      "line": 280,
+      "kind": "jsx-text",
+      "text": "Hint rung"
+    },
+    {
+      "file": "components\\practice-cards.tsx",
+      "line": 282,
+      "kind": "jsx-text",
+      "text": "Miss class"
+    },
+    {
+      "file": "components\\practice-cards.tsx",
+      "line": 284,
+      "kind": "jsx-text",
+      "text": "Retest"
+    },
+    {
+      "file": "components\\practice-cards.tsx",
+      "line": 299,
+      "kind": "label",
+      "text": "YOUR THINKING"
+    },
+    {
+      "file": "components\\practice-dock.tsx",
+      "line": 134,
+      "kind": "jsx-text",
+      "text": "Problem"
+    },
+    {
+      "file": "components\\practice-dock.tsx",
+      "line": 150,
+      "kind": "jsx-text",
+      "text": "Problem"
+    },
+    {
+      "file": "components\\practice-dock.tsx",
+      "line": 191,
+      "kind": "placeholder",
+      "text": "Work here, think out loud."
+    },
+    {
+      "file": "components\\question-dock.tsx",
+      "line": 233,
+      "kind": "jsx-text",
+      "text": "Check your understanding"
+    },
+    {
+      "file": "components\\question-dock.tsx",
+      "line": 720,
+      "kind": "jsx-text",
+      "text": "I don't know"
+    },
+    {
+      "file": "components\\question-dock.tsx",
+      "line": 789,
+      "kind": "placeholder",
+      "text": "Type your own answer…"
+    },
+    {
+      "file": "components\\question-dock.tsx",
+      "line": 850,
+      "kind": "aria-label",
+      "text": "Confidence — the probability your selected answer is correct"
+    },
+    {
+      "file": "components\\question-dock.tsx",
+      "line": 935,
+      "kind": "placeholder",
+      "text": "Type your answer…"
+    },
+    {
+      "file": "components\\question-dock.tsx",
+      "line": 966,
+      "kind": "placeholder",
+      "text": "Why this answer? Whatever comes to mind."
+    },
+    {
+      "file": "components\\reading-thinking.tsx",
+      "line": 115,
+      "kind": "placeholder",
+      "text": "Whatever comes to mind as you read."
+    },
+    {
+      "file": "components\\selection-toolbar.tsx",
+      "line": 187,
+      "kind": "aria-label",
+      "text": "Selection actions"
+    },
+    {
+      "file": "components\\session-find.tsx",
+      "line": 162,
+      "kind": "aria-label",
+      "text": "Session Find"
+    },
+    {
+      "file": "components\\session-find.tsx",
+      "line": 183,
+      "kind": "aria-label",
+      "text": "Find in session"
+    },
+    {
+      "file": "components\\session-find.tsx",
+      "line": 184,
+      "kind": "placeholder",
+      "text": "Find in session…"
+    },
+    {
+      "file": "components\\session-find.tsx",
+      "line": 193,
+      "kind": "aria-label",
+      "text": "Previous match"
+    },
+    {
+      "file": "components\\session-find.tsx",
+      "line": 193,
+      "kind": "title",
+      "text": "Previous match (Shift+Enter)"
+    },
+    {
+      "file": "components\\session-find.tsx",
+      "line": 197,
+      "kind": "aria-label",
+      "text": "Next match"
+    },
+    {
+      "file": "components\\session-find.tsx",
+      "line": 197,
+      "kind": "title",
+      "text": "Next match (Enter)"
+    },
+    {
+      "file": "components\\session-find.tsx",
+      "line": 201,
+      "kind": "aria-label",
+      "text": "Close Find"
+    },
+    {
+      "file": "components\\session-find.tsx",
+      "line": 201,
+      "kind": "title",
+      "text": "Close Find (Esc)"
+    },
+    {
+      "file": "components\\session-overlay.tsx",
+      "line": 240,
+      "kind": "label",
+      "text": "Close"
+    },
+    {
+      "file": "components\\session-overlay.tsx",
+      "line": 244,
+      "kind": "aria-label",
+      "text": "Close"
+    },
+    {
+      "file": "components\\session-overlay.tsx",
+      "line": 292,
+      "kind": "alt",
+      "text": "Submitted image"
+    },
+    {
+      "file": "components\\session-overlay.tsx",
+      "line": 310,
+      "kind": "jsx-text",
+      "text": "Drag to pan · scroll to zoom"
+    },
+    {
+      "file": "components\\session-overlay.tsx",
+      "line": 312,
+      "kind": "label",
+      "text": "Zoom out"
+    },
+    {
+      "file": "components\\session-overlay.tsx",
+      "line": 315,
+      "kind": "aria-label",
+      "text": "Zoom out"
+    },
+    {
+      "file": "components\\session-overlay.tsx",
+      "line": 332,
+      "kind": "label",
+      "text": "Zoom in"
+    },
+    {
+      "file": "components\\session-overlay.tsx",
+      "line": 335,
+      "kind": "aria-label",
+      "text": "Zoom in"
+    },
+    {
+      "file": "components\\settings\\agent-section.tsx",
+      "line": 586,
+      "kind": "jsx-text",
+      "text": "Source"
+    },
+    {
+      "file": "components\\settings\\agent-section.tsx",
+      "line": 590,
+      "kind": "aria-label",
+      "text": "The original instructions"
+    },
+    {
+      "file": "components\\settings\\agent-section.tsx",
+      "line": 595,
+      "kind": "jsx-text",
+      "text": "Override"
+    },
+    {
+      "file": "components\\settings\\agent-section.tsx",
+      "line": 599,
+      "kind": "aria-label",
+      "text": "Your version of the instructions"
+    },
+    {
+      "file": "components\\settings\\agent-section.tsx",
+      "line": 600,
+      "kind": "placeholder",
+      "text": "Add your own instructions…"
+    },
+    {
+      "file": "components\\settings\\agent-section.tsx",
+      "line": 656,
+      "kind": "label",
+      "text": "Models"
+    },
+    {
+      "file": "components\\settings\\agent-section.tsx",
+      "line": 664,
+      "kind": "jsx-text",
+      "text": "Model catalog could not be loaded. Check the connection and retry."
+    },
+    {
+      "file": "components\\settings\\agent-section.tsx",
+      "line": 664,
+      "kind": "jsx-text",
+      "text": "Retry"
+    },
+    {
+      "file": "components\\settings\\agent-section.tsx",
+      "line": 795,
+      "kind": "label",
+      "text": "Concurrent worker requests"
+    },
+    {
+      "file": "components\\settings\\agent-section.tsx",
+      "line": 830,
+      "kind": "label",
+      "text": "Tools"
+    },
+    {
+      "file": "components\\settings\\agent-section.tsx",
+      "line": 842,
+      "kind": "label",
+      "text": "Graph tools"
+    },
+    {
+      "file": "components\\settings\\agent-section.tsx",
+      "line": 850,
+      "kind": "label",
+      "text": "graph tools"
+    },
+    {
+      "file": "components\\settings\\agent-section.tsx",
+      "line": 864,
+      "kind": "label",
+      "text": "Quizzing"
+    },
+    {
+      "file": "components\\settings\\agent-section.tsx",
+      "line": 870,
+      "kind": "aria-label",
+      "text": "Quizzing mechanics"
+    },
+    {
+      "file": "components\\settings\\agent-section.tsx",
+      "line": 922,
+      "kind": "label",
+      "text": "File access"
+    },
+    {
+      "file": "components\\settings\\agent-section.tsx",
+      "line": 927,
+      "kind": "jsx-text",
+      "text": "Restrict to listed folders"
+    },
+    {
+      "file": "components\\settings\\agent-section.tsx",
+      "line": 928,
+      "kind": "label",
+      "text": "Restrict to listed folders"
+    },
+    {
+      "file": "components\\settings\\agent-section.tsx",
+      "line": 933,
+      "kind": "aria-label",
+      "text": "Allowed folder path"
+    },
+    {
+      "file": "components\\settings\\agent-section.tsx",
+      "line": 933,
+      "kind": "placeholder",
+      "text": "Absolute path or ~/folder"
+    },
+    {
+      "file": "components\\settings\\agent-section.tsx",
+      "line": 937,
+      "kind": "jsx-text",
+      "text": "Add folder"
+    },
+    {
+      "file": "components\\settings\\agent-section.tsx",
+      "line": 945,
+      "kind": "jsx-text",
+      "text": "Remove"
+    },
+    {
+      "file": "components\\settings\\agent-section.tsx",
+      "line": 957,
+      "kind": "label",
+      "text": "Search engine"
+    },
+    {
+      "file": "components\\settings\\agent-section.tsx",
+      "line": 999,
+      "kind": "label",
+      "text": "Context"
+    },
+    {
+      "file": "components\\settings\\agent-section.tsx",
+      "line": 1001,
+      "kind": "label",
+      "text": "Compaction threshold"
+    },
+    {
+      "file": "components\\settings\\agent-section.tsx",
+      "line": 1030,
+      "kind": "label",
+      "text": "Include reasoning in token estimates (OpenAI Responses only)"
+    },
+    {
+      "file": "components\\settings\\agent-section.tsx",
+      "line": 1035,
+      "kind": "label",
+      "text": "Include reasoning in token estimates (OpenAI Responses only)"
+    },
+    {
+      "file": "components\\settings\\agent-section.tsx",
+      "line": 1042,
+      "kind": "label",
+      "text": "System prompts"
+    },
+    {
+      "file": "components\\settings\\agent-section.tsx",
+      "line": 1044,
+      "kind": "jsx-text",
+      "text": "Loading prompt segments…"
+    },
+    {
+      "file": "components\\settings\\appearance-section.tsx",
+      "line": 77,
+      "kind": "jsx-text",
+      "text": "Promise"
+    },
+    {
+      "file": "components\\settings\\appearance-section.tsx",
+      "line": 328,
+      "kind": "jsx-text",
+      "text": "Typography"
+    },
+    {
+      "file": "components\\settings\\appearance-section.tsx",
+      "line": 330,
+      "kind": "label",
+      "text": "Reading font"
+    },
+    {
+      "file": "components\\settings\\appearance-section.tsx",
+      "line": 345,
+      "kind": "aria-label",
+      "text": "Reading font"
+    },
+    {
+      "file": "components\\settings\\appearance-section.tsx",
+      "line": 355,
+      "kind": "label",
+      "text": "Choose from your installed fonts"
+    },
+    {
+      "file": "components\\settings\\appearance-section.tsx",
+      "line": 386,
+      "kind": "label",
+      "text": "Reading font size"
+    },
+    {
+      "file": "components\\settings\\appearance-section.tsx",
+      "line": 406,
+      "kind": "label",
+      "text": "Code ligatures"
+    },
+    {
+      "file": "components\\settings\\appearance-section.tsx",
+      "line": 409,
+      "kind": "label",
+      "text": "Code ligatures"
+    },
+    {
+      "file": "components\\settings\\appearance-section.tsx",
+      "line": 413,
+      "kind": "label",
+      "text": "Session names in serif"
+    },
+    {
+      "file": "components\\settings\\appearance-section.tsx",
+      "line": 416,
+      "kind": "label",
+      "text": "session names serif"
+    },
+    {
+      "file": "components\\settings\\appearance-section.tsx",
+      "line": 420,
+      "kind": "label",
+      "text": "Heading weight"
+    },
+    {
+      "file": "components\\settings\\appearance-section.tsx",
+      "line": 473,
+      "kind": "label",
+      "text": "Extraction"
+    },
+    {
+      "file": "components\\settings\\appearance-section.tsx",
+      "line": 476,
+      "kind": "label",
+      "text": "extraction enabled"
+    },
+    {
+      "file": "components\\settings\\appearance-section.tsx",
+      "line": 489,
+      "kind": "label",
+      "text": "Graph rendering"
+    },
+    {
+      "file": "components\\settings\\appearance-section.tsx",
+      "line": 492,
+      "kind": "label",
+      "text": "graph rendering enabled"
+    },
+    {
+      "file": "components\\settings\\appearance-section.tsx",
+      "line": 497,
+      "kind": "label",
+      "text": "Extraction chunk budget"
+    },
+    {
+      "file": "components\\settings\\appearance.tsx",
+      "line": 126,
+      "kind": "jsx-text",
+      "text": "Promise"
+    },
+    {
+      "file": "components\\settings\\cache-retention-menu.tsx",
+      "line": 22,
+      "kind": "jsx-text",
+      "text": "Cache retention"
+    },
+    {
+      "file": "components\\settings\\chatgpt-connection.tsx",
+      "line": 133,
+      "kind": "call",
+      "text": "The desktop connection is unavailable. Retry when the app is ready."
+    },
+    {
+      "file": "components\\settings\\chatgpt-connection.tsx",
+      "line": 189,
+      "kind": "jsx-text",
+      "text": "Promise"
+    },
+    {
+      "file": "components\\settings\\chatgpt-connection.tsx",
+      "line": 262,
+      "kind": "jsx-text",
+      "text": "ChatGPT"
+    },
+    {
+      "file": "components\\settings\\chatgpt-connection.tsx",
+      "line": 265,
+      "kind": "jsx-text",
+      "text": "Dismiss"
+    },
+    {
+      "file": "components\\settings\\chatgpt-connection.tsx",
+      "line": 272,
+      "kind": "jsx-text",
+      "text": "Cancel"
+    },
+    {
+      "file": "components\\settings\\chatgpt-connection.tsx",
+      "line": 273,
+      "kind": "jsx-text",
+      "text": "Disconnect account"
+    },
+    {
+      "file": "components\\settings\\chatgpt-connection.tsx",
+      "line": 278,
+      "kind": "aria-label",
+      "text": "Saved ChatGPT account"
+    },
+    {
+      "file": "components\\settings\\chatgpt-connection.tsx",
+      "line": 279,
+      "kind": "jsx-text",
+      "text": "Add another account or workspace"
+    },
+    {
+      "file": "components\\settings\\chatgpt-connection.tsx",
+      "line": 282,
+      "kind": "jsx-text",
+      "text": "Manage…"
+    },
+    {
+      "file": "components\\settings\\chatgpt-connection.tsx",
+      "line": 294,
+      "kind": "jsx-text",
+      "text": "OpenAI privacy"
+    },
+    {
+      "file": "components\\settings\\chatgpt-connection.tsx",
+      "line": 295,
+      "kind": "jsx-text",
+      "text": "Manage usage"
+    },
+    {
+      "file": "components\\settings\\chatgpt-connection.tsx",
+      "line": 298,
+      "kind": "jsx-text",
+      "text": "Waiting for browser sign-in…"
+    },
+    {
+      "file": "components\\settings\\chatgpt-connection.tsx",
+      "line": 302,
+      "kind": "aria-label",
+      "text": "Manage ChatGPT account"
+    },
+    {
+      "file": "components\\settings\\chatgpt-connection.tsx",
+      "line": 306,
+      "kind": "jsx-text",
+      "text": "Add accounts"
+    },
+    {
+      "file": "components\\settings\\chatgpt-connection.tsx",
+      "line": 309,
+      "kind": "jsx-text",
+      "text": "Disconnect"
+    },
+    {
+      "file": "components\\settings\\chatgpt-connection.tsx",
+      "line": 311,
+      "kind": "jsx-text",
+      "text": "Sign in again"
+    },
+    {
+      "file": "components\\settings\\chatgpt-connection.tsx",
+      "line": 330,
+      "kind": "label",
+      "text": "ChatGPT account"
+    },
+    {
+      "file": "components\\settings\\chatgpt-connection.tsx",
+      "line": 339,
+      "kind": "label",
+      "text": "ChatGPT"
+    },
+    {
+      "file": "components\\settings\\chatgpt-connection.tsx",
+      "line": 340,
+      "kind": "aria-label",
+      "text": "ChatGPT account"
+    },
+    {
+      "file": "components\\settings\\chatgpt-connection.tsx",
+      "line": 345,
+      "kind": "jsx-text",
+      "text": "Dismiss"
+    },
+    {
+      "file": "components\\settings\\chatgpt-connection.tsx",
+      "line": 354,
+      "kind": "jsx-text",
+      "text": "Enable background use"
+    },
+    {
+      "file": "components\\settings\\claude-code-status.tsx",
+      "line": 43,
+      "kind": "call",
+      "text": "Could not load Claude Code settings."
+    },
+    {
+      "file": "components\\settings\\claude-code-status.tsx",
+      "line": 69,
+      "kind": "call",
+      "text": "Could not save Claude Code settings."
+    },
+    {
+      "file": "components\\settings\\claude-code-status.tsx",
+      "line": 103,
+      "kind": "jsx-text",
+      "text": "Claude Code"
+    },
+    {
+      "file": "components\\settings\\claude-code-status.tsx",
+      "line": 104,
+      "kind": "label",
+      "text": "Claude Code"
+    },
+    {
+      "file": "components\\settings\\claude-code-status.tsx",
+      "line": 110,
+      "kind": "jsx-text",
+      "text": "Check again"
+    },
+    {
+      "file": "components\\settings\\claude-code-status.tsx",
+      "line": 112,
+      "kind": "jsx-text",
+      "text": "LearnHarness starts it when needed—no background process required."
+    },
+    {
+      "file": "components\\settings\\claude-code-status.tsx",
+      "line": 113,
+      "kind": "jsx-text",
+      "text": "Setup ↗"
+    },
+    {
+      "file": "components\\settings\\keyboard-section.tsx",
+      "line": 186,
+      "kind": "jsx-text",
+      "text": "Cancel"
+    },
+    {
+      "file": "components\\settings\\keyboard-section.tsx",
+      "line": 187,
+      "kind": "jsx-text",
+      "text": "Rebind"
+    },
+    {
+      "file": "components\\settings\\keyboard-section.tsx",
+      "line": 188,
+      "kind": "jsx-text",
+      "text": "Clear"
+    },
+    {
+      "file": "components\\settings\\keyboard-section.tsx",
+      "line": 189,
+      "kind": "jsx-text",
+      "text": "Reset"
+    },
+    {
+      "file": "components\\settings\\keyboard-section.tsx",
+      "line": 195,
+      "kind": "jsx-text",
+      "text": "Stored on this device (lh:keymap) — overrides only."
+    },
+    {
+      "file": "components\\settings\\keys-section.tsx",
+      "line": 181,
+      "kind": "jsx-text",
+      "text": "Promise"
+    },
+    {
+      "file": "components\\settings\\keys-section.tsx",
+      "line": 182,
+      "kind": "jsx-text",
+      "text": "Promise"
+    },
+    {
+      "file": "components\\settings\\keys-section.tsx",
+      "line": 219,
+      "kind": "placeholder",
+      "text": "Paste key…"
+    },
+    {
+      "file": "components\\settings\\keys-section.tsx",
+      "line": 472,
+      "kind": "jsx-text",
+      "text": "Loading keys…"
+    },
+    {
+      "file": "components\\settings\\keys-section.tsx",
+      "line": 488,
+      "kind": "label",
+      "text": "Model API keys"
+    },
+    {
+      "file": "components\\settings\\keys-section.tsx",
+      "line": 575,
+      "kind": "label",
+      "text": "Subscriptions"
+    },
+    {
+      "file": "components\\settings\\keys-section.tsx",
+      "line": 579,
+      "kind": "label",
+      "text": "External CLI"
+    },
+    {
+      "file": "components\\settings\\keys-section.tsx",
+      "line": 610,
+      "kind": "jsx-text",
+      "text": "Deepgram API key"
+    },
+    {
+      "file": "components\\settings\\keys-section.tsx",
+      "line": 650,
+      "kind": "placeholder",
+      "text": "Paste key…"
+    },
+    {
+      "file": "components\\settings\\keys-section.tsx",
+      "line": 692,
+      "kind": "jsx-text",
+      "text": "Retry"
+    },
+    {
+      "file": "components\\settings\\keys-section.tsx",
+      "line": 717,
+      "kind": "jsx-text",
+      "text": "Custom endpoint"
+    },
+    {
+      "file": "components\\settings\\keys-section.tsx",
+      "line": 801,
+      "kind": "jsx-text",
+      "text": "Promise"
+    },
+    {
+      "file": "components\\settings\\keys-section.tsx",
+      "line": 825,
+      "kind": "call",
+      "text": "Unable to inspect effective key. Reload configuration and retry."
+    },
+    {
+      "file": "components\\settings\\keys-section.tsx",
+      "line": 897,
+      "kind": "jsx-text",
+      "text": "Custom endpoint"
+    },
+    {
+      "file": "components\\settings\\keys-section.tsx",
+      "line": 903,
+      "kind": "placeholder",
+      "text": "Base URL, e.g. http://localhost:11434/v1"
+    },
+    {
+      "file": "components\\settings\\keys-section.tsx",
+      "line": 904,
+      "kind": "aria-label",
+      "text": "Custom endpoint base URL"
+    },
+    {
+      "file": "components\\settings\\keys-section.tsx",
+      "line": 916,
+      "kind": "aria-label",
+      "text": "Custom endpoint model IDs"
+    },
+    {
+      "file": "components\\settings\\keys-section.tsx",
+      "line": 922,
+      "kind": "aria-label",
+      "text": "Custom endpoint authentication"
+    },
+    {
+      "file": "components\\settings\\keys-section.tsx",
+      "line": 923,
+      "kind": "jsx-text",
+      "text": "Keyless"
+    },
+    {
+      "file": "components\\settings\\keys-section.tsx",
+      "line": 923,
+      "kind": "jsx-text",
+      "text": "API key"
+    },
+    {
+      "file": "components\\settings\\keys-section.tsx",
+      "line": 927,
+      "kind": "jsx-text",
+      "text": "Allow reuse of the effective existing key for this URL"
+    },
+    {
+      "file": "components\\settings\\keys-section.tsx",
+      "line": 938,
+      "kind": "aria-label",
+      "text": "Custom endpoint API key"
+    },
+    {
+      "file": "components\\settings\\keys-section.tsx",
+      "line": 1017,
+      "kind": "jsx-text",
+      "text": "Reasoning effort: Use reported"
+    },
+    {
+      "file": "components\\settings\\keys-section.tsx",
+      "line": 1018,
+      "kind": "jsx-text",
+      "text": "Reasoning effort: Supported"
+    },
+    {
+      "file": "components\\settings\\keys-section.tsx",
+      "line": 1019,
+      "kind": "jsx-text",
+      "text": "Reasoning effort: Not supported"
+    },
+    {
+      "file": "components\\settings\\keys-section.tsx",
+      "line": 1047,
+      "kind": "jsx-text",
+      "text": "Reload configuration"
+    },
+    {
+      "file": "components\\settings\\model-menu.tsx",
+      "line": 82,
+      "kind": "placeholder",
+      "text": "Search models…"
+    },
+    {
+      "file": "components\\settings\\model-menu.tsx",
+      "line": 209,
+      "kind": "placeholder",
+      "text": "Search providers…"
+    },
+    {
+      "file": "components\\settings\\model-menu.tsx",
+      "line": 213,
+      "kind": "jsx-text",
+      "text": "No providers match."
+    },
+    {
+      "file": "components\\settings\\model-menu.tsx",
+      "line": 339,
+      "kind": "placeholder",
+      "text": "Search fonts…"
+    },
+    {
+      "file": "components\\settings\\model-menu.tsx",
+      "line": 342,
+      "kind": "jsx-text",
+      "text": "Loading fonts…"
+    },
+    {
+      "file": "components\\settings\\plugin-settings-page.tsx",
+      "line": 14,
+      "kind": "jsx-text",
+      "text": "Loading plugin settings…"
+    },
+    {
+      "file": "components\\settings\\plugin-settings-page.tsx",
+      "line": 15,
+      "kind": "jsx-text",
+      "text": "Plugin settings could not be loaded."
+    },
+    {
+      "file": "components\\settings\\plugin-settings-page.tsx",
+      "line": 16,
+      "kind": "jsx-text",
+      "text": "No settings available."
+    },
+    {
+      "file": "components\\settings\\plugins-section.tsx",
+      "line": 19,
+      "kind": "jsx-text",
+      "text": "How to install a plugin"
+    },
+    {
+      "file": "components\\settings\\plugins-section.tsx",
+      "line": 22,
+      "kind": "jsx-text",
+      "text": "For source projects, follow the repository’s dependency setup and run"
+    },
+    {
+      "file": "components\\settings\\plugins-section.tsx",
+      "line": 24,
+      "kind": "jsx-text",
+      "text": "Restart LearnHarness after changing loaded code. Preserve"
+    },
+    {
+      "file": "components\\settings\\plugins-section.tsx",
+      "line": 28,
+      "kind": "jsx-text",
+      "text": "Build a plugin"
+    },
+    {
+      "file": "components\\settings\\plugins-section.tsx",
+      "line": 29,
+      "kind": "jsx-text",
+      "text": "Download the authoring skill for your coding agent."
+    },
+    {
+      "file": "components\\settings\\plugins-section.tsx",
+      "line": 30,
+      "kind": "jsx-text",
+      "text": "Download authoring skill"
+    },
+    {
+      "file": "components\\settings\\plugins-section.tsx",
+      "line": 33,
+      "kind": "jsx-text",
+      "text": "Plugins directory"
+    },
+    {
+      "file": "components\\settings\\plugins-section.tsx",
+      "line": 36,
+      "kind": "aria-label",
+      "text": "Refresh plugins"
+    },
+    {
+      "file": "components\\settings\\plugins-section.tsx",
+      "line": 36,
+      "kind": "title",
+      "text": "Refresh plugins"
+    },
+    {
+      "file": "components\\settings\\plugins-section.tsx",
+      "line": 45,
+      "kind": "jsx-text",
+      "text": "Loading plugins…"
+    },
+    {
+      "file": "components\\settings\\settings-dialog.tsx",
+      "line": 162,
+      "kind": "aria-label",
+      "text": "Settings"
+    },
+    {
+      "file": "components\\settings\\settings-dialog.tsx",
+      "line": 349,
+      "kind": "aria-label",
+      "text": "Settings"
+    },
+    {
+      "file": "components\\settings\\settings-dialog.tsx",
+      "line": 356,
+      "kind": "jsx-text",
+      "text": "Settings"
+    },
+    {
+      "file": "components\\settings\\settings-dialog.tsx",
+      "line": 359,
+      "kind": "label",
+      "text": "Close"
+    },
+    {
+      "file": "components\\settings\\settings-dialog.tsx",
+      "line": 365,
+      "kind": "aria-label",
+      "text": "Close settings"
+    },
+    {
+      "file": "components\\settings\\settings-dialog.tsx",
+      "line": 387,
+      "kind": "aria-label",
+      "text": "Settings sections"
+    },
+    {
+      "file": "components\\settings\\settings-dialog.tsx",
+      "line": 435,
+      "kind": "jsx-text",
+      "text": "Loading plugins…"
+    },
+    {
+      "file": "components\\settings\\settings-dialog.tsx",
+      "line": 448,
+      "kind": "title",
+      "text": "General"
+    },
+    {
+      "file": "components\\settings\\settings-dialog.tsx",
+      "line": 460,
+      "kind": "title",
+      "text": "Providers"
+    },
+    {
+      "file": "components\\settings\\settings-dialog.tsx",
+      "line": 466,
+      "kind": "title",
+      "text": "Agent"
+    },
+    {
+      "file": "components\\settings\\settings-dialog.tsx",
+      "line": 489,
+      "kind": "title",
+      "text": "Appearance"
+    },
+    {
+      "file": "components\\settings\\settings-dialog.tsx",
+      "line": 502,
+      "kind": "title",
+      "text": "Graph"
+    },
+    {
+      "file": "components\\settings\\settings-dialog.tsx",
+      "line": 515,
+      "kind": "title",
+      "text": "Keyboard"
+    },
+    {
+      "file": "components\\settings\\subscription-connections.tsx",
+      "line": 44,
+      "kind": "call",
+      "text": "The desktop connection is unavailable. Retry when the app is ready."
+    },
+    {
+      "file": "components\\settings\\subscription-connections.tsx",
+      "line": 59,
+      "kind": "jsx-text",
+      "text": "Promise"
+    },
+    {
+      "file": "components\\settings\\subscription-connections.tsx",
+      "line": 81,
+      "kind": "call",
+      "text": "Sign-in did not complete. Try connecting again."
+    },
+    {
+      "file": "components\\settings\\subscription-connections.tsx",
+      "line": 96,
+      "kind": "label",
+      "text": "Allow background use"
+    },
+    {
+      "file": "components\\settings\\subscription-connections.tsx",
+      "line": 97,
+      "kind": "jsx-text",
+      "text": "Allow background use"
+    },
+    {
+      "file": "components\\settings\\subscription-connections.tsx",
+      "line": 102,
+      "kind": "jsx-text",
+      "text": "Device code:"
+    },
+    {
+      "file": "components\\settings\\subscription-connections.tsx",
+      "line": 103,
+      "kind": "jsx-text",
+      "text": "Open browser"
+    },
+    {
+      "file": "components\\settings\\subscription-connections.tsx",
+      "line": 103,
+      "kind": "call",
+      "text": "The browser could not be opened. Try again."
+    },
+    {
+      "file": "components\\settings\\subscription-connections.tsx",
+      "line": 106,
+      "kind": "jsx-text",
+      "text": "Select…"
+    },
+    {
+      "file": "components\\settings\\subscription-connections.tsx",
+      "line": 107,
+      "kind": "jsx-text",
+      "text": "Continue"
+    },
+    {
+      "file": "components\\settings\\subscription-connections.tsx",
+      "line": 112,
+      "kind": "jsx-text",
+      "text": "Disconnect"
+    },
+    {
+      "file": "components\\settings\\subscription-connections.tsx",
+      "line": 114,
+      "kind": "jsx-text",
+      "text": "Retry"
+    },
+    {
+      "file": "components\\settings\\subscription-connections.tsx",
+      "line": 115,
+      "kind": "jsx-text",
+      "text": "Sign in again"
+    },
+    {
+      "file": "components\\settings\\subscription-connections.tsx",
+      "line": 118,
+      "kind": "jsx-text",
+      "text": "Disconnect"
+    },
+    {
+      "file": "components\\settings\\subscription-connections.tsx",
+      "line": 118,
+      "kind": "jsx-text",
+      "text": "Continue"
+    },
+    {
+      "file": "components\\settings\\subscription-connections.tsx",
+      "line": 118,
+      "kind": "jsx-text",
+      "text": "Connect"
+    },
+    {
+      "file": "components\\settings\\subscription-connections.tsx",
+      "line": 142,
+      "kind": "jsx-text",
+      "text": "Enable background use"
+    },
+    {
+      "file": "components\\settings\\theme-cards.tsx",
+      "line": 130,
+      "kind": "jsx-text",
+      "text": "Theme"
+    },
+    {
+      "file": "components\\settings\\theme-cards.tsx",
+      "line": 193,
+      "kind": "jsx-text",
+      "text": "Import JSON"
+    },
+    {
+      "file": "components\\settings\\update-settings.tsx",
+      "line": 93,
+      "kind": "jsx-text",
+      "text": "Release notes"
+    },
+    {
+      "file": "components\\settings\\update-settings.tsx",
+      "line": 98,
+      "kind": "jsx-text",
+      "text": "Restart"
+    },
+    {
+      "file": "components\\settings\\update-settings.tsx",
+      "line": 107,
+      "kind": "label",
+      "text": "Automatic updates"
+    },
+    {
+      "file": "components\\settings\\update-settings.tsx",
+      "line": 108,
+      "kind": "label",
+      "text": "auto update"
+    },
+    {
+      "file": "components\\setup-dialog.tsx",
+      "line": 172,
+      "kind": "aria-label",
+      "text": "Provider"
+    },
+    {
+      "file": "components\\setup-dialog.tsx",
+      "line": 206,
+      "kind": "placeholder",
+      "text": "Paste key…"
+    },
+    {
+      "file": "components\\setup-dialog.tsx",
+      "line": 231,
+      "kind": "jsx-text",
+      "text": "Subscriptions"
+    },
+    {
+      "file": "components\\setup-dialog.tsx",
+      "line": 434,
+      "kind": "aria-label",
+      "text": "Set up your models"
+    },
+    {
+      "file": "components\\setup-dialog.tsx",
+      "line": 440,
+      "kind": "jsx-text",
+      "text": "Set up your models"
+    },
+    {
+      "file": "components\\setup-dialog.tsx",
+      "line": 441,
+      "kind": "label",
+      "text": "Close"
+    },
+    {
+      "file": "components\\setup-dialog.tsx",
+      "line": 444,
+      "kind": "aria-label",
+      "text": "Close setup"
+    },
+    {
+      "file": "components\\setup-dialog.tsx",
+      "line": 456,
+      "kind": "jsx-text",
+      "text": "Retry"
+    },
+    {
+      "file": "components\\setup-dialog.tsx",
+      "line": 460,
+      "kind": "jsx-text",
+      "text": "Loading models…"
+    },
+    {
+      "file": "components\\side-thread.tsx",
+      "line": 37,
+      "kind": "jsx-text",
+      "text": "Promise"
+    },
+    {
+      "file": "components\\side-thread.tsx",
+      "line": 41,
+      "kind": "jsx-text",
+      "text": "Promise"
+    },
+    {
+      "file": "components\\side-thread.tsx",
+      "line": 54,
+      "kind": "aria-label",
+      "text": "Show the quoted tutor text"
+    },
+    {
+      "file": "components\\side-thread.tsx",
+      "line": 54,
+      "kind": "title",
+      "text": "Show in the lesson"
+    },
+    {
+      "file": "components\\side-thread.tsx",
+      "line": 65,
+      "kind": "aria-label",
+      "text": "Microphone input level"
+    },
+    {
+      "file": "components\\side-thread.tsx",
+      "line": 122,
+      "kind": "jsx-text",
+      "text": "Side question"
+    },
+    {
+      "file": "components\\side-thread.tsx",
+      "line": 127,
+      "kind": "aria-label",
+      "text": "Close side conversation"
+    },
+    {
+      "file": "components\\side-thread.tsx",
+      "line": 127,
+      "kind": "title",
+      "text": "Close"
+    },
+    {
+      "file": "components\\side-thread.tsx",
+      "line": 134,
+      "kind": "jsx-text",
+      "text": "Stopped"
+    },
+    {
+      "file": "components\\side-thread.tsx",
+      "line": 139,
+      "kind": "label",
+      "text": "Answering"
+    },
+    {
+      "file": "components\\side-thread.tsx",
+      "line": 143,
+      "kind": "jsx-text",
+      "text": "Retry answer"
+    },
+    {
+      "file": "components\\side-thread.tsx",
+      "line": 154,
+      "kind": "aria-label",
+      "text": "Side question"
+    },
+    {
+      "file": "components\\side-thread.tsx",
+      "line": 278,
+      "kind": "aria-label",
+      "text": "Side question"
+    },
+    {
+      "file": "components\\side-thread.tsx",
+      "line": 287,
+      "kind": "aria-label",
+      "text": "Side question"
+    },
+    {
+      "file": "components\\sidebar.tsx",
+      "line": 73,
+      "kind": "jsx-text",
+      "text": "Promise"
+    },
+    {
+      "file": "components\\sidebar.tsx",
+      "line": 76,
+      "kind": "jsx-text",
+      "text": "Promise"
+    },
+    {
+      "file": "components\\sidebar.tsx",
+      "line": 85,
+      "kind": "jsx-text",
+      "text": "Promise"
+    },
+    {
+      "file": "components\\sidebar.tsx",
+      "line": 88,
+      "kind": "jsx-text",
+      "text": "Promise"
+    },
+    {
+      "file": "components\\sidebar.tsx",
+      "line": 90,
+      "kind": "jsx-text",
+      "text": "Promise"
+    },
+    {
+      "file": "components\\sidebar.tsx",
+      "line": 220,
+      "kind": "label",
+      "text": "Open sidebar"
+    },
+    {
+      "file": "components\\sidebar.tsx",
+      "line": 224,
+      "kind": "aria-label",
+      "text": "Open sidebar"
+    },
+    {
+      "file": "components\\sidebar.tsx",
+      "line": 340,
+      "kind": "aria-label",
+      "text": "Practice session"
+    },
+    {
+      "file": "components\\sidebar.tsx",
+      "line": 389,
+      "kind": "aria-label",
+      "text": "Rename session"
+    },
+    {
+      "file": "components\\sidebar.tsx",
+      "line": 676,
+      "kind": "label",
+      "text": "Home"
+    },
+    {
+      "file": "components\\sidebar.tsx",
+      "line": 682,
+      "kind": "aria-label",
+      "text": "Home"
+    },
+    {
+      "file": "components\\sidebar.tsx",
+      "line": 688,
+      "kind": "label",
+      "text": "Close sidebar"
+    },
+    {
+      "file": "components\\sidebar.tsx",
+      "line": 692,
+      "kind": "aria-label",
+      "text": "Close sidebar"
+    },
+    {
+      "file": "components\\sidebar.tsx",
+      "line": 706,
+      "kind": "title",
+      "text": "Teaching"
+    },
+    {
+      "file": "components\\sidebar.tsx",
+      "line": 711,
+      "kind": "jsx-text",
+      "text": "Teaching"
+    },
+    {
+      "file": "components\\sidebar.tsx",
+      "line": 717,
+      "kind": "title",
+      "text": "Practice"
+    },
+    {
+      "file": "components\\sidebar.tsx",
+      "line": 722,
+      "kind": "jsx-text",
+      "text": "Practice"
+    },
+    {
+      "file": "components\\sidebar.tsx",
+      "line": 728,
+      "kind": "jsx-text",
+      "text": "Sessions"
+    },
+    {
+      "file": "components\\sidebar.tsx",
+      "line": 729,
+      "kind": "label",
+      "text": "Search sessions"
+    },
+    {
+      "file": "components\\sidebar.tsx",
+      "line": 781,
+      "kind": "placeholder",
+      "text": "Search…"
+    },
+    {
+      "file": "components\\sidebar.tsx",
+      "line": 782,
+      "kind": "aria-label",
+      "text": "Search sessions"
+    },
+    {
+      "file": "components\\sidebar.tsx",
+      "line": 818,
+      "kind": "jsx-text",
+      "text": "Loading…"
+    },
+    {
+      "file": "components\\sidebar.tsx",
+      "line": 860,
+      "kind": "label",
+      "text": "Settings"
+    },
+    {
+      "file": "components\\source-folder-tree.tsx",
+      "line": 10,
+      "kind": "jsx-text",
+      "text": "Promise"
+    },
+    {
+      "file": "components\\source-folder-tree.tsx",
+      "line": 63,
+      "kind": "jsx-text",
+      "text": "Promise"
+    },
+    {
+      "file": "components\\source-folder-tree.tsx",
+      "line": 85,
+      "kind": "placeholder",
+      "text": "Folder name"
+    },
+    {
+      "file": "components\\source-folder-tree.tsx",
+      "line": 85,
+      "kind": "aria-label",
+      "text": "Source or folder name"
+    },
+    {
+      "file": "components\\source-folder-tree.tsx",
+      "line": 92,
+      "kind": "title",
+      "text": "Rename"
+    },
+    {
+      "file": "components\\source-folder-tree.tsx",
+      "line": 212,
+      "kind": "aria-label",
+      "text": "Move outside folders"
+    },
+    {
+      "file": "components\\stats-bar.tsx",
+      "line": 148,
+      "kind": "jsx-text",
+      "text": "Context (last call)"
+    },
+    {
+      "file": "components\\stats-bar.tsx",
+      "line": 154,
+      "kind": "jsx-text",
+      "text": "Window reported by Claude Code; may be lower for auto-compaction."
+    },
+    {
+      "file": "components\\stats-bar.tsx",
+      "line": 162,
+      "kind": "jsx-text",
+      "text": "Cache hit rate"
+    },
+    {
+      "file": "components\\stats-bar.tsx",
+      "line": 166,
+      "kind": "jsx-text",
+      "text": "Manage ChatGPT usage"
+    },
+    {
+      "file": "components\\stats-bar.tsx",
+      "line": 169,
+      "kind": "jsx-text",
+      "text": "Unpriced turns"
+    },
+    {
+      "file": "components\\submitted-images.tsx",
+      "line": 19,
+      "kind": "alt",
+      "text": "Submitted image"
+    },
+    {
+      "file": "components\\submitted-images.tsx",
+      "line": 23,
+      "kind": "aria-label",
+      "text": "Open submitted image fullscreen"
+    },
+    {
+      "file": "components\\thinking-block.tsx",
+      "line": 72,
+      "kind": "label",
+      "text": "YOUR THINKING"
+    },
+    {
+      "file": "components\\update-banner.tsx",
+      "line": 40,
+      "kind": "aria-label",
+      "text": "Dismiss update notification"
+    }
+  ]
+}
