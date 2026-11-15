@@ -1060,9 +1060,20 @@ def biz_message_db(config=None):
     return db, key, salt
 
 def get_api_key(config=None) -> str:
-    """读取 AI API key (自动解密 lock: 前缀)。"""
+    """读取 AI API key (自动解密 lock: 前缀)。
+
+    **配了 `aiBaseUrl`（自定义 OpenAI 兼容端点）时，优先用 `aiApiKey`。**
+    否则"换一家供应商"就只剩一条路：把别家的 key 塞进 `deepseekApiKey`——
+    那既误导人，又会把回退用的 DeepSeek key 顶掉（想退回时已经拿不回来）。
+    只配 `aiApiKey` 不配 `aiBaseUrl` 时不用它：那种组合下请求仍发往
+    api.deepseek.com，拿一个通义的 key 去请求只会得到 401。
+    """
     if config is None:
         config = load_config()
+    if str(config.get('aiBaseUrl') or '').strip():
+        custom = decrypt_lock(config.get('aiApiKey', '') or '')
+        if custom:
+            return custom
     return decrypt_lock(config.get('deepseekApiKey', ''))
 
 

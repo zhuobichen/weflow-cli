@@ -32,6 +32,26 @@ import { whitelistService, MAX_TEXT_LENGTH } from '../src/services/whitelistServ
 import { authorizeOutbound, parseOutboundPolicy, performOutbound } from '../src/services/outboundSend.js'
 import { applyDerivedNtKeys, enableFavorites, detectFavDbPath } from '../src/services/initKeyService.js'
 import type { ChatSession } from '../src/types.js'
+
+/**
+ * 解出这一轮该用哪个 AI key。
+ *
+ * **必须只有这一处。** 2026-11-15 换到千问时踩过：`daily` 与另一条路径各自写了一份
+ * `get('deepseekApiKey')`，只改了一处，于是 `daily` 把 DeepSeek 的 key 发去了
+ * 通义端点——373 篇摘要全部 HTTP 401，而失败被主循环的兜底吞掉，产物看起来
+ * "有摘要、但主题全变成默认值"。这种错法不报错，只能靠人肉对比两天的 md 才发现。
+ *
+ * 顺序：显式参数 > 环境变量 > （配了 aiBaseUrl 时）aiApiKey > deepseekApiKey。
+ * 配了 aiBaseUrl 却没配 aiApiKey 时仍退回 deepseekApiKey——那是"换端点不换 key"
+ * 的老用法，不能因为新增字段就把它弄坏。
+ */
+function resolveAiKey(explicit?: string): string {
+  const picked = explicit || process.env.DEEPSEEK_API_KEY
+    || (configService.get('aiBaseUrl') ? configService.get('aiApiKey') : '')
+    || configService.get('deepseekApiKey') || ''
+  return picked
+}
+
 import { disabledIds, describeSkill, readSkillBody, scanSkills, skillRoots, skillState } from '../src/services/assistantSkills.js'
 import { assistantScenes, validateSceneId, type Scene } from '../src/services/assistantScenes.js'
 import {
@@ -1529,7 +1549,8 @@ const configurableKeys = [
   'assistantGroupRequireMention', 'assistantFastRoute', 'assistantPanelUser', 'quickReplyContacts',
   'skillDirs', 'skillDisabled',
   'dailySources', 'dailySourceCategories',
-  'dailyExcludeTopics', 'dailyAiEnabled', 'dailyKeepImages', 'dailyMailTo',
+  'dailyExcludeTopics', 'dailyAiEnabled', 'dailyKeepImages', 'dailyMaxFailureRate', 'dailyMailTo',
+  'aiApiKey',
   'wechatMediaDownload',
   'emoticonSeed',
 ] as const
@@ -1597,7 +1618,7 @@ configCmd
         },
         ai: {
           engine: configService.get('aiEngine') || 'deepseek',
-          configured: ['ollama', 'lmstudio'].includes(String(configService.get('aiEngine') || 'deepseek')) || !!configService.get('deepseekApiKey'),
+          configured: ['ollama', 'lmstudio'].includes(String(configService.get('aiEngine') || 'deepseek')) || !!resolveAiKey(),
           dailyEnabled: configService.get('dailyAiEnabled') !== 'false',
         },
         daily: {
@@ -5414,7 +5435,9 @@ program
     const pkgRoot = resolvePackageRoot()
     const args = ['--vault', opts.vault]
     // 也读配置：`config set deepseekApiKey` 之后不该还要求传参或设环境变量
-    const apiKey = opts.apiKey || process.env.DEEPSEEK_API_KEY || configService.get('deepseekApiKey') || ''
+
+
+    const apiKey = resolveAiKey(opts.apiKey)
     if (opts.withAi && !opts.dryRun) {
       if (!apiKey) {
         if (opts.json) console.log(JSON.stringify({ success: false, code: 'AI_KEY_REQUIRED', action }))
@@ -7381,7 +7404,7 @@ program
     const date = opts.date || (opts.yesterday
       ? isoDate(new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1))
       : localDate)
-    const apiKey = opts.apiKey || process.env.DEEPSEEK_API_KEY || configService.get('deepseekApiKey') || ''
+    const apiKey = resolveAiKey(opts.apiKey)
     const noAi = opts.ai === false || configService.get('dailyAiEnabled') === 'false'
     const dailyLog = (...values: any[]) => opts.json ? console.error(...values) : console.log(...values)
 
@@ -8288,7 +8311,7 @@ assistantCmd
     const { isDaemonAlive, tailLog, rotateLogIfNeeded } = await import('../src/services/assistantDaemon.js')
     const { alive, pid } = isDaemonAlive()
     const token = configService.get('wechatOcToken')
-    const aiKey = configService.get('deepseekApiKey')
+    const aiKey = resolveAiKey()
     const { privacyGate } = await import('../src/services/assistantPrivacy.js')
     const { readEndpoint } = await import('../src/panel/endpoint.js')
     const wl = String(configService.get('assistantWhitelist') || '').trim()
@@ -9270,7 +9293,7 @@ program
         assistant: {
           engine,
           localInference: ['ollama', 'lmstudio'].includes(engine),
-          aiConfigured: ['ollama', 'lmstudio'].includes(engine) || !!configService.get('deepseekApiKey'),
+          aiConfigured: ['ollama', 'lmstudio'].includes(engine) || !!resolveAiKey(),
           messageChannelLoggedIn: !!configService.get('wechatOcToken'),
           daemonRunning: daemonAlive,
         },
@@ -9584,7 +9607,7 @@ program
 
     // 7. Assistant (第二大脑)
     console.log(chalk.white('\n第二大脑 Agent:'))
-    const aiKey = configService.get('deepseekApiKey')
+    const aiKey = resolveAiKey()
     const aiBase = configService.get('aiBaseUrl')
     const engine = String(configService.get('aiEngine') || 'deepseek')
     if (['ollama', 'lmstudio'].includes(engine)) {

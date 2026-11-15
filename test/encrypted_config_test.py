@@ -27,7 +27,7 @@ sys.path.insert(0, str(SCRIPTS))
 ENCRYPTED_KEYS = {
     'decryptKey', 'decryptKey3x', 'ntKey', 'contactKey', 'wechatOcToken',
     'wereadApiKey', 'deepseekApiKey', 'typesafeApiKey', 'dashscopeApiKey', 'snsKey',
-    'favKey', 'favPassphrase', 'openrouterApiKey',
+    'favKey', 'favPassphrase', 'openrouterApiKey', 'aiApiKey',
 }
 # 允许直接读的文件：解密助手就住在这里。
 SANCTIONED = {'_utils.py'}

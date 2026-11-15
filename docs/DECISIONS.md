@@ -4780,3 +4780,79 @@ weflow-cli config set dailyKeepImages true   # 全局默认改为保留
 - 日志会报「清理了 N 个文件，释放 X MB」，否则这件事永远无声无息；
 - 配置键 `dailyKeepImages`（默认 `'false'`）已进 `CliConfig`，`config set` 可改；
   优先级是 `--keep-images` > `dailyKeepImages` > 默认删。
+
+## D-153：换模型供应商时，`bin` 里「取 AI key」必须只有一处——否则 373 篇摘要全 401，而产物看起来正常
+
+**事故（2026-11-15）**：把日报的摘要从 DeepSeek 换到通义 qwen-flash。配置侧都对了
+（`aiBaseUrl` / `aiModel` / 新增的 `aiApiKey`），用 `create_engine()` 直接测也通过。
+但真跑一次日报：**373 篇摘要全部 `HTTP 401 Unauthorized`**。
+
+根因：`bin/weflow-cli.ts` 里「解出这一轮用哪个 key」有**两处**各写各的——
+
+```ts
+// 一处（改到了）
+opts.apiKey || env.DEEPSEEK_API_KEY || (aiBaseUrl ? aiApiKey : '') || deepseekApiKey
+// 另一处（漏了，而 `daily` 走的正是这一处）
+opts.apiKey || env.DEEPSEEK_API_KEY || deepseekApiKey
+```
+
+于是 `daily` 把 **DeepSeek 的 key 发去了通义端点**。key 有效、端点有效，组合起来是 401。
+
+**为什么危险：它整条链上没有一处会红。**
+
+- 401 被每篇的 `except` 兜成「摘要 = 正文前 300 字」；
+- `topic` 被兜成 `DEFAULT_TOPIC`（`学术`），于是 373 篇**全落进「学术」目录**；
+- `tags` 被兜成 `[学术]`；
+- 邮件照常发出、退出码 0、`.articles.json` 里 `decisionModel` 还老老实实写着
+  `typesafe/jev-1.14`（Jev 确实跑过，且成功）。
+
+唯一能看出来的信号是 373 行 `ERR: HTTP Error 401` 和一行 `[WARN] 学术 聚类返回无法解析`。
+发现方式是**人眼对比两天的 md frontmatter**：11-14 有 `relevanceScore` / `topicConfidence`，
+11-15 一个都没有。
+
+**规定**：`bin` 里解 AI key 只保留 `resolveAiKey()` 一个函数。顺序是
+显式参数 > 环境变量 >（配了 `aiBaseUrl` 时）`aiApiKey` > `deepseekApiKey`。
+判「AI 是否已配置」也走它——否则新增字段会让这些判定悄悄失效。
+
+**为什么新增 `aiApiKey` 而不是把千问 key 塞进 `deepseekApiKey`**：后者会**顶掉**原来的
+DeepSeek key（想回退时已经拿不回来），而且名字会长期误导人。`aiApiKey` 只在配了
+`aiBaseUrl` 时才生效——只配它不配端点没用，请求仍发往 `api.deepseek.com`。
+
+**配套**：这类"失败被兜底伪装成正常"的失效，靠代码审查拦不住，只能靠**熔断**（见 D-154）。
+
+## D-154：摘要降级超过 20% 就中止，不发邮件——「跑完了」不等于「跑对了」
+
+**背景**：D-153 那次故障里，进程跑完了、邮件发出了、退出码 0，而产物是 373 篇的兜底值。
+判据不能是「有没有报错」，因为每一处失败都被单篇的 `except` 吞掉并降级了；也不能是
+「退出码」，因为那条路从来没想过要非零退出。
+
+**做法**：Phase 2 结束后统计「**本该拿到模型结果却没拿到**」的篇目比例，超过阈值就
+`SystemExit(2)`，于是 pipeline 中止、邮件不发、产物不写。
+
+```python
+MAX_SUMMARY_FAILURE_RATE = 0.2      # 默认 20%
+```
+
+只统计走了 LLM 那条分支的篇目：没有正文的文章本来就不调模型，算进来会把正常的一天
+误判成故障。阈值可按配置覆盖：
+
+```powershell
+weflow-cli config set dailyMaxFailureRate 0.5   # 放宽
+weflow-cli config set dailyMaxFailureRate 1     # 关掉熔断
+weflow-cli config set dailyMaxFailureRate 0     # 一篇失败就中止
+```
+
+判定逻辑抽成纯函数 `check_failure_budget(total, failed, limit)`，因为它的边界
+（恰好等于阈值算不算超、0 样本怎么办、`1.0` 是不是等于关闭）都是会被写错的地方。
+
+**几个刻意的取舍**：
+
+- **「超过」而不是「达到」**：恰好 20% 不熔断。否则 374 篇里 74 篇失败这种正常波动
+  会因为边界四舍五入翻脸。
+- **`total == 0` 不熔断**：「0 篇失败」与「没跑」在数据上分不出来，不能凭它中止。
+- **`limit == 1.0` 视为关闭**：全失败也不拦——这是显式要求"我就要这份降级产物"。
+- **阈值解析失败（非数字）退回默认并打 WARN**：读配置的手滑不该让当天的日报直接失败。
+
+**Rejected.** ①只统计 `call_error`：解析阶段的异常同样会产出兜底主题，漏掉那一半等于
+把 D-153 的形状留了个后门；②按绝对篇数（比如「超过 50 篇失败」）而不是比例：晴雨天
+篇数差三倍，绝对阈值在冷清的一天会永远不触发。

@@ -580,6 +580,59 @@ def _apply_decision(article, decision, set_topic=True):
     return True
 
 
+
+# **失败预算**（熔断）：这一天有多少篇是"静默降级"的，超过就中止、不发邮件。
+#
+# 2026-11-15 实测的失效形状：换模型供应商时 bin 里两处取 key 只改了一处，`daily`
+# 把 DeepSeek 的 key 发去了通义端点——373 篇摘要全部 `HTTP 401`。而每篇的失败都被
+# 下面那个 `except` 兜成「正文前 300 字 + 主题=默认值」，于是：主题全变成「学术」、
+# 摘要是截断的正文、邮件照常发出、退出码 0。**没有任何一处红**。
+#
+# 所以判据不能是"跑完了没有"，而是"有多少篇没拿到模型结果"。默认 20%：偶尔几篇
+# 抓不到正文、单次超时属正常波动；一片 401 一定超过这条线。
+MAX_SUMMARY_FAILURE_RATE = 0.2
+
+
+def summary_failure_limit(config=None) -> float:
+    """熔断阈值：配置 `dailyMaxFailureRate` > 环境变量 > 默认 0.2。
+
+    允许 0（任何一篇失败都中止）与 1（等于关掉熔断）——两者都是有意义的取值，
+    所以边界处不做"取中间值"的修正。
+    """
+    import os as _os
+    raw = None
+    try:
+        cfg = config if config is not None else (load_config() or {})
+        raw = cfg.get('dailyMaxFailureRate')
+    except Exception:
+        raw = None
+    if raw is None or str(raw).strip() == '':
+        raw = _os.environ.get('WEFLOW_MAX_SUMMARY_FAILURE_RATE')
+    if raw is None or str(raw).strip() == '':
+        return MAX_SUMMARY_FAILURE_RATE
+    try:
+        value = float(str(raw).strip())
+    except ValueError:
+        print(f'  [WARN] dailyMaxFailureRate={raw!r} 不是数字，按默认 {MAX_SUMMARY_FAILURE_RATE:.0%} 处理')
+        return MAX_SUMMARY_FAILURE_RATE
+    return min(1.0, max(0.0, value))
+
+
+def check_failure_budget(total: int, failed: int, limit: float) -> dict:
+    """判断这批降级是不是"多到该中止"。纯函数，好测。
+
+    返回 `{'breached', 'rate', 'failed', 'total', 'limit'}`。
+    `total <= 0` 不熔断：没有可判断的样本时，"0 篇失败"和"没跑"分辨不出来。
+    """
+    total = max(0, int(total))
+    failed = max(0, int(failed))
+    rate = (failed / total) if total else 0.0
+    return {
+        'breached': bool(total) and rate > limit,
+        'rate': rate, 'failed': failed, 'total': total, 'limit': limit,
+    }
+
+
 SUMMARY_WORKERS = 6
 # 单篇摘要的实测耗时（3 篇串行 2.27/2.92/2.45s，含网络）。只用来报「串行约需多少秒」。
 SUMMARY_SECONDS_PER_ARTICLE = 2.5
@@ -1545,10 +1598,16 @@ def main():
         # `--no-summary` 时 prefetched 是 None，这个循环整段不跑（循环体是围绕 LLM
         # 响应写的）。用变量而不是把循环体缩进进 if，是为了让 diff 只碰这一行。
         pending = list(enumerate(articles)) if prefetched is not None else []
+        # 熔断要的计数：**只统计"本该拿到模型结果却没拿到"的篇目**。没有正文的那几篇
+        # 走的是另一条分支（本来就不会调模型），算进来会把正常的一天误判成故障。
+        summary_attempts = 0
+        summary_failures = 0
+        first_failure = ''
         for i, a in pending:
             t, n, ti = a['time'], a['account_name'], a['title']
             content = a.get('fetched_md') or a.get('local_text', '')
             if content and len(content.strip()) > 50:
+                summary_attempts += 1
                 try:
                     category_hint = a.get('source_category', '')
                     response, call_error = prefetched[i]
@@ -1644,6 +1703,9 @@ def main():
 
                     print(f'[{i+1}/{len(articles)}] [{t}] {n} - [{a.get("topic","?")}] tags={a.get("tags",[])} ({len(a.get("summary",""))}字)')
                 except Exception as e:
+                    summary_failures += 1
+                    if not first_failure:
+                        first_failure = f'{type(e).__name__}: {e}'
                     a['summary'] = a.get('digest', '') or content[:300]
                     a['topic'] = a.get('source_category') or DEFAULT_TOPIC
                     a['tags'] = [a['topic']]
@@ -1660,6 +1722,22 @@ def main():
                 a['summary'] = a.get('digest', '(无内容)')
                 a['topic'] = a.get('source_category') or DEFAULT_TOPIC
                 a.setdefault('relevance', DEFAULT_RELEVANCE)
+
+        # ---- 熔断：降级比例过高就中止，**不要**把这样的产物发出去 ----
+        budget = check_failure_budget(summary_attempts, summary_failures,
+                                      summary_failure_limit(config))
+        if budget['failed']:
+            print(f'  [WARN] {budget["failed"]}/{budget["total"]} 篇降级'
+                  f'（{budget["rate"]:.0%}，阈值 {budget["limit"]:.0%}）'
+                  + (f'；首个错误：{first_failure[:120]}' if first_failure else ''))
+        if budget['breached']:
+            print(f'\n[ERROR] 降级比例 {budget["rate"]:.0%} 超过阈值 {budget["limit"]:.0%}：'
+                  f'这一天有 {budget["failed"]}/{budget["total"]} 篇没拿到模型结果，'
+                  f'主题与摘要都是兜底值。**已中止，未写产物、未发邮件**。')
+            print('        先查失败原因（上面那行 ERR / 首个错误），修好再重跑；'
+                  '确实想接受这份降级产物，就调高阈值：')
+            print('        weflow-cli config set dailyMaxFailureRate 0.9    # 或传 1 关掉熔断')
+            raise SystemExit(2)
 
         # Print topic distribution
         from collections import Counter

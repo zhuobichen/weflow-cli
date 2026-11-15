@@ -947,6 +947,36 @@ weflow-cli config set dailyKeepImages true  # 以后都保留
 跑完顺手对一眼量：当天日报的文章数如果明显低于历史同期（比如不到七成），
 先别当成「今天冷清」，按上面查一遍是不是抢在回填之前读了库。
 
+### 换 AI 供应商（摘要、标签、简报）
+
+摘要那条线可以指向任意 OpenAI 兼容端点；**判断层（主题/相关度）始终走 Jev，不受影响**。
+
+```powershell
+weflow-cli config set aiBaseUrl "https://dashscope.aliyuncs.com/compatible-mode/v1"
+weflow-cli config set aiModel   "qwen-flash"
+weflow-cli config set aiApiKey  "<那家的 key>"
+```
+
+`aiApiKey` 只在配了 `aiBaseUrl` 时才生效，所以原来的 `deepseekApiKey` 会**原样保留**，
+回退时把前两项清空即可（见 D-153）。
+
+换完**先小样本验一次再发全天**，因为这类配错的表现是「静默降级」而不是报错：
+主题全落到默认那一档、摘要是正文截断、邮件照发。判据是看 md 的 frontmatter 有没有
+`relevanceScore` / `topicConfidence`——**有才是 Jev 真的判过**。
+
+### 降级熔断（摘要失败太多就不发）
+
+Phase 2 结束后会统计「本该拿到模型结果却没拿到」的比例，超过阈值就中止、不发邮件：
+
+```powershell
+weflow-cli config set dailyMaxFailureRate 0.2   # 默认；超过 20% 降级就中止
+weflow-cli config set dailyMaxFailureRate 1     # 关掉熔断（全失败也不拦）
+weflow-cli config set dailyMaxFailureRate 0     # 一篇失败就中止
+```
+
+中止时退出码是 2，日志里会打印降级比例与首个错误（见 D-154）。
+
+
 补跑是安全的：`.run_state.json` 按 URL 指纹跳过已处理（不重复花 AI 的钱），
 `.articles.json` 是合并写、不覆盖，README 与 `index.html` 从磁盘上的 md 重建——
 所以补跑只会追加缺的那部分，不会把上一轮已有的条目挤掉（见 D-151）。
