@@ -597,11 +597,17 @@ def load_contact_names(contact_db_path, contact_key_hex, contact_salt_hex):
         from database_cache import DatabaseCache
         cache_enabled = DatabaseCache.is_enabled()
         raw_key = f"x'{contact_key_hex}{contact_salt_hex}'"
-        
+
+        # 两个分支返回的第二个值**不是同一种东西**：`open_database_with_cache` 给
+        # `(conn, 是否命中缓存)`，`connect_encrypted_readonly` 给 `(conn, cursor)`。
+        # 所以游标一律自己取，别从解包里接——接错的那个不会响（`c` 未定义 →
+        # NameError → 被下面的 except 吞掉 → 静默返回空表，本机实测 53,057 个
+        # 联系人全部变成裸 wxid）。
         if cache_enabled:
-            conn, _ = open_database_with_cache(contact_db_path, raw_key, use_cache=True)
+            conn, _from_cache = open_database_with_cache(contact_db_path, raw_key, use_cache=True)
         else:
             conn, _cur = connect_encrypted_readonly(contact_db_path, raw_key)
+        c = conn.cursor()
 
         # contact.db schema: username, alias, remark, nick_name, ...
         c.execute("SELECT username, COALESCE(NULLIF(remark,''), NULLIF(nick_name,''), NULLIF(alias,''), username) FROM contact")
