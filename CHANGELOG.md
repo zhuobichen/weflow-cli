@@ -18,6 +18,21 @@ purpose** - a hand-written "latest is X" is exactly the claim that goes stale he
 
 All notable user-facing changes are recorded here. This project follows [Semantic Versioning](https://semver.org/).
 
+## 1.21.16
+
+- **修复：联系人姓名全都显示成 `wxid_xxx`**（1.21.5 引入）。读取联系人库的函数在迁移时接错了返回值，
+  取游标那一步失败又被静默吞掉，函数返回空表——所有联系人姓名退化为裸 wxid。
+  本机实测修复后读出 4,319 个联系人。这个 bug 不报错，只是结果悄悄变差，所以没有在测试里被发现；
+  现在有 4 条回归测试覆盖它，其中带裸 SQL 正对照，避免"空库也返回空表"造成的假通过。
+- **文档：新增「重装 / 升级微信客户端（Windows）」一节**，含四类实测踩坑：`NSIS Error: Error writing
+  temporary file`（`%TEMP%` 不可写，需改用户级环境变量）、`无法打开要写入的文件 install.7z`
+  （选中止不要选忽略）、绕开安装器直接用 7-Zip 解包、以及**版本号怎么看**——
+  `WeChatWin_4.2.0.exe` 的文件属性（`4.2.0.1000`）与包内 `Weixin.exe`（`4.2.0.52`）并不一致，
+  判断装到了哪个版本要看后者；`4.2.0` 之后那段是整数构建号，不是小数。
+- 文档同时记录了实测基准：**4.2.0.52 下读取正常**（30 个会话），遇到"升级后读不出来"应先查
+  密钥是否失效、磁盘是否写满、数据目录是否换了，而不是归因到版本。
+- 「摘要可换供应商」（`aiApiKey`）与 `call_deepseek` 未走 `aiBaseUrl` 的修复一并进入本版。
+
 ## 1.21.15
 
 - **助手会在本机留一份对话流水（只追加，保留 7 天）**：`~/.weflow-cli/assistant_transcript/YYYY-MM-DD.jsonl`，目录 0700 / 文件 0600。
