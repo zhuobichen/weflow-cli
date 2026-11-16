@@ -5,6 +5,7 @@ import { SqlcipherCore } from '../core/sqlcipherCore.js'
 import { NtCore } from '../core/ntCore.js'
 import type { ShardReport } from '../core/ntCore.js'
 import { configService } from './configService.js'
+import { connectFailure, classifyReadError, type ReadFailure } from './readFailure.js'
 import type { ChatSession, Message, Contact, DataVersion } from '../types.js'
 import { collectMessagesInRange } from './messageQuery.js'
 import { resolvePackageRoot } from '../utils/packageRoot.js'
@@ -174,6 +175,36 @@ export class ChatService {
     return { success: false, error: ok.error || '3.x 数据库连接失败' }
   }
 
+
+  /**
+   * 与 `listSessions` 相同，但**把失败原因带出来**（issue #16）。
+   *
+   * `listSessions` 在连不上/查不出时返回 `[]`，调用方无法区分「失败」和「确实没有会话」。
+   * 这里返回 `failure`，让 CLI 能明确告诉用户"这是读取没完成，不代表没有数据"。
+   *
+   * 只新增方法，不改 `listSessions` 的签名——那有十几个调用点，改签名会把失败处理
+   * 强行摊到每个调用方，而它们大多并不需要。
+   */
+  async listSessionsDetailed(keyword?: string, limit = 50): Promise<{
+    sessions: ChatSession[]
+    failure?: ReadFailure
+  }> {
+    const conn = await this.connect()
+    if (!conn.success) return { sessions: [], failure: connectFailure(conn.error) }
+
+    if (this.ntCore) {
+      const result = await this.ntCore.getSessions(keyword)
+      if (!result.success) return { sessions: [], failure: classifyReadError(result.error) }
+      return { sessions: result.sessions ?? [] }
+    }
+    const core = this.activeVersion === '4.x'
+      ? (this.useRawSqlite4x ? sqlcipherCore : wcdbCore)
+      : sqlcipherCore
+    const result = await core.getSessions()
+    if (!result.success) return { sessions: [], failure: classifyReadError(result.error) }
+    return { sessions: result.sessions ?? [] }
+  }
+
   async listSessions(keyword?: string, limit = 50): Promise<ChatSession[]> {
     const conn = await this.connect()
     if (!conn.success) return []
@@ -210,6 +241,33 @@ export class ChatService {
     }
 
     return sessions.slice(0, limit)
+  }
+
+  /**
+   * 与 `getMessages` 相同，但把失败原因带出来（issue #16 的另一半）。
+   *
+   * `getMessages` 失败时返回 `[]`，与"这段对话确实没有消息"无法区分；而 `messages`
+   * 命令的空结果提示目前只覆盖了"ID 拼错"这一种情况。库读不出来时会静默显示"未找到消息"。
+   */
+  async getMessagesDetailed(
+    talker: string,
+    limit = 0,
+    offset = 0
+  ): Promise<{ messages: Message[]; failure?: ReadFailure }> {
+    const conn = await this.connect()
+    if (!conn.success) return { messages: [], failure: connectFailure(conn.error) }
+
+    if (this.ntCore) {
+      const result = await this.ntCore.getMessages(talker, limit, offset)
+      if (!result.success) return { messages: [], failure: classifyReadError(result.error) }
+      return { messages: result.messages ?? [] }
+    }
+    const core = this.activeVersion === '4.x'
+      ? (this.useRawSqlite4x ? sqlcipherCore : wcdbCore)
+      : sqlcipherCore
+    const result = await core.getMessages(talker, limit, offset)
+    if (!result.success) return { messages: [], failure: classifyReadError(result.error) }
+    return { messages: result.messages ?? [] }
   }
 
   async getMessages(

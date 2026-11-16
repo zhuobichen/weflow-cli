@@ -1801,9 +1801,34 @@ program
       process.exit(1)
     }
 
-    const sessions = await chatService.listSessions(opts.keyword, limit)
+    // 用 `listSessionsDetailed` 而不是 `listSessions`：后者失败时返回 []，调用方分不清
+    // 「读取没成功」和「确实没有会话」。issue #16 的现场就是踩在这上面——报错只在
+    // 日志深处（SQLITE_NOTADB 26），用户看到的是"空"。
+    const detailed = await chatService.listSessionsDetailed(opts.keyword, limit)
+    const sessions = detailed.sessions
     if (sessions.length === 0) {
-      if (opts.json) { console.log(JSON.stringify({ success: true, sessions: [] })); return }
+      if (opts.json) {
+        // 失败时不再谎报 success:true —— 这正是 issue #16 建议的那条。
+        console.log(JSON.stringify(detailed.failure
+          ? { success: false, code: 'READ_FAILED', failure: detailed.failure, sessions: [] }
+          : { success: true, sessions: [] }, null, 2))
+        // JSON 模式也要有非 0 退出码：脚本用 `success` 判断是它的事，
+        // 但 shell 层面 `if weflow-cli sessions --json` 同样应当能看出失败。
+        if (detailed.failure) process.exit(1)
+        return
+      }
+      if (detailed.failure) {
+        // 有确切失败原因时，直接说清楚，而不是让用户去猜"是不是没会话"。
+        console.error(chalk.red(`
+✗ ${detailed.failure.message}
+`))
+        console.error(chalk.yellow(`  下一步：${detailed.failure.next}
+`))
+        if (detailed.failure.detail) console.error(chalk.gray(`  原始错误：${detailed.failure.detail}
+`))
+        process.exit(1)
+        return
+      }
       console.log(chalk.gray('未找到会话'))
       // "0 条"有两种完全不同的原因：真的没有会话，和**初始化/密钥坏了读不出来**。
       // 后者以前只显示这一句，用户就去猜"是不是我微信坏了 / 版本太新"（issue #3/#9/#10 的老路：
@@ -1861,11 +1886,25 @@ program
 
     const talker = await resolveTalker(talkerInput, opts.json, opts.nonInteractive || opts.json)
 
-    const messages = start !== undefined || end !== undefined
-      ? (await chatService.getMessagesInRange(talker, limit + offset, start, end)).slice(offset, offset + limit)
-      : await chatService.getMessages(talker, limit, offset)
+    const detailed = start !== undefined || end !== undefined
+      ? { messages: (await chatService.getMessagesInRange(talker, limit + offset, start, end)).slice(offset, offset + limit) }
+      : await chatService.getMessagesDetailed(talker, limit, offset)
+    const messages = detailed.messages
 
     if (messages.length === 0) {
+      // 读失败优先于"没有消息"：这两件事以前都显示"未找到消息"，而前者需要用户去做别的事。
+      if (detailed.failure) {
+        if (opts.json) {
+          console.log(JSON.stringify(
+            { success: false, code: 'READ_FAILED', talker, failure: detailed.failure, messages: [] }, null, 2))
+        } else {
+          console.error(chalk.red(`\n✗ ${detailed.failure.message}\n`))
+          console.error(chalk.yellow(`  下一步：${detailed.failure.next}\n`))
+          if (detailed.failure.detail) console.error(chalk.gray(`  原始错误：${detailed.failure.detail}\n`))
+        }
+        process.exit(1)
+        return
+      }
       // 拼错的 ID 会被 resolveTalker 原样放行 ⇒ 取不到消息。这里补一句话把两种情况分开，
       // 但**不改退出码、也不改 success**（"没有消息"不是错误，脚本与 MCP 依赖这一点）。
       let note = ''
