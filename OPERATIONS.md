@@ -1868,6 +1868,78 @@ weflow-cli check --report
 | 阅读器打不开 | 使用 `daily-server --date YYYY-MM-DD --open`，不要直接双击 `file://` 页面。 |
 | 图片或表情串错 | 保留原始数据库和导出日志，反馈脱敏后的消息类型、版本和最小复现；不要提交真实媒体。 |
 
+### 重装 / 升级微信客户端（Windows）
+
+**先说结论：升级前先备份 `db_storage`，升级后先用 `check` 确认版本再读数据。** 2026-11-16 在本机实测，升级流程本身比想象中容易失败，下面每一条都是当天踩出来的。
+
+**① 安装器报 `Error writing temporary file` → `%TEMP%` 不可写**
+
+现象是一个标题为 `NSIS Error` 的弹窗，正文只有一句 `Error writing temporary file. Make sure your temp folder is valid.`。安装器进程会立刻消失，看起来像"没反应"。
+
+处理：把 `TEMP`/`TMP` 指到一个确实可写的目录（用户级即可）：
+
+```powershell
+[Environment]::SetEnvironmentVariable('TEMP','D:\wcinst\tmp','User')
+[Environment]::SetEnvironmentVariable('TMP','D:\wcinst\tmp','User')
+```
+
+注意 `Start-Process -Environment` 只影响该进程，NSIS 内部还会去读用户/系统变量——所以要改**用户级**环境变量，或从已带正确环境变量的 shell 里启动。
+
+**② 安装器报 `无法打开要写入的文件: "…\install.7z"`**
+
+看到这条**不要选「忽略」**：忽略等于跳过主资源包，结果是安装不完整、微信起不来（与本文件上面那条"安装出错"是同一个结局）。选「中止」。
+
+若确认目标目录权限正常（`Administrators` 有 `FullControl`、且外部写测试能通过），那问题在安装器自身，直接走 ③。
+
+**③ 绕开安装器，直接解包（本机可用的方法）**
+
+NSIS 安装包本质是一个 7z 自解压包，可以用 7-Zip 直接展开后拷到安装目录：
+
+```powershell
+# 需要 7-Zip（没有就下载单文件版 https://www.7-zip.org/a/7zr.exe）
+& 'D:\wcinst\7z\7zr.exe' x WeChatWin_4.2.0.exe -oD:\wcinst\extract -y
+# 解出的 Weixin.exe 与 4.2.0.xx 子目录一起复制到安装位置
+Copy-Item 'D:\wcinst\extract\*' D:\WeiXin -Recurse -Force
+Copy-Item 'D:\wcinst\extract\4.2.0.52\*' D:\WeiXin -Recurse -Force
+(Get-Item 'D:\WeiXin\Weixin.exe').VersionInfo.FileVersion   # 核对版本
+```
+
+**④ 版本号怎么看：外壳 ≠ 内容**
+
+官网那个 `WeChatWin_4.2.0.exe`，文件属性里的版本是 **`4.2.0.1000`**，但包内 `4.2.0.52\Weixin.dll`、解出来的 `Weixin.exe` 都是 **`4.2.0.52`**。**判断装到了哪个版本，看 `Weixin.exe` 的文件版本，不要看安装包。**
+
+同理，`4.2.0` 之后那段是**构建号整数**，不是小数：`4.2.0.1000` 比 `4.2.0.52` 新，`4.2.0.13` 比 `4.2.0.52` 旧。
+
+**⑤ 安装器会先卸载旧版**
+
+实测：安装器在写入新文件之前就把旧版本移除了。中途失败会留下"程序没了、但数据目录还在"的状态。**数据目录（默认 `xwechat_files`）不受影响**，但要有心理准备，别在这个时候慌。
+
+**⑥ 升级前备份、升级后验证**
+
+```powershell
+# 升级前：把 db_storage 整份复制到别处（本机实测 541 MB / 24 个库）
+Copy-Item '<数据目录>\db_storage' 'D:\backup\wxdb-YYYYMMDD' -Recurse
+# 升级后：先看版本判定，再读数据
+weflow-cli check --report
+weflow-cli sessions --json
+```
+
+有了升级前的备份，才对得起"升级后读不出来"这类问题的排查——能区分是**库被重建**、**只换了密钥**，还是**读法有问题**。没有备份时这三种情况的现象几乎一样。
+
+**⑦ 实测基准：4.2.0.52 下读取正常**
+
+2026-11-16 在本机从 4.2.0.13 换到 **4.2.0.52**（用 ③ 的方式安装，未重新 `init`），随后：
+
+```text
+weflow-cli sessions --json   → success=true，30 个会话
+```
+
+也就是说：**4.2.0.52 本身不会让读取失效**。遇到"升级后读不出来"，先别归因到版本，按这个顺序查：
+
+1. 密钥是否还有效（升级可能重建库或换 salt）→ `check --report` 的密钥/判定段
+2. 磁盘是否写满（曾导致客户端新建分片、随后全部会话读不出）
+3. 数据目录是不是换了一个（新旧客户端目录不同）→ `check --report` 的目录对照
+
 ## 8. 安全排查原则
 
 不要在 Issue、PR、截图或共享日志中包含数据库、密钥、token、账号 ID、聊天正文或完整本地路径。公开报告只需操作系统、Node/Python 版本、微信版本、命令和脱敏错误。安全漏洞按 `SECURITY.md` 私下报告。
