@@ -18,6 +18,14 @@ purpose** - a hand-written "latest is X" is exactly the claim that goes stale he
 
 All notable user-facing changes are recorded here. This project follows [Semantic Versioning](https://semver.org/).
 
+## 1.21.17
+
+- **读取失败不再显示成「没有消息」**。此前 `sessions` / `messages` 在读库失败时返回
+  `success: true` + 空结果，用户看到的是「没有会话 / 未找到消息」，很容易以为是数据丢了。
+  现在会说明真实原因并给出下一步——例如密钥与库不匹配时建议重新获取密钥，
+  找不到表时建议核对数据目录，库被占用时建议等同步结束。JSON 输出带 `failure` 字段，
+  且**退出码非 0**，脚本可以据此判断。这条来自 issue #16 的建议。
+
 ## 1.21.16
 
 - **修复：联系人姓名全都显示成 `wxid_xxx`**（1.21.5 引入）。读取联系人库的函数在迁移时接错了返回值，
