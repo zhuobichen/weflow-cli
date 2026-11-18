@@ -27,18 +27,35 @@ spec.loader.exec_module(mac)
 
 class MacCaptureStaticTests(unittest.TestCase):
     def test_lldb_script_covers_both_architectures(self):
-        self.assertIn("reg('x1')", mac.PY_BODY)
-        self.assertIn("reg('rsi')", mac.PY_BODY)
-        self.assertIn('arm64', mac.PY_BODY)
+        arm = mac.build_lldb_script(*mac.REGISTERS['arm64'])
+        intel = mac.build_lldb_script(*mac.REGISTERS['x86_64'])
+        self.assertIn('register read x1 x2', arm)
+        self.assertIn('register read rsi rdx', intel)
+        self.assertIn('CCKeyDerivationPBKDF', arm)
 
-    def test_lldb_script_embeds_log_path(self):
-        log = '/tmp/hits.log'
-        built = mac.LLDB_TEMPLATE.replace(
-            'script\nimport gdb\nPYTHON_BLOCK',
-            'script\n' + mac.PY_BODY.replace('LOG', repr(log)),
-        )
-        self.assertIn(log, built)
-        self.assertIn('CCKeyDerivationPBKDF', built)
+    def test_lldb_script_autocontinues(self):
+        """回调里没有 process continue，微信就会冻在断点上。"""
+        script = mac.build_lldb_script('x1', 'x2')
+        self.assertIn('-o \'process continue\'', script)   # 回调内自动放行
+        self.assertTrue(script.rstrip().endswith('process continue'))  # 主 continue
+
+    def test_no_gdb_dependency(self):
+        """旧版在 lldb 里 import gdb 必炸——这条钉住回归（只看代码，不看文档）。"""
+        import ast as _ast
+        src = (ROOT / 'scripts' / 'macos_capture.py').read_text(encoding='utf-8')
+        tree = _ast.parse(src)
+        imported = set()
+        for node in _ast.walk(tree):
+            if isinstance(node, _ast.Import):
+                imported.update(a.name.split('.')[0] for a in node.names)
+            elif isinstance(node, _ast.ImportFrom):
+                imported.add((node.module or '').split('.')[0])
+        self.assertNotIn('gdb', imported)
+
+    def test_watchers_cover_helper_process(self):
+        """口令可能在 WeChatAppEx 里派生，两类进程都得扫。"""
+        src = (ROOT / 'scripts' / 'macos_capture.py').read_text(encoding='utf-8')
+        self.assertIn('WeChatAppEx', src)
 
     def test_db_candidates_finds_containers_layout(self):
         home = pathlib.Path(mkdtemp('wf-mac-home-'))
