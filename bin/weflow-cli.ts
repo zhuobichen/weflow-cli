@@ -8983,6 +8983,47 @@ program
     }
   })
 
+// ==================== ask（带引用的问答）====================
+program
+  .command('ask <question>')
+  .description('问一句：路由 → 取证据 → 判定 → 组句 → 校验，每条结论都挂原话')
+  .option('--profile <name>', '出网档位：balanced（默认）| offline | cloud', 'balanced')
+  .option('--thread <id>', '线程 id：让"那后来呢"接上上一轮')
+  .option('--fresh', '不复用上次的阶段产物，全部重算')
+  .option('--json', '输出 JSON 格式')
+  .action(async (question: string, opts) => {
+    const { execFile } = await import('child_process')
+    const { promisify } = await import('util')
+    const execFileAsync = promisify(execFile)
+    const script = join(resolvePackageRoot(), 'scripts', 'ask.py')
+
+    const args = [script, String(question), '--profile', String(opts.profile)]
+    if (opts.thread) args.push('--thread', String(opts.thread))
+    if (opts.fresh) args.push('--fresh')
+    if (opts.json) args.push('--json')
+
+    try {
+      const { stdout } = await execFileAsync(getPythonCommand(), args, {
+        timeout: 600_000,
+        maxBuffer: 10 * 1024 * 1024,
+        env: createPythonProcessEnv({}),
+      })
+      console.log(stdout.trimEnd())
+    } catch (e: any) {
+      // 与 ask.py 自己的契约一致：读不出来就说读不出来，不编一个空答案。
+      if (opts.json) {
+        console.log(JSON.stringify({
+          success: false,
+          code: 'ASK_FAILED',
+          error: '问答不可用，请先运行 weflow-cli check --report 检查配置与依赖',
+        }))
+        process.exit(1)
+      }
+      console.error(chalk.red(`\n${safeSubprocessError(e, '问答失败')}`))
+      process.exit(1)
+    }
+  })
+
 // ==================== leads（线索雷达）====================
 program
   .command('leads')

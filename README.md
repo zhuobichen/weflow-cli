@@ -82,6 +82,18 @@ weflow-cli network --with "联系人A"     # 我和他共同在哪些群；--int
 weflow-cli timeline --source "某号"     # 这个号历次说法的时间线
 ```
 
+**问一句话，每条结论都挂原话**（`ask` 是上面这些命令的问答外壳）：
+
+```text
+weflow-cli ask "上个月我答应过谁什么"        # 路由 → 取证据 → 判定 → 组句 → 校验
+weflow-cli ask "那后来呢" --thread demo     # 同一线程里接上一轮的指代
+weflow-cli ask "…" --profile offline        # 三个都走本机，问题也不出网
+```
+
+它只做一件事：**把已经查得到的东西，整理成你能核对的一段话**。判不了就写「看不清」，
+没实现的路由直接说没实现，不会凑一个答案。默认档位 `balanced` 只有**你的问题**会出网
+（用于选路由），判定与组句都在本机；`--profile offline` 连问题也不出去。
+
 ## 直接回答
 
 **怎么把微信聊天记录导出成 HTML / Excel？**
