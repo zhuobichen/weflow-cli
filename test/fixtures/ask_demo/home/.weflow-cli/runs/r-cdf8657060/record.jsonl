@@ -1,0 +1,7 @@
+{"stage": "plan", "t": 0.0, "question": "这个月我一共聊了多少条消息", "profile": "balanced", "resumed_from": []}
+{"stage": "route", "t": 0.037, "by": "rule", "route": "stats", "hit": "多少条"}
+{"stage": "retrieve", "t": 0.061, "by": "stats", "candidates": 1, "db_fp": "fdb887ab836e", "keywords": null}
+{"stage": "judge", "t": 0.061, "by": "rule", "items": 1, "states": {"delivered": 0, "acked": 0, "chased": 0, "unknown": 0, "found": 1}}
+{"stage": "compose", "t": 0.062, "by": "template", "citations": 1, "verdict": "answered"}
+{"stage": "verify", "t": 0.063, "ok": true, "checks": ["citation_for_claim", "ref_present_in_text", "citation_matches_text"], "failed": 0, "missing_refs": [], "unrelated": []}
+{"stage": "answer", "t": 0.063, "route": "stats", "verdict": "answered", "ok": true, "citations": 1}

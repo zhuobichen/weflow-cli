@@ -1,0 +1,120 @@
+{
+ "_fresh": true,
+ "route": "promises",
+ "candidates": [
+  {
+   "kind": "promise",
+   "ts": 1794967200,
+   "talker": "wxid_demo_group_b",
+   "said": "我明天把排期表发到群里。",
+   "follow": [
+    [
+     false,
+     "好嘞"
+    ]
+   ]
+  },
+  {
+   "kind": "promise",
+   "ts": 1793930400,
+   "talker": "wxid_demo_contact_a",
+   "said": "我下周把会议纪要整理好发你。",
+   "follow": [
+    [
+     false,
+     "会议纪要发了吗？"
+    ]
+   ]
+  },
+  {
+   "kind": "promise",
+   "ts": 1793239200,
+   "talker": "wxid_demo_contact_a",
+   "said": "我回头整理一下发你。",
+   "follow": [
+    [
+     true,
+     "新版清单发你了。"
+    ],
+    [
+     false,
+     "收到了"
+    ],
+    [
+     true,
+     "交了，上周就交了"
+    ],
+    [
+     false,
+     "这个月的报销单你交了吗"
+    ],
+    [
+     true,
+     "我下周把会议纪要整理好发你。"
+    ],
+    [
+     false,
+     "会议纪要发了吗？"
+    ]
+   ]
+  }
+ ],
+ "db_fp": "fdb887ab836e",
+ "items": [
+  {
+   "time": "2026-11-18",
+   "talker": "wxid_demo_group_b",
+   "said": "我明天把排期表发到群里。",
+   "state": "unknown",
+   "evidence": null,
+   "verdict": "answered",
+   "path": "no-evidence"
+  },
+  {
+   "time": "2026-11-06",
+   "talker": "wxid_demo_contact_a",
+   "said": "我下周把会议纪要整理好发你。",
+   "state": "chased",
+   "evidence": "会议纪要发了吗？",
+   "verdict": "answered",
+   "path": "rule-strong"
+  },
+  {
+   "time": "2026-10-29",
+   "talker": "wxid_demo_contact_a",
+   "said": "我回头整理一下发你。",
+   "state": "acked",
+   "evidence": "收到了",
+   "verdict": "answered",
+   "path": "rule-strong"
+  }
+ ],
+ "composed": {
+  "text": "最近 60 天里，\"我\"承诺过 3 件事：\n\n[E1] 2026-11-18 · wxid_demo_group_b\n     我说：我明天把排期表发到群里。\n     后续：没有可引用的证据（看不清）\n\n[E2] 2026-11-06 · wxid_demo_contact_a\n     我说：我下周把会议纪要整理好发你。\n     后续（可能还欠着）：会议纪要发了吗？\n\n[E3] 2026-10-29 · wxid_demo_contact_a\n     我说：我回头整理一下发你。\n     后续（已确认收货）：收到了\n",
+  "citations": [
+   {
+    "ref": "E1",
+    "time": "2026-11-18",
+    "said": "我明天把排期表发到群里。"
+   },
+   {
+    "ref": "E2",
+    "time": "2026-11-06",
+    "said": "我下周把会议纪要整理好发你。"
+   },
+   {
+    "ref": "E3",
+    "time": "2026-10-29",
+    "said": "我回头整理一下发你。"
+   }
+  ],
+  "verdict": "answered",
+  "by": "template"
+ },
+ "verified": {
+  "ok": true,
+  "failed": 0,
+  "missing_refs": [],
+  "unrelated": []
+ }
+}

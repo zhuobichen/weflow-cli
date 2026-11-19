@@ -1,0 +1,7 @@
+{"stage": "plan", "t": 0.0, "question": "找一下提到会议纪要的对话", "profile": "balanced", "resumed_from": []}
+{"stage": "route", "t": 0.035, "by": "rule", "route": "search_chats", "hit": "找一下"}
+{"stage": "retrieve", "t": 0.057, "by": "search_chats", "candidates": 2, "db_fp": "fdb887ab836e", "keywords": ["会议纪", "议纪要", "纪要的", "会议", "议纪", "纪要"]}
+{"stage": "judge", "t": 0.058, "by": "rule", "items": 2, "states": {"delivered": 0, "acked": 0, "chased": 0, "unknown": 0, "found": 2}}
+{"stage": "compose", "t": 0.058, "by": "template", "citations": 2, "verdict": "answered"}
+{"stage": "verify", "t": 0.059, "ok": true, "checks": ["citation_for_claim", "ref_present_in_text", "citation_matches_text"], "failed": 0, "missing_refs": [], "unrelated": []}
+{"stage": "answer", "t": 0.059, "route": "search_chats", "verdict": "answered", "ok": true, "citations": 2}

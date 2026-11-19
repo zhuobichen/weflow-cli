@@ -1,0 +1,7 @@
+{"stage": "plan", "t": 0.0, "question": "上个月我答应过谁什么", "profile": "balanced", "resumed_from": []}
+{"stage": "route", "t": 0.031, "by": "rule", "route": "promises", "hit": "答应"}
+{"stage": "retrieve", "t": 0.052, "by": "promises", "candidates": 3, "db_fp": "fdb887ab836e", "keywords": null}
+{"stage": "judge", "t": 0.053, "by": "rule", "items": 3, "states": {"delivered": 0, "acked": 1, "chased": 1, "unknown": 1, "found": 0}}
+{"stage": "compose", "t": 0.053, "by": "template", "citations": 3, "verdict": "answered"}
+{"stage": "verify", "t": 0.054, "ok": true, "checks": ["citation_for_claim", "ref_present_in_text", "citation_matches_text"], "failed": 0, "missing_refs": [], "unrelated": []}
+{"stage": "answer", "t": 0.055, "route": "promises", "verdict": "answered", "ok": true, "citations": 3}

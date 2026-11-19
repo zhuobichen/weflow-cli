@@ -1,0 +1,62 @@
+{
+ "_fresh": true,
+ "route": "stats",
+ "candidates": [
+  {
+   "kind": "stat",
+   "ts": 1794967200,
+   "talker": "（全部会话）",
+   "said": "共 11 条消息，覆盖 2 个会话，时间范围 2026-10-29 ~ 2026-11-18",
+   "top": [
+    [
+     "wxid_demo_contact_a",
+     7
+    ],
+    [
+     "wxid_demo_group_b",
+     4
+    ]
+   ]
+  }
+ ],
+ "db_fp": "fdb887ab836e",
+ "items": [
+  {
+   "time": "2026-11-18",
+   "talker": "（全部会话）",
+   "said": "共 11 条消息，覆盖 2 个会话，时间范围 2026-10-29 ~ 2026-11-18",
+   "state": "found",
+   "evidence": "共 11 条消息，覆盖 2 个会话，时间范围 2026-10-29 ~ 2026-11-18",
+   "verdict": "answered",
+   "path": "aggregate",
+   "top": [
+    [
+     "wxid_demo_contact_a",
+     7
+    ],
+    [
+     "wxid_demo_group_b",
+     4
+    ]
+   ]
+  }
+ ],
+ "composed": {
+  "text": "统计结果（只读本地库，口径写在括号里）：\n\n[E1] 2026-11-18 · （全部会话）\n     口径：共 11 条消息，覆盖 2 个会话，时间范围 2026-10-29 ~ 2026-11-18\n       - wxid_demo_contact_a：7 条\n       - wxid_demo_group_b：4 条\n",
+  "citations": [
+   {
+    "ref": "E1",
+    "time": "2026-11-18",
+    "said": "共 11 条消息，覆盖 2 个会话，时间范围 2026-10-29 ~ 2026-11-18"
+   }
+  ],
+  "verdict": "answered",
+  "by": "template"
+ },
+ "verified": {
+  "ok": true,
+  "failed": 0,
+  "missing_refs": [],
+  "unrelated": []
+ }
+}

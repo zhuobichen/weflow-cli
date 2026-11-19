@@ -1,0 +1,92 @@
+{
+ "_fresh": true,
+ "route": "search_chats",
+ "candidates": [
+  {
+   "kind": "hit",
+   "ts": 1794016800,
+   "talker": "wxid_demo_contact_a",
+   "said": "会议纪要发了吗？",
+   "keywords": [
+    "会议纪",
+    "议纪要",
+    "纪要的",
+    "会议",
+    "议纪",
+    "纪要"
+   ],
+   "hits": [
+    "会议纪",
+    "议纪要",
+    "会议",
+    "议纪",
+    "纪要"
+   ]
+  },
+  {
+   "kind": "hit",
+   "ts": 1793930400,
+   "talker": "wxid_demo_contact_a",
+   "said": "我下周把会议纪要整理好发你。",
+   "keywords": [
+    "会议纪",
+    "议纪要",
+    "纪要的",
+    "会议",
+    "议纪",
+    "纪要"
+   ],
+   "hits": [
+    "会议纪",
+    "议纪要",
+    "会议",
+    "议纪",
+    "纪要"
+   ]
+  }
+ ],
+ "db_fp": "fdb887ab836e",
+ "items": [
+  {
+   "time": "2026-11-07",
+   "talker": "wxid_demo_contact_a",
+   "said": "会议纪要发了吗？",
+   "state": "found",
+   "evidence": "会议纪要发了吗？",
+   "verdict": "answered",
+   "path": "direct-hit"
+  },
+  {
+   "time": "2026-11-06",
+   "talker": "wxid_demo_contact_a",
+   "said": "我下周把会议纪要整理好发你。",
+   "state": "found",
+   "evidence": "我下周把会议纪要整理好发你。",
+   "verdict": "answered",
+   "path": "direct-hit"
+  }
+ ],
+ "composed": {
+  "text": "找到 2 条相关记录：\n\n[E1] 2026-11-07 · wxid_demo_contact_a\n     会议纪要发了吗？\n\n[E2] 2026-11-06 · wxid_demo_contact_a\n     我下周把会议纪要整理好发你。\n",
+  "citations": [
+   {
+    "ref": "E1",
+    "time": "2026-11-07",
+    "said": "会议纪要发了吗？"
+   },
+   {
+    "ref": "E2",
+    "time": "2026-11-06",
+    "said": "我下周把会议纪要整理好发你。"
+   }
+  ],
+  "verdict": "answered",
+  "by": "template"
+ },
+ "verified": {
+  "ok": true,
+  "failed": 0,
+  "missing_refs": [],
+  "unrelated": []
+ }
+}

@@ -1,0 +1,7 @@
+{
+ "version": 1,
+ "ntDbPath": "FIXTURE_HOME/nt/message_0.db",
+ "ntKey": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+ "ntSalt": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
+ "wxid": "wxid_demo_me"
+}
