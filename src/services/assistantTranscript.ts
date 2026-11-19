@@ -20,9 +20,21 @@
  *   这是文章里明写的工程代价，不靠自觉。
  * - 所有写入都是 **best-effort**：写不进去只是少一份证据，绝不能让助手这一轮失败。
  */
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync } from 'fs'
+import { appendFileSync, chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync } from 'fs'
 import { join } from 'path'
 import os from 'os'
+
+/**
+ * 把权限收紧到 `mode`，best-effort。
+ *
+ * 存在的意义只有一个：`mkdirSync`/`appendFileSync` 的 `mode` 参数**只在创建时生效**，
+ * 已经存在的路径它一概不管。这条流水的隐私全部押在 0700/0600 上（D-140 那类取舍），
+ * 于是"旧版本建的 0755 目录"会一直被继承下去，而任何一次 chmod 都没发生过。
+ * 改不动（Windows、只读挂载）就跳过——它不该让写流水失败。
+ */
+function tighten(path: string, mode: number): void {
+  try { chmodSync(path, mode) } catch { /* 见上：收紧失败不影响写入 */ }
+}
 
 const TRANSCRIPT_DIR = join(os.homedir(), '.weflow-cli', 'assistant_transcript')
 
@@ -71,7 +83,14 @@ export function appendTurn(entry: TranscriptEntry): boolean {
       content: safe,
       ...(entry.session ? { session: entry.session } : {}),
     }) + '\n'
-    appendFileSync(dayFile(dayOf(entry.ts)), line, { encoding: 'utf8', mode: 0o600 })
+    const file = dayFile(dayOf(entry.ts))
+    // `mode` 只在**创建**那一刻生效：目录/文件已经存在（旧版本建的、别的进程建的）就完全不管。
+    // 于是一个宽松的 0755 会永久留着，而这条流水的隐私恰恰只靠权限——CI 上
+    // `test/assistant-transcript.test.ts`「目录 0700、文件 0600」就是这么红的。
+    // 所以每次写完都收紧一次（best-effort：改不动也不影响写入，Windows 上 chmod 基本是空操作）。
+    tighten(TRANSCRIPT_DIR, 0o700)
+    appendFileSync(file, line, { encoding: 'utf8', mode: 0o600 })
+    tighten(file, 0o600)
     return true
   } catch {
     return false
