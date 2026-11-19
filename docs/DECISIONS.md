@@ -4875,3 +4875,33 @@ weflow-cli config set dailyMaxFailureRate 0     # 一篇失败就中止
 
 **Consequences.** 清单会比"宽松口径"更短，这是**预期行为**不是漏判；出现误判时
 先看测试里的正反例，改口径要同时改测试和这一条。
+
+## D-156: 删除一律走 `unlinkSync` / 非递归 `rmdirSync`，`src/` 禁用 `rmSync`
+
+**Decision.** 生产代码里删文件只能调 `src/utils/quietFs.ts` 的 `removeFileQuietly` /
+`removeDirQuietly`（内部是 `unlinkSync`，目录按"先清空、再非递归 `rmdirSync`"手工递归）。
+`test/no_rm_sync.test.ts` 会拦住 `src/` 里新写的 `rmSync` / `rmdirSync`。
+
+**Reason.** 2026-11-19 在本机（Windows + 沙箱）实测，删除 API 分成两组：
+
+| 调用 | 结果 |
+| --- | --- |
+| `rmSync(file, { force: true })` | 不抛错，**文件还在** |
+| `rmSync(dir, { recursive: true, force: true })` | 不抛错，**目录还在** |
+| `rmdirSync(dir, { recursive: true })` | 不抛错，**目录还在** |
+| `unlinkSync(file)` | 真的删掉 |
+| `rmdirSync(空目录)` | 真的删掉 |
+
+危险的地方不是"留下垃圾文件"，而是**上层语义整体失真**——三个真实后果：
+`assistant stop` 报"已停止"却留着 pid 文件；原子写退化路径留下 `.tmp`，下次读到旧内容；
+`setup --recreate` 删不掉旧 venv，紧接着的 `existsSync` 判定为真、直接跳过创建，
+**用户以为换了新 venv 而实际还是旧的**。
+
+**Alternatives rejected.** ①把 `rmSync` 换成 `fs.rm` 的异步版：同一套底层实现，实测同样静默；
+②在每处调用点各写一份 try/catch + `existsSync` 复查：三处已经各写一遍且各不相同，
+第四处一定会忘；③只改测试、不动生产代码：`setup --recreate` 那条是用户可见的失效，
+测试绿了反而更难被发现。
+
+**Consequences.** 手工递归比 `rmSync({recursive})` 慢一点、代码多几行——删除本来就不在热路径上。
+`test/` 里其余几十处 `rmSync` 暂未替换：它们是临时目录清理，泄漏但不影响正确性，
+一次性全改的改动量大于收益；新写的测试若要断言"删干净了"，同样该走 `quietFs`。

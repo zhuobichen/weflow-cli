@@ -18,7 +18,8 @@
  */
 import { join, dirname, isAbsolute } from 'node:path'
 import { homedir } from 'node:os'
-import { existsSync, readFileSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
+import { existsSync, readFileSync, mkdirSync, writeFileSync } from 'node:fs'
+import { removeFileQuietly } from '../utils/quietFs.js'
 
 /** 与 `assistantPrivacy.ts` 里的表达式相同——审计文件是这份评测的观测口。 */
 const AUDIT_FILE = join(homedir(), '.weflow-cli', 'assistant_audit.log')
@@ -853,7 +854,7 @@ export async function installStubs(spec: EvalCase): Promise<() => void> {
     // 铺过的文件和设过的环境变量都要收回去：留着的话下一条用例会读到上一条的夹具，
     // 而且**静默**——这正是"合成数据"那条纪律最容易破的地方。
     for (const full of writtenFiles) {
-      try { rmSync(full, { force: true }) } catch { /* 收不掉就留着，下一条用例用的是临时家目录，不会串到真实数据 */ }
+      removeFileQuietly(full)   // 用 rmSync 在本机是"不抛错也不删"，见 src/utils/quietFs.ts
     }
     for (const [key, value] of Object.entries(savedEnv)) {
       if (value === undefined) delete process.env[key]

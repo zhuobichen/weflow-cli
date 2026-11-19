@@ -3,11 +3,12 @@
  * pid 文件: ~/.weflow-cli/assistant.pid, 日志: ~/.weflow-cli/assistant.log
  */
 import { join } from 'path'
-import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, statSync, unlinkSync, writeFileSync } from 'fs'
+import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, statSync, writeFileSync } from 'fs'
 import os from 'os'
 import { spawn, type ChildProcess } from 'child_process'
 import { resolvePackageRoot } from '../utils/packageRoot.js'
 import { createPythonProcessEnv } from '../utils/pythonProcessEnv.js'
+import { removeFileQuietly } from '../utils/quietFs.js'
 import { clearEndpoint } from '../panel/endpoint.js'
 
 const DIR = join(os.homedir(), '.weflow-cli')
@@ -24,6 +25,19 @@ export interface StartDaemonOptions {
   settleMs?: number
 }
 
+/**
+ * 删 pid 文件。
+ *
+ * **必须走 `removeFileQuietly`（内部是 unlinkSync），不要用 rmSync。** 本机（Windows +
+ * 沙箱）下 `rmSync(file, { force: true })` 不抛错、但文件仍在原处——也就是"成功"且没删。
+ * 后果是 `assistant stop` 报"已停止"却留下 pid 文件，而 `assistant-daemon-start` 那几条
+ * 用例会因为上一条用例的 pid 文件删不掉，集体变成"守护进程已在运行"。
+ * 完整实测表见 `src/utils/quietFs.ts` 的文件头。
+ */
+function removePidFile(): void {
+  removeFileQuietly(PID_FILE)
+}
+
 export function isDaemonAlive(): { alive: boolean; pid: number | null } {
   if (!existsSync(PID_FILE)) return { alive: false, pid: null }
   try {
@@ -32,7 +46,7 @@ export function isDaemonAlive(): { alive: boolean; pid: number | null } {
     process.kill(pid, 0)
     return { alive: true, pid }
   } catch {
-    rmSync(PID_FILE, { force: true })
+    removePidFile()
     return { alive: false, pid: null }
   }
 }
@@ -139,7 +153,7 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<{
     // 不再监听 stdout/stderr：它们已经直接写进日志文件（见上面的 logFd）。
     child.on('exit', (code) => {
       appendLog(`--- daemon exited (code ${code}) ---`)
-      try { if (existsSync(PID_FILE)) rmSync(PID_FILE, { force: true }) } catch {}
+      removePidFile()
     })
 
     await new Promise<void>((resolve) => setTimeout(resolve, settleMs))
@@ -170,10 +184,8 @@ export async function startDaemon(options: StartDaemonOptions = {}): Promise<{
  * 否则 pid 文件会留着，`assistant status` 虽然能靠探活纠正，但日志与 `ps` 会有个空洞。
  */
 export function cleanupDaemonFiles(): void {
-  // 用 unlinkSync 而不是 rmSync：本机沙箱下 `rmSync(file)` 会"成功"却不真的删
-  // （不抛错、文件还在），而 unlinkSync 行为确定。删不掉也不影响正确性：读取端会探活。
-  try { if (existsSync(PID_FILE)) unlinkSync(PID_FILE) } catch { /* 同上 */ }
-  try { clearEndpoint() } catch { /* 同上 */ }
+  removePidFile()
+  try { clearEndpoint() } catch { /* 删不掉不影响正确性：读取端会探活 */ }
 }
 
 export function stopDaemon(): { stopped: boolean; message: string } {
@@ -182,7 +194,7 @@ export function stopDaemon(): { stopped: boolean; message: string } {
   try {
     // Windows 下 SIGTERM/SIGKILL 等价 terminate
     process.kill(pid!, 'SIGTERM')
-    rmSync(PID_FILE, { force: true })
+    removePidFile()
     // 端点文件也删掉：子进程收的是 SIGTERM，**不会**跑到 `AssistantService.stop()` 里去清理，
     // 所以这里替它删。删得掉最好，删不掉也不影响正确性——读取端会探活（见 panel/endpoint.ts）。
     clearEndpoint()

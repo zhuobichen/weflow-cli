@@ -13,7 +13,8 @@
  */
 import { execFile } from 'child_process'
 import { promisify } from 'util'
-import { existsSync, readFileSync, rmSync } from 'fs'
+import { existsSync, readFileSync } from 'fs'
+import { removeDirQuietly } from '../utils/quietFs.js'
 import { basename, join } from 'path'
 import { homedir } from 'os'
 import { resolvePackageRoot } from '../utils/packageRoot.js'
@@ -144,7 +145,11 @@ export async function runSetup(plan: SetupPlan, onLine?: (line: string) => void)
 
   // 1. 重建或创建 venv
   if (plan.recreate && existsSync(plan.venvDir)) {
-    rmSync(plan.venvDir, { recursive: true, force: true })
+    // 用 removeDirQuietly 而不是 rmSync：本机（Windows + 沙箱）下
+    // `rmSync(dir, { recursive: true, force: true })` 不抛错、目录还在，于是紧接着的
+    // `existsSync(venvDir)` 仍然为真、直接跳过创建——`--recreate` 静默失效，
+    // 用户以为换了新 venv，实际还是旧的。见 src/utils/quietFs.ts 的实测表。
+    removeDirQuietly(plan.venvDir)
     steps.push({ name: 'remove-existing-venv', ok: true, detail: basename(plan.venvDir) })
     say(`已删除旧 venv: ${plan.venvDir}`)
   }

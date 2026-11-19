@@ -18,7 +18,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
-import { appendFileSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdtempSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -70,7 +70,10 @@ function recorder(): Recorder {
 }
 
 function cleanup(): void {
-  rmSync(PID_FILE, { force: true })
+  // unlinkSync 而不是 rmSync：本机（Windows + 沙箱）下 `rmSync(file, { force: true })`
+  // 不抛错、文件却还在。用 rmSync 时这条 cleanup 形同没写，pid 文件从上一条用例
+  // 留到下一条，后面三条用例会一起变红（"守护进程已在运行"）。
+  try { if (existsSync(PID_FILE)) unlinkSync(PID_FILE) } catch { /* 删不掉就让断言去红 */ }
 }
 
 test('the daemon child is spawned with --yes, because its stdin is ignored', async () => {

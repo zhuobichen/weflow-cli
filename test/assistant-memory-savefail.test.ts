@@ -16,7 +16,7 @@
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -68,7 +68,12 @@ test('内存态没有被这次失败破坏：事实还在，窗口还在', () =>
 })
 
 test('下一次成功落盘会把失败记录清掉', () => {
-  rmSync(MEMORY_PATH + '.tmp', { recursive: true, force: true })   // 把占住 .tmp 的目录挪开
+  // 用 rmdirSync（**非递归**）而不是 rmSync：本机（Windows + 沙箱）实测，
+  // `rmSync(dir, { recursive: true, force: true })` 与 `rmdirSync(dir, { recursive: true })`
+  // 都是不抛错、目录还在；非递归的 rmdirSync 对空目录才真的删得掉。
+  // 删不掉的话下面这次 save 仍然撞 EISDIR，"存成功"根本没发生，断言会看起来像
+  // "失败记录没被清掉"，其实是被测代码压根没走到成功分支。
+  if (existsSync(MEMORY_PATH + '.tmp')) rmdirSync(MEMORY_PATH + '.tmp')
   const memory = new AssistantMemory()
   memory.addFact('u-ok', '这次能存上')
   memory.save()

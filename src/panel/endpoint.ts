@@ -27,7 +27,7 @@
  * 它**挡不住**以同一用户身份运行、且愿意翻 `~/.weflow-cli/` 的程序——那种程序本来就能直接读库。
  * 这是这条设计的真实边界，别把它说成比这更强。
  */
-import { existsSync, mkdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'fs'
+import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'fs'
 import { writeFileAtomic } from '../utils/atomicWrite.js'
 import { randomBytes, timingSafeEqual } from 'crypto'
 import { join } from 'path'

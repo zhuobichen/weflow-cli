@@ -21,13 +21,26 @@
  * 退化的那一次只失去"改名是瞬时"这一点。留给同机的读者一个真实边界：
  * 若那个句柄是以拒绝写入的方式打开的，直接写也会失败，这时照旧抛给调用方。
  */
-import { writeFileSync, renameSync, rmSync } from 'node:fs'
+import { writeFileSync, renameSync } from 'node:fs'
+import { removeFileQuietly } from './quietFs.js'
 
 /** 忙等。`Atomics.wait` 是标准库里的同步睡眠，不用引第三方包 */
 function sleepSync(ms: number): void {
   try {
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
   } catch { /* 不支持就干脆不等，直接重试 */ }
+}
+
+/**
+ * 收掉临时文件。
+ *
+ * **必须走 `removeFileQuietly`（内部是 unlinkSync），不要用 rmSync。** 本机实测
+ * `rmSync(file, { force: true })` 不抛错、文件仍在原处，于是"退化为直接写"这条路径
+ * 会留下 `.tmp`，而 `test/atomic-write.test.ts` 里"不留临时文件"那条一直红——
+ * 红的原因和被测逻辑无关。实测表见 `src/utils/quietFs.ts`。
+ */
+function removeTmp(path: string): void {
+  removeFileQuietly(path)
 }
 
 /** 这些是"文件正忙"的形态，值得重试；别的错误（权限、路径不存在）立刻抛 */
@@ -43,7 +56,7 @@ export function writeFileAtomic(target: string, data: string, options: { mode?: 
       return
     } catch (error: any) {
       if (!BUSY_CODES.has(error?.code)) {
-        try { rmSync(tmp, { force: true }) } catch { /* 清理失败不掩盖原错误 */ }
+        removeTmp(tmp)
         throw error
       }
       sleepSync(10 * (attempt + 1))
@@ -52,5 +65,5 @@ export function writeFileAtomic(target: string, data: string, options: { mode?: 
 
   // 还在忙：直接覆盖。数据不丢，只是不再"原子"
   writeFileSync(target, data, { encoding: 'utf8', mode: options.mode })
-  try { rmSync(tmp, { force: true }) } catch { /* 见上 */ }
+  removeTmp(tmp)
 }
