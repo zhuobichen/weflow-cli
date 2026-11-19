@@ -8,7 +8,7 @@
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -65,7 +65,9 @@ test('流水靠文件权限保护：目录 0700、文件 0600', () => {
   if (process.platform === 'win32') return   // Windows 上 chmod 是空操作，这条只对 POSIX 有意义
   const ts = Date.now()
   appendTurn({ ts, role: 'user', content: '权限检查' })
-  const { statSync } = require('node:fs') as typeof import('node:fs')
+  // statSync 从文件顶部 import：这个测试文件是 ESM，`require` 在 Linux CI 上直接
+  // `ReferenceError: require is not defined`。而它上面一行在 Windows 就 return 了，
+  // 所以本机永远看不到——这条测试曾在 CI 上"红了两天"，红的原因和权限毫无关系。
   const fileMode = statSync(join(transcriptDir(), `${dayOf(ts)}.jsonl`)).mode & 0o777
   const dirMode = statSync(transcriptDir()).mode & 0o777
   assert.equal(fileMode & 0o077, 0, `文件对同组/其他人不该可读：${fileMode.toString(8)}`)
