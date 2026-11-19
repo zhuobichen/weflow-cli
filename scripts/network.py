@@ -27,10 +27,20 @@ from nt_common import derive_database_key  # noqa: E402
 from export_chat_html import connect  # noqa: E402
 
 
+class ContactDbUnavailable(RuntimeError):
+    """联系人库不可用。
+
+    **不要用 SystemExit 表达这个错误**：`promises` / `today` / `replay` 等命令都靠
+    `except Exception` 把联系人名降级成 wxid 继续跑（联系人只是锦上添花，消息库才是主体）。
+    SystemExit 继承 BaseException，`except Exception` 接不住——缺 contactDbPath 时
+    整个命令直接退出，用户看到的是"先跑 init"，而其实该命令本可以正常出结果。
+    """
+
+
 def _open_contact(cfg):
     path = cfg.get('contactDbPath') or ''
     if not path:
-        raise SystemExit('配置里没有 contactDbPath，先跑 weflow-cli init')
+        raise ContactDbUnavailable('配置里没有 contactDbPath，先跑 weflow-cli init')
     key = decrypt_lock(cfg.get('contactKey', '') or cfg.get('ntKey', '') or '')
     salt = decrypt_lock(cfg.get('contactSalt', '') or cfg.get('ntSalt', '') or '')
     pw = decrypt_lock(cfg.get('favPassphrase', '') or cfg.get('decryptKey', '') or '')
@@ -191,7 +201,10 @@ def main():
     args = ap.parse_args()
 
     cfg = load_config()
-    people, rooms, members = load_graph(cfg)
+    try:
+        people, rooms, members = load_graph(cfg)
+    except ContactDbUnavailable as exc:
+        raise SystemExit(str(exc))
     if args.groups:
         cmd_groups(people, rooms, members)
     elif args.with_who:

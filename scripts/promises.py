@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import pathlib
 import re
 import sys
@@ -95,14 +96,30 @@ def load_messages(conns, days, my_wxid):
 
 
 def classify(follow):
-    """看承诺之后发生了什么：兑现 / 被催 / 只有确认 / 无后续。"""
-    if any(f[1] and DELIVER_RE.search(f[3]) for f in follow):
+    """看承诺之后发生了什么：已兑现 / 被催 / 确认收到 / 看不清。
+
+    **「确认」的判据是我声称已发之后对方才说收到。** 原来的写法只要后续出现
+    「好的 / 收到」就判 `acked`，于是「我明天把排期表发到群里」+「好嘞」被标成
+    "已确认"——那一声是在回应**承诺**，不是在确认**收到东西**。合成样例第一次
+    跑就把这条误报打出来了；拿它做宣传，懂得看的用户一眼能挑出来。
+
+    现在：先找我"已发/已弄好"的位置，只有**它之后**对方说收到才算确认；
+    只有承诺+对方应一声时不判确认，落回"看不清"（由人来判断）。
+    """
+    deliver_at = None
+    for i, f in enumerate(follow):
+        if f[1] and DELIVER_RE.search(f[3]):
+            deliver_at = i
+            break
+    if deliver_at is not None:
+        if any(not f[1] and ACK_RE.search(f[3]) for f in follow[deliver_at + 1:]):
+            return 'acked', '我说已发之后，对方确认收到'
         return 'delivered', '我后来提到"已发/已弄好"'
     chases = [f for f in follow if not f[1] and CHASE_RE.search(f[3])]
     if chases:
         return 'chased', '对方后来催过：' + chases[0][3][:40]
     if any(not f[1] and ACK_RE.search(f[3]) for f in follow):
-        return 'acked', '对方回复了确认'
+        return 'unknown', '对方只应了一声，没有确认收到东西'
     return 'unknown', '没有后续证据'
 
 
