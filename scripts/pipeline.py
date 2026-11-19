@@ -48,6 +48,10 @@ def main():
     parser.add_argument('--interest', default='AI', help='兴趣主题（默认 AI）')
     parser.add_argument('--wiki-limit', type=int, default=20, help='概念编译数量（默认 20）')
     parser.add_argument('--skip-classify', action='store_true', help='跳过后处理')
+    parser.add_argument('--deep', action='store_true',
+                        help='让 classify_daily 做深度解析 + 行动建议（**默认不做**）。\n'
+                             '每一步都要把正文本再喂一次云端模型：168 篇串行约 40 分钟，'
+                             '产出只有 AI/学术 两栏会看。想要细看的那天显式加它。')
     parser.add_argument('--with-wiki', action='store_true',
                         help='把概念页写进 Obsidian Vault。**默认不做** —— Obsidian 自带的图谱\n'
                              '视图是实时的，写一次 vault 图谱就重画一次，所以只有你明确要它重建时才写')
@@ -167,6 +171,8 @@ def main():
             '--engine', args.engine,
         ]
         step2_args += ['--interest', args.interest]
+        if args.deep:
+            step2_args += ['--deep']
         if args.date:
             step2_args.insert(1, args.date)
         if not run_step('classify_daily — 后处理', step2_args):

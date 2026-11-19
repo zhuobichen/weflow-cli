@@ -171,6 +171,9 @@ def main():
     parser.add_argument('--interest', default='AI', help='兴趣主题，默认 AI')
     parser.add_argument('--profile', default='', help='用户定位描述（默认使用环境科学研究生画像）')
     parser.add_argument('--skip-action', action='store_true', help='跳过行动建议生成')
+    parser.add_argument('--deep', action='store_true',
+                        help='做深度解析 + 行动建议（默认不做：每篇一次 2000 token 调用，'
+                             '168 篇串行约 40 分钟，产出只有 AI/学术 两栏会看）')
     args = parser.parse_args()
 
     config = load_config()
@@ -226,7 +229,13 @@ def main():
     print(f'  分布: {dict(dist)}\n')
 
     # ====== Step 3: Deep summary for interest ======
+    # **默认不做**：这一步每篇一次 2000 token 的调用，168 篇串行约 40 分钟，
+    # 而它的产出（深度解析）只有 AI/学术两栏会看。日报的本职是"当天有什么"，
+    # 深度解析属于"我想细看"——需要时用 --deep 显式打开（见 D-158）。
     interest_files = [f for f, t in topic_map.items() if t == args.interest]
+    if interest_files and not args.deep:
+        print(f'=== Step 3: 跳过深度摘要（{len(interest_files)} 篇待解析；加 --deep 才做）===')
+        interest_files = []
     if interest_files:
         print(f'=== Step 3: [{args.interest}] 深度摘要 ({len(interest_files)}篇) ===')
         for i, fpath in enumerate(interest_files):
@@ -261,7 +270,9 @@ def main():
                 print(f'  [{i+1}] ERR: {e}')
 
     # ====== Step 4: Generate action suggestions (batch) ======
-    if not args.skip_action:
+    # 与 Step 3 同属"细看"那类产出：它要把 AI/学术 的正文再喂一次云端模型。
+    # 默认关闭（`--deep` 一起打开），理由与 Step 3 相同。
+    if args.deep and not args.skip_action:
         print(f'\n=== Step 4: 生成行动建议 ===')
         # 只处理 AI 和 学术 主题的文章
         candidate_files = [f for f, t in topic_map.items() if t in ['AI', '学术']]

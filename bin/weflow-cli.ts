@@ -5010,6 +5010,9 @@ program
         .option('--wiki-limit <n>', '概念编译数', '20')
         .option('--source <name>', '仅处理指定公众号，可重复使用', (value: string, previous: string[]) => [...previous, value], [] as string[])
         .option('--skip-classify', '跳过 AI 后处理')
+        // 深度解析默认不做：每篇一次 2000 token 调用，168 篇串行约 40 分钟，
+        // 产出只有 AI/学术 两栏会看。想要细看的那天显式加 --deep。
+        .option('--deep', '做深度解析 + 行动建议（默认不做）')
         // 这两个**默认不做**：Obsidian 自带的图谱视图是实时的，写一次 vault 图谱就重画一次。
         .option('--with-wiki', '把概念页写进 Obsidian Vault（默认不写：图谱只在你说了才变）')
         .option('--with-vault', '把当天内容副本同步进 Obsidian Vault（默认不写）')
@@ -5094,6 +5097,7 @@ program
           if (opts.date) args.push('--date', opts.date)
           for (const source of sources) args.push('--source', source)
           if (opts.skipClassify) args.push('--skip-classify')
+          if (opts.deep) args.push('--deep')
           if (opts.withWiki) args.push('--with-wiki')
           if (opts.withVault) args.push('--with-vault')
           if (opts.skipHtml) args.push('--skip-html')
