@@ -612,12 +612,47 @@ weflow-cli wiki compile --source ./output/user-notes --min-refs 1 --yes
   不动别的，也不动 frontmatter；
 - **它们是线索不是定论**：每页 frontmatter 里 `verified: false`，表示**未经人工核验**。
 
-## 知识库体检（本地，不联网）
+## 导出本地缓存的图片与视频（只读，不联网）
 
 ```powershell
-weflow-cli wiki lint            # 断链 / 孤儿 / 空页 / 同名 / 近似重名 / 退化字段
-weflow-cli wiki lint --json     # 机器可读
+weflow-cli media-export --dry-run                  # 先看有多少
+weflow-cli media-export --since 2026-11            # 只导这个月
+weflow-cli media-export --out D:\media             # 指定输出目录
 ```
+
+输出布局：
+
+```
+output/media/images/<YYYY-MM>/<md5>[_t|_h].jpg    # 解密后的图片
+output/media/videos/<YYYY-MM>/<md5>.mp4           # 视频（本来就没加密）
+```
+
+**它解的是什么**：微信 4.x 把聊天图片存成 `msg/attach/<账号哈希>/<月份>/Img/*.dat`，
+格式叫 V2——头 15 字节 + AES-128-ECB 段 + 16 字节分隔符 + 单字节 XOR 段。
+密钥不写在任何配置里，但可以**离线推出来**：
+
+```
+AES key = MD5(str(UIN) + wxid)[:16] 的 ASCII 字节
+XOR key = UIN & 0xFF
+UIN     = %APPDATA%\Tencent\xwechat\{net,net_1}\kvcomm\ 下文件名里的数字之一
+```
+
+本命令不猜 UIN：把候选全试一遍，用**缩略图解码后是不是图片**当判据（首次运行会打印
+`密钥标定: UIN=… wxid=…`）。标定不出来就直接报错退出，不会拿一堆解不开的文件充数。
+
+两个已知边界（会打印 `[WARN]`，不算失败）：
+
+| 情况 | 说明 |
+| --- | --- |
+| **WxAM 原图** | 解密后魔数是 `wxgf`，还要第二层解码；目前不处理，缩略图（`_t`）不受影响 |
+| **V2 布局差异** | 少数 `_h` 文件头里 `xor_size` 与文件长度不符（实测 1 MB 对 1.34 MB），各种切法都拼不回完整图片 |
+
+**视频不用解密**：`msg/video/<YYYY-MM>/*.mp4` 是明文，直接复制。
+
+> 别把 `output/media` 当备份：它只是把客户端已经缓存在本地的文件换了个可读形态。
+> 客户端清理过的（`--missing-only` 能查出来）这里也没有。
+
+## 知识库体检（本地，不联网）
 
 - **断链**：`## 来源` 里指向的卡片没了（卡片删了或改名）——这是**真坏了**；
 - **还没建页的相关概念**：`## 相关概念` 里模型提出、但当前 `--limit` 还没轮到建页的——

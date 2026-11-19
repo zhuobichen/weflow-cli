@@ -3823,6 +3823,38 @@ auditCmd
     }
   })
 
+// ==================== media-export (本地缓存媒体解密导出) ====================
+// 与 `media`（用 hardlink.db 做 md5 精确匹配）分工不同：
+// 这个命令真的把 `msg/attach` 下的 .dat 解成图片、把 `msg/video` 的 mp4 复制出来。
+program
+  .command('media-export')
+  .description('解密本地缓存的图片（.dat V2）并复制视频；只读、不联网')
+  .option('--since <YYYY-MM>', '起始月份')
+  .option('--until <YYYY-MM>', '结束月份')
+  .option('--out <dir>', '输出目录（默认 output/media）')
+  .option('--workers <n>', '并发数', '6')
+  .option('--limit <n>', '最多处理多少个 .dat（0=不限）', '0')
+  .option('--no-video', '只导出图片，不复制视频')
+  .option('--dry-run', '只统计，不落盘')
+  .option('--json', '输出 JSON')
+  .action(async (opts) => {
+    const { spawn } = await import('child_process')
+    const script = join(resolvePackageRoot(), 'scripts', 'media_export.py')
+    const args = [script]
+    if (opts.since) args.push('--since', opts.since)
+    if (opts.until) args.push('--until', opts.until)
+    if (opts.out) args.push('--out', opts.out)
+    args.push('--workers', String(parseCliInteger(opts.workers, 'workers', 1, 32, !!opts.json)))
+    if (opts.limit && opts.limit !== '0') {
+      args.push('--limit', String(parseCliInteger(opts.limit, 'limit', 1, 100000, !!opts.json)))
+    }
+    if (opts.video === false) args.push('--no-video')
+    if (opts.dryRun) args.push('--dry-run')
+    if (opts.json) args.push('--json')
+    const child = spawn(getPythonCommand(), args, { stdio: 'inherit', windowsHide: true })
+    child.on('exit', (code) => process.exit(code || 0))
+  })
+
 // ==================== sns (朋友圈本地缓存) ====================
 const snsCmd = program
   .command('sns')
