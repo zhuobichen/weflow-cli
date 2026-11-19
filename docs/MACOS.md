@@ -1,10 +1,10 @@
 # macOS 上怎么用 WeFlow
 
-> 最后更新：2026-12-19。
+> 最后更新：2026-11-19。
 > **状态说明**：已在真机跑通完整流程（macOS 27.2 / Apple M4 / 微信 4.1.15，
-> 10/10 库通过首页 HMAC 校验）。此前的实现有两处必炸的 bug（lldb 里 import gdb、
-> 轮询把调试器崩溃当超时），现已重写为纯 lldb 原生断点命令，见
-> `scripts/macos_capture.py` 头注释。
+> 10/10 库通过首页 HMAC 校验，由贡献者在自己的机器上验证）。此前实现有两处必炸的
+> bug（lldb 里 import gdb、轮询把调试器崩溃当超时），现已重写为纯 lldb 原生断点命令，
+> 见 `scripts/macos_capture.py` 头注释。
 
 ## macOS 版微信能导出聊天记录吗？
 

@@ -71,12 +71,87 @@ class MacCaptureStaticTests(unittest.TestCase):
             import shutil
             shutil.rmtree(home, ignore_errors=True)
 
+    def test_db_candidates_keeps_every_known_layout(self):
+        """四种布局都要认——少一条，那类用户就是"找不到库目录"（曾经被 PR 删掉两条）。"""
+        home = pathlib.Path(mkdtemp('wf-mac-home-'))
+        try:
+            layouts = [
+                home / 'Library/Containers/com.tencent.xinWeChat/Data/Documents/xwechat_files',
+                home / 'Library/Containers/com.tencent.xinWeChat/Data/Library/Application Support/com.tencent.xinWeChat',
+                home / 'Library/Containers/com.tencent.WeChat/Data/Documents/xwechat_files',
+                home / 'Library/Application Support/com.tencent.xinWeChat',
+            ]
+            for base in layouts:
+                base.mkdir(parents=True, exist_ok=True)
+            with patch.object(pathlib.Path, 'home', return_value=home):
+                found = mac.db_candidates()
+            for base in layouts:
+                self.assertIn(base, found, f'这种布局没有被认出来：{base}')
+        finally:
+            import shutil
+            shutil.rmtree(home, ignore_errors=True)
+
     def test_non_darwin_is_rejected(self):
         with patch.object(sys, 'argv', ['macos_capture.py']), \
                 patch.object(sys, 'platform', 'win32'):
             with self.assertRaises(SystemExit) as ctx:
                 mac.main()
         self.assertIn('macOS', str(ctx.exception))
+
+
+class AttachmentPolicyTests(unittest.TestCase):
+    """attach 的调度规则。每一条都对应一次真机事故。"""
+
+    def test_new_pid_is_attached(self):
+        self.assertEqual(mac.plan_attachments([100], {}, set()), [100])
+
+    def test_pid_that_failed_attach_is_never_retried(self):
+        """SIP 没关时若每 0.5s 重开一个 lldb，5 分钟就是六百次 + 六百个泄漏的 fd。"""
+        self.assertEqual(mac.plan_attachments([100, 200], {}, {100}), [200])
+        self.assertEqual(mac.plan_attachments([100], {100: _DeadProc()}, {100}), [])
+
+    def test_pid_whose_lldb_died_is_reattached_once(self):
+        """lldb 自己崩了不代表不能再来一次（但失败过的不在此列）。"""
+        self.assertEqual(mac.plan_attachments([100], {100: _DeadProc()}, set()), [100])
+
+    def test_live_pid_is_not_attached_twice(self):
+        self.assertEqual(mac.plan_attachments([100], {100: _LiveProc()}, set()), [])
+
+
+class _DeadProc:
+    def poll(self):
+        return 1
+
+
+class _LiveProc:
+    def poll(self):
+        return None
+
+
+class LengthDiagnosticTests(unittest.TestCase):
+    """口令长度对不上时要说清楚，而不是笼统地"没有命中"。"""
+
+    def test_reads_len_register_values(self):
+        logdir = pathlib.Path(mkdtemp('wf-mac-len-'))
+        try:
+            (logdir / 'lldb_1.log').write_text(
+                '     x1 = 0x00007ff7bf6ff000\n'
+                '     x2 = 0x0000000000000020\n'
+                '     x2 = 0x0000000000000010\n', encoding='utf-8')
+            self.assertEqual(mac.collect_lengths(logdir, 'x2'), {0x20, 0x10})
+        finally:
+            import shutil
+            shutil.rmtree(logdir, ignore_errors=True)
+
+    def test_ignores_other_registers(self):
+        logdir = pathlib.Path(mkdtemp('wf-mac-len2-'))
+        try:
+            (logdir / 'lldb_1.log').write_text(
+                '     x1 = 0x0000000000000020\n', encoding='utf-8')
+            self.assertEqual(mac.collect_lengths(logdir, 'x2'), set())
+        finally:
+            import shutil
+            shutil.rmtree(logdir, ignore_errors=True)
 
 
 if __name__ == '__main__':

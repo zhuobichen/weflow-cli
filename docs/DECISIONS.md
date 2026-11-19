@@ -4905,3 +4905,24 @@ weflow-cli config set dailyMaxFailureRate 0     # 一篇失败就中止
 **Consequences.** 手工递归比 `rmSync({recursive})` 慢一点、代码多几行——删除本来就不在热路径上。
 `test/` 里其余几十处 `rmSync` 暂未替换：它们是临时目录清理，泄漏但不影响正确性，
 一次性全改的改动量大于收益；新写的测试若要断言"删干净了"，同样该走 `quietFs`。
+
+## D-157: macOS 口令捕获必须临时关闭 SIP；工具不自动化这一步
+
+**Decision.** macOS 上 `capture-passphrase` 走 lldb 断在 `CCKeyDerivationPBKDF`，读
+`(password, passwordLen)`。微信带 Hardened Runtime，`task_for_pid` 会被内核拒绝——
+**仅开"开发者模式"不够**，捕获阶段必须在恢复模式 `csrutil disable`，捕获后立刻
+`csrutil enable`。工具**不自动改**这个开关，只在 attach 被拒时把原因说清楚。
+Windows / Linux 都不经过这条路径。
+
+**Reason.** 这是唯一能自动拿到 macOS 口令的公开可行路径，同类工具（chatlog）也这么做。
+但它降低整机安全性，属于**必须由用户自己按下**的开关：如果一个批量导出热情上头的
+工具在后台替你关 SIP，那才是真的危险。写成"工具会提示、但不替你关"，让决策留在人手里。
+
+**Alternatives rejected.** ①软件断点/`task_for_pid` 绕过：内核层面被拒，做不到；
+②让用户手抄口令：可行（老路径仍在），但对"口令是客户端生成的 32 字节随机串"这类情况
+实际上等于做不到；③用 ad-hoc 重签微信再 attach：改的是用户的 App，风险更高。
+
+**Consequences.** macOS 首次使用要先重启进恢复模式——流程重，文档必须写清楚
+（`docs/MACOS.md`）。捕获失败时**必须区分**"attach 被拒（SIP）"与"没命中（没重新登录）"：
+归错因会让人去关 SIP，而问题其实是没操作对。这条诊断由
+`test/macos_capture_test.py` 的 `LengthDiagnosticTests` 与 `AttachmentPolicyTests` 钉住。

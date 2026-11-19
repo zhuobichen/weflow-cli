@@ -122,8 +122,44 @@ def wechat_version() -> str | None:
 
 def _attach(pid: int, script_path: pathlib.Path, log_path: pathlib.Path) -> subprocess.Popen:
     fh = open(log_path, 'w', encoding='utf-8', errors='replace')
-    return subprocess.Popen(['lldb', '-p', str(pid), '-b', '-s', str(script_path)],
-                            stdout=fh, stderr=subprocess.STDOUT, text=True)
+    try:
+        proc = subprocess.Popen(['lldb', '-p', str(pid), '-b', '-s', str(script_path)],
+                                stdout=fh, stderr=subprocess.STDOUT, text=True)
+    finally:
+        # 子进程已经 dup 出自己的 fd，父进程这份必须关掉。
+        # 不关的话每 attach 一次泄漏一个 fd——SIP 没关时正是 attach 反复重试的场景，
+        # 几百次就把 ulimit 用尽，最后报出来的是 OSError traceback 而不是"需要关 SIP"。
+        fh.close()
+    return proc
+
+
+def _attach_failed(log_path: pathlib.Path) -> bool:
+    """lldb 日志里出现 attach 失败（SIP / Hardened Runtime 挡住）。"""
+    try:
+        return 'attach failed' in log_path.read_text(encoding='utf-8', errors='replace').lower()
+    except OSError:
+        return False
+
+
+def plan_attachments(pids: list[int], procs: dict[int, subprocess.Popen],
+                     failed: set[int]) -> list[int]:
+    """这一轮该 attach 哪些 pid。
+
+    三条规则，每条都对应一个真机踩过的形态：
+
+    * 没挂过的 pid → 挂（重登录会换 pid，WeChatAppEx 是另一个 pid）；
+    * 挂过、但**进程已经退出**且没被判失败 → 再挂一次（lldb 自己崩了不代表不能再来一次）；
+    * 已经 attach 失败过的 pid → **永远不再碰**。否则 SIP 没关时每 0.5 秒重开一个 lldb，
+      5 分钟就是六百次，用户等满超时才看到"需要 csrutil disable"。
+    """
+    todo: list[int] = []
+    for pid in pids:
+        if pid in failed:
+            continue
+        proc = procs.get(pid)
+        if proc is None or proc.poll() is not None:
+            todo.append(pid)
+    return todo
 
 
 _HEX_LINE = re.compile(r'^0x[0-9a-f]+:\s+((?:0x[0-9a-f]{2}\s+)+)')
@@ -155,6 +191,34 @@ def collect_candidates(logdir: pathlib.Path) -> list[tuple[str, int]]:
     return sorted(counts.items(), key=lambda kv: -kv[1])
 
 
+_REG_LINE = re.compile(r'^\s*([A-Za-z0-9]+)\s*=\s*0x([0-9a-fA-F]+)\s*$')
+
+
+def collect_lengths(logdir: pathlib.Path, len_reg: str) -> set[int]:
+    """日志里出现过的 `passwordLen` 取值。
+
+    为什么需要它：候选是按"读 64 字节取前 32"得到的，**没有校验长度**。
+    ABI 变了（Rosetta、寄存器换位、微信改实现）时产出的就是垃圾候选，
+    最后只会报"没有命中"——而真相是"命中了，但长度不是 32"。
+    这条诊断在新版里被弄丢了，这里补回来；取不到就返回空集，不影响主流程。
+    """
+    seen: set[int] = set()
+    for f in sorted(logdir.glob('lldb_*.log')):
+        try:
+            text = f.read_text(encoding='utf-8', errors='replace')
+        except OSError:
+            continue
+        for line in text.splitlines():
+            m = _REG_LINE.match(line)
+            if not m or m.group(1) != len_reg:
+                continue
+            try:
+                seen.add(int(m.group(2), 16))
+            except ValueError:
+                continue
+    return seen
+
+
 def capture(timeout: int, logdir: pathlib.Path) -> str:
     pids = find_wechat_pids()
     if not pids:
@@ -170,11 +234,24 @@ def capture(timeout: int, logdir: pathlib.Path) -> str:
     script_path.write_text(build_lldb_script(ptr_reg, len_reg), encoding='utf-8')
 
     procs: dict[int, subprocess.Popen] = {}
+    failed: set[int] = set()
     deadline = time.time() + timeout
     while time.time() < deadline:
-        for pid in find_wechat_pids():          # 新 PID（重登录、辅助进程）持续补挂
-            if pid not in procs or procs[pid].poll() is not None:
-                procs[pid] = _attach(pid, script_path, logdir / f'lldb_{pid}.log')
+        for pid in plan_attachments(find_wechat_pids(), procs, failed):
+            log_path = logdir / f'lldb_{pid}.log'
+            procs[pid] = _attach(pid, script_path, log_path)
+            # attach 被拒就到此为止：继续等下去只会让用户白白耗满 timeout。
+            # 先给 lldb 一拍时间把错误写进日志，再判。
+            time.sleep(0.3)
+            if _attach_failed(log_path):
+                failed.add(pid)
+                procs[pid].terminate()
+                for p in procs.values():        # 其余会话也收掉，别留着占着进程
+                    if p.poll() is None:
+                        p.terminate()
+                raise SystemExit(
+                    '调试器无法 attach：微信带 Hardened Runtime，仅开"开发者模式"不够，'
+                    '需要在恢复模式临时 csrutil disable（用完恢复）。本工具不替你改系统安全设置。')
         cands = collect_candidates(logdir)
         if cands and cands[0][1] >= MIN_REPEATS:
             break
@@ -192,21 +269,31 @@ def capture(timeout: int, logdir: pathlib.Path) -> str:
     if cands:
         return cands[0][0]
 
-    attach_denied = any(
-        'attach failed' in (logdir / f).read_text(encoding='utf-8', errors='replace').lower()
-        for f in logdir.glob('lldb_*.log')
-    )
-    if attach_denied:
+    # 命中了断点、但长度对不上：说清楚是"长度不对"，别让用户去猜是不是没操作对。
+    lengths = collect_lengths(logdir, len_reg)
+    if lengths and PASSWORD_BYTES not in lengths:
         raise SystemExit(
-            '调试器无法 attach：微信带 Hardened Runtime，仅开"开发者模式"不够，'
-            '需要在恢复模式临时 csrutil disable（用完恢复）。本工具不替你改系统安全设置。')
-    raise SystemExit('调试器没有记录到任何命中——确认这 300 秒内在微信里完成了"退出登录 → 重新登录"。')
+            f'命中了 PBKDF2，但 {len_reg}（passwordLen）是 {sorted(lengths)}，不是 {PASSWORD_BYTES}——'
+            '口令长度不符合预期（架构/ABI 可能变了，或打到的是别的调用）。'
+            '这时不要用产出结果写配置。')
+
+    raise SystemExit(
+        f'调试器没有记录到任何命中——确认这 {timeout} 秒内在微信里完成了"退出登录 → 重新登录"。')
 
 
 def db_candidates() -> list[pathlib.Path]:
+    """macOS 微信的库目录。**四种布局都看**，不要删。
+
+    沙箱（App Store 版）把数据放在 `~/Library/Containers/<bundle>/Data/...` 下，
+    而 `Catalog`/`Application Support` 两种内部布局在不同版本里都出现过；
+    bundle id 也有 `com.tencent.xinWeChat` 与 `com.tencent.WeChat` 两种。
+    少列一条，那类用户就是"找不到库目录"——而这条本来是支持的，删掉属于倒退。
+    """
     home = pathlib.Path.home()
     roots = [
         home / 'Library/Containers/com.tencent.xinWeChat/Data/Documents/xwechat_files',
+        home / 'Library/Containers/com.tencent.xinWeChat/Data/Library/Application Support/com.tencent.xinWeChat',
+        home / 'Library/Containers/com.tencent.WeChat/Data/Documents/xwechat_files',
         home / 'Library/Application Support/com.tencent.xinWeChat',
     ]
     found: list[pathlib.Path] = []
