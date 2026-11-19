@@ -58,11 +58,13 @@ SCRIPT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DB_PATH = None  # auto-detect from config
 # 输出根目录必须**可写**：全局安装时包目录属于 root，写不进去（Linux 实测
 # PermissionError）。`_utils.output_root()` 会把可写性算清楚并退回用户目录。
-try:
-    from _utils import output_root as _output_root
-    OUTPUT_ROOT = os.path.join(_output_root(), 'biz-daily')
-except Exception:
-    OUTPUT_ROOT = os.path.join(SCRIPT_DIR, 'output', 'biz-daily')
+#
+# 这里原先是 `try: output_root() / except: SCRIPT_DIR/output`——那个 except 是**死代码**
+# （本文件第 31 行已经从 _utils 导入，导入失败的话整个模块都加载不起来），
+# 而且它的兜底正是"不可写的包目录"，也就是这条注释第一句要防的东西。
+from _utils import output_root as _output_root  # noqa: E402  (放在常量区，便于阅读)
+
+OUTPUT_ROOT = os.path.join(_output_root(), 'biz-daily')
 # 这里曾有一个 MAX_ARTICLES = 50，注释写着"最多抓取篇数"——**它从来没有被读过**。
 # 真正生效的是 --limit（默认 0 = 不限），所以一天 150–270 篇是常态。一个写着上限
 # 却不生效的常量，比没有它更误导人。

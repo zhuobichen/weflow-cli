@@ -17,10 +17,16 @@ from _utils import (
     get_api_key,
     TOPICS, DEFAULT_TOPIC,
     call_ai, parse_frontmatter, write_with_frontmatter,
-    DEFAULT_USER_PROFILE, generate_action_suggestion, load_config
+    DEFAULT_USER_PROFILE, generate_action_suggestion, load_config,
+    output_root,
 )
 
-OUTPUT_ROOT = 'output/biz-daily'
+# 输出根不能写死成相对的 `output/biz-daily`：那会跟着**当前工作目录**走。
+# 全局安装时（本项目的服务器就是这样）真实产物在 `~/.weflow-cli/output`，
+# 于是这里 `Path('output/biz-daily')` 一个目录都找不到 → 文章 0 篇 → 建目录时
+# `FileNotFoundError` 直接退出，而调用方只打一句 WARN 就继续。2026-11-16~19
+# 连续四天如此：广告清洗、深度解析、行动建议全部静默失效。
+OUTPUT_ROOT = str(Path(output_root()) / 'biz-daily')
 
 
 INTEREST_PROMPT = """对以下AI领域文章生成深度解析：

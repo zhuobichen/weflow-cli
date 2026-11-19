@@ -24,12 +24,20 @@ from collections import Counter
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _utils import (create_engine, parse_frontmatter, TOPICS, TOPIC_CRITERIA,
-                    load_config, excluded_topics)
+                    load_config, excluded_topics, get_api_key)
 
 SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR = os.path.dirname(SCRIPTS_DIR)
-SOURCE_ROOT = os.path.join(ROOT_DIR, 'output', 'biz-daily')
-OUTPUT_DIR = os.path.join(ROOT_DIR, 'output', 'ai-reports')
+# 输出根不能写死成"包目录下的 output/"：全局安装（Linux 的 /usr/lib/node_modules、
+# macOS 的 /usr/local/lib）时包目录属于 root，真实产物在 `~/.weflow-cli/output`。
+# 写死的结果是这里永远读不到文章，于是**这一步每天失败、还被 WARN 吞掉**——
+# 2026-11-16~19 连续四天 `generate_ai_report` 都是 exit=1，报告里那句
+# "未找到 … 的文章"就是这么来的。`_utils.output_root()` 已经实现了回退，
+# 这里必须用它，不要再自己拼路径。
+from _utils import output_root  # noqa: E402  (scripts/ 已在 sys.path 上)
+
+SOURCE_ROOT = os.path.join(str(output_root()), 'biz-daily')
+OUTPUT_DIR = os.path.join(str(output_root()), 'ai-reports')
 
 TZ = timezone(timedelta(hours=8))
 
@@ -531,9 +539,19 @@ def main():
     # AI 引擎初始化
     engine = None
     if not args.dry_run:
+        # key 一律走 `_utils.get_api_key(config)`，不能只读 `DEEPSEEK_API_KEY` 环境变量：
+        # 配了 `aiBaseUrl`（本项目的服务器就是 DashScope）时，key 在配置的 `aiApiKey` 里，
+        # 环境变量通常没有。只读环境变量的结果是 `engine` 拿到空 key →
+        # "AI 调用失败：HTTP Error 401: Unauthorized"，而报告会照样落盘一份只有骨架的版本。
+        # 这与 2026-11-15 那次日报 401 是同一类错误：key 的解析分散在多处，改了一处漏了另一处。
         api_key = args.api_key or ''
         if args.engine not in ('local', 'ollama') and not api_key:
-            api_key = os.environ.get('DEEPSEEK_API_KEY', '')
+            api_key = os.environ.get('DEEPSEEK_API_KEY', '') or get_api_key(load_config())
+        if args.engine not in ('local', 'ollama') and not api_key:
+            print('\n[ERROR] 没有拿到 AI key：检查配置里的 aiApiKey / deepseekApiKey，'
+                  '或显式传 --api-key。')
+            print('       或者使用 --dry-run 直接输出文章清单。')
+            sys.exit(1)
         try:
             engine = create_engine(args.engine, api_key)
         except (ValueError, RuntimeError) as e:
