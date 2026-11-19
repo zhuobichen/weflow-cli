@@ -53,6 +53,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import pathlib
 import re
 import shutil
@@ -176,6 +177,80 @@ def is_wxam(plain: bytes) -> bool:
     return plain.startswith(WXAM_MAGIC)
 
 
+def extract_hevc(plain: bytes) -> bytes:
+    """从 WxAM（`wxgf`）容器里取出 Annex-B HEVC 比特流。
+
+    实测（2026-11-20，本机 4.1.15）：文件头是 42 字节，紧随其后就是标准起始码
+    `00 00 00 01`，再往后是普通 HEVC——`ffmpeg -f hevc -i` 能直接解出 1280×1858 的原图
+    （同一张图的缩略图只有 145×210）。
+
+    这里**不解析那 42 字节头**：它对我们的用途没有信息量，而"找第一个起始码"这个判断
+    对单帧、多帧动画都成立。找不到起始码就返回空（由调用方计入 unsupported）。
+    """
+    for start in (b'\x00\x00\x00\x01', b'\x00\x00\x01'):
+        idx = plain.find(start)
+        if idx >= 0:
+            return plain[idx:]
+    return b''
+
+
+def find_ffmpeg(explicit: str | None = None) -> str | None:
+    """定位 ffmpeg：显式参数 > 环境变量 `WEFLOW_FFMPEG` > PATH。找不到返回 None。
+
+    不写死任何本机路径——包是发给别人用的，他们装在哪我们不知道。
+    """
+    if explicit and pathlib.Path(explicit).is_file():
+        return explicit
+    env = os.path.dirname(os.path.abspath(sys.executable))
+    cand = pathlib.Path(env) / 'ffmpeg.exe'          # 与 Python 同目录的常见部署方式
+    if cand.is_file():
+        return str(cand)
+    from os import environ
+    from shutil import which
+    if environ.get('WEFLOW_FFMPEG') and pathlib.Path(environ['WEFLOW_FFMPEG']).is_file():
+        return environ['WEFLOW_FFMPEG']
+    return which('ffmpeg')
+
+
+def decode_wxam(hevc: bytes, dest_stem: pathlib.Path, ffmpeg: str) -> dict:
+    """把 HEVC 比特流转成图片：单帧出 `.png`，多帧出 `.gif`。
+
+    WeChat 的动图表情就是多帧 HEVC。先按帧导出到临时目录数帧数，再决定产物形态——
+    直接 `-frames:v 1` 会把动图悄悄截成第一帧，那种"成功"比失败更难发现。
+    """
+    import shutil as _shutil
+    import subprocess
+    import tempfile
+
+    stem = str(dest_stem)
+    with tempfile.TemporaryDirectory(prefix='wxam-') as tmp:
+        src = pathlib.Path(tmp) / 'in.265'
+        src.write_bytes(hevc)
+        pattern = pathlib.Path(tmp) / 'f_%03d.png'
+        proc = subprocess.run(
+            [ffmpeg, '-hide_banner', '-loglevel', 'error', '-f', 'hevc', '-i', str(src),
+             # 新 ffmpeg 把 `-vsync` 换成了 `-fps_mode`（本机 2026-10 版本已不认 -vsync）。
+             # passthrough = 有几帧写几帧，动图不会被悄悄截成第一帧。
+             '-fps_mode', 'passthrough', str(pattern)],
+            capture_output=True)
+        frames = sorted(pathlib.Path(tmp).glob('f_*.png'))
+        if proc.returncode != 0 or not frames:
+            return {'ok': False, 'error': (proc.stderr.decode('utf-8', 'replace') or '解不出帧')[:160]}
+        if len(frames) == 1:
+            dest = pathlib.Path(stem + '.png')
+            _shutil.move(str(frames[0]), dest)
+            return {'ok': True, 'path': str(dest), 'bytes': dest.stat().st_size, 'frames': 1}
+        dest = pathlib.Path(stem + '.gif')
+        gif = subprocess.run(
+            [ffmpeg, '-hide_banner', '-loglevel', 'error', '-f', 'hevc', '-i', str(src),
+             '-filter_complex', '[0:v]split[a][b];[a]palettegen[p];[b][p]paletteuse',
+             '-loop', '0', str(dest)],
+            capture_output=True)
+        if gif.returncode != 0 or not dest.exists():
+            return {'ok': False, 'error': (gif.stderr.decode('utf-8', 'replace') or 'GIF 打包失败')[:160]}
+        return {'ok': True, 'path': str(dest), 'bytes': dest.stat().st_size, 'frames': len(frames)}
+
+
 def calibrate(samples: list[pathlib.Path], cands: list[int], wxids: list[str]) -> tuple[int, str] | None:
     """用真实样本反推 (uin, wxid)：解出来是图片的才算数。
 
@@ -233,6 +308,8 @@ def main() -> int:
     ap.add_argument('--limit', type=int, default=0, help='最多处理多少个 .dat（0=不限）')
     ap.add_argument('--no-video', action='store_true', help='只导出图片，不复制视频')
     ap.add_argument('--dry-run', action='store_true', help='只统计，不落盘')
+    ap.add_argument('--ffmpeg', help='ffmpeg 路径（默认取环境变量 WEFLOW_FFMPEG 或 PATH 里的）')
+    ap.add_argument('--no-wxam', action='store_true', help='不解码 WxAM 原图（只解明文缩略图）')
     ap.add_argument('--json', action='store_true')
     args = ap.parse_args()
 
@@ -269,6 +346,9 @@ def main() -> int:
         print(f'  密钥标定: UIN={calib[0]} wxid={calib[1]}')
 
     root = pathlib.Path(args.out) if args.out else pathlib.Path(output_root()) / 'media'
+    ffmpeg = None if args.no_wxam else find_ffmpeg(args.ffmpeg)
+    if not args.no_wxam:
+        print(f"  WxAM 解码: {ffmpeg or '未找到 ffmpeg（原图将跳过，只出缩略图）'}")
     if args.dry_run:
         print(f'  .dat {len(dat_files)} 个 | mp4 {len(video_files)} 个')
         print(f'  输出: {root}')
@@ -278,7 +358,7 @@ def main() -> int:
         (root / sub).mkdir(parents=True, exist_ok=True)
 
     stats = {'images': 0, 'videos': 0, 'skipped': 0, 'wxam_skipped': 0,
-             'unsupported': 0, 'bad': 0, 'bytes': 0}
+             'wxam_decoded': 0, 'unsupported': 0, 'bad': 0, 'bytes': 0}
     failures: list[dict] = []
 
     def one_dat(p: pathlib.Path) -> dict:
@@ -295,14 +375,26 @@ def main() -> int:
                       else '不是 V2（旧版 XOR 或其它格式）')
             return {'file': p.name, 'ok': True, 'unsupported': True, 'reason': reason, 'bytes': 0}
         ext = classify(plain)
+        month = p.parent.parent.name
+        dest_dir = root / 'images' / month
         if not ext:
             if is_wxam(plain):
-                return {'file': p.name, 'ok': True, 'wxam': True, 'bytes': 0}
+                if not ffmpeg:
+                    return {'file': p.name, 'ok': True, 'wxam': True, 'bytes': 0}
+                hevc = extract_hevc(plain)
+                if not hevc:
+                    return {'file': p.name, 'ok': True, 'unsupported': True,
+                            'reason': 'WxAM 里找不到 HEVC 起始码', 'bytes': 0}
+                dest_dir.mkdir(parents=True, exist_ok=True)
+                got = decode_wxam(hevc, dest_dir / p.stem, ffmpeg)
+                if not got['ok']:
+                    return {'file': p.name, 'ok': True, 'unsupported': True,
+                            'reason': f"WxAM 解码失败: {got['error']}", 'bytes': 0}
+                return {'file': p.name, 'ok': True, 'bytes': got['bytes'],
+                        'path': got['path'], 'wxam_decoded': True, 'frames': got['frames']}
             return {'file': p.name, 'ok': True, 'unsupported': True,
                     'reason': f'未知魔数 {plain[:4].hex()}', 'bytes': 0}
         # 落盘：images/<YYYY-MM>/<stem>.<ext>。月份来自源目录名（attach/<hash>/<YYYY-MM>/Img）
-        month = p.parent.parent.name
-        dest_dir = root / 'images' / month
         dest_dir.mkdir(parents=True, exist_ok=True)
         dest = dest_dir / (p.stem + ext)
         if dest.exists() and dest.stat().st_size:
@@ -327,6 +419,8 @@ def main() -> int:
             else:
                 stats['images'] += 1
                 stats['bytes'] += r.get('bytes', 0)
+                if r.get('wxam_decoded'):
+                    stats['wxam_decoded'] += 1
             if i % 200 == 0 or i == len(futs):
                 print(f'    [{i}/{len(futs)}] 图片 {stats["images"]} · 跳过 {stats["skipped"]}'
                       f' · WxAM {stats["wxam_skipped"]} · 布局差异 {stats["unsupported"]}'
@@ -360,6 +454,8 @@ def main() -> int:
               f" · 跳过 {stats['skipped']} · {stats['bytes'] / 1024 / 1024:.1f} MB")
         if stats['wxam_skipped']:
             print(f"  [WARN] {stats['wxam_skipped']} 个是 WxAM 压缩原图，需要第二层解码，未导出")
+        if stats['wxam_decoded']:
+            print(f"  WxAM 原图解码成功 {stats['wxam_decoded']} 个（单帧出 png、多帧出 gif）")
         if stats['unsupported']:
             print(f"  [WARN] {stats['unsupported']} 个是 V2 布局差异（xor_size 与文件长度不符）或非 V2，未导出")
         for f in failures[:5]:

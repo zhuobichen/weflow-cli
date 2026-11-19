@@ -3835,6 +3835,8 @@ program
   .option('--workers <n>', '并发数', '6')
   .option('--limit <n>', '最多处理多少个 .dat（0=不限）', '0')
   .option('--no-video', '只导出图片，不复制视频')
+  .option('--no-wxam', '不解码 WxAM 原图（只解明文缩略图）')
+  .option('--ffmpeg <path>', 'ffmpeg 路径（默认取环境变量 WEFLOW_FFMPEG 或 PATH）')
   .option('--dry-run', '只统计，不落盘')
   .option('--json', '输出 JSON')
   .action(async (opts) => {
@@ -3849,6 +3851,8 @@ program
       args.push('--limit', String(parseCliInteger(opts.limit, 'limit', 1, 100000, !!opts.json)))
     }
     if (opts.video === false) args.push('--no-video')
+    if (opts.wxam === false) args.push('--no-wxam')
+    if (opts.ffmpeg) args.push('--ffmpeg', String(opts.ffmpeg))
     if (opts.dryRun) args.push('--dry-run')
     if (opts.json) args.push('--json')
     const child = spawn(getPythonCommand(), args, { stdio: 'inherit', windowsHide: true })

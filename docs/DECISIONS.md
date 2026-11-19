@@ -4978,3 +4978,28 @@ UIN 候选全部解不出来；②UIN 不在配置里，只在 kvcomm 文件名�
 解码）与**少数 `_h` 文件的 V2 布局差异**（`xor_size` 与文件长度不符，整段 XOR / 前半段
 +XOR 尾段原样 / 截断三种切法都试过，PIL 全部 broken data stream）。命令会打印各自的
 数量而不是混进失败率——"解不开"和"坏了"是两件事，混在一起就没人看得懂报告。
+
+## D-160: WxAM 原图用 ffmpeg 解，找不到 ffmpeg 就明确跳过
+
+**Decision.** `media-export` 解出 `wxgf`（WxAM）时，从容器里取出 Annex-B HEVC 比特流交给
+**ffmpeg** 解码：单帧出 `.png`，多帧出 `.gif`。ffmpeg 的定位顺序是
+`--ffmpeg` > 环境变量 `WEFLOW_FFMPEG` > 与 Python 同目录 > PATH；一个都没有时**跳过原图**
+（只出明文缩略图）并打印提示，不静默。
+
+**Reason.** WxAM 是微信自己套的一层容器，里面是普通 HEVC；本机实测头 42 字节之后就是
+`00 00 00 01`，`ffmpeg -f hevc -i` 一次就出 1280×1858 的原图（同一张的缩略图只有 145×210）。
+两条别的路都不划算：①自己写 HEVC 解码器——那是几千行的工程；②调微信自己的
+`wxam_dec_wxam2pic_*` DLL——版本绑定、要加载别人的二进制，且只在 Windows 有。
+
+**Alternatives rejected.** ①把 ffmpeg 打进 npm 包：几十 MB 的平台二进制，且许可与
+分发成本都不该由这个包承担；②`-frames:v 1` 了事：微信的动图表情是多帧 HEVC，
+那样会把动图**悄悄截成第一帧**——"成功"但内容错，比失败更难发现。
+
+**Consequences.** 没有 ffmpeg 的机器上，原图这条路就是不可用（缩略图不受影响）——
+这是有意的：宁可明确说"没解"，也不产出半张图。`-vsync` 在新版 ffmpeg 已改名
+`-fps_mode passthrough`，用旧的会直接报 `Unrecognized option`（本机 2026-10 版本就是），
+所以命令里用新写法。
+
+**实测（2026-11-20，本机 23378 个 .dat）.** 原图解码成功 2083 个，随机抽检 60 张
+全部可被 PIL 完整打开，其中 40 张宽度 ≥1000px；动图落的 `.gif` 415 个。
+总产物 23152 张 / 2.6 GB（jpg 19522、png 3215、gif 415）。

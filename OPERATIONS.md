@@ -644,8 +644,17 @@ UIN     = %APPDATA%\Tencent\xwechat\{net,net_1}\kvcomm\ 下文件名里的数字
 
 | 情况 | 说明 |
 | --- | --- |
-| **WxAM 原图** | 解密后魔数是 `wxgf`，还要第二层解码；目前不处理，缩略图（`_t`）不受影响 |
+| **WxAM 原图** | 解密后魔数是 `wxgf`，里面是 HEVC。**装了 ffmpeg 就能解**（单帧出 `.png`、多帧出 `.gif`）；没有 ffmpeg 时跳过并提示 |
 | **V2 布局差异** | 少数 `_h` 文件头里 `xor_size` 与文件长度不符（实测 1 MB 对 1.34 MB），各种切法都拼不回完整图片 |
+
+原图解码要 ffmpeg，按这个顺序找：`--ffmpeg <路径>` > 环境变量 `WEFLOW_FFMPEG` >
+与 Python 同目录 > PATH。没有它也不影响缩略图：
+
+```powershell
+$env:WEFLOW_FFMPEG = 'D:\ffmpeg\bin\ffmpeg.exe'
+weflow-cli media-export --since 2026-11
+weflow-cli media-export --no-wxam        # 明确不要原图，只出缩略图
+```
 
 **视频不用解密**：`msg/video/<YYYY-MM>/*.mp4` 是明文，直接复制。
 

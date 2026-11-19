@@ -125,6 +125,56 @@ class ClassifyTests(unittest.TestCase):
         self.assertEqual(m.classify(b'\x00\x01\x02\x03'), '')
 
 
+class WxamTests(unittest.TestCase):
+    """WxAM（`wxgf`）原图：本质是 Annex-B HEVC，交给 ffmpeg 解。"""
+
+    def test_extracts_hevc_from_first_start_code(self):
+        plain = b'wxgf' + b'\x13\x00\x02\x05' + b'\x00' * 34 + b'\x00\x00\x00\x01\x40\x01' + b'BODY'
+        hevc = m.extract_hevc(plain)
+        self.assertTrue(hevc.startswith(b'\x00\x00\x00\x01'))
+        self.assertIn(b'BODY', hevc)
+
+    def test_falls_back_to_three_byte_start_code(self):
+        # 头里不能再有连着的零，否则 3 字节起始码会被前面的零拼成 4 字节形态
+        plain = b'wxgf\x13\x00\x02' + b'\x00\x00\x01\x40\x01' + b'BODY'
+        self.assertTrue(m.extract_hevc(plain).startswith(b'\x00\x00\x01'))
+
+    def test_returns_empty_when_no_start_code(self):
+        self.assertEqual(m.extract_hevc(b'wxgf' + b'\x00' * 40), b'')
+
+    def test_ffmpeg_lookup_prefers_explicit_path(self):
+        with tempfile.TemporaryDirectory() as d:
+            fake = pathlib.Path(d) / 'ffmpeg.exe'
+            fake.write_bytes(b'')
+            self.assertEqual(m.find_ffmpeg(str(fake)), str(fake))
+
+
+class WxamDecodeIntegrationTests(unittest.TestCase):
+    """真调 ffmpeg：没有 ffmpeg 就跳过（不假绿），有则必须解出可打开的图片。"""
+
+    def test_decodes_a_synthetic_hevc(self):
+        ffmpeg = m.find_ffmpeg()
+        if not ffmpeg:
+            self.skipTest('本机没有 ffmpeg')
+        # 用 ffmpeg 自己造一段最小 HEVC，再让被测代码把它解回图片
+        import subprocess
+        with tempfile.TemporaryDirectory() as d:
+            src = pathlib.Path(d) / 'seed.png'
+            from PIL import Image  # 没装 Pillow 就跳过，别用假数据凑
+            Image.new('RGB', (64, 48), (10, 20, 30)).save(src)
+            hevc = pathlib.Path(d) / 'seed.265'
+            subprocess.run([ffmpeg, '-hide_banner', '-loglevel', 'error', '-i', str(src),
+                            '-c:v', 'libx265', '-x265-params', 'log-level=error', str(hevc)],
+                           capture_output=True, check=False)
+            if not hevc.exists() or not hevc.stat().st_size:
+                self.skipTest('本机 ffmpeg 不带 libx265，无法造样本')
+            got = m.decode_wxam(hevc.read_bytes(), pathlib.Path(d) / 'out', ffmpeg)
+            self.assertTrue(got['ok'], got.get('error'))
+            with Image.open(got['path']) as im:
+                im.load()
+                self.assertEqual(im.size, (64, 48))
+
+
 class CalibrationTests(unittest.TestCase):
     def setUp(self):
         if not HAVE_AES:
