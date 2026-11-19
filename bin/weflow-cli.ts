@@ -8596,7 +8596,9 @@ program
 
     // ---------------------------------------------------------- 打开窗口
     const { resolveElectronBinary, resolveBrowserBinary, electronLaunchArgs,
-            browserLaunchArgs, browserProfileDir } = await import('../src/panel/launch.js')
+            browserLaunchArgs, browserProfileDir,
+            electronLaunchArgsNoSandbox, electronLaunchArgsWithProfile }
+        = await import('../src/panel/launch.js')
     const { isDaemonAlive, startDaemon } = await import('../src/services/assistantDaemon.js')
     const { weflowHome } = await import('../src/panel/endpoint.js')
 
@@ -8661,10 +8663,78 @@ program
     let url: string | null = null
     if (electron.found) {
       // argv 里**什么都没有**：不带 token、不带端口、不带 URL（命令行对同机任何进程可见）
-      const child = spawn(electron.found, electronLaunchArgs(join(resolvePackageRoot(), 'resources', 'panel')), {
-        detached: true, stdio: 'ignore', windowsHide: true,
-      })
-      child.unref()
+      //
+      // **不能 spawn 完就宣布成功**：某些 Windows 环境里 Chromium 沙箱初始化失败，
+      // 进程以 0x80000003 立刻退出、窗口根本不出现，而 CLI 已经打印了"✓ 面板已启动"。
+      // 所以先观察一个短窗口：真退出了，就用 --no-sandbox 重试一次；仍退出就如实报错。
+      const panelDir = join(resolvePackageRoot(), 'resources', 'panel')
+      // 捕获 stderr：Chromium 起不来时**原因全在 stderr**（例如
+      // `Lock file can not be created! Error code: 5`）。原来 `stdio: 'ignore'`
+      // 把它丢掉了，失败只剩一个看不懂的退出码。
+      const attempt = async (args: string[]) => {
+        const child = spawn(electron.found as string, args, {
+          detached: true, stdio: ['ignore', 'ignore', 'pipe'] as const, windowsHide: true,
+        })
+        let exitCode: number | null = null
+        let tail = ''
+        child.stderr?.on('data', (buf: Buffer) => {
+          tail = (tail + buf.toString('utf8')).slice(-600)
+        })
+        child.on('exit', (code) => { exitCode = code ?? -1 })
+        await new Promise((r) => setTimeout(r, 1200))
+        return { child, exitCode: exitCode as number | null, tail: tail.trim() }
+      }
+      // 用正则而不是 '\n' 字面量：这一行涉及多层转义，正则不受影响。
+      const lastLine = (t: string) => t.split(/\r?\n/).filter(Boolean).slice(-1)[0] || ''
+      // 换行用显式常量：这一行前后有多层转义，字面量反斜杠-n 会被逐层吃掉变成真换行。
+      const NL = String.fromCharCode(10)
+
+      const profileOverride = (process.env.WEFLOW_PANEL_USER_DATA_DIR || '').trim()
+      const chain: Array<{ label: string; args: string[] }> = [
+        { label: '默认参数', args: electronLaunchArgs(panelDir) },
+        { label: '--no-sandbox', args: electronLaunchArgsNoSandbox(panelDir) },
+      ]
+      if (profileOverride) {
+        // 有些机器在 C: 上禁止 Chromium 建单例锁（`Lock file can not be created`）。
+        // 这条是配置项而不是自动猜测：猜错盘会把面板缓存写到用户没想到的地方。
+        chain.push({
+          label: `--no-sandbox + --user-data-dir=${profileOverride}`,
+          args: electronLaunchArgsWithProfile(panelDir, profileOverride),
+        })
+      }
+
+      let started = false
+      let lastCode: number | null = null
+      let lastError = ''
+      for (const step of chain) {
+        const r = await attempt(step.args)
+        if (r.exitCode === null) {
+          if (step.label !== '默认参数') {
+            console.log(chalk.gray(`${NL}（默认启动失败，已用 ${step.label} 重试成功）`))
+          }
+          // **必须先断开 stderr 管道**：`unref()` 只让进程句柄不再保活，
+          // 但那个 pipe 还挂在事件循环上，CLI 会一直不返回（实测过）。
+          r.child.stderr?.destroy()
+          r.child.removeAllListeners()
+          r.child.unref()
+          started = true
+          break
+        }
+        lastCode = r.exitCode
+        lastError = lastLine(r.tail)
+      }
+
+      if (!started) {
+        const hint = profileOverride
+          ? ''
+          : '；若它是 `Lock file can not be created`，说明系统禁止在 C: 上建 Chromium 单例锁，'
+            + '可设 WEFLOW_PANEL_USER_DATA_DIR 指到另一个可写盘（例如 D:/weflow-panel-profile）'
+        const msg = `面板进程启动失败（退出码 ${lastCode}）。`
+          + (lastError ? ` 原始错误：${lastError}` : '') + hint
+        if (opts.json) console.log(JSON.stringify({ success: false, code: 'PANEL_EXITED', error: msg, ...preview }))
+        else console.log(chalk.red(`${NL}${msg}${NL}`))
+        process.exit(1)
+      }
       launched = 'electron'
     } else if (browser.found) {
       // 浏览器那条路只能靠一次性口令：它单次使用、60 秒过期，所以进命令行与浏览器历史都不算泄漏

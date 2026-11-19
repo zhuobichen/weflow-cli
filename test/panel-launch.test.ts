@@ -13,6 +13,7 @@ import assert from 'node:assert/strict'
 import { join } from 'node:path'
 
 const { resolveElectronBinary, resolveBrowserBinary, electronLaunchArgs,
+        electronLaunchArgsNoSandbox, electronLaunchArgsWithProfile,
         browserLaunchArgs, browserProfileDir } = await import('../src/panel/launch.js')
 
 const none = () => false
@@ -42,6 +43,19 @@ test('包内没有、全局有 → 用全局那个', () => {
 test('Electron 的 argv **只有一个参数**：应用目录', () => {
   const args = electronLaunchArgs('C:/proj/resources/panel')
   assert.deepEqual(args, ['C:/proj/resources/panel'])
+})
+
+test('重试时才带 --no-sandbox，且它排在应用目录之前', () => {
+  // 默认必须带沙箱：--no-sandbox 是失败后的退路，不是常态。
+  assert.equal(electronLaunchArgs('P').includes('--no-sandbox'), false)
+  assert.deepEqual(electronLaunchArgsNoSandbox('P'), ['--no-sandbox', 'P'])
+})
+
+test('profile 覆盖：--no-sandbox + --user-data-dir，目录排在最后', () => {
+  // 有些机器禁止在 C: 上建 Chromium 单例锁，只能把 profile 指到别的盘。
+  const args = electronLaunchArgsWithProfile('P', 'D:/prof')
+  assert.deepEqual(args, ['--no-sandbox', '--user-data-dir=D:/prof', 'P'])
+  assert.equal(args[args.length - 1], 'P', '应用目录必须仍在最后')
 })
 
 // ---------------------------------------------------------------- 浏览器降级

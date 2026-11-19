@@ -44,11 +44,40 @@ export function resolveElectronBinary(env: {
 }
 
 /**
- * Electron 的 argv。**就一个参数**：应用目录（里面的 `package.json` 指向 `main.cjs`）。
+ * Electron 的 argv。**只有一个参数**：应用目录（里面的 `package.json` 指向 `main.cjs`）。
  * 什么都不多带——不带 token、不带端口、不带 URL。
+ *
+ * 签名只有一个入参是**刻意的**（`test/panel-launch.test.ts` 用函数 arity 钉住它）：
+ * 没有第二个参数，就没有地方塞 token。所以"无沙箱重试"不在这里加开关，
+ * 而是下面那个独立的函数。
  */
 export function electronLaunchArgs(panelDir: string): string[] {
   return [panelDir]
+}
+
+/**
+ * 无沙箱重试用的 argv。
+ *
+ * 为什么需要它：实测某些 Windows 环境里 Chromium 沙箱初始化失败，进程以
+ * `0x80000003` 立刻退出，窗口不出现——而 CLI 已经打印了"✓ 面板已启动"。
+ * 这条只是**失败后的退路**，默认路径仍带沙箱。
+ */
+export function electronLaunchArgsNoSandbox(panelDir: string): string[] {
+  return ['--no-sandbox', panelDir]
+}
+
+/**
+ * 指定 user-data 目录的 argv（无沙箱 + 自定义 profile）。
+ *
+ * 为什么需要它：实测本机 **userData 落在 C: 的任何路径都起不来**——
+ * Chromium 报 `Lock file can not be created! Error code: 5`（%TEMP%、%LOCALAPPDATA%、
+ * %APPDATA% 全都一样），而放到 D: 立刻正常。这种限制来自机器上的安全软件或策略，
+ * 程序改不了，但可以**让用户把 profile 指到能写的盘**。
+ *
+ * profile 目录同时受隐私文档约束：它里面有缓存的页面数据，属于本地敏感路径。
+ */
+export function electronLaunchArgsWithProfile(panelDir: string, profileDir: string): string[] {
+  return ['--no-sandbox', `--user-data-dir=${profileDir}`, panelDir]
 }
 
 export interface EdgeLookup {
