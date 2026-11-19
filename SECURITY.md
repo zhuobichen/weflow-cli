@@ -43,6 +43,10 @@ Security fixes are applied to the current `master` branch and the latest npm rel
 ## Handling local data
 
 - Treat `~/.weflow-cli/config.json`, `.mcp.json`, `output/`, exported chats and every `*.db` file as sensitive.
+- Treat the panel's Chromium profile as sensitive too: by default it lives under `%APPDATA%\weflow-panel`, and
+  `WEFLOW_PANEL_USER_DATA_DIR` can move it elsewhere (that variable exists because some machines refuse to create
+  the Chromium singleton lock on `C:`). It holds page cache and local storage for the panel window, so apply the
+  same handling as `output/`, and remember that moving it does not make it less sensitive.
 - Treat `vault sync` as an external disclosure action. Preview it first; machine execution requires `--yes`, and its JSON response omits file names and remote URLs.
 - Preview Vault initialization, semantic indexing, knowledge pipelines, and report generation before execution. Their machine interfaces require `--yes`; structured output omits local paths, selected names, and generated content.
 - Never share encryption keys, wxid values, API keys, WeChat credentials or full process output in an issue.
