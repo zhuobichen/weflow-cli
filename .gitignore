@@ -7,6 +7,10 @@ logs/
 issue-*.log
 *.db
 *.decrypted.db
+# 端到端夹具里那个库是**合成**的空壳（16 KB，wxid_demo_me），必须入库——
+# `ask_pipeline_test.EndToEndTest` 在 CI 上靠它跑通，没有它就是整类 ERROR。
+# 只豁免这一个文件名；真实聊天库永远不进仓库（这也是上面 *.db 的用途）。
+!test/fixtures/ask_demo/home/nt/message_0.db
 test-*.txt
 test-*.py
 test-*.cjs
