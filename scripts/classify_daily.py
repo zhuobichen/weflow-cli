@@ -9,6 +9,7 @@
 
 import sys, os, json, re, time, urllib.request, shutil
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 # 公共工具
@@ -30,7 +31,6 @@ OUTPUT_ROOT = str(Path(output_root()) / 'biz-daily')
 
 
 INTEREST_PROMPT = """对以下AI领域文章生成深度解析：
-
 标题：{title}
 来源：{source}
 
@@ -161,6 +161,44 @@ def extract_tags_from_file(content: str) -> list[str]:
     return fm.get('tags', [])
 
 
+def _deep_summary_one(idx: int, fpath, total: int, engine, api_key: str) -> bool:
+    """给一篇打深度解析。返回是否成功。
+
+    抽成独立函数是为了并发：Step 3 串行时 168 篇约 40 分钟（2026-11-19 实测），
+    并发后是"这个功能还能不能在晚上跑"的分界。每篇只改自己那份文件，无需加锁。
+    """
+    try:
+        with open(fpath, 'r', encoding='utf-8') as f:
+            content = f.read()
+        title = re.search(r'^# (.+)', content, re.MULTILINE)
+        source = re.search(r'来源：(.+)', content)
+        title = title.group(1) if title else ''
+        source = source.group(1).strip() if source else ''
+        body_match = re.search(r'## 正文\n\n(.+)', content, re.DOTALL)
+        body = body_match.group(1)[:5000] if body_match else content[500:5500]
+
+        prompt = INTEREST_PROMPT.format(title=title, source=source, content=body)
+        deep = call_ai(prompt, engine, api_key, max_tokens=2000)
+        content = re.sub(
+            r'## AI 摘要\n\n.+?(?=\n\n---|\Z)',
+            f'## 深度解析\n\n{deep}',
+            content, flags=re.DOTALL,
+        )
+        fm, body = parse_frontmatter(content)
+        if fm:
+            fm['enhanced'] = 'true'
+            write_with_frontmatter(str(fpath), fm, body)
+        else:
+            with open(fpath, 'w', encoding='utf-8') as f:
+                f.write(content)
+        print(f'  [{idx}/{total}] {title[:50]}', flush=True)
+        return True
+    except Exception as e:                                   # noqa: BLE001
+        # 单篇失败不该让这一步整体失败：调用方按篇计成功/失败
+        print(f'  [{idx}/{total}] ERR: {e}', flush=True)
+        return False
+
+
 def main():
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')
     import argparse
@@ -174,6 +212,8 @@ def main():
     parser.add_argument('--deep', action='store_true',
                         help='做深度解析 + 行动建议（默认不做：每篇一次 2000 token 调用，'
                              '168 篇串行约 40 分钟，产出只有 AI/学术 两栏会看）')
+    parser.add_argument('--workers', type=int, default=6,
+                        help='深度解析的并发数（默认 6；串行时 168 篇约 40 分钟）')
     args = parser.parse_args()
 
     config = load_config()
@@ -237,37 +277,20 @@ def main():
         print(f'=== Step 3: 跳过深度摘要（{len(interest_files)} 篇待解析；加 --deep 才做）===')
         interest_files = []
     if interest_files:
-        print(f'=== Step 3: [{args.interest}] 深度摘要 ({len(interest_files)}篇) ===')
-        for i, fpath in enumerate(interest_files):
-            with open(fpath, 'r', encoding='utf-8') as f:
-                content = f.read()
-            title = re.search(r'^# (.+)', content, re.MULTILINE)
-            source = re.search(r'来源：(.+)', content)
-            title = title.group(1) if title else ''
-            source = source.group(1).strip() if source else ''
-            body_match = re.search(r'## 正文\n\n(.+)', content, re.DOTALL)
-            body = body_match.group(1)[:5000] if body_match else content[500:5500]
+        print(f'=== Step 3: [{args.interest}] 深度摘要 ({len(interest_files)}篇，'
+              f'{args.workers} 并发) ===')
+        deep_one = _deep_summary_one  # 局部别名：并发里少一层属性查找
 
-            try:
-                prompt = INTEREST_PROMPT.format(title=title, source=source, content=body)
-                deep = call_ai(prompt, engine, api_key, max_tokens=2000)
-                content = re.sub(
-                    r'## AI 摘要\n\n.+?(?=\n\n---|\Z)',
-                    f'## 深度解析\n\n{deep}',
-                    content, flags=re.DOTALL,
-                )
-                # Update frontmatter: mark as enhanced
-                fm, body = parse_frontmatter(content)
-                if fm:
-                    fm['enhanced'] = 'true'
-                    write_with_frontmatter(str(fpath), fm, body)
-                else:
-                    with open(fpath, 'w', encoding='utf-8') as f:
-                        f.write(content)
-                print(f'  [{i+1}/{len(interest_files)}] {title[:50]}')
-                time.sleep(0.3)
-            except Exception as e:
-                print(f'  [{i+1}] ERR: {e}')
+        def job(item):
+            idx, fpath = item
+            return deep_one(idx, fpath, len(interest_files), engine, api_key)
+
+        # **必须并发**：这一步每篇一次 2000 token 调用，串行时 168 篇约 40 分钟
+        # （2026-11-19 实测）。并发的不只是"快"，它是"这个功能还能不能在晚上跑"的分界。
+        # 写文件仍按文件粒度互不重叠（每篇只改自己那份），所以不需要加锁。
+        with ThreadPoolExecutor(max_workers=max(1, args.workers)) as pool:
+            for _ in pool.map(job, list(enumerate(interest_files, 1))):
+                pass
 
     # ====== Step 4: Generate action suggestions (batch) ======
     # 与 Step 3 同属"细看"那类产出：它要把 AI/学术 的正文再喂一次云端模型。
