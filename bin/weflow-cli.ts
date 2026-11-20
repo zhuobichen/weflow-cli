@@ -1546,7 +1546,7 @@ const configurableKeys = [
   'judgeProvider', 'openrouterApiKey', 'openrouterJudgeModel', 'judgeLocalUrl', 'judgeEndpoint',
   'wereadApiKey',
   'assistantPrivacy', 'assistantWhitelist', 'assistantGroupWhitelist',
-  'assistantGroupRequireMention', 'assistantFastRoute', 'assistantPanelUser', 'quickReplyContacts',
+  'assistantGroupRequireMention', 'assistantFastRoute', 'assistantLexiconRoute', 'assistantPanelUser', 'quickReplyContacts',
   'skillDirs', 'skillDisabled',
   'dailySources', 'dailySourceCategories',
   'dailyExcludeTopics', 'dailyAiEnabled', 'dailyKeepImages', 'dailyMaxFailureRate', 'dailyMailTo',
@@ -8489,6 +8489,7 @@ assistantCmd
   .option('--case <id>', '只跑这些用例（逗号分隔，或多次使用）', (v: string, acc: string[]) => { acc.push(...v.split(',').map(s => s.trim()).filter(Boolean)); return acc }, [] as string[])
   .option('--category <name>', '只跑这些维度（routing/answer/honesty/memory/multi/privacy/robustness）', (v: string, acc: string[]) => { acc.push(...v.split(',').map(s => s.trim()).filter(Boolean)); return acc }, [] as string[])
   .option('--repeats <n>', '每条重复跑几次（≥2 才有稳定性指标）', '1')
+  .option('--temperature <n>', '采样温度；默认 0（评测固定值，线上默认 0.4）', '0')
   .option('--json', '输出机器可读报告')
   .option('--save-baseline <path>', '把这次报告存成 JSON 基线')
   .option('--baseline <path>', '与一份基线报告对比')
@@ -8533,6 +8534,7 @@ assistantCmd
     try {
       outcome = await runEvalSuite({
         only: opts.case, categories: opts.category, repeats, precheck: precheckModel,
+        temperature: Number(opts.temperature),
         onCaseDone: opts.json ? undefined : (result, i, total) => {
           const mark = result.problems.length ? chalk.red('✗') : chalk.green('✓')
           const q = result.spec.question ?? (result.spec.turns ?? []).join(' → ')
@@ -8583,6 +8585,89 @@ assistantCmd
 
     // 有失败的用例就让退出码非零：CI 靠它判断，而不是靠人读输出
     if (report.perCase.some(c => c.passRate < 1)) process.exit(1)
+  })
+
+assistantCmd
+  .command('rsi')
+  .description('评测 → 失败分桶 → 指出下一个该修的 harness 机制（递归自我改进的度量环，D-170）')
+  .option('--case <id>', '只跑这些用例（逗号分隔，或多次使用）', (v: string, acc: string[]) => { acc.push(...v.split(',').map(s => s.trim()).filter(Boolean)); return acc }, [] as string[])
+  .option('--category <name>', '只跑这些维度（routing/answer/honesty/memory/multi/privacy/robustness）', (v: string, acc: string[]) => { acc.push(...v.split(',').map(s => s.trim()).filter(Boolean)); return acc }, [] as string[])
+  .option('--repeats <n>', '每条重复跑几次（≥2 才看得出来"忽好忽坏"）', '1')
+  .option('--temperature <n>', '采样温度；默认 0（评测固定值，线上默认 0.4）', '0')
+  .option('--json', '输出机器可读结果')
+  .option('--record', '把这一轮追加进账本（默认只读不写）')
+  .option('--ledger <n>', '顺便列出最近几条账本记录', '0')
+  .action(async (opts) => {
+    const { runEvalSuite, precheckModel } = await import('../src/services/assistantEvalRunner.js')
+    const { buildRsiReport, formatRsiReport, toLedgerEntry, appendLedger, ledgerPath, readLedger } =
+      await import('../src/services/assistantRsi.js')
+
+    const repeats = parseCliInteger(opts.repeats, 'repeats', 1, 20, !!opts.json)
+    const ledgerLimit = parseCliInteger(opts.ledger, 'ledger', 0, 200, !!opts.json)
+
+    let outcome
+    try {
+      outcome = await runEvalSuite({
+        only: opts.case, categories: opts.category, repeats, precheck: precheckModel,
+        temperature: Number(opts.temperature),
+        onCaseDone: opts.json ? undefined : (result, i, total) => {
+          const mark = result.problems.length ? chalk.red('✗') : chalk.green('✓')
+          console.log(`  ${mark} [${String(i).padStart(3)}/${total}] ${result.spec.id.padEnd(28)}`
+            + chalk.gray(result.problems[0]?.slice(0, 40) ?? ''))
+        },
+      })
+    } catch (error: any) {
+      console.log(chalk.red(`\n✗ ${error?.message ?? error}\n`))
+      process.exit(1)
+    }
+
+    if (outcome.unavailable) {
+      if (opts.json) {
+        console.log(JSON.stringify({ success: false, code: 'MODEL_NOT_CONFIGURED', error: outcome.unavailable }))
+      } else {
+        console.log(chalk.yellow(`\n${outcome.unavailable}\n`))
+      }
+      process.exit(2)
+    }
+
+    // 模型名只用来**标注**这一轮是谁跑的：账本里没有模型名，跨轮对比就变成拿两种模型的分数
+    // 相减，那是这个仓库反复要挡的"看起来很进步的假信号"。
+    const model = (process.env.WEFLOW_AI_MODEL ?? '').trim()
+      || String((await import('../src/services/configService.js')).configService.get('aiModel') || '').trim()
+      || String((await import('../src/services/configService.js')).configService.get('localModel') || '').trim()
+      || 'unknown'
+
+    const rsi = buildRsiReport(outcome.report!, outcome.results)
+    // 上一轮取**记录里的最后一条**：不是"上一次跑"，而是"上一次真的记下来的那一轮"
+    const previous = readLedger(1)[0]
+
+    if (opts.json) {
+      console.log(JSON.stringify({ success: true, model, temperature: outcome.temperature, rsi,
+        ledgerPath: ledgerPath(), previous: previous ?? null }))
+    } else {
+      console.log('\n' + formatRsiReport(rsi, { model, temperature: outcome.temperature,
+        baseline: previous }))
+      console.log('')
+    }
+
+    if (opts.record) {
+      const path = appendLedger(toLedgerEntry(rsi, model))
+      if (!opts.json) console.log(chalk.gray(`  已记账: ${path}`))
+    } else if (!opts.json) {
+      console.log(chalk.gray(`  未记账（要留痕加 --record）：${ledgerPath()}`))
+    }
+
+    if (ledgerLimit > 0 && !opts.json) {
+      const rows = readLedger(ledgerLimit)
+      console.log(chalk.bold('\n账本（最近优先）'))
+      for (const row of rows.slice().reverse()) {
+        console.log(`  ${row.ts.slice(0, 16).replace('T', ' ')}  ${(row.score * 100).toFixed(1).padStart(5)}%  `
+          + `${row.model.padEnd(18)} 失败 ${row.failing.length} 条`)
+      }
+      console.log('')
+    }
+
+    if (rsi.failingByCategory.length) process.exit(1)
   })
 
 assistantCmd

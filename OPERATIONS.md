@@ -1920,6 +1920,72 @@ weflow-cli assistant eval --baseline base.json       # 和基线比
 > 评测自己会把审计与轨迹指到临时目录（`WEFLOW_AUDIT_DIR`），所以正常情况不需要你操心；
 > 但如果环境连临时目录都写不了，`mustCall` 会全部误判成"一个工具都没调"。
 
+## 助手 harness 的自我改进环（`assistant rsi`）
+
+`assistant eval` 回答"过了没有"，`assistant rsi` 回答"**下一步该改哪里**"：
+
+```powershell
+weflow-cli assistant rsi                    # 跑一轮并按失败类型分桶，给下一步建议
+weflow-cli assistant rsi --record           # 顺便记一行账（~/.weflow-cli/rsi-ledger.jsonl）
+weflow-cli assistant rsi --ledger 10        # 把最近 10 条账列出来
+weflow-cli assistant rsi --category memory  # 只看某个维度
+weflow-cli assistant rsi --repeats 3        # 每条跑 3 次（"三次都过"才算过）
+weflow-cli assistant rsi --temperature 0.4  # 用线上那个温度量（默认 0，见下）
+```
+
+**温度固定 0 是有意的**：线上默认 0.4 会让同一个 harness 每次跑出不同的 1～2 条失败，而那些差别
+来自模型在两条都合理的路里随机选，不是 harness 的缺陷。要量"这次改得对不对"，就得把采样噪声按住。
+报告里印着用的是哪一个温度——**0 和 0.4 的分数不能直接比**。
+
+报告里除了分数还会列出**每一条失败的判据原文与答复开头**，诊断靠它，不用再单条重跑猜。
+
+它把失败分成 10 类（该查却没查 / 查得太多 / 答复缺内容 / 参数不对 / 空结果没被当空 /
+记忆没落住 / 抛异常 …），每类都指向一个**具体的 harness 机制**，而不是"让模型更聪明"。
+分数按 tuned（参与改进）与 holdout（不参与）两栏分开报——只有 tuned 涨、holdout 不涨，
+就是对着评测集过拟合的信号。
+
+两栏的切分只依赖用例 id，任何机器、任何一轮都一样；holdout 只有十几条，**是提示不是判决**。
+
+### 用便宜模型或本地模型跑
+
+不改持久配置，用环境变量临时换引擎（与助手运行时同一个口径）：
+
+```powershell
+$env:WEFLOW_AI_BASE_URL="https://dashscope.aliyuncs.com/compatible-mode/v1"
+$env:WEFLOW_AI_MODEL="qwen-flash"
+$env:WEFLOW_AI_KEY="<你的 key>"        # 注意：必须是明文 key
+weflow-cli assistant rsi
+```
+
+> ⚠️ `config.json` 里的 `dashscopeApiKey` / `deepseekApiKey` 等是 **`lock:` 加密**的
+> （AES-GCM、绑定机器）。**不要把密文当 key 用**——那会得到 401，而 401 会被助手兜成
+> 「❌ 大脑暂时离线」，看起来像"模型退化"。现在评测会认出这一类并**中止**（报"没跑"，
+> 退出码 2，不出分数）；要拿解密后的值，用 `weflow-cli config show` 或从助手自己的
+> 配置读取路径拿。
+
+零成本本地跑（llama.cpp / ollama 起在 `127.0.0.1`）不需要 key：
+
+```powershell
+$env:WEFLOW_AI_BASE_URL="http://127.0.0.1:8081/v1"
+$env:WEFLOW_AI_MODEL="qwen3vl"
+weflow-cli assistant rsi
+```
+
+### 两台新机制与它们的临时开关
+
+| 机制 | 做什么 | 关掉它（只用于 A/B） |
+| --- | --- | --- |
+| 词法快路径 | 用固定表把整句话对到「工具 + 参数」，**零模型调用**，循环第一轮就看到数据。两档：固定参数 16 条；抽参数（人名 / 关键词 / 时间词 / "两件事"分别派发） | `WEFLOW_LEXICON_ROUTE=off`（也可 `log` 只记账） |
+| 自述守卫 | 这一轮没调工具、答复却说"已查…"→ 顶回去一次；工具没拿出内容时当场把**工具的原话**提醒给它 | `WEFLOW_HARNESS_GUARDS=off` |
+| 空话 / 反问守卫 | 答复一个字都没用上刚查到的内容 → 顶回去；已经查到却反问「请给个时间范围」→ 顶回去 | 同上 |
+| 反跑题闸门 | 同一轮已从知识库拿到内容、用户又没提日报，却还去查日报 → 跳过并说明理由 | 同上 |
+
+三者**默认都开**。要判断某台机制有没有用，只能靠**同一时间窗、同一个模型、只差这一台**的
+两次跑分——改 `config.json` 做对照会把用户正在用的助手一起改掉，那两次测的就不是同一件事了。
+
+`WEFLOW_LEXICON_ROUTE` 也可以持久化：`weflow-cli config set assistantLexiconRoute off`。
+`WEFLOW_AI_TEMPERATURE` 是**采样温度**（线上默认 0.4，评测固定 0）——它不在配置里，只能由环境变量给。
+
 ## 问答（ask）
 
 问一句话，它把已经查得到的东西整理成一段可核对的话：

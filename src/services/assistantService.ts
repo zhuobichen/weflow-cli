@@ -8,10 +8,17 @@
  *     └─ 隐私关卡: 工具结果脱敏后才出境到云端 LLM (本地引擎则完全不出境)
  */
 import { WechatMessageService } from './wechatMessageService.js'
-import { decideRoute, MIN_NEEDS_TOOL, type FastRouteMode } from './assistantRouter.js'
+import { decideRoute, MIN_NEEDS_TOOL, type FastRouteMode, type RouteCapability } from './assistantRouter.js'
+import { routeByIntent, routeWithArgs, routeParts, isFollowUp, type IntentHit }
+  from './assistantIntent.js'
+import { pushbackFor, emptyTalkPushback, asksBackData, toolFailureNudge, isEmptyToolResult, guardsEnabled,
+         stateClaimPushback, impossibleOfferPushback,
+         timeWindowWithoutLookup, stripImpossibleOffers, destructiveFollowUpPushback,
+         stripOffersAfterDestructive }
+  from './assistantGuard.js'
 import { selectFactsForInjection, frameLocalData } from './assistantMemory.js'
 import { configService } from './configService.js'
-import { AssistantMemory, type ChatTurn } from './assistantMemory.js'
+import { AssistantMemory, explicitRememberIntent, type ChatTurn } from './assistantMemory.js'
 import { privacyGate } from './assistantPrivacy.js'
 import { TOOL_DEFS, availableToolDefs, unavailableCapabilities, unavailableToolReason,
          executeTool } from './assistantTools.js'
@@ -33,6 +40,8 @@ import { startPanelServer, type PanelServer } from '../panel/server.js'
 import { clearEndpoint } from '../panel/endpoint.js'
 
 const MAX_TOOL_ROUNDS = 6
+/** 追问接续只对这些"幂等的读类检索"生效（见 `lastRetrieval` 的注释） */
+const RETRIEVAL_TOOLS = new Set(['search_knowledge', 'search_chats', 'search_memory'])
 /** 每日 LLM 处理上限 (护栏: 防 bug 死循环/异常流量烧钱; 0 = 不限制) */
 const DAILY_LIMIT = 100
 
@@ -180,6 +189,25 @@ export function toApiMessages(messages: ApiMessage[], allowImages: boolean):
   return { messages: expanded, imagesSent, imagesDropped }
 }
 
+/**
+ * 按端点挑一台本机已有的 key（只给 `WEFLOW_AI_BASE_URL` 这条路用，D-171）。
+ *
+ * **认不出端点就返回空串**，绝不"随便拿一个 key 试试"：那把某个厂商的凭据发给了另一个主机，
+ * 是本仓库最不能接受的一类事故（凭据外泄比"没配好"严重得多）。空串会让 `callLLM`
+ * 抛一句明确的"未配置"，那比 401 好读，也比泄出去安全。
+ *
+ * 值都是加密存盘的，`get()` 会解密；这里**只读不打印**。
+ */
+function envKeyFor(url: string): string {
+  const pick = (key: 'dashscopeApiKey' | 'deepseekApiKey' | 'typesafeApiKey' | 'openrouterApiKey') =>
+    String(configService.get(key) ?? '').trim()
+  if (/dashscope|aliyuncs/.test(url)) return pick('dashscopeApiKey')
+  if (/deepseek/.test(url)) return pick('deepseekApiKey')
+  if (/302ai|typesafe/.test(url)) return pick('typesafeApiKey')
+  if (/openrouter/.test(url)) return pick('openrouterApiKey')
+  return ''
+}
+
 export class AssistantService {
   constructor(options: { routeDecider?: (request: unknown) => Promise<any> } = {}) {
     this.routeDecider = options.routeDecider
@@ -220,10 +248,16 @@ export class AssistantService {
     if (envBase) {
       const model = (process.env.WEFLOW_AI_MODEL ?? '').trim() || 'deepseek-chat'
       const isLocal = /127\.0\.0\.1|localhost/.test(envBase)
+      // 没显式给 key 时**按端点挑一台本机已有的**（D-171）。
+      //
+      // 原来这里写的是 `|| 'local'`：本地端点那样是对的（llama-server 不看 Authorization），
+      // 但换到云端就是**必然 401**——而 401 会被 `handleMessage` 兜成「❌ 大脑暂时离线」，
+      // 于是"换模型"这件事在用户眼里变成"模型退化了"。2026-11-20 追出来过一次。
+      // 换模型不该要求把明文 key 抄进命令行：用户机器上本来就有这个端点的 key。
       return {
         url: envBase,
         model,
-        key: (process.env.WEFLOW_AI_KEY ?? '').trim() || 'local',
+        key: (process.env.WEFLOW_AI_KEY ?? '').trim() || (isLocal ? 'local' : envKeyFor(envBase)),
         local: isLocal,
       }
     }
@@ -274,7 +308,12 @@ export class AssistantService {
     // `images` 不是 API 的字段，展平后要去掉；其余字段原样透传。
     const payload = expanded.map(({ images, ...rest }) => rest)
 
-    const body: Record<string, unknown> = { model, messages: payload, max_tokens: maxTokens, temperature: 0.4 }
+    // 温度：**默认 0.4**（助手说话要有变化），但允许环境变量覆盖（D-174）。
+    // 评测把它固定成 0：那时量的是 harness，不是采样噪声；而线上默认值一个字没改。
+    const rawTemperature = Number(process.env.WEFLOW_AI_TEMPERATURE ?? '')
+    const temperature = Number.isFinite(rawTemperature) && String(process.env.WEFLOW_AI_TEMPERATURE ?? '').trim() !== ''
+      ? rawTemperature : 0.4
+    const body: Record<string, unknown> = { model, messages: payload, max_tokens: maxTokens, temperature }
     if (tools?.length) { body.tools = tools; body.tool_choice = 'auto' }
 
     const res = await fetch(`${url}/chat/completions`, {
@@ -351,10 +390,19 @@ export class AssistantService {
       return '[隐私] 本地推理：数据不出这台机器，工具结果里的聊天正文是原文，可以如实引用。'
     }
     if (mode === 'strict') {
-      return '[隐私] 当前 strict 模式：第三方聊天正文会以「[内容N字已按严格模式屏蔽]」的形式出现在'
-        + '工具结果里，那时你只能看到时间与字数。遇到这种情况如实说明，并给出三条路：'
-        + '①改 balanced（正文发给当前模型，电话/证件/邮箱/密钥/链接仍打码）；'
-        + '②改用本地模型 aiEngine=ollama/lmstudio（数据不出机器，屏蔽自动不生效）；③保持现状。'
+      // 2026-11-20 两次实测的教训，都写在这里：
+      // ① 原来这段写着「给出三条路：①改 balanced…」，模型把它当成**自己**的选项，回了一句
+      //    "现在模式已切换为 balanced"——档位一次都没动（D-176）。
+      // ② 改老实之后又变成另一种烦人：每答一句就推销一次"要我帮你改模式吗？"，用户原话是
+      //    "默认不要设什么balanced模式了…………"。所以现在**不给菜单、不主动提议**，
+      //    只在用户真的问"怎么看正文"时，一句话说清它是配置项、要自己改。
+      return '[隐私] 当前 strict 模式：第三方聊天正文会以「[内容N字已按严格模式屏蔽]」的形式'
+        + '出现在工具结果里，你只能看到时间、方向与字数。'
+        + '**不要主动提议改档位，也不要问"要我帮你改吗"**——那不是你能做的操作，'
+        + '反复提议只会打扰用户。正常按你手上有的信息回答（谁、何时、多少字、什么类型）。'
+        + '只有当用户明确问"怎么才能看到正文"时，才用一句话说明：这是配置项 '
+        + 'assistantPrivacy，需要他自己在终端执行 weflow-cli config set assistantPrivacy balanced '
+        + '并重启助手；你没有修改它的工具。'
     }
     return `[隐私] 当前 ${mode} 模式：工具结果里的聊天正文是原文（电话/证件/邮箱/密钥/链接已打成`
       + '占位符），可以直接引用，不必声称被屏蔽。'
@@ -413,6 +461,31 @@ export class AssistantService {
   private firstRunHintShown = false
   /** 最近一次路由认为「这条消息需要查本机数据」的概率（0 = 没问过） */
   private lastNeedsLocalData = 0
+  /** 本轮按「记住：…」直接落盘的那条事实（没有就 null）。用来跳过同轮的 `save_memory` */
+  private turnExplicitFact: string | null = null
+  /** 本轮**有产出**的工具结果（截断）。守卫判断"答复有没有用上刚查到的内容"要靠它 */
+  private turnToolText: string[] = []
+  /**
+   * 本轮实际执行过的工具名。守卫靠它分辨"说改了"和"真的调了写操作"（D-176）：
+   * 答复里出现「已切换/已改为/已保存」，而这份集合里没有 `WRITE_TOOLS` 的任何一个 → 顶回去。
+   */
+  private turnToolNames = new Set<string>()
+  /**
+   * 每个用户**上一轮用过的那条检索**（工具 + 参数）。追问（"展开讲讲它"）靠它接回主题。
+   *
+   * 只收检索类（知识库/跨会话/记忆）——它们幂等、可重复读；`get_messages` 之类不在内，
+   * 因为"再讲一遍上一条消息"没有意义，重派一次只是白花一次调用。
+   */
+  private lastRetrieval = new Map<string, { tool: string; args: Record<string, unknown> }>()
+  /**
+   * 每个用户**上一轮按名字查过的那个人**。用于「查一下他的聊天记录」这种代词收尾句：
+   * 这句话里没有人名，而"他"指谁只有 harness 知道（上一轮的 `get_messages.contact`）。
+   */
+  private lastContact = new Map<string, string>()
+  /** 本轮原话（闸门要看"用户到底提没提日报"）。每轮覆盖 */
+  private turnText = ''
+  /** 本轮知识库给过内容没有。反跑题闸门用（见 `get_daily_report` 那一段） */
+  private turnKnowledgeHit = false
   /** 最近一次模型调用里**真返回**的推理内容（`reasoning_content`）。默认模型不返回，所以常是空串 */
   private lastReasoning = ''
   /** 每个用户最近一轮的轨迹：微信里发「轨迹」看的就是它（跨进程的历史在文件里，见 assistantTrace） */
@@ -429,7 +502,7 @@ export class AssistantService {
   }
   /**
    * 本轮已经调过的「工具名 + 参数」。同一条消息里重复调用**同样的参数**不会得到新信息，
-   * 而实测（评测的 ambiguous-contact 用例）模型会连着调三次 list_sessions。
+   * 而实测（重名联系人那类用例里）模型会连着调三次 list_sessions。
    * 消息是串行处理的（queue），所以实例字段在这里是安全的。
    */
   private turnCalls = new Set<string>()
@@ -530,9 +603,34 @@ export class AssistantService {
       return
     }
     this.turnCalls.add(callKey)
+    // 本轮的显式记忆已经在进模型之前就落盘了（见 `explicitRememberIntent`）。
+    // 这时 `save_memory` 再写一次只会造出**两条近义事实**（用户原话一条、模型改写一条），
+    // 而记忆是按条数占预算、按条数注入提示的，重复条目会挤掉真正有用的那条。
+    // 这里不执行、但把话说清楚：模型看到的是"已经记下了"，不是"工具坏了"。
+    if (name === 'save_memory' && this.turnExplicitFact) {
+      trace.steps.push({ kind: 'note', detail: 'save_memory 跳过：本轮已按「记住：…」直接落盘' })
+      messages.push({ role: 'tool', tool_call_id: callId,
+        content: `（这句已经写进长期记忆了：「${this.turnExplicitFact}」。不用再写一次。）` })
+      return
+    }
+    // 「这一轮已经拿到知识库内容、用户又没提日报，却还去查日报」——跳过，不执行（D-175）。
+    //
+    // 实测（qwen-flash，4 次里 1 次）：追问「展开讲讲它」时它先查了知识库，接着又去翻当天日报。
+    // 日报只覆盖最近几天，与那个主题毫无关系，于是答复跑题、还多花一次调用。系统提示里早就写着
+    // 「明知查不到还去查，用户等的时间是白等的」，但那是概率的；**这道闸门只在两个条件同时成立时
+    // 触发**（本轮知识库有产出 + 用户话里没有日报/公众号这类词），所以它不会拦住真的想看日报的人。
+    if (name === 'get_daily_report' && guardsEnabled() && this.turnKnowledgeHit
+        && !/(日报|公众号|推文|推送|订阅号)/.test(this.turnText)) {
+      trace.steps.push({ kind: 'note', detail: 'get_daily_report 跳过：本轮已有知识库内容，用户没提日报' })
+      messages.push({ role: 'tool', tool_call_id: callId,
+        content: '（跳过：这一轮已经从知识库拿到内容，用户也没有提到日报/公众号。'
+          + '日报只覆盖最近几天，这次调用帮不上忙，还会让答复跑题。直接用上面查到的内容回答。）' })
+      return
+    }
     const ctx: ToolContext = { userId, memory: this.memory }
     if (this.turnInboundImages.length) ctx.inboundImages = this.turnInboundImages
     const raw = await executeTool(name, args, ctx)
+    this.turnToolNames.add(name)
     trace.toolCalls += 1
     trace.steps.push({
       kind: 'tool', name, args: summarizeArgs(args), bytes: raw.length,
@@ -541,6 +639,29 @@ export class AssistantService {
     const { safe, redactions } = privacyGate.redact(raw)
     privacyGate.audit(`TOOL:${name}`, raw.length, redactions ? `redacted=${redactions}` : '')
     messages.push({ role: 'tool', tool_call_id: callId, content: safe })
+    // 收一份"这一轮查到过什么"：守卫要靠它判断答复有没有用上刚查到的内容（D-174）。
+    // 只收**有产出**的、截断后的正文；失败的括号消息另有 `toolFailureNudge` 那条路。
+    if (!isEmptyToolResult(raw) && this.turnToolText.length < 6) {
+      this.turnToolText.push(safe.slice(0, 2000))
+    }
+    // 记下"上一轮用过的检索"，供追问接续（D-175）。只收幂等的读类检索
+    if (RETRIEVAL_TOOLS.has(name)) {
+      this.lastRetrieval.set(userId, { tool: name, args: { ...args } })
+    }
+    // 记下"上一轮查过谁"，供代词收尾句接续（D-175）。只在真的取到东西时记：
+    // 查不到的失败不该被当成"他指的是这个人"。
+    if (name === 'get_messages' && !isEmptyToolResult(raw)) {
+      const contact = String(args.contact ?? '').trim()
+      if (contact) this.lastContact.set(userId, contact)
+    }
+    // 本轮从知识库拿到过内容：反跑题闸门要靠它判断（见 get_daily_report 那一段）
+    if (name === 'search_knowledge' && !isEmptyToolResult(raw)) this.turnKnowledgeHit = true
+    // 工具这一步**没拿出内容**时紧跟着提醒一句（D-169）。不另开一轮：这条 system 消息与
+    // 工具结果在同一批里进对话，模型下一轮自然看得到。小模型常把括号里那句错误当没看见，
+    // 继续按自己的假设往下写——这一句是把"这一步失败了"翻译成它能接住的指令。
+    if (guardsEnabled() && isEmptyToolResult(raw)) {
+      messages.push({ role: 'system', content: toolFailureNudge(name, raw) })
+    }
 
     // 工具取来的图片作为**紧随其后的一条 user 消息**附上：`tool` 消息的 content 只能是
     // 字符串（OpenAI 的形状），塞不进多模态数组。图片本身不过 redact（它不是文本），
@@ -553,6 +674,170 @@ export class AssistantService {
         images: ctx.pendingImages,
       })
     }
+  }
+
+  /** 词法快路径开关。**默认 on**：它不进模型、不花钱，而且误命中是可恢复的（见下）。
+   *
+   *  `WEFLOW_LEXICON_ROUTE` 优先于配置，与 `engineConfig()` 读 AI 设置同一个口径：
+   *  **临时换行为不该改用户的持久配置**。这一条是为了 A/B——"这台机制到底有没有用"只能靠
+   *  同一时间窗、同一个模型、只差这一台的两次测量回答；靠改配置做对照，会把用户的助手一起改掉。
+   */
+  private lexiconRouteMode(): FastRouteMode {
+    const env = String(process.env.WEFLOW_LEXICON_ROUTE ?? '').trim().toLowerCase()
+    const raw = (env || String(configService.get('assistantLexiconRoute') ?? '')).trim().toLowerCase()
+    if (raw === 'off' || raw === 'log') return raw
+    return 'on'
+  }
+
+  /**
+   * 预派发一个能力：把它写成一条 assistant 的 tool_call，再走**同一条** `runToolCall`。
+   *
+   * 抽出来是因为现在有三条路要用它（判断层快路径、词法快路径，将来可能还有场景）。
+   * 这个仓库付过学费的老毛病在这里格外贵：审计、脱敏、重复调用去重、图片回填都长在
+   * `runToolCall` 里，绕开它自己拼一次就等于少一道门。
+   *
+   * 返回派发了个数（0 = 没派发，调用方照常回退到循环）。
+   */
+  private async dispatchCapability(userId: string, capability: RouteCapability,
+                                   messages: ApiMessage[], trace: TurnTrace): Promise<number> {
+    // 预派发是**直接派发**的（不经工具表），所以这里要自己过同一道判据
+    const blocked = unavailableToolReason(capability.tool)
+    if (blocked) {
+      trace.steps.push({ kind: 'route',
+        detail: `想预派发 ${capability.tool}，但${blocked}；回退成循环` })
+      return 0
+    }
+    const callId = `route-${capability.name}-${Date.now()}`
+    messages.push({
+      role: 'assistant',
+      content: '',
+      tool_calls: [{
+        id: callId,
+        type: 'function',
+        function: {
+          name: capability.tool,
+          arguments: JSON.stringify(capability.args),
+        },
+      }],
+    })
+    await this.runToolCall(userId, messages, callId, capability.tool, capability.args, trace)
+    return 1
+  }
+
+  /**
+   * 词法快路径（D-168 / D-172）：用固定表把整句话对到"工具 + 参数"，**一次模型调用都不花**。
+   *
+   * 它服务的是**便宜的小模型**：两次往返里真正难的那次（从 31 个工具里挑一个、还要给参数）
+   * 由确定性代码做掉，模型只需要把拿到的数据说成人话。命中之后**循环照跑**——预派发不结束
+   * 这一轮，所以哪怕这条路挑错了，模型还能再调别的工具，最坏代价是白调一次。
+   *
+   * 两档：`routeByIntent`（固定参数，精度高）先，`routeWithArgs`（抽人名 + 时间词）后。
+   */
+  private async maybeLexiconRoute(userId: string, text: string, messages: ApiMessage[],
+                                  trace: TurnTrace): Promise<number> {
+    const mode = this.lexiconRouteMode()
+    if (mode === 'off') return 0
+
+    // 一句话两件事：**分别路由、各派一次**（D-173）。一个工具答不完那种消息，
+    // 旧做法是整条交回循环——而模型经常只顾一件。两件都能被高精度命中才拆，否则交回循环。
+    const parts = routeParts(text)
+    if (parts.length >= 2) {
+      if (mode === 'log') {
+        privacyGate.audit('LEXICON_WOULD', 0, parts.map(h => h.capability.name).join('+'))
+        trace.steps.push({ kind: 'route',
+          detail: `词法（只记，未派发）: 两件事 ${parts.map(h => h.capability.name).join(' + ')}` })
+        return 0
+      }
+      let dispatched = 0
+      for (const hit of parts) {
+        const n = await this.dispatchCapability(userId, hit.capability, messages, trace)
+        if (!n) continue
+        dispatched += n
+        appendLog(`[词法/两件事] ${hit.reason}`)
+        privacyGate.audit('LEXICON_HIT', 0, `${hit.capability.name} ${hit.capability.tool}`)
+        trace.steps.push({ kind: 'route', detail: `词法: ${hit.reason}` })
+      }
+      if (dispatched) {
+        this.lastNeedsLocalData = 1
+        return dispatched
+      }
+      return 0
+    }
+
+    const hit = routeByIntent(text) ?? routeWithArgs(text)
+    if (!hit) {
+      // 「查一下他的聊天记录」：**代词指代上一轮那个人**（D-175）。
+      // 这句话里没有人名，词法表抽不出来；而"他"在上一轮刚被查过——harness 手里本来就有这个
+      // 事实（`lastContact`），拿它去补参数比让模型猜可靠。实测模型在这种收尾句上会**一次工具
+      // 都不调**就作答，于是"确认我到底回没回他"变成了一句没有依据的话。
+      const pronounContact = /(他|她|对方)/.test(text) && /(聊天记录|消息|记录|说过)/.test(text)
+        ? this.lastContact.get(userId) : null
+      if (pronounContact) {
+        const capability: RouteCapability = {
+          name: 'messages_of_pronoun', tool: 'get_messages',
+          args: { contact: pronounContact }, when: '',
+        }
+        if (mode === 'log') {
+          privacyGate.audit('LEXICON_WOULD', 0, `${capability.name}:${pronounContact}`)
+          trace.steps.push({ kind: 'route', detail: `词法（只记，未派发）: 代词接回「${pronounContact}」` })
+          return 0
+        }
+        const n = await this.dispatchCapability(userId, capability, messages, trace)
+        if (n) {
+          this.lastNeedsLocalData = 1
+          appendLog(`[词法/代词] 接回上一轮那个人：${pronounContact}`)
+          privacyGate.audit('LEXICON_HIT', 0, `${capability.name} get_messages`)
+          trace.steps.push({ kind: 'route', detail: `词法: 代词接回「${pronounContact}」` })
+          return n
+        }
+      }
+      // 追问（"展开讲讲它"）：把**上一轮用过的那条检索**接回来（D-175）。
+      // 这类话里没有名词，词法表无从下手；实测模型在这时会换个话题重开（去查当天日报），
+      // 而日报只覆盖最近几天，与上一轮那个概念毫无关系。用它自己上一轮用过的工具再接一次，
+      // 比让它自由发挥可靠；而且这一步**不结束这一轮**，它仍可以改主意。
+      if (isFollowUp(text)) {
+        const last = this.lastRetrieval.get(userId)
+        if (last) {
+          const args = { ...last.args }
+          // "展开"就是要看邻居，知识库那条给 depth=2（工具自己的参数语义）
+          if (last.tool === 'search_knowledge') args.depth = 2
+          const followUp: IntentHit = {
+            capability: { name: `${last.tool}_follow_up`, tool: last.tool, args, when: '' },
+            reason: `词法接续：追问接回上一轮的 ${last.tool}`,
+          }
+          if (mode === 'log') {
+            privacyGate.audit('LEXICON_WOULD', 0, followUp.capability.name)
+            trace.steps.push({ kind: 'route', detail: `词法（只记，未派发）: ${followUp.reason}` })
+            return 0
+          }
+          const n = await this.dispatchCapability(userId, followUp.capability, messages, trace)
+          if (n) {
+            this.lastNeedsLocalData = 1
+            appendLog(`[词法/接续] ${followUp.reason}`)
+            privacyGate.audit('LEXICON_HIT', 0, `${followUp.capability.name} ${last.tool}`)
+            trace.steps.push({ kind: 'route', detail: followUp.reason })
+            return n
+          }
+        }
+      }
+      return 0
+    }
+
+    if (mode === 'log') {
+      // 灰度：只记「本来会走哪条」，行为一个字不改
+      privacyGate.audit('LEXICON_WOULD', 0, `${hit.capability.name} ${hit.reason}`)
+      trace.steps.push({ kind: 'route', detail: `词法（只记，未派发）: ${hit.reason}` })
+      return 0
+    }
+
+    const dispatched = await this.dispatchCapability(userId, hit.capability, messages, trace)
+    if (!dispatched) return 0
+    // 走过词法路径就当"这条消息要查本机数据"：这句话本来就是从"查什么"的表里来的
+    this.lastNeedsLocalData = 1
+    appendLog(`[词法] ${hit.reason}`)
+    privacyGate.audit('LEXICON_HIT', 0, `${hit.capability.name} ${hit.capability.tool}`)
+    trace.steps.push({ kind: 'route', detail: `词法: ${hit.reason}` })
+    return dispatched
   }
 
   /** 快路径：先问一次「该查哪个能力」，把这一个工具执行掉，于是循环第一轮就看得到结果。
@@ -590,31 +875,12 @@ export class AssistantService {
       return 0
     }
     trace.steps.push({ kind: 'route', detail: `判断层: ${decision.reason}` })
-    // 快路径是**直接派发**的（不经工具表），所以这里要自己过同一道判据
-    const blocked = unavailableToolReason(decision.capability.tool)
-    if (blocked) {
-      trace.steps.push({ kind: 'route', detail: `快路径想派发 ${decision.capability.tool}，但${blocked}；回退成循环` })
-      return 0
+    const dispatched = await this.dispatchCapability(userId, decision.capability, messages, trace)
+    if (dispatched) {
+      appendLog(`[快路径] ${decision.reason}`)
+      privacyGate.audit('FASTROUTE_HIT', 0, `${decision.capability.name} ${decision.model}`)
     }
-
-    const callId = `fastroute-${Date.now()}`
-    appendLog(`[快路径] ${decision.reason}`)
-    privacyGate.audit('FASTROUTE_HIT', 0, `${decision.capability.name} ${decision.model}`)
-    messages.push({
-      role: 'assistant',
-      content: '',
-      tool_calls: [{
-        id: callId,
-        type: 'function',
-        function: {
-          name: decision.capability.tool,
-          arguments: JSON.stringify(decision.capability.args),
-        },
-      }],
-    })
-    await this.runToolCall(userId, messages, callId, decision.capability.tool,
-                           decision.capability.args, trace)
-    return 1
+    return dispatched
   }
 
   /**
@@ -660,6 +926,13 @@ export class AssistantService {
     }
     const startedAt = Date.now()
     this.turnCalls.clear()
+    // 每轮清零：`lastNeedsLocalData` 由这一轮的判断层/词法路径各自写。**不清零就会漏到下一轮**
+    // ——词法路径把它设成 1 之后，下一句纯闲聊（"今天天气不错"）会带着上一轮的信号被守卫顶一次。
+    this.lastNeedsLocalData = 0
+    this.turnToolText = []
+    this.turnToolNames.clear()
+    this.turnText = t
+    this.turnKnowledgeHit = false
     // 一轮的轨迹：判断了什么、调了什么、几轮、为什么停。**内置指令也要记**——
     // 不然"我发了「轨迹」却看不到刚才那一轮"这种事自己就会发生（它本身也是一轮）。
     const trace: TurnTrace = {
@@ -711,7 +984,8 @@ export class AssistantService {
         : mode === 'strict' ? '被屏蔽, 只剩时间与字数'
         : mode === 'open' ? '原文, 不脱敏'
         : '原文, 但电话/证件/邮箱/密钥/链接会打码'}`)
-      lines.push('在电脑上改(改完要重启助手):')
+      lines.push('下面是**用户自己在终端执行**的命令（你没有执行它们的工具，只能转述；'
+        + '**只在用户问起时才提，不要主动提议**）：')
       lines.push('weflow-cli config set assistantPrivacy balanced   # 正文出境, PII 打码')
       lines.push('weflow-cli config set assistantPrivacy open       # 全不打码')
       lines.push('weflow-cli config set assistantPrivacy strict     # 正文不出境')
@@ -788,35 +1062,110 @@ export class AssistantService {
       ...this.memory.workingWindow(userId).map(turn => ({ role: turn.role, content: turn.content })),
     ]
 
+    // 显式「记住：X」**直接落盘**，不等模型抽取（与 D-169 同族的确定性兜底）。
+    // 理由见 `explicitRememberIntent` 的注释：这是全系统最高精度的意图，交给一个会抽不出来的
+    // 模型是白送的失败——用户说了"记住"，记忆里却没有，下次照样给出错误的建议。
+    // 落盘之后**告诉模型一次**，它就不必再调 `save_memory`，也不会声称"我记下了"却什么都没写。
+    const explicitFact = explicitRememberIntent(t)
+    this.turnExplicitFact = null
+    if (explicitFact && this.memory.addFact(userId, explicitFact, { sourceQuote: t })) {
+      this.turnExplicitFact = explicitFact
+      trace.steps.push({ kind: 'note', detail: `显式记忆：直接落盘（${explicitFact.slice(0, 30)}）` })
+      privacyGate.audit('MEMORY_RULE_WRITE', explicitFact.length, 'explicit-remember')
+      messages.push({
+        role: 'system',
+        content: `（这句话里的「${explicitFact}」已经写进长期记忆了，不必再调 save_memory；`
+          + '直接确认你记下了它就行。）',
+      })
+    }
+
     let reply = ''
     let toolCalls = 0
     try {
+      toolCalls += await this.maybeLexiconRoute(userId, t, messages, trace)
       toolCalls += await this.maybeFastRoute(userId, t, messages, trace)
       const first = await this.runReactLoop(userId, messages, trace)
       reply = first.reply
       toolCalls += first.toolCalls
 
-      // 守卫：路由说「这条消息需要查本机数据」，而这一轮**一次工具都没调** —— 两者自相矛盾。
-      // 实测撞到过两次：它回"我确实调了工具查了"，而审计里 `tools=0`、没有任何 TOOL: 行。
-      // 这里不去解释原因，只把矛盾顶回去**一次**：让模型看见"你手上没有工具结果"再答。
-      // 只在路由判过"需要查本机数据"时触发（那时才有这个信号），且补问失败不许把原答复弄丢。
-      if (toolCalls === 0 && this.lastNeedsLocalData >= MIN_NEEDS_TOOL) {
+      // 守卫（D-169）：**从答复本身取证**，不再依赖判断层。
+      //
+      // 老版本只在 `lastNeedsLocalData >= MIN_NEEDS_TOOL` 时触发，而这个信号由判断层给，
+      // 判断层又只在 `assistantFastRoute=on` 时跑——默认 `off`，于是那条守卫在默认配置下
+      // **永远不会触发**。实测撞到的是最坏的一种：模型一次工具都没调，却答「已查：甲在 3 天前
+      // 发来项目文档更新，提到『等你确认』」，带着具体细节，用户没法从文字上分辨真假。
+      //
+      // 现在两个信号并列，任一成立就顶回去**一次**：
+      // ① 答复自述查过、而这一轮工具调用为 0 —— 纯字符串判定，成立即编造；
+      // ② 判断层说"要查本机数据"、而这一轮没调工具 —— 老信号，留着不冲突。
+      // 补问失败一律保留原答复（守卫是纠错，不是否决）。
+      const corpus = messages.map(m => typeof m.content === 'string' ? m.content : '').join('\n')
+      // 一次只顶回一种：先认"编造"（最严重），再认"答复没用上刚查到的内容"，最后才是老信号。
+      // 两件事都犯的时候先修编造——那一句补问里已经要求它去查、去引用。
+      let retry: { mechanism: string; reason: string; message: string } | null =
+        guardsEnabled() ? pushbackFor({ reply, toolCalls, corpus }) : null
+      // 紧接着认"编造做过某件事"：用户会照着它行事（以为档位/待办改了），代价比多一次调用大。
+      if (!retry && guardsEnabled()) {
+        retry = stateClaimPushback({ reply, toolNames: this.turnToolNames })
+      }
+      // 再认"提议做不到的事"（"要我帮你解密吗？"）：它没做也没改，但用户会点头等一个结果。
+      if (!retry && guardsEnabled()) {
+        retry = impossibleOfferPushback(reply)
+      }
+      // 破坏性请求被拒之后，不许顺手提议导出/备份（把"毁掉"变成"搬出来一份"）。
+      if (!retry && guardsEnabled()) {
+        retry = destructiveFollowUpPushback({ userText: t, reply })
+      }
+      // 最后认"给了过去时间窗却一个工具都没查"：拿前面几轮对话里的旧摘要当答案，日期还对不上。
+      if (!retry && guardsEnabled()) {
+        retry = timeWindowWithoutLookup({ userText: t, toolNames: this.turnToolNames })
+      }      if (!retry && toolCalls === 0 && this.lastNeedsLocalData >= MIN_NEEDS_TOOL) {
+        retry = {
+          mechanism: 'needs-local-data',
+          reason: '路由说需要查本机数据，但这一轮没调任何工具',
+          message: '注意：你刚才的回答没有调用任何工具，因此你手上并没有本机数据。'
+            + '这个问题需要本机的真实数据。请现在就调用合适的工具；'
+            + '若确实查不到，说明你调用了哪个工具、它返回了什么。',
+        }
+      }
+      if (!retry && guardsEnabled()) {
+        // 顺序：先"答复没用上刚查到的内容"，再"已经查到了却反问用户要参数"。
+        // 两条都是"查到了却没交出去"，前者是没带内容，后者是干脆推回去。
+        const toolText = this.turnToolText.join('\n')
+        retry = emptyTalkPushback({ reply, toolText }) ?? asksBackData({ reply, toolText })
+      }
+      if (retry) {
         privacyGate.audit('TOOL_GUARD_PUSHBACK', 0,
-          `needs_local_data=${this.lastNeedsLocalData.toFixed(2)}`)
-        appendLog('[守卫] 路由说需要查本机数据，但这一轮没调任何工具；顶回去一次')
+          `${retry.mechanism} needs_local_data=${this.lastNeedsLocalData.toFixed(2)}`)
+        appendLog(`[守卫] ${retry.reason}；顶回去一次`)
         try {
-          messages.push({
-            role: 'system',
-            content: '注意：你刚才的回答没有调用任何工具，因此你手上并没有本机数据。'
-              + '这个问题需要本机的真实数据。请现在就调用合适的工具；'
-              + '若确实查不到，说明你调用了哪个工具、它返回了什么。',
-          })
-          trace.steps.push({ kind: 'note', detail: '守卫：路由说需要本机数据而这一轮没调工具，顶回去一次' })
+          messages.push({ role: 'system', content: retry.message })
+          trace.steps.push({ kind: 'note', detail: `守卫（${retry.mechanism}）：顶回去一次` })
           const second = await this.runReactLoop(userId, messages, trace)
           reply = second.reply
           toolCalls += second.toolCalls
         } catch (e: any) {
           appendLog(`[守卫] 补问失败，保留原答复: ${e?.message ?? e}`)
+        }
+      }
+      // **确定性兜底：无条件执行**，不依赖上面是否命中 pushback。
+      //
+      // 这一段原来写在 `if (retry)` 里面，于是漏掉了一种最关键的形态：模型补问后把承诺
+      // 换了措辞（"你回复后我立即处理"），那句话**不含**"导出/收藏"这类关键词，
+      // 下一次 impossibleOffer 判 null → 整个答复被当成"没有承诺"原样放行。
+      // 教训：兜底逻辑挂在"前面那道有没有命中"下面，就等于把它的有效性交给了她要修的那件事。
+      if (guardsEnabled()) {
+        const cleaned = stripOffersAfterDestructive(t, reply)
+        if (cleaned !== reply) {
+          appendLog('[守卫] 删掉了破坏性请求之后的多余提议')
+          trace.steps.push({ kind: 'note', detail: '守卫：删掉拒绝后的多余提议' })
+          reply = cleaned
+        }
+        const cleaned2 = stripImpossibleOffers(reply)
+        if (cleaned2 !== reply) {
+          appendLog('[守卫] 删掉了做不到的提议')
+          trace.steps.push({ kind: 'note', detail: '守卫：删掉做不到的提议' })
+          reply = cleaned2
         }
       }
     } catch (e: any) {

@@ -30,8 +30,14 @@ const SESSIONS = '· 甲: 最近还好吗\n· 乙: 明天见'
 const realGet = configService.get.bind(configService)
 
 function setConfig(mode: string | undefined): void {
-  ;(configService as any).get = (key: string) =>
-    key === 'assistantFastRoute' ? (mode ?? '') : realGet(key)
+  // **词法快路径（D-168）在这里一律关掉**：它与 `assistantFastRoute` 是两台独立的开关，
+  // 默认 on。这个文件测的是判断层那台开关的行为（含"默认关闭 ⇒ 与今天逐字段一致"），
+  // 不关掉词法就会出现"两边都派发了一次"的噪声，那时失败的是断言，不是代码。
+  ;(configService as any).get = (key: string) => {
+    if (key === 'assistantFastRoute') return mode ?? ''
+    if (key === 'assistantLexiconRoute') return 'off'
+    return realGet(key)
+  }
 }
 
 function audit(): string {
@@ -159,7 +165,10 @@ test('路由错：模型仍能在循环里再要一个工具，不会被错结�
   const { decide } = deciderPicking(0.9, 'get_stats', 0.9)
   const script = [
     { choices: [{ message: { content: '', tool_calls: [{ id: 'c2', type: 'function', function: { name: 'list_sessions', arguments: '{}' } }] } }] },
-    { choices: [{ message: { content: '这才是对的答复' } }] },
+    // 答复**带上了查到的内容**（甲/乙）：空话守卫（D-174）会在"答复与工具结果零重合"时
+    // 多顶一次，而这里要测的是"错路由之后循环没被卡死"，不该被那条守卫搅进第三轮。
+    // 第一版这条 fixture 写的是「这才是对的答复」——那是占位句，不是真实答复。
+    { choices: [{ message: { content: '甲和乙最近还在聊' } }] },
   ]
 
   const result = await ask('我有什么事要做', { mode: 'on', decide, script })
@@ -167,7 +176,7 @@ test('路由错：模型仍能在循环里再要一个工具，不会被错结�
   assert.equal(result.rounds.length, 2)
   assert.equal(toolMessages(result.rounds[0]).length, 1, '错的那一个先派发了')
   assert.equal(toolMessages(result.rounds[1]).length, 2, '模型自己又要了一个，循环没有被卡住')
-  assert.equal(result.reply, '这才是对的答复')
+  assert.equal(result.reply, '甲和乙最近还在聊')
 })
 
 // ------------------------------------------------------------------ 路由不确定

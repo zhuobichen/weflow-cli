@@ -257,9 +257,25 @@ test('save_memory 工具真的写进长期记忆', async () => {
     answer('记住了'),
   ])
   const user = newUser()
-  await h.svc.handleMessage(user, '记住我的猫叫豆豆', 'text')
+  // **不是**祈使句：没有「记住：」这条规则可走，工具仍然唯一那条通路
+  await h.svc.handleMessage(user, '我喜欢猫', 'text')
 
   assert.deepEqual(h.svc.memory.facts(user).map((f: any) => f.content), ['用户的猫叫豆豆'])
+})
+
+test('「记住：X」在进模型之前就落盘，同轮的 save_memory 不再写第二遍', async () => {
+  // 为什么不让两条都写：记忆按**条数**占预算、按条数注入提示，两条近义事实（用户原话一条、
+  // 模型改写一条）会挤掉真正有用的那条。存用户原话也更好溯源（sourceQuote 就是那句原话）。
+  const h = harness([
+    toolCall('save_memory', { content: '用户的猫叫豆豆' }),
+    answer('记住了'),
+  ])
+  const user = newUser()
+  await h.svc.handleMessage(user, '记住我的猫叫豆豆', 'text')
+
+  const facts = h.svc.memory.facts(user).map((f: any) => f.content)
+  assert.deepEqual(facts, ['我的猫叫豆豆'], '存的是用户原话，不是模型改写的那条')
+  assert.equal(facts.length, 1, '一轮里只该多出一条事实')
 })
 
 // ------------------------------------------------------- 隐私状态写进系统提示
@@ -273,14 +289,19 @@ function withPrivacy(mode: string, run: () => void): void {
   try { run() } finally { ;(configService as any).get = realGet }
 }
 
-test('strict 档：提示里说明正文会被屏蔽，并给出全部三条路', () => {
+test('strict 档：说明正文被屏蔽，且**不主动提议改档位**', () => {
+  // 这条曾经断言"给出全部三条路"（①改 balanced ②本地模型 ③保持现状）。
+  // 2026-11-20 两次实测说明那种写法有两个害处，所以断言反过来了：
+  //  ① 给出菜单 → 模型把"①改 balanced"当成自己能做，回"现在模式已切换为 balanced"（D-176）；
+  //  ② 改成老实之后仍每次推销"要我帮你改模式吗？"，用户原话是"默认不要设什么balanced模式了"。
+  // 现在：如实说被屏蔽 + 明确不许主动提议 + 只在用户问起时给一句配置项与命令。
   withPrivacy('strict', () => {
     const prompt: string = harness([]).svc.buildSystemPrompt('u-privacy')
     assert.match(prompt, /strict 模式/)
     assert.match(prompt, /严格模式屏蔽/)
-    assert.match(prompt, /balanced/)
-    assert.match(prompt, /ollama/)
-    assert.match(prompt, /保持现状/)
+    assert.match(prompt, /不要主动提议改档位/)
+    assert.match(prompt, /assistantPrivacy/, '用户主动问起时要说得出配置项名')
+    assert.doesNotMatch(prompt, /保持现状/, '不再摆三选一菜单')
   })
 })
 

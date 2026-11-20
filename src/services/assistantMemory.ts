@@ -46,6 +46,8 @@ export const WORKING_MIN_TURNS = 6
 export const WORKING_MAX = 16
 export const SUMMARY_MAX = 800
 export const FACTS_MAX = 30
+/** 空关键词检索（"你记得我什么"）最多列出多少条：给多了会把窗口挤满，给少了像没记住 */
+export const MEMORY_OVERVIEW_MAX = 8
 export const FACT_EXTRACT_EVERY = 6
 /** 每次注入事实的字符预算：30 条 × 72 字 ≈ 2.1KB 全塞进去是纯噪声，按相关度取一部分 */
 export const FACTS_INJECT_BUDGET_CHARS = 1200
@@ -100,6 +102,36 @@ export function normalizeFact(text: string): string {
     .replace(/\s+/g, '')
     .replace(/[，。、；：！？,.;:!?（）()【】[\]{}"'「」『』·—～~]/g, '')
     .toLowerCase()
+}
+
+/**
+ * 用户**显式**说"记住 X"时，X 是什么。没有这种指令就返回 null。
+ *
+ * ## 为什么这条不走模型
+ *
+ * 记忆的常规通路是"这一轮结束后让模型抽取事实"。抽取是概率的：便宜模型经常抽不出来，
+ * 于是出现最没道理的一种失败——用户明明说了「记住：我吃花生会过敏」，记忆里却没有，
+ * 下次问"晚上点什么外卖"它照样推荐带花生的菜。**这是全系统最高精度的意图**（用户自己用了
+ * 祈使句"记住"），把它交给一个会抽不出来的模型是白送的失败。
+ *
+ * 所以这里只做一件事：认出祈使句，把后面那半句原样落盘。**判断"值不值得记"仍然归模型**
+ * （抽取那条路照旧跑，去重也是同一套 `rememberFact`），这里只补上"确定该记"的那一类。
+ *
+ * 三条边界：**疑问句不算**（"记住我说的话了吗？"）、**太短或太长不算**（两个字不像事实，
+ * 一百多字多半是一段话而不是一条记忆）、**只有祈使动词没有内容不算**。
+ */
+const REMEMBER_INTENT = /^(?:请|帮我|麻烦|顺便|对了)?\s*(?:记住|记下来|记一下|记下|记一笔|记得)\s*(?:了)?\s*[:：,，]?\s*(.+)$/s
+
+export function explicitRememberIntent(text: string): string | null {
+  const raw = String(text ?? '').trim()
+  if (!raw) return null
+  // 问句不是指令（"你还记住我吗？"）
+  if (/[？?]\s*$/.test(raw)) return null
+  const match = raw.match(REMEMBER_INTENT)
+  if (!match) return null
+  const fact = match[1].trim().replace(/^[:：,，\s]+/, '').replace(/[。.!！]+$/, '').trim()
+  if (fact.length < 2 || fact.length > 120) return null
+  return fact
 }
 
 export class AssistantMemory {
@@ -370,6 +402,9 @@ export class AssistantMemory {
       const m = raw.match(/\[[\s\S]*\]/)
       if (!m) return 0
       const items: unknown[] = JSON.parse(m[0])
+      // **对账闸门**：两道一起过——①不是"没有数据"的结论；②能在用户原话里找到依据。
+      // （提示词写了"只提取用户说过的"，但实测便宜模型照样越界，所以要有代码兜住。）
+      const userText = s.working.filter(t => t.role === 'user').map(t => t.content).join('\n')
       let added = 0
       for (const item of items) {
         // 模型两种形状都见过：新提示词给对象 {k,t}，旧记忆/别的模型可能仍给字符串
@@ -379,6 +414,8 @@ export class AssistantMemory {
         if (!text.trim()) continue
         const rawKind = (item && typeof item === 'object') ? String((item as any).k ?? '') : ''
         const kind: FactKind = rawKind === 'rule' || rawKind === 'lesson' ? rawKind : 'profile'
+        if (looksLikeNegativeFinding(text)) continue
+        if (!userSaidIt(text, userText)) continue
         if (this.rememberFact(s, text.trim().slice(0, 60), { sourceTurn, sourceQuote }, kind)) added++
       }
       if (s.facts.length > FACTS_MAX) s.facts = s.facts.slice(-FACTS_MAX)
@@ -391,8 +428,23 @@ export class AssistantMemory {
   /** L3 检索: 关键词命中；命中即记 `usedAt`（谁被用过是排序与"陈旧"判断的依据） */
   searchFacts(userId: string, keyword: string): Fact[] {
     const kw = keyword.trim()
-    if (!kw) return []
     const s = this.state(userId)
+    // **空关键词 = "把你记得的事列出来"**。
+    //
+    // 这里原来是 `if (!kw) return []`，而 `assistantIntent.ts` 的 `memory_overview` 规则
+    // 注释写着"零参数（工具拿空关键词就是全列出来）"并照着它派发——于是「你还记得我让你
+    // 记住的事吗」每次都拿到空结果，回答"没查到"，而记忆里明明存着那条（2026-11-20 实测：
+    // 同一分钟内先说"已记下：下周三要交季度报告"，再问就说没记下）。
+    // 注释与实现不一致时，**改实现**：空关键词列出最近的若干条，这才是那条路由的本意。
+    if (!kw) {
+      const recent = s.facts.slice(-MEMORY_OVERVIEW_MAX).reverse()
+      if (recent.length) {
+        const now = Date.now()
+        for (const f of recent) f.usedAt = now
+        this.dirtyUsers.add(userId)
+      }
+      return recent
+    }
     const hits = s.facts.filter(f =>
       f.content.includes(kw) || kw.split(/\s+/).some(w => w.length >= 2 && f.content.includes(w)))
     if (hits.length) {
@@ -502,9 +554,50 @@ rule / lesson 必须能指向一句用户原话；**找不到原话就不要提*
 ${transcript}`
 }
 
+/**
+ * 这条"事实"其实是"没有数据"的结论吗？
+ *
+ * 2026-11-20 实测：抽取把**一次没查到**写成了关于用户的事实，最典型的两条是
+ * 「不要查今天下午发的消息」「和张三三最近没聊到具体内容」——它们会一直注入系统提示，
+ * 比不记更糟（下次它会以为自己知道"张三三没聊到内容"）。
+ *
+ * 刻意只挡**否定式查询结论**，不挡"我不能吃辣"这种用户本人的否定事实，也不做"必须有
+ * 字面依据"的强校验：后者会挡掉正常抽取（实测把第 1 轮说过的「我喜欢喝茶」全挡了，
+ * 因为抽取窗口只回看最后 6 轮）。
+ */
+const NEGATIVE_FINDING = /查不到|没查到|未查到|没找到|未找到|没有记录|没有查到|没聊到|未收录|没收录|不存在/
+
+function looksLikeNegativeFinding(content: string): boolean {
+  const t = normalizeFact(content)
+  // "不要查 / 别查"这类把助手的失败当规则的，单独挡
+  if (/不要(再)?查|别(再)?查/.test(t)) return true
+  return NEGATIVE_FINDING.test(t)
+}
+
+/**
+ * 这条"事实"能在**用户自己的原话**里找到依据吗？
+ *
+ * 这是抽取环节最重要的一道闸门：模型会把自己的**结论、推测、能力**当成用户事实写进去。
+ * 2026-11-20 一天里实测到的脏记忆：
+ *   「和张三三最近没聊到具体内容」        ← 一次空查询的结果
+ *   「强彩2027校招大概率会失败」          ← 纯推测
+ *   「可以帮你整理朋友圈总结」            ← 助手自己的能力
+ *   「偏好朋友圈发吃喝、促销类内容」      ← 从朋友圈内容推出来的"偏好"
+ * 用户一个字都没说过这些，它们却会一直注入系统提示——比不记更糟。
+ *
+ * 判据：整串包含（模型常做无损缩写），或二元组重合 ≥ 0.5。
+ * **对照范围是整个工作窗口的用户发言**，不只是这次待抽取的 6 轮。
+ */
+function userSaidIt(content: string, userText: string): boolean {
+  const f = normalizeFact(content)
+  const u = normalizeFact(userText)
+  if (!f || !u) return false
+  if (u.includes(f)) return true
+  return overlap(bigrams(content), bigrams(userText)) >= 0.5
+}
+
 /** 字符二元组集合——中文没有词边界，用二元组算重合比"包含"稳，也不用引模型 */
-function bigrams(text: string): Set<string> {
-  const norm = normalizeFact(text)
+function bigrams(text: string): Set<string> {  const norm = normalizeFact(text)
   const out = new Set<string>()
   for (let i = 0; i + 1 < norm.length; i++) out.add(norm.slice(i, i + 2))
   return out

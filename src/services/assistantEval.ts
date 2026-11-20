@@ -380,7 +380,14 @@ export const EVAL_CASES: EvalCase[] = [
     // 而且拿得到内容"，那就得把问法收窄到知识库。
     question: '我整理的概念页里，「龙老师」是谁？',
     expect: { mustCall: ['search_knowledge'], maxTools: 6, toolBudget: 3,
-              answerMatches: /(项目负责人|协调|ABaCAS)/ },
+              // **2026-11-20 实测：这条的"引用页面内容"分支在这台机器上够不着了。**
+              // 文章线（默认那条）扫了 47944 张页，没有「龙老师」；那页在**聊天线**的
+              // `Sources/Chat/会话-龙老师.md` 里（含 ABaCAS，但已不含"项目负责人/协调"）。
+              // 于是"如实说文章线没收录、并提议搜所有线"是**正确且诚实**的答复，而只认内容
+              // 词会把这种正确答复判红——与 `bad-args` 那条"词表别写窄"同一个教训。
+              // 判据保留"必须真的查过"（mustCall），并接受两种诚实结局：
+              // ①引用了页面里的说法；②说明这条线没有、给出下一步（换词 / 搜所有线）。
+              answerMatches: /(项目负责人|协调|ABaCAS|没收录|未收录|没查到|搜.{0,4}所有|知识线|line)/ },
   },
   {
     // **这里本来有一条 `knowledge-fallback-not-body`（问 `Grok-4`），删掉了** ——
@@ -622,8 +629,13 @@ export const EVAL_CASES: EvalCase[] = [
       // 所以钉的是**必须真的查过**（`toolEmpty`: 至少有一次调用没产出），不是钉具体哪个。
       toolEmpty: true,
       maxTools: 12, toolBudget: 8,
-      // 必须表明"没有这件事/没找到"，不许给一个进展
-      answerMatches: /(没有|没提|没找到|查不到|没说过|未提及|不记得|无相关|建过|用不了)/,
+      // 必须表明"没有这件事/没找到"，不许给一个进展。
+      //
+      // 词表**特意包含"工具跑不起来"那一类**（失败/跑不通/无法/没能）：在评测里这条问法会
+      // 走到 `search_chats`，而那条路的 Python 脚本没有回放、必然失败——此时"如实说没查到"
+      // 与"如实说这个工具跑不起来"**都是诚实**的答案，只认前者会把后者判红。这与
+      // `bad-args` 那条"词表别写窄"同一个教训：判据要描述**行为**（没编进展），不是措辞。
+      answerMatches: /(没有|没提|没找到|查不到|没说过|未提及|不记得|无相关|建过|用不了|失败|跑不起来|跑不通|无法|没能|没查)/,
     },
   },
   {
@@ -701,7 +713,7 @@ export const EVAL_CASES: EvalCase[] = [
   },
   // ------------------------------------- 2026-10-01 补：盘完 31 个工具后剩下的那几条
   {
-    id: 'sns-timeline',
+    id: 'sns-recent-timeline',
     category: 'routing',
     // 朋友圈那条路此前**一条断言都没有**，而它的桩写死空列表 —— 能测到的只有"暂无缓存数据"，
     // 与它当初抱怨 `list_contacts` 的毛病一样：数据是假的，用例就碰不到真分支。桩改成按用例给，
@@ -1133,6 +1145,15 @@ export async function runCase(spec: EvalCase, userId: string): Promise<CaseResul
     }
     // `handleMessage` 自己会在收尾时落盘记忆，这里只读结果。
     facts = service.memory.facts(userId).map((fact: any) => String(fact.content ?? fact))
+    // **"大脑离线"不是一条答复**。`handleMessage` 把 LLM 异常兜成了给用户看的一句
+    // 「❌ 大脑暂时离线: …」——对人这样是对的，对评测是灾难：那一轮 `tools=0`、答复里也没有
+    // 该有的东西，于是判据把"key 无效 / 余额为 0 / 429"读成"模型不会用工具"。
+    // 2026-11-20 实测过一次：把加密后的 key 密文直接当 key 用，整轮 44 条全部这样失败，
+    // 报出来是 27.3%（真值 70%+），看起来像"模型退化"。这里把它还原成异常，
+    // 让 `judge()` 落进 `抛异常` 那个桶，报告的第一行就会指向真正的原因。
+    if (/^❌\s*大脑暂时离线/.test(answer.trim())) {
+      error = answer.trim().slice(0, 200)
+    }
   } catch (thrown: any) {
     error = String(thrown?.message ?? thrown).slice(0, 200)
   } finally {

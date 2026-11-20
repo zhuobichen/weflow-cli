@@ -111,10 +111,10 @@ test('facts are extracted only every N user turns', async () => {
   const llm = llmReturning('["喜欢喝茶"]')
 
   for (let turn = 1; turn < FACT_EVERY; turn++) {
-    memory.addTurn(user, 'user', `第 ${turn} 句`)
+    memory.addTurn(user, 'user', `第 ${turn} 句：我喜欢喝茶`)
     assert.equal(await memory.extractFactsIfNeeded(user, llm), 0, `第 ${turn} 轮不该提取`)
   }
-  memory.addTurn(user, 'user', `第 ${FACT_EVERY} 句`)
+  memory.addTurn(user, 'user', `第 ${FACT_EVERY} 句：我喜欢喝茶`)
   assert.equal(await memory.extractFactsIfNeeded(user, llm), 1, '到点该提取了')
   assert.equal(memory.facts(user)[0].content, '喜欢喝茶')
 })
@@ -129,7 +129,7 @@ test('assistant turns do not advance the fact-extraction cadence', async () => {
 test('fact extraction finds the JSON array inside noisy model output', async () => {
   const memory = new AssistantMemory()
   const user = newUser()
-  for (let i = 0; i < FACT_EVERY; i++) memory.addTurn(user, 'user', '随便说点')
+  for (let i = 0; i < FACT_EVERY; i++) memory.addTurn(user, 'user', '随便说点：项目叫 weflow-cli，周末常去爬山')
 
   const noisy = '好的，我提取如下：\n["项目叫 weflow-cli", "周末常去爬山"]\n以上。'
   assert.equal(await memory.extractFactsIfNeeded(user, llmReturning(noisy)), 2)
@@ -142,7 +142,7 @@ test('a more specific fact replaces the general one instead of piling up', async
   const memory = new AssistantMemory()
   const user = newUser()
   memory.addFact(user, '项目叫 weflow-cli')
-  for (let i = 0; i < FACT_EVERY; i++) memory.addTurn(user, 'user', '随便说点')
+  for (let i = 0; i < FACT_EVERY; i++) memory.addTurn(user, 'user', '随便说点：项目叫 weflow-cli 并开源')
 
   assert.equal(await memory.extractFactsIfNeeded(user, llmReturning('["项目叫 weflow-cli 并开源"]')), 1)
   assert.deepEqual(memory.facts(user).map(f => f.content), ['项目叫 weflow-cli 并开源'])
@@ -159,7 +159,7 @@ test('a general fact does not replace a more specific one', () => {
 test('a failed extraction adds nothing and does not throw', async () => {
   const memory = new AssistantMemory()
   const user = newUser()
-  for (let i = 0; i < FACT_EVERY; i++) memory.addTurn(user, 'user', '随便说点')
+  for (let i = 0; i < FACT_EVERY; i++) memory.addTurn(user, 'user', '随便说点：我喜欢喝茶，周末去爬山，项目叫 weflow-cli')
 
   const boom = async () => { throw new Error('LLM 挂了') }
   assert.equal(await memory.extractFactsIfNeeded(user, boom), 0)
@@ -169,7 +169,7 @@ test('a failed extraction adds nothing and does not throw', async () => {
 test('non-string entries in the model output are ignored', async () => {
   const memory = new AssistantMemory()
   const user = newUser()
-  for (let i = 0; i < FACT_EVERY; i++) memory.addTurn(user, 'user', '随便说点')
+  for (let i = 0; i < FACT_EVERY; i++) memory.addTurn(user, 'user', '随便说点：我喜欢喝茶，周末去爬山，项目叫 weflow-cli')
 
   assert.equal(await memory.extractFactsIfNeeded(
     user, llmReturning('["喜欢喝茶", 42, "", null, "周末去爬山"]')), 2)
@@ -223,7 +223,9 @@ test('searchFacts matches the keyword and any word of a multi-word query', () =>
   assert.equal(memory.searchFacts(user, '喝茶').length, 1)
   assert.equal(memory.searchFacts(user, 'weflow 部署').length, 1, '按词命中')
   assert.equal(memory.searchFacts(user, '不存在的词').length, 0)
-  assert.deepEqual(memory.searchFacts(user, ''), [], '空关键词不该把全部事实倒出来')
+  // 旧断言是 `deepEqual(searchFacts(user, ''), [])`（空关键词不倒事实）。
+  // 2026-11-20 改了：`assistantIntent` 的 memory_overview 规则按"空关键词 = 全列出来"派发，
+  // 两处不一致的结果是"已记下"之后又说"没查到"。行为定义在下面那条专门的用例里。
 })
 
 test('reset clears that user and leaves the others alone', () => {
@@ -525,3 +527,48 @@ test('旧记忆里没有 kind 字段也不影响注入（按 profile 处理）',
   assert.equal(selected.length, 1)
   assert.equal(selected[0].kind, undefined, '不就地改写旧数据，只按缺省语义处理')
 })
+
+test('空关键词要列出来，不是返回空', () => {
+  // 2026-11-20 实测：同一分钟内先说"已记下：下周三要交季度报告"，再问"你还记得我让你记住的
+  // 事吗"就答"没查到"——因为 searchFacts('') 直接 return []，而 assistantIntent 的
+  // memory_overview 规则正是按"空关键词 = 全列出来"派发的。注释与实现不一致时改实现。
+  const memory = new AssistantMemory()
+  const user = 'u-overview-' + Date.now()
+  memory.addFact(user, '下周三要交季度报告')
+  memory.addFact(user, '猫叫豆豆')
+
+  const all = memory.searchFacts(user, '')
+  assert.equal(all.length, 2, '空关键词要把记得的事列出来')
+  assert.ok(all.some((f) => f.content.includes('季度报告')), '刚记的那条必须在内')
+
+  // 关键词检索的行为保持不变
+  assert.equal(memory.searchFacts(user, '豆豆').length, 1)
+  assert.equal(memory.searchFacts(user, '不存在的词').length, 0)
+})
+
+test('抽取对账：把"没查到"写成事实的，一律丢掉', async () => {
+  // 2026-11-20 实测：抽取把助手自己的结论写成了用户事实，最脏的两条是
+  // 「不要查今天下午发的消息」「和张三三最近没聊到具体内容」——都是把一次"没查到"记成了
+  // 关于用户的事，之后会一直注入系统提示（下次它会以为自己知道"张三三没聊到内容"）。
+  // 刻意只挡**否定式查询结论**，用户本人的否定事实（"我们不能吃辣"）不算。
+  const memory = new AssistantMemory()
+  const user = 'u-basis-' + Date.now()
+  for (let i = 0; i < FACT_EVERY; i += 1) {
+    memory.addTurn(user, 'user', i === 0 ? '记住：我下周三要交季度报告；另外我们不能吃辣' : '嗯嗯')
+    memory.addTurn(user, 'assistant', '好的')
+  }
+  const fakeLLM = async () => JSON.stringify([
+    { k: 'profile', t: '下周三要交季度报告' },
+    { k: 'profile', t: '我们不能吃辣' },
+    { k: 'lesson', t: '不要查今天下午发的消息' },
+    { k: 'profile', t: '和张三三最近没聊到具体内容' },
+  ])
+  const added = await memory.extractFactsIfNeeded(user, fakeLLM)
+  const facts = memory.facts(user).map((f) => f.content)
+  assert.ok(facts.some((t) => t.includes('季度报告')), '正常事实要留下')
+  assert.ok(facts.some((t) => t.includes('不能吃辣')), '用户本人的否定事实不算"没查到"')
+  assert.ok(!facts.some((t) => t.includes('不要查')), '失败查询不许变成规则')
+  assert.ok(!facts.some((t) => t.includes('没聊到')), '"没聊到"不许变成事实')
+  assert.equal(added, 2, '四条里该只留下两条')
+})
+

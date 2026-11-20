@@ -16,6 +16,7 @@ import assert from 'node:assert/strict'
 const { isSafeUrl, stripTags, extractText, extractFromChallengePage,
         availableToolDefs, unavailableToolReason, unavailableCapabilities } =
   await import('../src/services/assistantTools.js')
+const { privacyGate } = await import('../src/services/assistantPrivacy.js')
 
 test('公网 http(s) 链接放行', () => {
   assert.equal(isSafeUrl('https://mp.weixin.qq.com/s/AbC123'), true)
@@ -181,4 +182,31 @@ test('起草只要 DeepSeek 一个 key —— 判断那一步可以降级', () =
   assert.match(unavailableToolReason('draft_reply', onlyTypesafe)!, /deepseekApiKey/,
     '没有 DeepSeek 才是真跑不通')
   assert.match(unavailableToolReason('draft_reply', () => '')!, /deepseekApiKey/)
+})
+
+test('strict 模式下不摆"看图"那个工具 —— 摆了它只会白跑一次', () => {
+  // 这条规则过去不存在：工具自己会在 strict 模式里拒绝，而**"自己会拒绝"不够**——
+  // 实测（2026-11-20，千问 flash）模型照样去调它、拿回一句"图片不能出境"，
+  // 那一轮白跑，而"别调它"正是隐私那条用例判的东西。
+  const gate: any = privacyGate
+  const originalMode = gate.mode
+  const originalLocal = gate.isLocalInference
+  const set = (mode: string, local: boolean) => {
+    gate.mode = () => mode
+    gate.isLocalInference = () => local
+  }
+  try {
+    set('strict', false)
+    assert.match(unavailableToolReason('look_at_image')!, /strict/)
+    assert.ok(!availableToolDefs().some(def => def.function.name === 'look_at_image'),
+      'strict + 云端：工具表里不该有它')
+    set('balanced', false)
+    assert.equal(unavailableToolReason('look_at_image'), null, 'balanced 下它是能用的')
+    set('strict', true)
+    assert.equal(unavailableToolReason('look_at_image'), null,
+      'strict 但本地推理：图片不出机器，能看')
+  } finally {
+    gate.mode = originalMode
+    gate.isLocalInference = originalLocal
+  }
 })

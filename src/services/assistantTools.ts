@@ -750,6 +750,8 @@ export const TOOL_DEFS: ToolDef[] = [
       name: 'get_messages',
       description: '读取用户与某位联系人的聊天记录。默认给最近若干条；'
         + '问**某一天或某段时间**时给 since/until —— 不给的话久远的日子按条数是取不到的。'
+        + '**用户说"最近/这几天"就直接用默认，不要反问他要具体日期**：不给 since 就是最近若干条，'
+        + '这已经是能回答的；宁可先给这些内容再问要不要往前翻。'
         + '联系人名用会话里出现的显示名。',
       parameters: {
         type: 'object',
@@ -1331,14 +1333,31 @@ export const TOOL_REQUIREMENTS: Record<string, { key: string; why: string }> = {
 }
 
 /**
+ * **运行时**才成立的前置条件：不是"缺配置"，而是"此刻这条路上跑不了"。
+ *
+ * 目前只有一条：`look_at_image` 在 strict 模式且非本地推理时不可用——图片不出发本机，
+ * 工具自己也会拒绝。**但"自己会拒绝"不够**：实测（2026-11-20，千问 flash）模型照样去调它，
+ * 拿回一句"图片不能出境"，于是这一轮白跑一次，而隐私那条用例判的正是"别调它"。
+ * 工具越少，选择越准——这条规则与缺配置那条是同一个理由，只是信号源不同
+ * （一个是配置，一个是隐私档位），所以放在同一道门里，而不是让调用方各自判断。
+ */
+export function unavailableByRuntime(name: string): string | null {
+  if (name !== 'look_at_image') return null
+  const blocked = privacyGate.mode() === 'strict' && !privacyGate.isLocalInference()
+  return blocked ? '看图在 strict 模式下不可用（图片不出发本机）' : null
+}
+
+/**
  * 这台机器上**跑不了**的工具，不该出现在工具表里。规则本身在上面的 `TOOL_REQUIREMENTS` 里，这里只是执行它。
  *
  * 为什么按配置过滤：模型看见工具就会去试。这台机器没配 `dashscopeApiKey` 时 `search_semantic`
- * 必然失败——实测（评测的 `ambiguous-contact` 那次）模型连试两个检索工具、两个都报错，最后答复
+ * 必然失败——实测（重名联系人那一次）模型连试两个检索工具、两个都报错，最后答复
  * 里带着"两个检索工具都跑不通"。那不是助手的问题，是**我们摆了一个跑不了的工具**。工具越少，
  * 选择也越准。
  */
 export function unavailableToolReason(name: string, config: (key: any) => any = configService.get.bind(configService)): string | null {
+  const runtime = unavailableByRuntime(name)
+  if (runtime) return runtime
   const need = TOOL_REQUIREMENTS[name]
   if (!need) return null
   return String(config(need.key) || '').trim() ? null : need.why
