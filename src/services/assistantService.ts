@@ -213,6 +213,20 @@ export class AssistantService {
 
   private engineConfig(): { url: string; model: string; key: string | null; local: boolean } {
     const engine = String(configService.get('aiEngine') || 'deepseek')
+    // **环境变量优先**，与 `scripts/_utils.py` 的 `_custom_endpoint()` 同一个口径
+    // （`WEFLOW_AI_BASE_URL` / `WEFLOW_AI_MODEL`）。只读配置的话，"临时换成一个本地模型
+    // 跑一轮"就必须改用户的持久配置——而那会把日报摘要、概念生成等所有走 AI 的功能一起改掉。
+    const envBase = (process.env.WEFLOW_AI_BASE_URL ?? '').trim().replace(/\/+$/, '')
+    if (envBase) {
+      const model = (process.env.WEFLOW_AI_MODEL ?? '').trim() || 'deepseek-chat'
+      const isLocal = /127\.0\.0\.1|localhost/.test(envBase)
+      return {
+        url: envBase,
+        model,
+        key: (process.env.WEFLOW_AI_KEY ?? '').trim() || 'local',
+        local: isLocal,
+      }
+    }
     if (engine === 'ollama' || engine === 'lmstudio') {
       const port = engine === 'lmstudio' ? 1234 : 11434
       const model = String(configService.get('localModel') || 'llama3')

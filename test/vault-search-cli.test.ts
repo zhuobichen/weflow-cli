@@ -49,7 +49,9 @@ function isSingleJson(text: string): boolean {
   }
 }
 
-test('vault search --json 被接受，且 stdout 是一整份 JSON', () => {
+// node:test 默认每条 120 秒；这条要起子进程跑 CLI（tsx 加载 + 扫库），
+// 单跑约 25 秒、三条合计 76 秒，全量并发下会顶到那个上限。显式抬到 240 秒。
+test('vault search --json 被接受，且 stdout 是一整份 JSON', { timeout: 240_000 }, () => {
   const r = runVaultSearch(['x', '--json'])
   // 先分清"没跑完"与"输出变了"：超时（signal=SIGTERM）会让 stdout 为空，
   // 而下面那条断言会把它报成"输出不是 JSON"——诊断又指向错误方向。
@@ -64,7 +66,9 @@ test('vault search --json 被接受，且 stdout 是一整份 JSON', () => {
   assert.ok(Array.isArray(body.results), 'JSON 里应有 results 数组')
 })
 
-test('vault search 默认是人类可读，不是 JSON', () => {
+// node:test 默认每条 120 秒；这条要起子进程跑 CLI（tsx 加载 + 扫库），
+// 单跑约 25 秒、三条合计 76 秒，全量并发下会顶到那个上限。显式抬到 240 秒。
+test('vault search 默认是人类可读，不是 JSON', { timeout: 240_000 }, () => {
   const r = runVaultSearch(['x'])
   // 先分清"没跑起来"与"跑起来但输出变了"。2026-10-12 实测过前者：机器休眠打断那次跑，子进程什么都没回，
   // 而下一条断言把空 stdout 报成了"脚本的默认输出被改了" —— 诊断指向了错误的方向（单独重跑即通过）。
@@ -77,7 +81,9 @@ test('vault search 默认是人类可读，不是 JSON', () => {
   assert.match(r.stdout, /找到/, '脚本人类模式那句"找到 N 条"不见了（脚本的默认输出被改了？）')
 })
 
-test('vault search 的校验分支认 --json：JSON 模式下 stdout 仍是一整份 JSON', () => {
+// node:test 默认每条 120 秒；这条要起子进程跑 CLI（tsx 加载 + 扫库），
+// 单跑约 25 秒、三条合计 76 秒，全量并发下会顶到那个上限。显式抬到 240 秒。
+test('vault search 的校验分支认 --json：JSON 模式下 stdout 仍是一整份 JSON', { timeout: 240_000 }, () => {
   const r = runVaultSearch(['x', '--json', '--type', 'bogus'])
   assert.equal(r.status, 1, '不合法的 --type 应当退出 1')
   assert.ok(isSingleJson(r.stdout),
