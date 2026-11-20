@@ -2530,6 +2530,12 @@ export async function executeTool(name: string, args: Record<string, any>, ctx: 
     }
   } catch (error) {
     if (error instanceof ToolInputError) return `(参数错误: ${error.message})`
-    return '(工具执行失败，请检查本地配置或运行状态)'
+    // **不要把异常信息整个吞掉。** 系统提示词要求"工具失败时只许转述工具给出的原因，
+    // 工具没写原因就说『工具没给出原因』"——只回一句"工具执行失败，请检查本地配置"
+    // 等于每次崩溃都让模型走到那个分支，用户看到的是"工具没给出原因"，而真正的原因
+    // （数据库没连上 / 超时 / 缺依赖）就在手里的这个异常里躺着。
+    // 走 `fail()` 是为了复用同一套脱敏（`privacyGate.redact`）：异常里可能带路径、名字。
+    const message = error instanceof Error ? error.message : String(error)
+    return fail(`${name} 执行失败`, { error: message })
   }
 }

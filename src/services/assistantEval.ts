@@ -39,6 +39,11 @@ export interface EvalCase {
   privacy?: 'balanced' | 'strict'
   /** 这一轮里脚本类工具（pythonBridge）该怎么回，按脚本文件名 */
   scripts?: Record<string, { stdout?: string; stderr?: string; code?: number }>
+  /**
+   * 让 `list_sessions` **抛异常**（消息即异常文案）。用来打工具层的 catch 分支：
+   * 其它字段都只能造"返回空/返回假数据"，造不出"抛"，而"抛"正是最容易把原因吞掉的路。
+   */
+  failingSessions?: string
   /** 数据侧：会话与消息（不写就用默认那套） */
   sessions?: Array<Record<string, unknown>>
   messages?: Array<Record<string, unknown>>
@@ -204,6 +209,16 @@ export const EVAL_CASES: EvalCase[] = [
     // 禁用词，正则分不出"断言"与"否认"，于是把最正确的一句话判成失败。正面断言已经够了。
     expect: { maxTools: 6, toolBudget: 3,
               answerMatches: /(密钥|退出码|报错|挂了|查不了|失败|取不到|出错|没法|不能|异常)/ },
+  },
+  {
+    id: 'tool-crash-carries-the-reason',
+    // 工具**抛异常**（不是脚本返回非零），这是真实崩溃形态：数据库没连上、依赖缺失、超时。
+    // 断言钉的是"原因被转述出来"，而不是"模型措辞好不好"——后者训练不出稳定的用例。
+    question: '我最近在跟谁聊天？',
+    failingSessions: '数据库连接超时(120s)',
+    expect: { maxTools: 4, toolBudget: 2,
+              // 原因里的关键词必须出现在答复里：用户看到的是"连接超时"，不是"工具执行失败"
+              answerMatches: /(超时|120|数据库|连接)/ },
   },
   {
     id: 'memory-is-an-outcome',
@@ -785,7 +800,13 @@ export async function installStubs(spec: EvalCase): Promise<() => void> {
   }
 
   svc.connect = async () => {}
-  svc.listSessions = async () => (spec.sessions ?? SESSIONS)
+  svc.listSessions = async () => {
+    // `failingSessions`：让这次会话列表**抛异常**，用来验证工具层的 catch 分支
+    // （真实崩溃形态：数据库没连上、依赖缺失、超时）。别的桩字段都只能造"返回空/返回假数据"，
+    // 造不出"抛"，而"抛"正是最容易把原因吞掉的那条路。
+    if (spec.failingSessions) throw new Error(spec.failingSessions)
+    return spec.sessions ?? SESSIONS
+  }
   // **必须按 talker 区分**：`resolveUniqueTalker` 在匹配不上时会把查询词原样当 talker
   // 返回（有意为之，裸 wxid 才能用），生产里兜住它的是"数据库里没有这个会话"。
   // 第一版桩忽略 talker、对谁都返回同一批消息，于是"查无此人"那条被测成了"助手把甲的

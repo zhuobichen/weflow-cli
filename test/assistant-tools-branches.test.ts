@@ -505,10 +505,26 @@ test('get_stats 汇总本地数据，并同时报出知识库那一半', async (
 
 // ------------------------------------------------------------ 失败不许外抛
 
-test('工具内部抛错时返回一句可读失败，绝不把异常抛回主循环', async () => {
+test('工具内部抛错时返回可读失败，且**带上真正的原因**，绝不把异常抛回主循环', async () => {
   svc.listSessions = async () => { throw new Error('数据库炸了') }
   const out = await run('list_sessions', {})
-  assert.equal(out, '(工具执行失败，请检查本地配置或运行状态)')
+  // 断言的是"不许把异常抛出来"，这一条没变
+  assert.equal(typeof out, 'string')
+  assert.match(out, /^\(/, '失败要按仓库约定以括号起头')
+  // 而这一条变了：原来只回一句"工具执行失败，请检查本地配置或运行状态"，
+  // 系统提示词又要求"工具没给原因就说工具没给原因"——于是每次崩溃用户都只看到
+  // 那句套话，真正的原因（这里就是"数据库炸了"）被吞在这一层。
+  assert.match(out, /list_sessions/, '要说清是哪个工具失败了')
+  assert.match(out, /数据库炸了/, '原因要转述给模型，它才能决定重试还是换个问法')
+})
+
+test('失败原因走的是 privacyGate 那一条路（邮箱这类 PII 会被打码）', async () => {
+  // 注意 privacyGate 脱敏的是电话/证件/邮箱/密钥/链接，**不含文件路径**——
+  // 别拿路径当例子，那会让这条用例测的是"路径该不该脱敏"（不是它的职责）。
+  svc.listSessions = async () => { throw new Error('校验失败: 联系 someone@example.com') }
+  const out = await run('list_sessions', {})
+  assert.match(out, /^\(/, '仍以括号起头')
+  assert.doesNotMatch(out, /someone@example\.com/, '异常里的邮箱要被打码，不能原样透传给模型')
 })
 
 test('工具执行结果永远是字符串（主循环会把它塞进 messages）', async () => {

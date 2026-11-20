@@ -30,9 +30,14 @@ import { join } from 'node:path'
 import test from 'node:test'
 
 function runVaultSearch(args: string[]) {
+  // 这些用例真起一个子进程跑 CLI（要加载 tsx + 扫库），单跑约 15 秒。
+  // **不给 timeout 的话，全量 `npm test` 并行时会撞上 node:test 的 120 秒上限**，
+  // 报出来的却是"stdout 不是 JSON"——看起来像 CLI 坏了，实际只是没跑完
+  // （2026-11-20 实测：单跑 5/5 过，全量里这两条各花 121 秒后判失败）。
+  // 显式给 timeout 之后，超时会变成 `signal=SIGTERM`，指向真正的原因。
   return spawnSync(process.execPath, [
     '--import', 'tsx', join(process.cwd(), 'bin', 'weflow-cli.ts'), 'vault', 'search', ...args,
-  ], { cwd: process.cwd(), encoding: 'utf8' })
+  ], { cwd: process.cwd(), encoding: 'utf8', timeout: 180_000, maxBuffer: 64 * 1024 * 1024 })
 }
 
 function isSingleJson(text: string): boolean {
@@ -46,6 +51,11 @@ function isSingleJson(text: string): boolean {
 
 test('vault search --json 被接受，且 stdout 是一整份 JSON', () => {
   const r = runVaultSearch(['x', '--json'])
+  // 先分清"没跑完"与"输出变了"：超时（signal=SIGTERM）会让 stdout 为空，
+  // 而下面那条断言会把它报成"输出不是 JSON"——诊断又指向错误方向。
+  assert.equal(r.signal, null,
+    `子进程被信号结束了（signal=${r.signal}）；多半是并发下没跑完，`
+    + `stderr=${JSON.stringify((r.stderr || '').slice(0, 200))}`)
   assert.ok(isSingleJson(r.stdout),
     `--json 必须给出可解析的一整份 JSON；实际 stdout=${JSON.stringify(r.stdout.slice(0, 200))}`
     + `（若这里是 "unknown option"，说明这条通道又断了）`)
