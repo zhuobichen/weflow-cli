@@ -23,7 +23,25 @@ import { configService } from './configService.js'
 
 export type PrivacyMode = 'open' | 'balanced' | 'strict'
 
-const AUDIT_FILE = join(os.homedir(), '.weflow-cli', 'assistant_audit.log')
+/**
+ * 审计文件的路径。**每次调用时算，不在模块加载时定死。**
+ *
+ * 两个理由，都是踩出来的：
+ *
+ * 1. **可覆盖**：测试与评测要把它指到临时目录，否则会往真实用户的审计里写。
+ *    环境变量 `WEFLOW_AUDIT_DIR` 优先。
+ * 2. **能被 mock 家目录**：`homedir()` 在模块加载那一刻求值的话，之后无论怎么改
+ *    `HOME`/`USERPROFILE` 都无效——评测里"跑在临时家目录"就成了一句空话
+ *    （2026-11-20 实测：改完 HOME 审计仍写向真实路径）。
+ */
+function auditDir(): string {
+  const override = (process.env.WEFLOW_AUDIT_DIR ?? '').trim()
+  return override || join(os.homedir(), '.weflow-cli')
+}
+
+function auditFile(): string {
+  return join(auditDir(), 'assistant_audit.log')
+}
 
 interface Rule { re: RegExp; mask: string }
 
@@ -94,12 +112,17 @@ export class PrivacyGate {
   /** 审计日志 — 只记事件与字节量, 绝不记内容 */
   audit(event: string, bytes = 0, extra = ''): void {
     try {
-      const dir = join(os.homedir(), '.weflow-cli')
+      const dir = auditDir()
       if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 })
       const line = `[${new Date().toLocaleString('zh-CN')}] ${event}` +
         (bytes ? ` ${bytes}B` : '') + (extra ? ` ${extra}` : '')
-      appendFileSync(AUDIT_FILE, line + '\n', { encoding: 'utf8', mode: 0o600 })
+      appendFileSync(auditFile(), line + '\n', { encoding: 'utf8', mode: 0o600 })
     } catch { /* 审计失败不阻断主流程 */ }
+  }
+
+  /** 当前审计文件路径（读审计的模块要用这个，不要自己拼路径） */
+  auditFilePath(): string {
+    return auditFile()
   }
 }
 

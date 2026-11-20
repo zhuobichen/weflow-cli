@@ -58,25 +58,47 @@ export async function runEvalSuite(options: RunOptions = {}): Promise<RunOutcome
   const unavailable = (await options.precheck?.()) ?? null
   if (unavailable) return { report: null, unavailable, results: [] }
 
+  // **审计指到临时目录**，这是三件事一起解决：
+  // ① 不往真实用户的 `~/.weflow-cli/assistant_audit.log` 里写评测记录；
+  // ② 某些环境（本机沙箱实测）那个文件不可写，写作吞掉、读方恒为空 →
+  //    `mustCall` 断言全部误判成"一个工具都没调"；
+  // ③ 每次评测从零开始，不受历史审计里同名字符串的影响。
+  const path = await import('node:path')
+  const os = await import('node:os')
+  const fs = await import('node:fs')
+  const savedAuditDir = process.env.WEFLOW_AUDIT_DIR
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'weflow-eval-audit-'))
+  process.env.WEFLOW_AUDIT_DIR = tmpDir
+
   const cases = pick(options)
   const repeats = Math.max(1, options.repeats ?? 1)
   const runs: CaseRun[] = []
   const results: CaseResult[] = []
 
-  let index = 0
-  for (const spec of cases) {
-    const observations = []
-    for (let round = 0; round < repeats; round++) {
-      // 每轮一个新 userId：同一用户的长期记忆跨轮累积，第二轮起点会带着第一轮的事实，
-      // 那样"记忆"维度测的就是累积效应而不是记忆本身。
-      const userId = `eval-${spec.id}-${round}-${Date.now().toString(36)}`
-      const result = await runCase(spec, userId)
-      observations.push(result.observed)
-      results.push(result)
-      index += 1
-      options.onCaseDone?.(result, index, cases.length * repeats)
+  try {
+    let index = 0
+    for (const spec of cases) {
+      const observations = []
+      for (let round = 0; round < repeats; round++) {
+        // 每轮一个新 userId：同一用户的长期记忆跨轮累积，第二轮起点会带着第一轮的事实，
+        // 那样"记忆"维度测的就是累积效应而不是记忆本身。
+        const userId = `eval-${spec.id}-${round}-${Date.now().toString(36)}`
+        const result = await runCase(spec, userId)
+        observations.push(result.observed)
+        results.push(result)
+        index += 1
+        options.onCaseDone?.(result, index, cases.length * repeats)
+      }
+      runs.push({ caseId: spec.id, observations })
     }
-    runs.push({ caseId: spec.id, observations })
+  } finally {
+    if (savedAuditDir === undefined) delete process.env.WEFLOW_AUDIT_DIR
+    else process.env.WEFLOW_AUDIT_DIR = savedAuditDir
+    // 用 quietFs 而不是 rmSync：本机（Windows + 沙箱）下 `rmSync(dir, {recursive})`
+    // 不抛错、目录还在。评测的临时审计目录收不掉不影响结论，但"以为删了其实没删"
+    // 会让下一次跑读到上一次的记录——见 src/utils/quietFs.ts 的实测表。
+    const { removeDirQuietly } = await import('../utils/quietFs.js')
+    removeDirQuietly(tmpDir)
   }
 
   return { report: buildReport(runs), results }

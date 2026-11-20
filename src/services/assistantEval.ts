@@ -21,10 +21,31 @@ import { homedir } from 'node:os'
 import { existsSync, readFileSync, mkdirSync, writeFileSync } from 'node:fs'
 import { removeFileQuietly } from '../utils/quietFs.js'
 
-/** 与 `assistantPrivacy.ts` 里的表达式相同——审计文件是这份评测的观测口。 */
-const AUDIT_FILE = join(homedir(), '.weflow-cli', 'assistant_audit.log')
-/** 轨迹：参数（工具名之外的"怎么调的"）从这里读。与 `assistantTrace.ts` 同一个路径。 */
-const TRACE_FILE = join(homedir(), '.weflow-cli', 'assistant_trace.jsonl')
+/**
+ * 审计与轨迹的路径**不能在模块加载时定死**。
+ *
+ * 评测要把它们指到临时目录（`WEFLOW_AUDIT_DIR`），而"加载时求值"意味着那个环境变量
+ * 再也改不动它——2026-11-20 实测的正是这个：评测读的是真实家目录的审计，
+ * 而真实审计里没有这一轮的记录（沙箱还让它不可写），于是 `tools` 恒为空、
+ * 所有 `mustCall` 断言误判成"一个工具都没调"。
+ *
+ * 审计路径从 `privacyGate.auditFilePath()` 取，与**写入方同一个来源**——
+ * 两份路径各算各的，迟早对不上（这次就对不上）。
+ */
+function auditPath(): string {
+  const override = (process.env.WEFLOW_AUDIT_DIR ?? '').trim()
+  return override
+    ? join(override, 'assistant_audit.log')
+    : join(homedir(), '.weflow-cli', 'assistant_audit.log')
+}
+
+/** 轨迹：参数（工具名之外的"怎么调的"）从这里读。与 `assistantTrace.ts` 同一个口径。 */
+function tracePath(): string {
+  const override = (process.env.WEFLOW_AUDIT_DIR ?? '').trim()
+  return override
+    ? join(override, 'assistant_trace.jsonl')
+    : join(homedir(), '.weflow-cli', 'assistant_trace.jsonl')
+}
 
 /**
  * 评测维度。**每一条用例必须落进其中一个**——`test/assistant-eval.test.ts` 会把
@@ -822,8 +843,8 @@ export function summarize(results: CaseResult[]): Report {
 
 /** 从审计文件里读本轮的工具调用与模型往返。评测不改生产代码，观测就走已有的审计口。 */
 export function readAuditSince(offset: number): { tools: string[]; cloudCalls: number } {
-  if (!existsSync(AUDIT_FILE)) return { tools: [], cloudCalls: 0 }
-  const tail = readFileSync(AUDIT_FILE, 'utf8').slice(offset)
+  if (!existsSync(auditPath())) return { tools: [], cloudCalls: 0 }
+  const tail = readFileSync(auditPath(), 'utf8').slice(offset)
   const tools: string[] = []
   let cloudCalls = 0
   for (const line of tail.split('\n')) {
@@ -842,7 +863,7 @@ export function readAuditSince(offset: number): { tools: string[]; cloudCalls: n
 /** 最后一轮每次工具调用的名字与产出。与 `readLastTraceProduced` 同源，多了名字。 */
 export function readLastTraceSteps(): Array<{ name: string; produced: boolean }> {
   try {
-    const lines = readFileSync(TRACE_FILE, 'utf8').split('\n').filter(Boolean)
+    const lines = readFileSync(tracePath(), 'utf8').split('\n').filter(Boolean)
     const last = JSON.parse(lines[lines.length - 1])
     return (last.steps ?? []).filter((s: any) => s.kind === 'tool')
       .map((s: any) => ({ name: String(s.name ?? ''), produced: Boolean(s.produced) }))
@@ -852,7 +873,7 @@ export function readLastTraceSteps(): Array<{ name: string; produced: boolean }>
 }
 export function readLastTraceProduced(): boolean[] {
   try {
-    const lines = readFileSync(TRACE_FILE, 'utf8').split('\n').filter(Boolean)
+    const lines = readFileSync(tracePath(), 'utf8').split('\n').filter(Boolean)
     const last = JSON.parse(lines[lines.length - 1])
     return (last.steps ?? []).filter((s: any) => s.kind === 'tool').map((s: any) => Boolean(s.produced))
   } catch {
@@ -863,7 +884,7 @@ export function readLastTraceProduced(): boolean[] {
 /** 最后一轮里每次工具调用的**参数摘要**（与 `readLastTraceProduced` 同源，同一个记录）。 */
 export function readLastTraceArgs(): string[] {
   try {
-    const lines = readFileSync(TRACE_FILE, 'utf8').split('\n').filter(Boolean)
+    const lines = readFileSync(tracePath(), 'utf8').split('\n').filter(Boolean)
     const last = JSON.parse(lines[lines.length - 1])
     return (last.steps ?? []).filter((s: any) => s.kind === 'tool').map((s: any) => String(s.args ?? ''))
   } catch {
@@ -872,7 +893,7 @@ export function readLastTraceArgs(): string[] {
 }
 
 export function auditSize(): number {
-  return existsSync(AUDIT_FILE) ? readFileSync(AUDIT_FILE, 'utf8').length : 0
+  return existsSync(auditPath()) ? readFileSync(auditPath(), 'utf8').length : 0
 }
 
 /**

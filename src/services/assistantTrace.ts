@@ -24,7 +24,21 @@ import { join } from 'node:path'
 import { homedir } from 'node:os'
 import { privacyGate } from './assistantPrivacy.js'
 
-const TRACE_FILE = join(homedir(), '.weflow-cli', 'assistant_trace.jsonl')
+/**
+ * 轨迹文件路径。**每次用时算，不在模块加载时定死**——与 `assistantPrivacy` 的审计同理：
+ * 评测要把它指到临时目录（`WEFLOW_AUDIT_DIR`），而"加载时求值"让那个环境变量再也改不动它。
+ * 2026-11-20 实测的后果：评测读不到这一轮的轨迹，于是 `argsMatch`（"带 since 调了没"这类
+ * 参数断言）全部失败，报出来像"模型没传参数"，其实是读错了文件。
+ *
+ * 导出名保持 `traceFile`（bin 与测试都在用），**不要**再定义一个同名的转发函数——
+ * 那会变成自己调自己（试过一次，TS 报 duplicate implementation）。
+ */
+export function traceFile(): string {
+  const override = (process.env.WEFLOW_AUDIT_DIR ?? '').trim()
+  return override
+    ? join(override, 'assistant_trace.jsonl')
+    : join(homedir(), '.weflow-cli', 'assistant_trace.jsonl')
+}
 /** 单条记录里推理内容最多留多少字（它是模型的独白，不是给用户看的东西） */
 const REASONING_KEEP = 800
 /** 单个参数值最多留多少字 */
@@ -86,9 +100,9 @@ export function summarizeArgs(args: Record<string, unknown>): string {
 
 function trimIfLarge(): void {
   try {
-    if (!existsSync(TRACE_FILE) || statSync(TRACE_FILE).size <= TRACE_MAX_BYTES) return
-    const lines = readFileSync(TRACE_FILE, 'utf8').split('\n').filter(Boolean)
-    writeFileSync(TRACE_FILE, lines.slice(-TRACE_KEEP).join('\n') + '\n', { encoding: 'utf8', mode: 0o600 })
+    if (!existsSync(traceFile()) || statSync(traceFile()).size <= TRACE_MAX_BYTES) return
+    const lines = readFileSync(traceFile(), 'utf8').split('\n').filter(Boolean)
+    writeFileSync(traceFile(), lines.slice(-TRACE_KEEP).join('\n') + '\n', { encoding: 'utf8', mode: 0o600 })
   } catch { /* 裁剪失败不该影响记录 */ }
 }
 
@@ -101,24 +115,20 @@ export function recordTurn(trace: TurnTrace): void {
     const dir = join(homedir(), '.weflow-cli')
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
     trimIfLarge()
-    appendFileSync(TRACE_FILE, JSON.stringify(trace, null, 0) + '\n', 'utf8')
+    appendFileSync(traceFile(), JSON.stringify(trace, null, 0) + '\n', 'utf8')
   } catch { /* 记录失败不阻断 */ }
 }
 
 /** 读最近 `n` 轮（新→旧）。读不出来就给空数组，不抛。 */
 export function readTurns(n = 5): TurnTrace[] {
   try {
-    const lines = readFileSync(TRACE_FILE, 'utf8').split('\n').filter(Boolean)
+    const lines = readFileSync(traceFile(), 'utf8').split('\n').filter(Boolean)
     return lines.slice(-n).map(line => {
       try { return JSON.parse(line) as TurnTrace } catch { return null }
     }).filter(Boolean).reverse() as TurnTrace[]
   } catch {
     return []
   }
-}
-
-export function traceFile(): string {
-  return TRACE_FILE
 }
 
 /** 一轮的推理内容该留多少。截断时留个记号，别让"截断"读起来像"说完了"。 */
