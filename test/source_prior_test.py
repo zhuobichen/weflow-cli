@@ -35,12 +35,23 @@ from _utils import (SOURCE_PRIOR_MIN_SAMPLES, SOURCE_PRIOR_SHARE,  # noqa: E402
 
 class PathTests(unittest.TestCase):
     def test_the_table_lives_outside_the_repository(self):
-        """里面是公众号名。放仓库里就有被提交的机会。"""
-        home = os.path.expanduser('~')
-        repo = str(Path(__file__).resolve().parents[1])
-        path = source_topics_path()
-        self.assertTrue(os.path.abspath(path).startswith(os.path.abspath(home)))
-        self.assertFalse(os.path.abspath(path).startswith(os.path.abspath(repo)))
+        """里面是公众号名。放仓库里就有被提交的机会。
+
+        断言写成"**不在仓库里** + 与 config.json 同目录"，不拿 `expanduser('~')` 当基准：
+        CI 上 `HOME` 指 `/home/runner/work/_temp/...`，而 `os.path.expanduser('~')` 在进程
+        启动的瞬间求值（pytest 之前可能被 conftest 或 runner 改过），两者会不一致——
+        2026-11-20 CI 就是在 `startswith(abspath(home))` 这一行红的，而表其实正常。
+        "不在仓库里"才是这条测试真正要防的事。
+        """
+        repo = Path(__file__).resolve().parents[1]
+        target = Path(os.path.abspath(source_topics_path()))
+
+        def inside(child: Path, parent: Path) -> bool:
+            return parent == child or parent in child.parents
+
+        self.assertFalse(inside(target, repo), f'表落在仓库里了：{target}（repo={repo}）')
+        # 与 config.json 同目录 —— 这是"测试能把它指到临时目录"的前提
+        self.assertEqual(target.parent, Path(os.path.abspath(os.path.dirname(_utils.CONFIG_PATH))))
 
     def test_an_explicit_path_wins(self):
         # 测试与将来的"多用例"都靠这个入口，不能悄悄退回默认位置。
