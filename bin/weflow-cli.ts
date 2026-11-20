@@ -8484,6 +8484,108 @@ assistantCmd
   })
 
 assistantCmd
+  .command('eval')
+  .description('跑助手评测（真模型、假数据）：分维度打分 + 稳定性 + 与基线对比')
+  .option('--case <id>', '只跑这些用例（逗号分隔，或多次使用）', (v: string, acc: string[]) => { acc.push(...v.split(',').map(s => s.trim()).filter(Boolean)); return acc }, [] as string[])
+  .option('--category <name>', '只跑这些维度（routing/answer/honesty/memory/multi/privacy/robustness）', (v: string, acc: string[]) => { acc.push(...v.split(',').map(s => s.trim()).filter(Boolean)); return acc }, [] as string[])
+  .option('--repeats <n>', '每条重复跑几次（≥2 才有稳定性指标）', '1')
+  .option('--json', '输出机器可读报告')
+  .option('--save-baseline <path>', '把这次报告存成 JSON 基线')
+  .option('--baseline <path>', '与一份基线报告对比')
+  .option('--list', '列出所有用例（id / 维度 / 问句），不跑')
+  .action(async (opts) => {
+    const { EVAL_CASES, EVAL_CATEGORIES } = await import('../src/services/assistantEval.js')
+
+    if (opts.list) {
+      if (opts.json) {
+        console.log(JSON.stringify(EVAL_CASES.map(c => ({
+          id: c.id, category: c.category,
+          question: c.question ?? (c.turns ?? []).join(' → '),
+        })), null, 1))
+        return
+      }
+      const byCat = new Map<string, number>()
+      for (const c of EVAL_CASES) byCat.set(c.category, (byCat.get(c.category) ?? 0) + 1)
+      console.log(chalk.bold(`\n评测集：${EVAL_CASES.length} 条用例，${byCat.size} 个维度\n`))
+      for (const [key, label] of Object.entries(EVAL_CATEGORIES)) {
+        const rows = EVAL_CASES.filter(c => c.category === key)
+        if (!rows.length) continue
+        console.log(chalk.cyan(`  ${label}（${rows.length}）`))
+        for (const c of rows) {
+          const q = c.question ?? (c.turns ?? []).join(' → ')
+          console.log(chalk.gray(`    ${c.id.padEnd(30)} ${q.slice(0, 42)}`))
+        }
+      }
+      console.log('')
+      return
+    }
+
+    const { runEvalSuite, precheckModel } = await import('../src/services/assistantEvalRunner.js')
+    const { formatReport } = await import('../src/services/assistantEvalReport.js')
+
+    const repeats = parseCliInteger(opts.repeats, 'repeats', 1, 20, !!opts.json)
+    if (!opts.json) {
+      console.log(chalk.bold('\n助手评测：真模型、假数据'))
+      console.log(chalk.gray('  （合成会话/消息；不读你的真实聊天记录）\n'))
+    }
+
+    let outcome
+    try {
+      outcome = await runEvalSuite({
+        only: opts.case, categories: opts.category, repeats, precheck: precheckModel,
+        onCaseDone: opts.json ? undefined : (result, i, total) => {
+          const mark = result.problems.length ? chalk.red('✗') : chalk.green('✓')
+          const q = result.spec.question ?? (result.spec.turns ?? []).join(' → ')
+          console.log(`  ${mark} [${String(i).padStart(3)}/${total}] ${result.spec.id.padEnd(28)} ${chalk.gray(q.slice(0, 30))}`)
+        },
+      })
+    } catch (error: any) {
+      console.log(chalk.red(`\n✗ ${error?.message ?? error}\n`))
+      process.exit(1)
+    }
+
+    if (outcome.unavailable) {
+      if (opts.json) {
+        console.log(JSON.stringify({ success: false, code: 'MODEL_NOT_CONFIGURED', error: outcome.unavailable }))
+      } else {
+        console.log(chalk.yellow(`\n${outcome.unavailable}\n`))
+      }
+      // 退出码 2 = "没跑"，与"跑了但有失败"(1) 区分开：CI 上这两件事要能分开处理
+      process.exit(2)
+    }
+
+    const report = outcome.report!
+    let baseline
+    if (opts.baseline) {
+      const fs = await import('fs')
+      try {
+        baseline = JSON.parse(fs.readFileSync(String(opts.baseline), 'utf8'))
+      } catch (error: any) {
+        console.log(chalk.red(`\n✗ 读不到基线 ${opts.baseline}: ${error?.message}\n`))
+        process.exit(1)
+      }
+    }
+
+    if (opts.saveBaseline) {
+      const fs = await import('fs')
+      fs.writeFileSync(String(opts.saveBaseline), JSON.stringify(report, null, 1), 'utf8')
+      if (!opts.json) console.log(chalk.gray(`\n  基线已保存: ${opts.saveBaseline}`))
+    }
+
+    if (opts.json) {
+      console.log(JSON.stringify({ success: true, report, results: outcome.results.map(r => ({
+        id: r.spec.id, category: r.spec.category, problems: r.problems, warnings: r.warnings,
+      })) }))
+    } else {
+      console.log('\n' + formatReport(report, { baseline }))
+      console.log('')
+    }
+
+    // 有失败的用例就让退出码非零：CI 靠它判断，而不是靠人读输出
+    if (report.perCase.some(c => c.passRate < 1)) process.exit(1)
+  })
+
+assistantCmd
   .command('run')
   .description('前台运行 (调试用; 常驻请用 start)')
   .option('--dry-run', '仅预览，不连接消息通道或调用 AI')

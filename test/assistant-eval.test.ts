@@ -11,7 +11,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-const { judge, summarize, budgetWarnings, softWarnings, EVAL_CASES, EVAL_UNCOVERED } =
+const { judge, summarize, budgetWarnings, softWarnings, EVAL_CASES, EVAL_UNCOVERED, EVAL_CATEGORIES } =
   await import('../src/services/assistantEval.js')
 
 function observed(patch: Record<string, unknown> = {}) {
@@ -99,6 +99,23 @@ test('summarize 数的是"问题为空的条数"，跳过的不算', () => {
   assert.equal(report.passed, 1)
   assert.equal(report.failed, 1)
   assert.equal(report.skipped, 1)
+})
+
+test('用例表：每个维度都有用例，且每条都打了合法的 category', () => {
+  // 没有这条守卫时，"以为覆盖了六个方面、实际全是查消息"是完全可能的——
+  // 只要所有用例都漏写了 category，报告里就只剩一个总分，看着还挺好看。
+  const valid = new Set(Object.keys(EVAL_CATEGORIES))
+  const seen = new Map<string, number>()
+  for (const spec of EVAL_CASES) {
+    assert.ok(spec.category, `${spec.id} 没有 category —— 它不会出现在任何维度的分母里`)
+    assert.ok(valid.has(spec.category), `${spec.id} 的 category 不在 EVAL_CATEGORIES 里：${spec.category}`)
+    seen.set(spec.category, (seen.get(spec.category) ?? 0) + 1)
+  }
+  // 每个维度至少两条：一条的证据量撑不起一个"维度得分"
+  for (const key of valid) {
+    const n = seen.get(key) ?? 0
+    assert.ok(n >= 2, `维度「${EVAL_CATEGORIES[key as keyof typeof EVAL_CATEGORIES]}」只有 ${n} 条用例，撑不起一个分数`)
+  }
 })
 
 test('用例表：id 唯一、每条至少有一条断言、正反不许自相矛盾', () => {

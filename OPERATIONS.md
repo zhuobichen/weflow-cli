@@ -1887,6 +1887,38 @@ weflow-cli scene unbind wxid_xxx --yes
 助手回答下面展开的「思考过程」里会写清这一次用了哪个场景、因为哪一档命中；如果有两个场景同样匹配，
 它**不带场景**，并在那里说明原因。
 
+## 助手评测（真模型、假数据）
+
+改完助手（工具、提示词、路由）之后跑一遍，看它是变好还是变坏：
+
+```powershell
+weflow-cli assistant eval --list                     # 看有哪些用例、各属哪个维度
+weflow-cli assistant eval                            # 跑全部
+weflow-cli assistant eval --category memory          # 只跑一个维度
+weflow-cli assistant eval --case sessions,no-tool    # 只跑指定的几条
+weflow-cli assistant eval --repeats 3                # 每条跑 3 次（≥2 才有稳定性）
+weflow-cli assistant eval --save-baseline base.json  # 存基线
+weflow-cli assistant eval --baseline base.json       # 和基线比
+```
+
+七个维度：路由与工具选择 / 答复质量 / 诚实与边界 / 记忆 / 多轮与上下文 / 隐私 / 健壮性。
+
+**三个指标分开看**：
+
+| 指标 | 回答什么 |
+| --- | --- |
+| 通过率 | 硬断言全过了吗（**只有它算分数**） |
+| 软警告 | 质量够不够（`answerShouldMatch` / 工具预算），不混进分数 |
+| 稳定性 | 重复跑结果一致吗。**单次跑一律显示"未测"**，不会给一个漂亮的 100% |
+
+**没跑不等于通过**：缺 key 时整体跳过、逐条列出，退出码 2（与"跑了但失败"的 1 分开）。
+
+**它是假数据**：会话、消息、收藏全是合成的，不读你的真实聊天记录。但**模型是真的**，
+所以有费用——一轮 41 条约几十次模型调用。
+
+> ⚠️ 本机沙箱下 `~/.weflow-cli/assistant_audit.log` 不可写，而工具调用正是从那里读的。
+> 这种情况下**所有 `mustCall` 断言都会误判**（报"一个工具都没调"）。跑之前先确认这个文件可写。
+
 ## 问答（ask）
 
 问一句话，它把已经查得到的东西整理成一段可核对的话：
