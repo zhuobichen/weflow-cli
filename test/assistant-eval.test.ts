@@ -209,3 +209,22 @@ test('例外表里每条都要有原因（空字符串不算）', () => {
   const empty = Object.entries(EVAL_UNCOVERED).filter(([, why]) => String(why).trim().length < 5)
   assert.deepEqual(empty.map(([n]) => n), [], '这些例外没写原因：')
 })
+
+test('例外理由不许停留在"环境不具备"这种会过期的说法上', () => {
+  // `EVAL_UNCOVERED` 的理由分两类：
+  //   结构性的（出网工具、按结果判而不是按工具判）—— 永远不会过期，可以写；
+  //   环境性的（"要某 key 且要某索引"）—— 一旦配好就变成**谎言**，而没有任何东西会红。
+  // 2026-10-15 真发生过：`search_semantic` 的理由是"要 dashscopeApiKey 且要建索引"，
+  // 那天两样都有了，理由却还挂着；真正的原因（它是第二个出网出口）是后来补上的。
+  //
+  // 所以环境性的理由必须**同时**给出结构性原因，否则这条会红。判据是粗的（关键词），
+  // 但它拦的是"只写了个环境原因就交差"这种形态，不是要求措辞精确。
+  const envOnly = Object.entries(EVAL_UNCOVERED).filter(([, why]) => {
+    const text = String(why)
+    const envFlavored = /(key|索引|未配置|没有|不具备|这台机器)/.test(text)
+    const structural = /(出网|出口|第二个|按结果|按\*\*结果\*\*|mustCall|调度|除非)/.test(text)
+    return envFlavored && !structural
+  })
+  assert.deepEqual(envOnly.map(([n]) => n), [],
+    '这些例外的理由只说了"环境不具备"，配好之后就会变成谎言；请补结构性原因：')
+})
