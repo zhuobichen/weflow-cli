@@ -46,6 +46,13 @@ export interface CaseScore {
   softWarned: number
   /** 稳定性：repeat 之间结果是否一致（1=每次都一样）。repeats<2 时为 null（未测） */
   stability: number | null
+  /**
+   * 工具调用次数（各次重复里的最大值）。
+   *
+   * 存下来是为了**校准预算本身**：`toolBudget` 该给几，要看实测分布，
+   * 而不是拍一个数字。没有这个字段时，只能看到"超了",看不到"超到几"。
+   */
+  toolCalls: number
   /** 失败细节（只留前几条，避免报告被淹） */
   problems: string[]
 }
@@ -137,6 +144,7 @@ export function scoreCase(spec: EvalCase, arg: CaseRun | Observation): CaseScore
     passRate: repeats ? passed / repeats : 0,
     softWarned,
     stability: repeats < 2 ? null : (allSame ? 1 : 1 - (outcomes.filter(o => o !== outcomes[0]).length / repeats)),
+    toolCalls: observations.reduce((m, o) => Math.max(m, (o.tools ?? []).length), 0),
     problems,
   }
 }

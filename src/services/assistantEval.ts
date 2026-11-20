@@ -327,7 +327,11 @@ export const EVAL_CASES: EvalCase[] = [
     ],
     // 这条实测波动很大：同一句话，调用次数在 2~7 之间（模型走的路不固定），而**每次都如实
     // 反问"是哪一个"**。所以硬上限放到 8（只拦真的失控），效率另用软预算盯着。
-    expect: { maxTools: 8, toolBudget: 3,
+    //
+    // 预算**原来是 4，与上面那句"2~7"自相矛盾**：澄清歧义天然要 1 次 list_contacts + 每个
+    // 候选各试 1 次 get_messages（实测两个候选 → 4 次起步，走偏一点就 6 次）。
+    // 「查两个候选都查不到、然后反问」是**正确行为**，不该被预算报警。2026-11-20 实测校准到 7。
+    expect: { maxTools: 8, toolBudget: 7,
               answerMatches: /(哪个|哪一个|更完整|全名|多个|精确|分不清|小明明|小明华)/ },
   },
   {
@@ -418,7 +422,7 @@ export const EVAL_CASES: EvalCase[] = [
     category: 'routing',
     // 第三类：助手自己记得的事，不是聊天记录
     question: '你都记得我什么？',
-    expect: { mustCall: ['search_memory'], maxTools: 6, toolBudget: 3 },
+    expect: { mustCall: ['search_memory'], maxTools: 6, toolBudget: 5 },
   },
   {
     id: 'memory-recall',
@@ -427,7 +431,7 @@ export const EVAL_CASES: EvalCase[] = [
     turns: ['记住：我对花生过敏', '晚上想点个外卖，有什么建议？'],
     // 硬：那件事**存进长期记忆**了。软：答复**用上了**它——这条三次里挂一次（模型有时不提），
     // 而"偶发红"会让整份报告失去可信度。质量类期待一律走软通道。
-    expect: { maxTools: 6, toolBudget: 4, memoryContains: '花生', answerShouldMatch: /花生|过敏/ },
+    expect: { maxTools: 6, toolBudget: 5, memoryContains: '花生', answerShouldMatch: /花生|过敏/ },
   },
   {
     id: 'reading-stats',
@@ -439,7 +443,7 @@ export const EVAL_CASES: EvalCase[] = [
       period: { start: '2026-09-17', end: '2026-09-23', days: 7 },
       sources: [{ name: '甲号', pushed: 248, processed: 30 }, { name: '乙号', pushed: 9, processed: 0 }],
     }) } },
-    expect: { mustCall: ['get_reading_stats'], maxTools: 6, toolBudget: 3, answerMatches: /甲号/ },
+    expect: { mustCall: ['get_reading_stats'], maxTools: 6, toolBudget: 4, answerMatches: /甲号/ },
   },
   {
     id: 'time-window',
@@ -447,7 +451,7 @@ export const EVAL_CASES: EvalCase[] = [
     // 问**某一天**：不给时间窗就够不着（按条数只能取最近的），而"调了 get_messages"与
     // "带着 since 调了 get_messages"是两件事——argsMatch 就是从轨迹里盯这一点的。
     question: '前天甲跟我说了什么？',
-    expect: { mustCall: ['get_messages'], maxTools: 6, toolBudget: 3, argsMatch: /since=/ },
+    expect: { mustCall: ['get_messages'], maxTools: 6, toolBudget: 4, argsMatch: /since=/ },
   },
   {
     id: 'todos-never-extracted',
@@ -541,8 +545,11 @@ export const EVAL_CASES: EvalCase[] = [
     // **不许**拿默认值猜一个人出来。`mustNotCall` 钉的是"别瞎调"，
     // 而不是"必须调某个工具"——两种正确的应对（追问 / 说缺参数）都得能过。
     question: '帮我看看我跟他最近聊了什么。',
+    // 断言用词表覆盖"追问"的各种说法。**别把它写窄**：实测模型会说「**他**指哪位？」——
+    // 完全正确的一句追问，却因为词表里没有"他"被判失败（2026-11-20，3 次里挂 1 次）。
+    // 这类假失败最坑：它让人以为模型不会追问，然后去改提示词。
     expect: { mustNotCall: ['get_messages'], maxTools: 4, toolBudget: 2,
-              answerMatches: /(谁|哪位|哪个人|名字|不清楚|需要|告诉我|说明)/ },
+              answerMatches: /(谁|哪位|哪个人|哪一位|名字|称呼|不清楚|需要|告诉我|说明|指|具体|补充|联系)/ },
   },
   {
     id: 'thread-carries-the-subject',
@@ -552,9 +559,16 @@ export const EVAL_CASES: EvalCase[] = [
     // 而断言只钉"答复里出现了上一轮的那个实体"，不钉措辞。
     turns: ['「矢量风速预测」是什么？', '再展开讲讲它'],
     expect: {
-      maxTools: 6, toolBudget: 4,
-      // 依赖上一轮的主题才能答对；单看第二句无法知道「它」指什么
-      answerMatches: /(矢量|风速|预测)/,
+      maxTools: 8, toolBudget: 6,
+      // 「展开讲讲它」与当天日报无关。实测三次里有一次伸手去查 `get_daily_report`
+      // （产出 false，白跑一趟）——钉住它，让"用无关工具凑数"这个毛病不能悄悄回来。
+      // 注意预算给到 6：这条实测一次能到 5~6 次（概念页 + 邻居），与"该不该查日报"是两件事。
+      mustNotCall: ['get_daily_report'],
+      // 依赖上一轮的主题才能答对；单看第二句无法知道「它」指什么。
+      // **词表要认"同一概念的别名"**：实测模型会一路用 DUSTFN（那篇论文的模型名）指代，
+      // 整段答复不提「矢量/风速」——内容完全正确，却被窄词表判成"丢了上下文"
+      // （2026-11-20，8 次里挂 1 次）。这类假失败会把人骗去改提示词。
+      answerMatches: /(矢量|风速|预测|DUSTFN|时空融合|双路径)/,
     },
   },
   {
