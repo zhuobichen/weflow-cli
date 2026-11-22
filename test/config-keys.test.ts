@@ -77,3 +77,11 @@ test('the daily exclusion key is registered here and nowhere else', () => {
   // 这个键是本期新加的：它同时是"展示层开关"，所以要能从 CLI 配。
   assert.ok(KEYS.includes('dailyExcludeTopics'), 'dailyExcludeTopics 没登记，config set 会被拒')
 })
+
+test('isConfigured 认 dbKeyMap（扫内存得到的密钥表）', () => {
+  // 全新机器上 hook 取不到口令、但扫描能拿到每个库的 key，此时配置里只有
+  // dbPath + dbKeyMap。不认它，用户会"scan 成功却被告知没初始化"。
+  const fn = SERVICE.slice(SERVICE.indexOf('isConfigured(): boolean'))
+  assert.ok(fn.includes('dbKeyMap'), 'isConfigured 不再把 dbKeyMap 当凭据，scan-only 配置会被拒')
+  assert.ok(fn.includes('hasKeyMap'), 'isConfigured 里应当有显式的 hasKeyMap 分支')
+})

@@ -60,6 +60,17 @@ weflow-cli dbkey --scan --json     # 机器可读
 
 等价性实测：24 个库里按盐命中的 key 与 passphrase 派生的**完全一致（24/24，0 不一致）**。
 
+**全新机器怎么用**：`dbkey --scan --save` 会顺便在 `ntKey`/`ntSalt` 为空时，用
+`message_0.db` 那一组补位（已有值不覆盖），因为 NT 读库分支要求这两个字段存在。
+补位后**不需要 passphrase、也不需要 decryptKey** 就能读：
+
+```
+配置里只有 dbPath / dbKeyMap / 补位的 ntKey+ntSalt
+  → weflow-cli sessions  →  148 条（实测）
+```
+
+各分片的真实密钥仍由 `dbKeyMap` 按盐提供，补位的 `ntKey` 只用于满足入口检查。
+
 **什么时候用它**：报错是"本地访问组件已就绪，但没等到数据库打开事件"时。
 4.x 的连接是常驻的，点开聊天不会再 open 一次——等事件这条路在"没重启过客户端"时永远等不到。
 扫描不需要这个前提。

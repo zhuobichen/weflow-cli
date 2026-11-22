@@ -63,9 +63,11 @@ export class ChatService {
     const wxid = configService.get('wxid')
     const decryptKey = configService.get('decryptKey')
     const ntConfigured = !!(configService.get('ntDbPath') && configService.get('ntKey'))
+    // 扫描来的按盐密钥表也算凭据：全新机器上 hook 取不到口令时，靠它能直接读库
+    const hasKeyMap = !!configService.get('dbKeyMap')
 
     // NT 配置完整时无需 decryptKey（非 Windows 平台密钥自动提取不可用，仅有 NT 密钥）
-    if (!dbPath || (!decryptKey && !ntConfigured)) {
+    if (!dbPath || (!decryptKey && !ntConfigured && !hasKeyMap)) {
       return { success: false, error: '4.x 配置不完整，请运行 weflow-cli init' }
     }
 

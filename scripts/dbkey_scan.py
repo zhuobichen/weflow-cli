@@ -294,12 +294,15 @@ def scan(pid, db_paths, time_budget=120.0, progress=None):
             by_salt.setdefault(page.hex(), []).append(db)
 
     verified = {}
+    primary = None
     for (key_hex, salt_hex), how in found.items():
         for db in by_salt.get(salt_hex, [])[:4]:
             try:
                 if nd.verify_raw_key_native(key_hex, salt_hex, str(db)):
                     verified[salt_hex] = {'key': key_hex, 'how': how,
                                           'db': pathlib.Path(db).name}
+                    if pathlib.Path(db).name == 'message_0.db':
+                        primary = {'salt': salt_hex, 'key': key_hex}
                     break
             except Exception:
                 continue
@@ -309,6 +312,7 @@ def scan(pid, db_paths, time_budget=120.0, progress=None):
         return {'ok': True, 'salt': first[0], 'key': first[1]['key'],
                 'verifiedAgainst': first[1]['db'], 'path': first[1]['how'],
                 'verifiedCount': len(verified), 'saltTotal': len(by_salt),
+                'primary': primary,
                 'keys': {k: v['key'] for k, v in verified.items()},
                 'scannedMb': round(scanned / 1048576.0, 1),
                 'elapsedMs': int((time.time() - started) * 1000),

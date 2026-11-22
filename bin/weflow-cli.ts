@@ -1540,7 +1540,7 @@ const configCmd = program
 
 const configurableKeys = [
   'dbPath', 'decryptKey', 'dbPath3x', 'decryptKey3x', 'dataVersion', 'wxid',
-  'ntDbPath', 'ntKey', 'ntSalt', 'contactDbPath', 'contactKey', 'contactSalt',
+  'ntDbPath', 'ntKey', 'ntSalt', 'dbKeyMap', 'contactDbPath', 'contactKey', 'contactSalt',
   'vaultRepo', 'aiEngine', 'aiBaseUrl', 'aiModel', 'deepseekApiKey', 'typesafeApiKey',
   'dashscopeApiKey', 'favPassphrase',
   'judgeProvider', 'openrouterApiKey', 'openrouterJudgeModel', 'judgeLocalUrl', 'judgeEndpoint',
@@ -3353,6 +3353,13 @@ program
           // 只存 {盐: 密钥}，读库时 derive_database_key 按 salt 精确命中；不命中就退回 passphrase
           configService.set('dbKeyMap', JSON.stringify(r.keys))
           console.log(chalk.gray(`  已写入配置 dbKeyMap（${Object.keys(r.keys).length} 个库的密钥，lock: 加密）`))
+          // NT 分支要求 ntKey/ntSalt 存在才走；全新机器上它们通常是空的。
+          // 用 message_0.db 那一组补位（已有值不覆盖），各分片的真实密钥仍由 dbKeyMap 提供。
+          if (r.primary && !configService.get('ntKey') && !configService.get('ntSalt')) {
+            configService.set('ntSalt', String(r.primary.salt))
+            configService.set('ntKey', String(r.primary.key))
+            console.log(chalk.gray('  已用 message_0.db 的密钥补上 ntKey/ntSalt（原来为空）'))
+          }
         }
         console.log(chalk.green(`✓ 扫描到密钥（${r.path}）`))
         console.log(chalk.gray(`  可解密 ${r.verifiedCount}/${r.saltTotal} 个库 ｜ 扫描 ${r.scannedMb} MB ｜ 候选 ${r.candidates} 个 ｜ ${r.elapsedMs} ms`))

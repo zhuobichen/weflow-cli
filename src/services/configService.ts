@@ -400,9 +400,13 @@ export class ConfigService {
   }
 
   isConfigured(): boolean {
-    const has4x = !!(this.config.dbPath && this.config.decryptKey)
+    // dbKeyMap 是「扫内存得到的按盐密钥表」：全新机器上 hook 取不到口令、但扫描能拿到
+    // 每个库的 key 时，配置里只有 dbPath + dbKeyMap。这种配置**是可用的**，
+    // 不认它会让用户「明明 scan 成功却被告知没初始化」。
+    const hasKeyMap = !!this.config.dbKeyMap
+    const has4x = !!(this.config.dbPath && (this.config.decryptKey || hasKeyMap))
     const has3x = !!(this.config.dbPath3x && this.config.decryptKey3x)
-    const hasNt = !!(this.config.ntDbPath && this.config.ntKey && this.config.ntSalt)
+    const hasNt = !!(this.config.ntDbPath && ((this.config.ntKey && this.config.ntSalt) || hasKeyMap))
     return has4x || has3x || hasNt
   }
 
