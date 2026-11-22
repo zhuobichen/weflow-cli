@@ -11,3 +11,6 @@ pycryptodome
 # requests 用于面板帧抓取。缺它们时对应命令会直接报 ImportError。
 pillow
 requests
+# 归档加密（export --zip --password）。可选：缺它时明文 ZIP 仍可用，
+# 带密码时脚本会明确报错而不是静默打成明文。复用上面已装的 pycryptodome。
+pyzipper

@@ -146,6 +146,62 @@ weflow-cli export "联系人A" json --output ./output
 `written`（清单里叫 `documents.copied`）才是"这次新拷了几个"，别把后者当成前者的成绩。
 另外 `--media` 配 `html` 不生效（HTML 不写文档本体），CLI 会提示一句而不是静默忽略。
 
+### 打成一个 ZIP（可加密）
+
+```bash
+weflow-cli export "联系人A" html --zip
+weflow-cli export "联系人A" html --zip --password "你的口令"
+```
+
+**只打包本次产物**：导出文件 + 它的 `<会话>_assets/` + 媒体报告。输出目录里以前导的其它会话不会被带进去。
+
+带 `--password` 时用 **WinZip AES-256**（需要 `pip install pyzipper`）；没装会**明确报错**，不会静默打成明文——那比不加密更糟。加密包用 7-Zip / WinRAR / Bandizip 输口令即可打开。
+
+### 批量导出
+
+```bash
+weflow-cli export-batch html --batch 1,2,5           # 按序号
+weflow-cli export-batch html --batch "联系人A,群B"    # 按昵称/备注/wxid
+weflow-cli export-batch md --all --max 20            # 全部会话（有上限）
+weflow-cli export-batch html --batch 1,2 --zip --password "口令"
+```
+
+- **失败隔离**：某个会话解析不了或导出失败，只记一条失败，后面的照常跑
+- **退出码**：全部失败才 `1`；部分成功是 `0`，失败项在汇总里逐条列出
+- `--zip` 是**每个会话各打一个包**（不是合成一个大包）；`--json` 时 stdout 只有汇总 JSON，进度走 stderr
+
+### 表情包导出
+
+```bash
+weflow-cli emoji export -o ./output/emoji
+```
+
+导出**收藏表情**与**专辑表情本体**，输出 `index.html`（离线浏览）与 `manifest.json`（清单+说明）。
+
+- 需要**管理员终端**：4.x 把表情密钥的 seed 放在微信进程内存里，导出时要扫一次（`pymem`）
+- 查不到 seed、或某个专辑本地没有整包文件时，该专辑状态标 `unavailable` 并在 `manifest.json` 写原因，**不会产出空目录或 `.bin` 垃圾**
+
+### 朋友圈归档
+
+```bash
+weflow-cli sns export -o ./output/sns
+weflow-cli sns export -o ./output/sns --since 2026-01-01 --until 2026-06-30
+weflow-cli sns export -o ./output/sns -n 100
+```
+
+输出 `index.html`（离线时间线）、`posts.json`（结构化）、`manifest.json`（统计与说明）。
+
+**这一版只归档文字与媒体地址，不塞本地缓存图**。原因分两层，都实测过：
+
+1. 动态里的媒体只有远程 URL，没有本地 md5 字段；缓存文件名虽是 32 位十六进制，
+   但 `md5(url)`、`md5(去 query)`、`md5(路径)` 三种推导命中率都是 **0/141**，
+   且 `SnsTimeLine.content` 里的 1477 个十六进制值与 1644 个缓存文件名**交集为 0**。
+2. 缓存文件本身是 **V2 加密**（头 `\x07\x08V2`）——用已有的 V2 解码器能还原成 JPEG，
+   但"能解"不等于"知道属于哪条动态"。
+
+错配的图比没有图更糟，所以媒体只列地址并标注可能过期。
+- 说明文字取本机数据库里的标题；未缓存的表情（微信里没点开过）不会凭空出现
+
 md 里指向文档的链接**把路径里的空格、括号等字符做了百分号编码**（如 `报告%282%29.pdf`），链接文字仍是原名。
 这不是洁癖：文档名里带半角括号时（`报告(2).pdf` 这种），链接目标会被任何 markdown 渲染器在**第一个 `)`
 处截断**，点开是空的（2026-10-13 重导时实测到；同一批里还有一份超长标题被 80 字符上限连 `.pdf` 一起截掉，

@@ -2805,6 +2805,81 @@ program
   })
 
 // ==================== export ====================
+/** 一次导出：媒体抽取 + 格式分派 + 可选打包。批量与单条都走它，规则只有一份。 */
+async function runOneExport(
+  talker: string,
+  format: string,
+  opts: any,
+  limit: number,
+  from: number | undefined,
+  to: number | undefined,
+): Promise<{ result: any; zip: { path: string; entries: number; encrypted: boolean } | null; error?: string }> {
+  const { execFile } = await import('child_process')
+  const { promisify } = await import('util')
+
+  if (opts.media && (format === 'json' || format === 'txt' || format === 'excel')) {
+    const media = await exportService.extractMedia(talker, opts.output, !!opts.json, { fullImages: opts.fullImages === true }, limit, opts.date || '')
+    if (!media.success) {
+      return { result: media, zip: null, error: media.error || '媒体抽取失败' }
+    }
+  } else if (opts.media && format === 'html' && !opts.json) {
+    // HTML 的用法是"单文件可分享"，不写文档本体。静默忽略开关会让人以为它生效了。
+    console.error(chalk.gray('  提示：HTML 导出不含文档本体（单文件分享的用法），--media 对它不生效；'))
+    console.error(chalk.gray('        要连文档一起导出请用 md，或 json|txt|excel --media。'))
+  }
+
+  let result: any
+  switch (format) {
+    case 'json':
+      result = await exportService.exportJson(talker, opts.output, limit, from, to, opts.contract)
+      break
+    case 'txt':
+      result = await exportService.exportTxt(talker, opts.output, limit, from, to)
+      break
+    case 'html':
+      result = await exportService.exportHtml(talker, opts.output, limit, opts.date || '', from, to, !!opts.json, { fullImages: opts.fullImages === true })
+      break
+    case 'md':
+      result = await exportService.exportMarkdown(talker, opts.output, limit, opts.date || '', from, to, !!opts.json, { fullImages: opts.fullImages === true })
+      break
+    case 'excel':
+      result = await exportService.exportExcel(talker, opts.output, limit, from, to)
+      break
+    default:
+      return { result: { success: false, error: `不支持的格式: ${format}` }, zip: null, error: 'INVALID_FORMAT' }
+  }
+
+  let zip: { path: string; entries: number; encrypted: boolean } | null = null
+  if (opts.zip && result?.success) {
+    // 只打包本次产物：导出文件 + 同名的 _assets 目录 + 媒体报告。
+    // 绝不打整个输出目录——那会把以前导出的别的会话一起带进去。
+    const outDir = join(opts.output)
+    const base = (result.path ? result.path.replace(/\\/g, '/').split('/').pop() ?? '' : '').replace(/\.[^.]+$/, '')
+    const includes: string[] = []
+    if (result.path && existsSync(result.path)) includes.push(result.path)
+    for (const cand of [join(outDir, `${base}_assets`), join(outDir, `${base}_media.json`)]) {
+      if (existsSync(cand)) includes.push(cand)
+    }
+    if (includes.length === 0) return { result, zip: null, error: '没有可打包的产物' }
+    const zipPath = join(outDir, `${base}.zip`)
+    const argv = [join(resolvePackageRoot(), 'scripts', 'archive_zip.py'), '--out', zipPath]
+    for (const inc of includes) argv.push('--src', inc)
+    if (opts.password) argv.push('--password', String(opts.password))
+    try {
+      const { stdout } = await promisify(execFile)(getPythonCommand(), argv, {
+        timeout: 300_000, maxBuffer: 4 * 1024 * 1024, env: createPythonProcessEnv({}),
+      })
+      const line = stdout.trim().split(/\r?\n/).filter(Boolean).pop() ?? '{}'
+      const parsed = JSON.parse(line)
+      if (!parsed.success) throw new Error(parsed.error || '打包失败')
+      zip = { path: parsed.path, entries: parsed.entries, encrypted: parsed.encrypted }
+    } catch (e: any) {
+      return { result, zip: null, error: safeSubprocessError(e, '打包失败') }
+    }
+  }
+  return { result, zip }
+}
+
 program
   .command('export <talker> <format>')
   .description('导出聊天记录 (支持 wxid / 昵称 / 备注 / 序号)')
@@ -2818,6 +2893,8 @@ program
   .option('--non-interactive', '禁止交互选择；匹配不唯一时返回错误')
   .option('--full-images', '使用原图而非微信缓存缩略图（更清晰，但导出慢数倍）')
   .option('--media', 'json/txt/excel 导出时一并抽出图片与文档（落盘到 <输出>/<会话>_assets，并在导出物里给出相对路径）')
+  .option('--zip', '导出完成后打成一个 ZIP（只含本次产物，不含输出目录里其它会话）')
+  .option('--password <pw>', '与 --zip 一起用：WinZip AES-256 加密（需要 Python 包 pyzipper）')
   .action(async (talkerInput: string, format: string, opts) => {
     const validFormats = ['json', 'txt', 'html', 'md', 'excel']
     if (!validFormats.includes(format)) {
@@ -2873,39 +2950,14 @@ program
     // 抽取那一步的媒体摘要留在这里：`--media` 的调用者（机器调用）应当能从结果里直接读到
     // "各状态多少条、报告叫什么"，而不必去翻 Python 的 stdout。
     let extracted: ExportResult | undefined
-    if (opts.media && (format === 'json' || format === 'txt' || format === 'excel')) {
-      const media = await exportService.extractMedia(talker, opts.output, !!opts.json, { fullImages: opts.fullImages === true }, limit, opts.date || '')
-      extracted = media
-      if (!media.success) {
-        if (opts.json) console.log(JSON.stringify({ success: false, code: 'MEDIA_EXPORT_FAILED', error: media.error || '媒体抽取失败' }))
-        else console.log(chalk.red(`✗ 媒体抽取失败: ${media.error}`))
-        process.exit(1)
-      }
-    } else if (opts.media && format === 'html') {
-      // HTML 的用法是"单文件可分享"，所以它不写文档本体（把几 MB 的 PDF 内嵌进网页，既打不开也把文件撑大）。
-      // 静默忽略这个开关会让人以为它生效了 —— 明说一句，并给出该用哪个格式。
-      if (!opts.json) {
-        console.error(chalk.gray('  提示：HTML 导出不含文档本体（单文件分享的用法），--media 对它不生效；'))
-        console.error(chalk.gray('        要连文档一起导出请用 md，或 json|txt|excel --media。'))
-      }
-    }
-    switch (format) {
-      case 'json':
-        result = await exportService.exportJson(talker, opts.output, limit, from, to, opts.contract)
-        break
-      case 'txt':
-        result = await exportService.exportTxt(talker, opts.output, limit, from, to)
-        break
-      case 'html':
-        result = await exportService.exportHtml(talker, opts.output, limit, opts.date || '', from, to, !!opts.json, { fullImages: opts.fullImages === true })
-        break
-      case 'md':
-        // markdown + 图片落盘（`<输出>/<talker>_assets/`）；json/txt/excel 之后会自动带上那些图。
-        result = await exportService.exportMarkdown(talker, opts.output, limit, opts.date || '', from, to, !!opts.json, { fullImages: opts.fullImages === true })
-        break
-      case 'excel':
-        result = await exportService.exportExcel(talker, opts.output, limit, from, to)
-        break
+    let zipInfo: { path: string; entries: number; encrypted: boolean } | null = null
+    const one = await runOneExport(talker, format, opts, limit, from, to)
+    result = one.result
+    zipInfo = one.zip
+    if (one.error && !one.result?.success) {
+      if (opts.json) console.log(JSON.stringify({ success: false, code: 'EXPORT_FAILED', error: one.error }))
+      else console.log(chalk.red(`✗ ${one.error}`))
+      process.exit(1)
     }
 
     if (result?.success) {
@@ -2918,13 +2970,201 @@ program
         // 媒体摘要：html/md 那条由导出自己产出（Python 的 media_json_summary），
         // json/txt/excel 的 `--media` 则由上面那次抽取产出 —— 两条都是同一份词汇。
         media: result.media ?? extracted?.media ?? null,
+        ...(zipInfo ? { zip: zipInfo } : {}),
       }, null, 2))
-      else console.log(chalk.green(`✓ 导出成功: ${result.path}`))
+      else {
+        console.log(chalk.green(`✓ 导出成功: ${result.path}`))
+        if (zipInfo) {
+          console.log(chalk.green(`✓ 已打包: ${zipInfo.path}（${zipInfo.entries} 个条目${zipInfo.encrypted ? '，AES-256 加密' : ''}）`))
+        }
+      }
     } else {
       if (opts.json) console.log(JSON.stringify({ success: false, code: 'EXPORT_FAILED', error: result?.error || '导出失败' }))
       else console.log(chalk.red(`✗ 导出失败: ${result?.error}`))
       process.exit(1)
     }
+  })
+
+/**
+ * 批量导出用的会话解析：**绝不 `process.exit`**。
+ *
+ * `resolveTalker` 在失败/歧义时直接退出进程——单条命令里合理，批量里会让整批
+ * 死在一个拼错的名字上。这里返回 `{ok, talker, error}`，由调用方决定怎么记。
+ */
+async function resolveTalkerQuiet(raw: string): Promise<{ ok: boolean; talker?: string; error?: string }> {
+  // 直接复用核心解析器：它**抛异常**而不是退出进程，语义（序号/昵称/备注/wxid）
+  // 因此与单条 export 完全一致，不会出现"单条能导、批量导不了"。
+  const text = String(raw || '').trim()
+  if (!text) return { ok: false, error: '空的会话名' }
+  try {
+    const talker = await resolveTalkerCore(text, { interactive: false })
+    return { ok: true, talker }
+  } catch (e: any) {
+    const msg = String(e?.message ?? e)
+    return { ok: false, error: msg.length > 120 ? msg.slice(0, 120) : msg }
+  }
+}
+
+// ==================== emoji（表情包）====================
+const emojiCmd = program
+  .command('emoji')
+  .description('表情包：按专辑导出表情本体，以及收藏表情')
+
+emojiCmd
+  .command('export')
+  .description('导出表情包专辑与收藏表情（需管理员终端：seed 要扫进程内存）')
+  .option('-o, --output <dir>', '输出目录', './output/emoji')
+  .option('--json', '输出 JSON 格式')
+  .action(async (opts) => {
+    const { execFile: execFileAsync } = await import('child_process')
+    const { promisify: promisifyFn } = await import('util')
+    try {
+      const { stdout } = await promisifyFn(execFileAsync)(
+        getPythonCommand(),
+        [join(resolvePackageRoot(), 'scripts', 'emoji_export.py'), '--out', opts.output],
+        { timeout: 900_000, maxBuffer: 8 * 1024 * 1024, env: createPythonProcessEnv({}) },
+      )
+      const line = stdout.trim().split(/\r?\n/).filter(Boolean).pop() ?? '{}'
+      const r = JSON.parse(line)
+      if (opts.json) {
+        console.log(JSON.stringify(r, null, 2))
+        return
+      }
+      if (!r.success) {
+        console.log(chalk.red(`✗ ${r.error || '导出失败'}`))
+        process.exit(1)
+      }
+      console.log(chalk.green(`✓ 表情已导出: ${r.path}`))
+      console.log(chalk.gray(`  收藏 ${r.favourites} 个 ｜ 专辑 ${r.packs} 个`))
+      if (r.notes) console.log(chalk.gray(`  ${r.notes} 条说明写在 manifest.json 里`))
+      console.log(chalk.gray('  打开 index.html 可离线浏览'))
+    } catch (e: any) {
+      const msg = safeSubprocessError(e, '表情导出失败')
+      if (opts.json) console.log(JSON.stringify({ success: false, code: 'EMOJI_EXPORT_FAILED', error: msg }))
+      else console.log(chalk.red(`✗ ${msg}`))
+      process.exit(1)
+    }
+  })
+
+// ==================== export-batch（批量导出）====================
+program
+  .command('export-batch <format>')
+  .description('批量导出多个会话（失败隔离；可逐项打包）')
+  .option('--batch <spec>', '会话列表：逗号分隔的 序号 / wxid / 昵称')
+  .option('--all', '导出全部会话（受 --max 限制）')
+  .option('--max <number>', '--all 时最多导出多少个会话', '20')
+  .option('-o, --output <dir>', '输出目录 (default: "./output")')
+  .option('-n, --limit <number>', '每个会话最大消息数（0=全量）', '0')
+  .option('-d, --date <YYYY-MM-DD>', '仅导出指定日期的消息')
+  .option('--from <date>', '起始日期')
+  .option('--to <date>', '结束日期')
+  .option('--contract <name>', 'JSON 数据契约：raw 或 weflow-v1', 'raw')
+  .option('--media', 'json/txt/excel 导出时一并抽出图片与文档')
+  .option('--full-images', '使用原图而非缩略图')
+  .option('--zip', '每个会话单独打成一个 ZIP')
+  .option('--password <pw>', '与 --zip 一起用：Win32 AES-256 加密')
+  .option('--non-interactive', '禁止交互选择')
+  .option('--json', '输出 JSON 格式')
+  .action(async (format: string, opts) => {
+    const validFormats = ['json', 'txt', 'html', 'md', 'excel']
+    if (!validFormats.includes(format)) {
+      if (opts.json) console.log(JSON.stringify({ success: false, code: 'INVALID_FORMAT', error: '导出格式无效', supported: validFormats }))
+      else console.log(chalk.red(`导出格式无效，可用: ${validFormats.join(', ')}`))
+      process.exit(1)
+    }
+    if (!configService.isConfigured()) {
+      if (opts.json) console.log(JSON.stringify({ success: false, code: 'NOT_INITIALIZED', error: '未完成初始化' }))
+      else { console.log(chalk.red('\n❌ 还没配置')); console.log(chalk.gray('  运行: weflow-cli init\n')) }
+      process.exit(1)
+    }
+
+    const limit = parseCliInteger(opts.limit, 'limit', 0, 100000, !!opts.json)
+    const maxSessions = parseCliInteger(opts.max, 'max', 1, 500, !!opts.json)
+
+    // 目标列表：--batch 显式给，或 --all 取前 N 个
+    let targets: string[] = []
+    if (opts.batch) {
+      targets = String(opts.batch).split(',').map((x: string) => x.trim()).filter(Boolean)
+    } else if (opts.all) {
+      const sessions = await chatService.listSessions(undefined, maxSessions)
+      targets = sessions.map((x) => x.username).filter(Boolean)
+    } else {
+      const msg = '要给 --batch <序号/wxid/昵称>，或者 --all'
+      if (opts.json) console.log(JSON.stringify({ success: false, code: 'NO_TARGET', error: msg }))
+      else console.log(chalk.red(msg))
+      process.exit(1)
+    }
+    if (targets.length === 0) {
+      if (opts.json) console.log(JSON.stringify({ success: true, total: 0, succeeded: 0, failed: 0, items: [] }))
+      else console.log(chalk.gray('没有可导出的会话'))
+      return
+    }
+
+    let from: number | undefined
+    let to: number | undefined
+    try {
+      const range = resolveExportDateRange({
+        date: opts.date, from: opts.from, to: opts.to,
+        preserveDateForRichHtml: format === 'html',
+      })
+      from = range.from
+      to = range.to
+    } catch (error) {
+      const dateError = error instanceof DateRangeError ? error : new DateRangeError('INVALID_DATE', '导出日期无效')
+      if (opts.json) console.log(JSON.stringify({ success: false, code: dateError.code, error: dateError.message }))
+      else console.log(chalk.red(dateError.message))
+      process.exit(1)
+    }
+
+    const items: any[] = []
+    let ok = 0
+    for (let i = 0; i < targets.length; i++) {
+      const raw = targets[i]
+      const label = `[${i + 1}/${targets.length}]`
+      try {
+        const resolved = await resolveTalkerQuiet(raw)
+        if (!resolved.ok) {
+          items.push({ talker: raw, success: false, path: null, count: null, zip: null, error: resolved.error })
+          if (!opts.json) console.error(chalk.red(`${label} ✗ ${raw}: ${resolved.error}`))
+          continue
+        }
+        const talker = resolved.talker as string
+        if (!opts.json) console.error(chalk.gray(`${label} 导出 ${talker} ...`))
+        const one = await runOneExport(talker, format, opts, limit, from, to)
+        const success = !!one.result?.success && !one.error
+        if (success) ok++
+        items.push({
+          talker, success,
+          path: one.result?.path ?? null,
+          count: one.result?.count ?? null,
+          zip: one.zip ?? null,
+          error: success ? null : (one.error || one.result?.error || '导出失败'),
+        })
+        if (!opts.json) {
+          if (success) console.error(chalk.green(`${label} ✓ ${one.result?.count ?? 0} 条`))
+          else console.error(chalk.red(`${label} ✗ ${one.error || one.result?.error || '失败'}`))
+        }
+      } catch (e: any) {
+        // 失败隔离：一个会话出错不中断整批
+        items.push({ talker: raw, success: false, path: null, count: null, zip: null, error: safeSubprocessError(e, '失败') })
+        if (!opts.json) console.error(chalk.red(`${label} ✗ ${safeSubprocessError(e, '失败')}`))
+      }
+    }
+
+    const summary = {
+      success: ok > 0, format, total: targets.length, succeeded: ok,
+      failed: targets.length - ok, items,
+    }
+    if (opts.json) {
+      console.log(JSON.stringify(summary, null, 2))
+    } else {
+      console.log('')
+      console.log(chalk.cyan(`批量导出完成：成功 ${ok} / ${targets.length}`))
+      for (const it of items) {
+        if (!it.success) console.log(chalk.red(`  ✗ ${it.talker}: ${it.error}`))
+      }
+    }
+    if (ok === 0) process.exit(1)
   })
 
 // ==================== evidence ====================
@@ -4110,6 +4350,42 @@ snsCmd
       }
     } catch (e: any) {
       console.log(chalk.red(`\n❌ 错误: ${e.message}`))
+    }
+  })
+
+snsCmd
+  .command('export')
+  .description('导出朋友圈归档（文字 + 媒体地址清单，输出 index.html / posts.json）')
+  .option('-o, --output <dir>', '输出目录', './output/sns')
+  .option('-n, --limit <number>', '最多多少条（0=全部）', '0')
+  .option('-u, --user <wxid>', '只看某个 wxid（子串匹配）')
+  .option('--since <date>', '起始日期 YYYY-MM-DD')
+  .option('--until <date>', '结束日期 YYYY-MM-DD')
+  .option('--json', '输出 JSON 格式')
+  .action(async (opts) => {
+    const { execFile: execFileAsync } = await import('child_process')
+    const { promisify: promisifyFn } = await import('util')
+    const argv = [join(resolvePackageRoot(), 'scripts', 'sns_export.py'), '--out', opts.output,
+                  '--limit', String(opts.limit)]
+    if (opts.user) argv.push('--user', String(opts.user))
+    if (opts.since) argv.push('--since', String(opts.since))
+    if (opts.until) argv.push('--until', String(opts.until))
+    try {
+      const { stdout } = await promisifyFn(execFileAsync)(getPythonCommand(), argv, {
+        timeout: 600_000, maxBuffer: 8 * 1024 * 1024, env: createPythonProcessEnv({}),
+      })
+      const line = stdout.trim().split(/\r?\n/).filter(Boolean).pop() ?? '{}'
+      const r = JSON.parse(line)
+      if (opts.json) { console.log(JSON.stringify(r, null, 2)); return }
+      if (!r.success) { console.log(chalk.red(`✗ ${r.error || '导出失败'}`)); process.exit(1) }
+      console.log(chalk.green(`✓ 朋友圈已导出: ${r.path}`))
+      console.log(chalk.gray(`  ${r.posts} 条动态 ｜ 媒体地址 ${r.media} 个`))
+      if (r.notes) console.log(chalk.gray(`  ${r.notes} 条说明写在 manifest.json 里`))
+    } catch (e: any) {
+      const msg = safeSubprocessError(e, '朋友圈导出失败')
+      if (opts.json) console.log(JSON.stringify({ success: false, code: 'SNS_EXPORT_FAILED', error: msg }))
+      else console.log(chalk.red(`✗ ${msg}`))
+      process.exit(1)
     }
   })
 

@@ -1638,6 +1638,67 @@ def render_system_message(content, names=None):
     return escape_html(text)
 
 
+def render_quote(content):
+    """引用回复：`<title>` 是我的回复，`<refermsg>` 里是被引用的原文。解析失败返回 None。"""
+    if not content:
+        return None
+    try:
+        quoted = extract_xml_text(content, 'refermsg')
+        my_text = readable_fragment(extract_xml_text(content, 'title')) or ''
+    except Exception:
+        return None
+    # refermsg 本身是 XML 片段，里面还有 content / displayname
+    quoted_text = ''
+    quoted_by = ''
+    if quoted:
+        quoted_text = readable_fragment(extract_xml_text(quoted, 'content'))
+        quoted_by = (extract_xml_text(quoted, 'displayname') or '').strip()
+        # 真实样本里 displayname 可能是占位符 "."（2108 条引用里大量如此），
+        # 直接显示会变成"引用（.）：…"，比不显示更糟
+        if quoted_by in ('.', '。', '-', ''):
+            quoted_by = ''
+    if not quoted_text and not my_text:
+        return None
+    head = ''
+    if quoted_text:
+        who = ('（%s）' % escape_html(quoted_by)) if quoted_by else ''
+        head = ('<div class="quote-src">引用%s：%s</div>'
+                % (who, escape_html(quoted_text[:160])))
+    body = ('<div class="quote-body">%s</div>' % escape_html(my_text)) if my_text else ''
+    if not head and not body:
+        return None
+    return '<div class="msg-quote">%s%s</div>' % (head, body)
+
+
+def render_merged_forward(content):
+    """合并转发：`<recorditem>` 里是一串 `<dataitem>`，每条含 `<title>`。
+
+    有多少条就说多少条；解析不出条目就返回 None（交给普通 appmsg 分支）。
+    """
+    if not content or '<recorditem' not in content:
+        return None
+    block = re.search(r'<recorditem[^>]*>(.*?)</recorditem>', content, re.S)
+    if not block:
+        return None
+    inner = block.group(1)
+    titles = []
+    # dataitem 可能没有闭合（微信历史上见过自闭合式写法），所以逐个 title 取更稳
+    for item in re.split(r'<dataitem\b', inner)[1:]:
+        t = readable_fragment(extract_xml_text(item, 'title'))
+        if t:
+            titles.append(t)
+    if not titles:
+        for t in re.findall(r'<title>(.*?)</title>', inner, re.S):
+            t = readable_fragment(t)
+            if t:
+                titles.append(t)
+    if not titles:
+        return None
+    lis = ''.join('<li>%s</li>' % escape_html(x) for x in titles)
+    return ('<details class="msg-forward"><summary>合并转发（%d 条）</summary>'
+            '<ol class="msg-forward-list">%s</ol></details>' % (len(titles), lis))
+
+
 def escape_html(text):
     if not text:
         return ''
@@ -2005,8 +2066,11 @@ def format_message(row, talker, wx_dir, image_map=None, sender_map=None, display
                 else:
                     display = escape_html(content) if content else '<span class="msg-media">[表情]</span>'
     elif local_type == 49 and not is_emoji_xml:
-        # App message (link/file/article)
-        if content:
+        # App message (link/file/article)；合并转发的记录清单在这一支里先分流
+        forward_html = render_merged_forward(content)
+        if forward_html:
+            display = forward_html
+        elif content:
             # Try to parse XML for title/desc
             title = readable_fragment(extract_xml_text(content, 'title'))
             desc = readable_fragment(extract_xml_text(content, 'des'))
@@ -2058,7 +2122,8 @@ def format_message(row, talker, wx_dir, image_map=None, sender_map=None, display
         names = {talker: display_name or talker, own_wxid: '我'}
         display = f'<span class="msg-sys">{render_system_message(content, names)}</span>'
     elif local_type == 10002:
-        display = escape_html(content) if content else '<span class="msg-media">[引用]</span>'
+        rendered = render_quote(content)
+        display = rendered or (escape_html(content) if content else '<span class="msg-media">[引用]</span>')
     else:
         if content:
             display = escape_html(content)
@@ -2234,6 +2299,83 @@ def decode_xml(text):
             .replace('&apos;', "'"))
 
 
+# 检索栏：搜索 + 时间范围 + 跳转。抽成常量是为了避开 f-string 的花括号转义。
+_SEARCH_TOOLBAR_HTML = """  <div class="search-box">
+    <div class="search-row">
+      <input type="text" id="q" placeholder="搜索昵称、内容或日期…" oninput="applyFilters()">
+      <button type="button" id="prev" onclick="jump(-1)" title="上一处">↑</button>
+      <button type="button" id="next" onclick="jump(1)" title="下一处">↓</button>
+      <button type="button" onclick="resetFilters()" title="清空">清空</button>
+    </div>
+    <div class="search-row">
+      <label>从 <input type="date" id="from" onchange="applyFilters()"></label>
+      <label>到 <input type="date" id="to" onchange="applyFilters()"></label>
+      <span class="search-info" id="search-info"></span>
+    </div>
+  </div>"""
+
+
+_SEARCH_JS = """
+const ROWS = Array.from(document.querySelectorAll('.msg-row'));
+let hits = [], cursor = -1;
+
+function applyFilters() {
+  const q = (document.getElementById('q').value || '').trim().toLowerCase();
+  const from = document.getElementById('from').value;
+  const to = document.getElementById('to').value;
+  const fromTs = from ? new Date(from + 'T00:00:00').getTime() : null;
+  const toTs = to ? new Date(to + 'T23:59:59').getTime() : null;
+
+  hits = [];
+  ROWS.forEach(row => {
+    const ts = Number(row.dataset.ts) * 1000;
+    const text = row.textContent.toLowerCase();
+    const okText = !q || text.includes(q);
+    const okFrom = fromTs === null || ts >= fromTs;
+    const okTo = toTs === null || ts <= toTs;
+    const show = okText && okFrom && okTo;
+    row.classList.toggle('hidden', !show);
+    row.classList.remove('hit');
+    if (show) hits.push(row);
+  });
+
+  cursor = -1;
+  const info = document.getElementById('search-info');
+  const filtering = q || from || to;
+  info.textContent = filtering
+    ? '显示 ' + hits.length + ' / ' + ROWS.length + ' 条' + (hits.length ? '（↑↓ 定位）' : '')
+    : '';
+}
+
+function jump(step) {
+  if (!hits.length) return;
+  if (cursor >= 0) hits[cursor].classList.remove('hit');
+  cursor = (cursor + step + hits.length) % hits.length;
+  const row = hits[cursor];
+  row.classList.add('hit');
+  row.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  document.getElementById('search-info').textContent =
+    '第 ' + (cursor + 1) + ' / ' + hits.length + ' 处在上面';
+}
+
+function resetFilters() {
+  document.getElementById('q').value = '';
+  document.getElementById('from').value = '';
+  document.getElementById('to').value = '';
+  ROWS.forEach(r => { r.classList.remove('hidden'); r.classList.remove('hit'); });
+  hits = []; cursor = -1;
+  document.getElementById('search-info').textContent = '';
+}
+
+document.addEventListener('keydown', function (e) {
+  if (e.key === 'Escape') resetFilters();
+  if (e.key === 'F3' || (e.key === 'Enter' && document.activeElement.id === 'q')) {
+    e.preventDefault(); jump(e.shiftKey ? -1 : 1);
+  }
+});
+"""
+
+
 def build_html_page(talker, messages_part, part_num, total_parts, display_name, file_prefix=''):
     """Build a single HTML page for a part.
 
@@ -2255,7 +2397,7 @@ def build_html_page(talker, messages_part, part_num, total_parts, display_name, 
         bg = '#95ec69' if is_self else '#ffffff'
         sender_display = escape_html(sender)
 
-        rows.append(f'''<div class="msg-row" style="text-align:{align};">
+        rows.append(f'''<div class="msg-row" data-ts="{int(m['create_time'])}" data-sender="{sender_display}" style="text-align:{align};">
   <div class="msg-bubble" style="background:{bg};">
     <div class="msg-sender">{sender_display} · {time_str}</div>
     <div class="msg-content">{content_html}</div>
@@ -2397,6 +2539,33 @@ body {{
 .msg-row.hidden {{
   display: none;
 }}
+.msg-quote {{ border-left: 3px solid #d0d0d0; padding: 4px 8px; margin: 2px 0; }}
+.msg-quote .quote-src {{ color: #888; font-size: 12px; margin-bottom: 4px; }}
+.msg-quote .quote-body {{ font-size: 14px; }}
+.msg-forward {{ font-size: 13px; }}
+.msg-forward summary {{ cursor: pointer; color: #576b95; }}
+.msg-forward-list {{ margin: 6px 0 0 18px; }}
+.msg-row.hit .msg-bubble {{
+  outline: 3px solid #f5a623;
+  outline-offset: 2px;
+}}
+.search-row {{
+  display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+  margin-top: 8px; justify-content: center;
+}}
+.search-row input[type="text"] {{
+  flex: 1 1 220px; min-width: 160px; padding: 7px 10px;
+  border: 1px solid #ddd; border-radius: 8px; font-size: 14px;
+}}
+.search-row input[type="date"] {{
+  padding: 5px 8px; border: 1px solid #ddd; border-radius: 8px; font-size: 13px;
+}}
+.search-row label {{ font-size: 13px; color: #666; }}
+.search-row button {{
+  padding: 6px 10px; border: 1px solid #ddd; background: #fff;
+  border-radius: 8px; font-size: 13px; cursor: pointer;
+}}
+.search-row button:hover {{ background: #f6f6f6; }}
 </style>
 </head>
 <body>
@@ -2407,10 +2576,7 @@ body {{
   <div class="part-nav">
 {chr(10).join(f'    <a href="{talker_safe}_part{i+1}.html" class="{"active" if i+1 == part_num else ""}">第{i+1}部分</a>' for i in range(total_parts))}
   </div>
-  <div class="search-box">
-    <input type="text" placeholder="搜索聊天记录..." oninput="searchMessages(this.value)">
-    <div class="search-info" id="search-info"></div>
-  </div>
+{_SEARCH_TOOLBAR_HTML}
 </div>
 {chr(10).join(rows)}
 </div>
@@ -2419,34 +2585,7 @@ body {{
   <p class="hint">💡 图片与表情来自本机微信数据（会话缓存 + 账号媒体索引）。本机从未下载过的图片、以及未缓存封面的视频，无法显示。</p>
   <p class="hint">⚠️ 语音下方文字为<b>本机机器转写</b>，未经校对。粤语/方言的识别准确率有限，可能出现通顺但并非原话的内容——<b>不可作为原话引用</b>；需要确证时请以录音为准。</p>
 </div>
-<script>
-function searchMessages(query) {{
-  const rows = document.querySelectorAll('.msg-row');
-  const info = document.getElementById('search-info');
-  let found = 0;
-  const q = query.toLowerCase().trim();
-  rows.forEach(row => {{
-    if (!q) {{
-      row.classList.remove('hidden');
-      found++;
-    }} else {{
-      const text = row.textContent.toLowerCase();
-      if (text.includes(q)) {{
-        row.classList.remove('hidden');
-        found++;
-      }} else {{
-        row.classList.add('hidden');
-      }}
-    }}
-  }});
-  if (q) {{
-    info.style.display = 'block';
-    info.textContent = `找到 ${{found}} 条匹配`;
-  }} else {{
-    info.style.display = 'none';
-  }}
-}}
-</script>
+<script>{_SEARCH_JS}</script>
 </body>
 </html>'''
 
