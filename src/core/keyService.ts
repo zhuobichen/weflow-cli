@@ -339,7 +339,15 @@ export class KeyService {
       try { this.cleanupHook() } catch { }
     }
 
-    return { success: false, error: '等待超时，未观察到数据库初始化事件', logs }
+    // 失败要能分辨"组件没装上"和"装上了但没等到事件"——这两种的下一步完全不同：
+    // 前者是权限/兼容问题，后者是没触发（在微信里点开一个聊天即可）。
+    return {
+      success: false,
+      error: `本地访问组件已就绪，但 ${Math.round(timeoutMs / 1000)} 秒内没等到数据库打开事件`
+        + `（轮询 ${pollCount} 次）。在微信里点开任一聊天或朋友圈可触发一次；`
+        + '若反复尝试仍无事件，请带上微信版本号反馈。',
+      logs,
+    }
   }
 
   /**

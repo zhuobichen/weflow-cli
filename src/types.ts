@@ -142,6 +142,8 @@ export interface ConfigData {
   ntKey?: string
   /** NT 格式: 32位十六进制盐值 */
   ntSalt?: string
+  /** 扫内存得到的「盐 → 每个库自己的 enc_key」映射（JSON，lock: 加密存放） */
+  dbKeyMap?: string
   /** NT 格式: 联系人数据库路径 (contact.db) */
   contactDbPath?: string
   /** NT 格式: contact.db 64位十六进制密钥 */

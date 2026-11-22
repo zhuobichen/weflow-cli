@@ -2805,6 +2805,22 @@ program
   })
 
 // ==================== export ====================
+/** Python 脚本失败时的可读信息：优先用脚本自己给的 error，别再套一层 stdout。 */
+function pythonFailureMessage(e: any, fallback: string): string {
+  const stdout = String(e?.stdout ?? '')
+  const lines = stdout.split(String.fromCharCode(10)).filter((x) => x.trim())
+  const line = lines.length ? lines[lines.length - 1] : ''
+  if (line) {
+    try {
+      const parsed = JSON.parse(line)
+      if (parsed && typeof parsed.error === 'string' && parsed.error) return parsed.error
+    } catch {
+      // 不是 JSON 就退回通用格式化
+    }
+  }
+  return safeSubprocessError(e, fallback)
+}
+
 /** 一次导出：媒体抽取 + 格式分派 + 可选打包。批量与单条都走它，规则只有一份。 */
 async function runOneExport(
   talker: string,
@@ -3028,9 +3044,11 @@ emojiCmd
       const r = JSON.parse(line)
       if (opts.json) {
         console.log(JSON.stringify(r, null, 2))
+        if (!r.success) process.exit(1)
         return
       }
       if (!r.success) {
+        if (opts.json) console.log(JSON.stringify({ success: false, code: 'EMOJI_EXPORT_FAILED', error: r.error || '导出失败' }))
         console.log(chalk.red(`✗ ${r.error || '导出失败'}`))
         process.exit(1)
       }
@@ -3039,7 +3057,7 @@ emojiCmd
       if (r.notes) console.log(chalk.gray(`  ${r.notes} 条说明写在 manifest.json 里`))
       console.log(chalk.gray('  打开 index.html 可离线浏览'))
     } catch (e: any) {
-      const msg = safeSubprocessError(e, '表情导出失败')
+      const msg = pythonFailureMessage(e, '表情导出失败')
       if (opts.json) console.log(JSON.stringify({ success: false, code: 'EMOJI_EXPORT_FAILED', error: msg }))
       else console.log(chalk.red(`✗ ${msg}`))
       process.exit(1)
@@ -3300,9 +3318,53 @@ program
   .option('-t, --timeout <ms>', '超时时间(毫秒)', '60000')
   .option('--force', '即使已有本地配置也执行捕获')
   .option('--dry-run', '仅预览，不扫描进程内存或捕获密钥')
+  .option('--scan', '改用内存扫描取密钥（不注入 DLL、不需要数据库打开事件）')
+  .option('--save', '与 --scan 一起用：把「盐 → 密钥」写进配置（dbKeyMap），读库时优先使用')
+  .option('--time-budget <sec>', '--scan 的扫描时间上限（秒）', '120')
   .option('--yes', '确认启动人工密钥捕获流程')
   .option('--json', '输出机器可读预览；实际捕获必须在交互终端执行')
   .action(async (opts) => {
+    if (opts.scan) {
+      // 内存扫描：不注入 DLL、不等数据库打开事件。微信 4.x 连接常驻，等事件的路径
+      // 在"没重启过客户端"时永远等不到（实测 180 秒 1451 次轮询为空）。
+      const { execFile: execFileAsync } = await import('child_process')
+      const { promisify: promisifyFn } = await import('util')
+      const argv = [join(resolvePackageRoot(), 'scripts', 'dbkey_scan.py'),
+                    '--json', '--time-budget', String(parseCliInteger(opts.timeBudget, 'time-budget', 5, 900, !!opts.json))]
+      try {
+        const { stdout } = await promisifyFn(execFileAsync)(getPythonCommand(), argv, {
+          timeout: 900_000, maxBuffer: 8 * 1024 * 1024, env: createPythonProcessEnv({}),
+        })
+        const parts = String(stdout).split(String.fromCharCode(10)).filter((x) => x.trim())
+        const line = parts.length ? parts[parts.length - 1] : '{}'
+        const r = JSON.parse(line)
+        if (opts.json) {
+          if (opts.save && r.ok && r.keys) configService.set('dbKeyMap', JSON.stringify(r.keys))
+          console.log(JSON.stringify(r, null, 2))
+          if (!r.ok) process.exit(1)
+          return
+        }
+        if (!r.ok) {
+          console.log(chalk.red(`✗ ${r.error || '扫描未命中'}`))
+          if (r.diag) console.log(chalk.gray(`  诊断: ${JSON.stringify(r.diag)}`))
+          process.exit(1)
+        }
+        if (opts.save && r.keys && typeof r.keys === 'object') {
+          // 只存 {盐: 密钥}，读库时 derive_database_key 按 salt 精确命中；不命中就退回 passphrase
+          configService.set('dbKeyMap', JSON.stringify(r.keys))
+          console.log(chalk.gray(`  已写入配置 dbKeyMap（${Object.keys(r.keys).length} 个库的密钥，lock: 加密）`))
+        }
+        console.log(chalk.green(`✓ 扫描到密钥（${r.path}）`))
+        console.log(chalk.gray(`  可解密 ${r.verifiedCount}/${r.saltTotal} 个库 ｜ 扫描 ${r.scannedMb} MB ｜ 候选 ${r.candidates} 个 ｜ ${r.elapsedMs} ms`))
+        console.log(chalk.gray(`  首个验证库: ${r.verifiedAgainst} ｜ key ${r.keyMasked || '（已隐藏）'}`))
+        return
+      } catch (e: any) {
+        const msg = pythonFailureMessage(e, '内存扫描失败')
+        if (opts.json) console.log(JSON.stringify({ ok: false, code: 'DBKEY_SCAN_FAILED', error: msg }))
+        else console.log(chalk.red(`✗ ${msg}`))
+        process.exit(1)
+      }
+    }
     const configured = configService.isConfigured()
     const preview = {
       success: true,
@@ -4376,13 +4438,21 @@ snsCmd
       })
       const line = stdout.trim().split(/\r?\n/).filter(Boolean).pop() ?? '{}'
       const r = JSON.parse(line)
-      if (opts.json) { console.log(JSON.stringify(r, null, 2)); return }
-      if (!r.success) { console.log(chalk.red(`✗ ${r.error || '导出失败'}`)); process.exit(1) }
+      if (opts.json) {
+        console.log(JSON.stringify(r, null, 2))
+        if (!r.success) process.exit(1)
+        return
+      }
+      if (!r.success) {
+        if (opts.json) console.log(JSON.stringify({ success: false, code: 'SNS_EXPORT_FAILED', error: r.error || '导出失败' }))
+        console.log(chalk.red(`✗ ${r.error || '导出失败'}`))
+        process.exit(1)
+      }
       console.log(chalk.green(`✓ 朋友圈已导出: ${r.path}`))
       console.log(chalk.gray(`  ${r.posts} 条动态 ｜ 媒体地址 ${r.media} 个`))
       if (r.notes) console.log(chalk.gray(`  ${r.notes} 条说明写在 manifest.json 里`))
     } catch (e: any) {
-      const msg = safeSubprocessError(e, '朋友圈导出失败')
+      const msg = pythonFailureMessage(e, '朋友圈导出失败')
       if (opts.json) console.log(JSON.stringify({ success: false, code: 'SNS_EXPORT_FAILED', error: msg }))
       else console.log(chalk.red(`✗ ${msg}`))
       process.exit(1)

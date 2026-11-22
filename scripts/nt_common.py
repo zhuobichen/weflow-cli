@@ -14,6 +14,8 @@
 所以这里只留一份实现，**契约取更安全的那一版**（下面的 docstring 各自写明）。
 导入本模块不需要 sqlcipher3：这几个函数都不连数据库。
 """
+
+import pathlib
 from pathlib import Path
 
 # 与 message_*.db 同目录、但不是消息分片的派生库。
@@ -47,25 +49,74 @@ def discover_message_shards(db_path):
     return shards or [str(path)]
 
 
+_KEY_MAP_CACHE = {'mtime': None, 'map': {}}
+
+
+def scan_key_map():
+    """配置里的「盐 → 该库 enc_key」映射；没有/解不开就返回空 dict。
+
+    缓存在进程内，按配置文件 mtime 失效——`derive_database_key` 每个库都会调，
+    每次都读盘+解密会明显拖慢查询。
+    """
+    import json
+    import os
+    try:
+        from _utils import load_config, decrypt_lock
+        cfg_path = pathlib.Path(os.path.expanduser('~')) / '.weflow-cli' / 'config.json'
+        mtime = cfg_path.stat().st_mtime_ns if cfg_path.exists() else None
+        if _KEY_MAP_CACHE['mtime'] == mtime:
+            return _KEY_MAP_CACHE['map']
+        # 同一条语句里就解密（仓库约定：加密键不能先把密文当变量拿出去，见 encrypted_config_test）
+        raw_enc = (load_config() or {}).get('dbKeyMap') or ''
+        mapping = {}
+        if raw_enc:
+            try:
+                decoded = decrypt_lock(raw_enc) if raw_enc.startswith('lock:') else raw_enc
+                parsed = json.loads(decoded)
+                if isinstance(parsed, dict):
+                    mapping = {str(k).lower(): str(v).lower() for k, v in parsed.items()}
+            except Exception:
+                mapping = {}
+        _KEY_MAP_CACHE['mtime'] = mtime
+        _KEY_MAP_CACHE['map'] = mapping
+        return mapping
+    except Exception:
+        return {}
+
+
 def derive_database_key(path, fallback_key, fallback_salt, passphrase=''):
     """每分片的 SQLCipher 密钥（微信 4.1.12.26+）。
 
-    共享的 passphrase 会跟**每个分片自己的** 16 字节文件头 salt 做一次
-    PBKDF2-HMAC-SHA512。没有 passphrase 时原样返回配置里那一对——老安装的
-    分片 0 就是用那个开的。
+    顺序：
+      1. **配置里的 dbKeyMap**：按该库自己的 salt 精确命中 —— 这是 `dbkey --scan`
+         扫出来的，不依赖 passphrase，也不依赖客户端行为
+      2. passphrase 与**该库自己的** 16 字节文件头 salt 做 PBKDF2-HMAC-SHA512
+      3. 都没命中 → 原样返回配置里那一对（老安装的分片 0 就是这么开的）
+
+    第 1 条不命中时行为与从前完全一致，所以老配置不受影响。
     """
     import hashlib
-    if not passphrase:
-        return fallback_key, fallback_salt
+
     try:
         with open(path, 'rb') as fh:
             salt = fh.read(16)
-        if len(salt) != 16:
-            return fallback_key, fallback_salt
+    except OSError:
+        return fallback_key, fallback_salt
+    if len(salt) != 16:
+        return fallback_key, fallback_salt
+
+    salt_hex = salt.hex()
+    mapped = scan_key_map().get(salt_hex)
+    if mapped:
+        return mapped, salt_hex
+
+    if not passphrase:
+        return fallback_key, fallback_salt
+    try:
         raw_passphrase = bytes.fromhex(passphrase)
         key = hashlib.pbkdf2_hmac('sha512', raw_passphrase, salt, 256000, 32).hex()
-        return key, salt.hex()
-    except (OSError, ValueError):
+        return key, salt_hex
+    except ValueError:
         return fallback_key, fallback_salt
 
 
