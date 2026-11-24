@@ -82,9 +82,21 @@ export function fatalModelError(error: string | undefined): string | null {
 }
 
 export async function runEvalSuite(options: RunOptions = {}): Promise<RunOutcome> {
-  const temperature = Number.isFinite(options.temperature) ? Number(options.temperature) : 0
+  // **不传温度就沿用线上默认**（助手自己的 0.4），而不是钉在 0。
+  //
+  // 原来这里是 `: 0`，注释还写着"评测固定 0 是有意的"。2026-11-24 改掉，理由：
+  // 评测要回答的是"**这个 harness 在真实采样下能不能让模型把事办对**"，而线上默认 0.4。
+  // 钉在 0 等于测了一个不存在的环境，还会给出"已经完美"的假象——实测同一套代码：
+  // 温度 0 连跑三次 49/49，放回 0.4 立刻出现 2~3 条偶发失败。那几条才是真缺口。
+  // 想看"最优采样下过不过"可以显式传 --temperature 0，但默认不该是它。
+  const temperature = Number.isFinite(options.temperature) ? Number(options.temperature) : undefined
+  // 报告里要印"这一轮实际用的温度"——不传时助手自己会取进程环境或默认 0.4，
+  // 这里按同一口径解析出来，否则报告里印 undefined，两次报告就没法比。
+  const effectiveTemperature = temperature
+    ?? (Number.isFinite(Number(process.env.WEFLOW_AI_TEMPERATURE)) && process.env.WEFLOW_AI_TEMPERATURE !== ''
+      ? Number(process.env.WEFLOW_AI_TEMPERATURE) : 0.4)
   const unavailable = (await options.precheck?.()) ?? null
-  if (unavailable) return { report: null, unavailable, results: [], temperature }
+  if (unavailable) return { report: null, unavailable, results: [], temperature: effectiveTemperature }
 
   // **审计指到临时目录**，这是三件事一起解决：
   // ① 不往真实用户的 `~/.weflow-cli/assistant_audit.log` 里写评测记录；
@@ -99,7 +111,7 @@ export async function runEvalSuite(options: RunOptions = {}): Promise<RunOutcome
   process.env.WEFLOW_AUDIT_DIR = tmpDir
   // 采样温度同理：整轮固定在同一个值，跑完还原（评测不该改用户进程里别的行为）
   const savedTemperature = process.env.WEFLOW_AI_TEMPERATURE
-  process.env.WEFLOW_AI_TEMPERATURE = String(temperature)
+  if (temperature !== undefined) process.env.WEFLOW_AI_TEMPERATURE = String(temperature)
 
   const cases = pick(options)
   const repeats = Math.max(1, options.repeats ?? 1)
@@ -119,7 +131,7 @@ export async function runEvalSuite(options: RunOptions = {}): Promise<RunOutcome
         // 这里返回 `report: null`（= 没跑），CLI 的退出码是 2，与"跑了但有失败"区分开。
         const fatal = fatalModelError(result.observed.error)
         if (fatal) {
-          return { report: null, unavailable: `模型调用失败，已中止（${spec.id}）：${fatal}`, results, temperature }
+          return { report: null, unavailable: `模型调用失败，已中止（${spec.id}）：${fatal}`, results, temperature: effectiveTemperature }
         }
         observations.push(result.observed)
         results.push(result)
@@ -140,7 +152,9 @@ export async function runEvalSuite(options: RunOptions = {}): Promise<RunOutcome
     removeDirQuietly(tmpDir)
   }
 
-  return { report: buildReport(runs), results, temperature }
+  const rep = buildReport(runs)
+  rep.temperature = effectiveTemperature
+  return { report: rep, results, temperature: effectiveTemperature }
 }
 
 /**

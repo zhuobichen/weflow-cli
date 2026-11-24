@@ -14,12 +14,13 @@ import { routeByIntent, routeWithArgs, routeParts, isFollowUp, type IntentHit }
 import { pushbackFor, emptyTalkPushback, asksBackData, toolFailureNudge, isEmptyToolResult, guardsEnabled,
          stateClaimPushback, impossibleOfferPushback,
          timeWindowWithoutLookup, stripImpossibleOffers, destructiveFollowUpPushback,
-         stripOffersAfterDestructive }
+         stripOffersAfterDestructive, reversedPrivacyPushback }
   from './assistantGuard.js'
 import { selectFactsForInjection, frameLocalData } from './assistantMemory.js'
 import { configService } from './configService.js'
 import { AssistantMemory, explicitRememberIntent, type ChatTurn } from './assistantMemory.js'
 import { privacyGate } from './assistantPrivacy.js'
+import { coerceToolArgs } from './assistantToolArgs.js'
 import { TOOL_DEFS, availableToolDefs, unavailableCapabilities, unavailableToolReason,
          executeTool } from './assistantTools.js'
 import type { AttachedImage, ToolContext } from './assistantTools.js'
@@ -40,6 +41,52 @@ import { startPanelServer, type PanelServer } from '../panel/server.js'
 import { clearEndpoint } from '../panel/endpoint.js'
 
 const MAX_TOOL_ROUNDS = 6
+
+/**
+ * `runReactLoop` 这一轮**是怎么结束的**。
+ *
+ * 存在的理由：`reply` 有两种来源，而调用方必须分开对待。
+ *
+ * - `'answered'`：模型真的给出了最终答复。
+ * - `'rounds-exhausted'`：用完了 `MAX_TOOL_ROUNDS`，`reply` 是占位文案。
+ *
+ * 为什么不用 `ok: boolean`：布尔值会被写成 `if (ok) … else …` 两条支路，而"撞上限"
+ * 和"LLM 报错"（走 catch 里的兜底文案）处理不同——前者还有一份半成品答复。
+ * 合成一个布尔，下次加状态时就会悄悄丢信息；可判别联合会让编译器指着所有 switch 让你改。
+ */
+type ReactOutcome = 'answered' | 'rounds-exhausted'
+
+/**
+ * 这个网络错误"重试一次有可能好"吗。
+ *
+ * 判据只有两类（2026-11-24 实测出来的）：
+ * - **连接层**：`fetch failed`（DNS/连接被拒/连接被重置）、`TimeoutError`（AbortSignal 超时）。
+ * - **临时性**：`UND_ERR_SOCKET`、`ECONNRESET`、`ETIMEDOUT`。
+ *
+ * **不重试**：`AbortError` 如果来自用户主动取消（不是超时）——重试等于无视取消。
+ * 这里靠 `signal.aborted` 之外的特征区分不了取消与超时，所以保守地只看 `TimeoutError`
+ * 这个名字（`AbortSignal.timeout()` 抛的正是它）。
+ */
+function isRetryableFetchError(error: any): boolean {
+  const name = String(error?.name ?? '')
+  const message = String(error?.message ?? '')
+  const cause = String(error?.cause?.code ?? error?.code ?? '')
+  if (name === 'TimeoutError') return true
+  if (name === 'AbortError') return false          // 用户取消，不重试
+  if (/fetch failed/i.test(message)) return true
+  if (/UND_ERR_SOCKET|ECONNRESET|ETIMEDOUT|ECONNREFUSED|EAI_AGAIN/.test(cause)) return true
+  return false
+}
+
+/** 指数退避 + 抖动：第 1 次约 0.5s，第 2 次约 1s（±25% 抖动，避免多请求同拍重试） */
+function backoffMs(attempt: number): number {
+  const base = 500 * 2 ** (attempt - 1)
+  return Math.round(base * (0.75 + Math.random() * 0.5))
+}
+
+function sleepMs(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
 /** 追问接续只对这些"幂等的读类检索"生效（见 `lastRetrieval` 的注释） */
 const RETRIEVAL_TOOLS = new Set(['search_knowledge', 'search_chats', 'search_memory'])
 /** 每日 LLM 处理上限 (护栏: 防 bug 死循环/异常流量烧钱; 0 = 不限制) */
@@ -295,6 +342,42 @@ export class AssistantService {
   }
 
   /** 底层 LLM 调用 (含出境审计) */
+  /**
+   * 带重试的 `fetch`：**只重试"重试有可能好"的那几种**，其余立即抛出。
+   *
+   * 判据写在 `isRetryableFetchError` 里。这里只负责节奏：3 次、指数退避带抖动。
+   *
+   * 为什么需要它（2026-11-24 实测）：评测 `--repeats 3` 连跑，绕不开的失败全是
+   * 「The operation was aborted due to timeout」「fetch failed」——**与模型能力无关**，
+   * 却把整条用例判成失败，报告读起来像"模型退化了"。而 `fatalModelError` 那套只覆盖
+   * 401/402/403/404/429 的中止逻辑，没有覆盖"重试一次就好"的这一类。
+   *
+   * 为什么不用 `fatalModelError` 那套：它的语义是"整轮中止"。这里的语义是"这一跳重来"，
+   * 两件事不该混在一个判词里。
+   */
+  private async fetchWithRetry(url: string, init: RequestInit, attempts = 3): Promise<Response> {
+    let lastError: unknown = null
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+      try {
+        const res = await fetch(url, init)
+        // 429 / 5xx 是"再来一次可能就好"，但**不消耗**这次尝试的响应体
+        if ((res.status === 429 || res.status >= 500) && attempt < attempts) {
+          appendLog(`[网络] HTTP ${res.status}，第 ${attempt} 次重试`)
+          await res.text().catch(() => '')   // 把连接读干净再重试
+          await sleepMs(backoffMs(attempt))
+          continue
+        }
+        return res
+      } catch (error: any) {
+        lastError = error
+        if (!isRetryableFetchError(error) || attempt >= attempts) throw error
+        appendLog(`[网络] ${String(error?.name ?? 'error')}: ${String(error?.message ?? '').slice(0, 60)}，第 ${attempt} 次重试`)
+        await sleepMs(backoffMs(attempt))
+      }
+    }
+    throw lastError ?? new Error('fetch 重试耗尽')
+  }
+
   private async callLLM(messages: ApiMessage[], tools?: any[], maxTokens = 800): Promise<any> {
     const { url, model, key, local } = this.engineConfig()
     if (!key && !local) {
@@ -316,7 +399,18 @@ export class AssistantService {
     const body: Record<string, unknown> = { model, messages: payload, max_tokens: maxTokens, temperature }
     if (tools?.length) { body.tools = tools; body.tool_choice = 'auto' }
 
-    const res = await fetch(`${url}/chat/completions`, {
+    // **可重试的失败要重试，坏的立即失败**（2026-11-24）。
+    //
+    // 评测连跑三轮，绕不开的失败全是这一类：
+    //   `❌ 大脑暂时离线: The operation was aborted due to timeout`
+    //   `❌ 大脑暂时离线: fetch failed`
+    // 它们**与"模型不会用工具"完全无关**，却把整条用例判成失败——而这类错误重试一次就好。
+    //
+    // 区分（与 pi 同一纪律）：
+    // - **可重试**：网络层错误（fetch failed / timeout）、429、5xx。
+    // - **立即失败**：401/403（key 不对）、400（请求本身错）、404（模型名错）——
+    //   这些重试只会把同一个错误重复三次，还多花时间。
+    const res = await this.fetchWithRetry(`${url}/chat/completions`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -403,6 +497,13 @@ export class AssistantService {
         + '只有当用户明确问"怎么才能看到正文"时，才用一句话说明：这是配置项 '
         + 'assistantPrivacy，需要他自己在终端执行 weflow-cli config set assistantPrivacy balanced '
         + '并重启助手；你没有修改它的工具。'
+        // 2026-11-24 实测：用户问「彪弟最近聊了什么」，它答「如果想了解具体内容，**需要打开
+        // 严格模式**查看」——方向说反了。strict 是**限制**模式（正文被屏蔽），要看到正文得
+        // **离开** strict。它知道该做什么，却把"解除限制"说成了"打开限制"。
+        // 这类错误比编造更隐蔽：句子通顺、动词具体，用户照着做只会更看不到。
+        + '**说方向时必须准确**：strict 是"屏蔽正文"的模式，想看到正文要**离开**它'
+        + '（改成 balanced），**绝不能**说"打开/开启严格模式"——那会让用户以为开了就能看见，'
+        + '实际正好相反。'
     }
     return `[隐私] 当前 ${mode} 模式：工具结果里的聊天正文是原文（电话/证件/邮箱/密钥/链接已打成`
       + '占位符），可以直接引用，不必声称被屏蔽。'
@@ -430,6 +531,22 @@ export class AssistantService {
         + SEP + '（这些工具**不在你的工具表里**，但你调不到的原因只是没配置，**不是这个功能不存在**。'
         + '用户问到时直说"这块还没配置"并给出上面那个配置项，**不要说"我没有这个工具"**。）')
     }
+    // **根本没做的能力也要说出来**，而且要说"做不到"，不是"没配置"。
+    //
+    // 为什么需要这一段（2026-11-20/21 两天实测）：只靠事后守卫挡，一共撞了四次——
+    // 「要我帮你解密吗」「帮你跑一遍提取」「帮你把收藏导出成 Excel」「你回复后我立即处理」。
+    // 每次都是模型**自己发明了一条产品里不存在的能力**，而守卫只能在它说出口之后删句。
+    // 事前把它不知道的事写进提示词，比事后删便宜得多，也不会留下断句。
+    parts.push('[本产品做不到的事]' + SEP + [
+      '· 导出收藏 / 朋友圈 / 读书 / 日历（只能导出**聊天记录**，工具 export_chat）',
+      '· 代你发送消息、代你登录微信、发布或互动朋友圈（朋友圈只读）',
+      '· 解密聊天正文或数据库（strict 下正文不出境，这也不是"解密"能解决的）',
+      '· 修改隐私档位 assistantPrivacy（那是用户自己在终端执行的命令）',
+      '· 执行命令行或脚本（todos extract / sync 这类要用户自己跑）',
+    ].join(SEP)
+      + SEP + '（**这些是真的做不到**，不是没配置。用户问到时直说做不到，并告诉他可以自己在终端做什么；'
+      + '**不要提议"要我帮你做吗"**，也不要用"你确认后我立即处理"这类承诺句式——'
+      + '你一旦那样说，用户确认之后就会发现做不了。）')
     // 本机装好的技能包。**只列名字/说明/版本，正文按需 read_skill 读** ——
     // 27 个技能的正文全塞进每轮提示词，既贵又会把真正的问题挤掉。
     const skillScan = scanSkills()
@@ -453,6 +570,19 @@ export class AssistantService {
       // 少给了几条要**如实说**：谎报「以下是全部记忆」比少给更糟——模型会以为自己看到了全部。
       const note = withheld > 0 ? `${SEP}（另有 ${withheld} 条与这次问题关系较远，未列出）` : ''
       parts.push('[关于用户的长期记忆]' + SEP + frameLocalData('memory.facts', lines + note))
+    } else if (withheld > 0) {
+      // **一条都没选中，但记忆里确实有东西**（2026-11-24 补）。
+      //
+      // 原来这里什么都不说，于是模型只看到"没有记忆段"——它不知道那是"没选出来"还是
+      // "真没有"，只能凭工作窗口里的残留硬答。实测：22 轮的任务型长程用例里，
+      // 早期细节早已滚出 16 条窗口，它仍然**一次工具都没调**就作答，答的是窗口残留。
+      // 这比编造更隐蔽：答案看起来对，但是靠运气。
+      //
+      // 现在明确告诉它"有记忆但没列出来，需要就查"，把选择权交回去。
+      parts.push('[关于用户的长期记忆]' + SEP
+        + `（记忆里有 ${withheld} 条，但与当前问题关系较远，这次没有列出来。`
+        + '**如果你需要回忆用户之前说过的事，先调 `search_memory` 查一下再回答**，'
+        + '不要凭工作窗口里的残留硬答——窗口只有最近几条，更早的事已经滚出去了。）')
     }
     return parts.join(SEP)
   }
@@ -545,9 +675,13 @@ export class AssistantService {
    *
    *  抽成方法是因为守卫（见 handleMessage）要在"顶回去一次"之后**再跑一遍同一条循环**——
    *  两处各写一份，早晚有一处会漏掉既有的容错（参数解析、工具审计、轮数上限）。
+   *
+   *  **返回的 `outcome` 说清 `reply` 是什么**：`'answered'` 才是模型真的说出口的话；
+   *  `'rounds-exhausted'` 时 `reply` 只是占位文案，调用方**不许**拿它跑"这句话是不是编造"
+   *  一类的守卫（2026-11-24）。
    */
   private async runReactLoop(userId: string, messages: ApiMessage[],
-                             trace: TurnTrace): Promise<{ reply: string; toolCalls: number }> {
+                             trace: TurnTrace): Promise<{ reply: string; toolCalls: number; outcome: ReactOutcome }> {
     let reply = ''
     let toolCalls = 0
     for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
@@ -581,7 +715,23 @@ export class AssistantService {
       // 别把它记成"答完了"：这是撞上限，不是回答
       trace.stop = 'rounds-exhausted'
     }
-    return { reply, toolCalls }
+    // **`outcome` 把"跑完了"和"答完了"拆开**（2026-11-24，借 pi 的
+    // `agent_end` ≠ `agent_before_settle` 那条纪律，ext2.md:665）。
+    //
+    // 原来 `return { reply, toolCalls }` 一个返回值同时表达两件事：
+    //   ① 这一轮跑完了（模型给了最终答复，或者用完了轮次）
+    //   ② 这一轮答完了（`reply` 是模型真的说出口的话）
+    // 95% 的情况下两者是同一件事，所以写在一起看着天经地义——但它们不是：
+    // 撞上限时 `reply` 是上面那句**占位文案**，不是模型说的话，却和真答复走同一条路
+    // 进了 `handleMessage` 的守卫段。守卫要判断"这句话是不是编造"，前提是"这句话是
+    // 模型生成的"；撞上限时它不成立。今天没炸，只是因为占位文案里恰好没有承诺词——
+    // 而那句文案是可以改的，改一个词就会去"修"一句没人说过的话。
+    //
+    // **特意不是 `ok: boolean`**：布尔值会被写成 `if (ok) … else …` 两条支路，而
+    // "撞上限"和"LLM 报错"的处理不同（前者还有一份半成品答复），合成一个布尔会在
+    // 下次改动时丢信息。用可判别联合，加状态时编译器会指着所有 switch 让你改。
+    const outcome: ReactOutcome = trace.stop === 'rounds-exhausted' ? 'rounds-exhausted' : 'answered'
+    return { reply, toolCalls, outcome }
   }
 
   /** 执行一次工具调用：脱敏、审计、把结果塞回对话。
@@ -629,7 +779,18 @@ export class AssistantService {
     }
     const ctx: ToolContext = { userId, memory: this.memory }
     if (this.turnInboundImages.length) ctx.inboundImages = this.turnInboundImages
-    const raw = await executeTool(name, args, ctx)
+    // **按 schema 抹平参数类型**（2026-11-24，借 pi 的宽松强转，D-178）。
+    //
+    // 为什么在 `executeTool` 之前而不是在各个工具里：`args.confirm !== true` 这种严格比较
+    // 遇到字符串 `"true"` 会**静默**判成"没确认"，`args.with_text === true` 遇到 `"true"`
+    // 会判成 false——两处都是"出错了却没有任何提示"，比报错难查得多。
+    // 在每个工具里各写一遍强转，早晚漏一处；在这一层做，只做一次。
+    //
+    // 它**不负责"帮模型改对"**：只抹平同一个值的不同 JSON 写法（`"true"`→`true`、
+    // `"20"`→`20`、单值→`[]`、可选 `null`→丢掉）。转不动的原样留着，
+    // 让工具自己报 `(参数错误: …)`——那比"我猜你是想要 0"清楚。
+    const coerced = coerceToolArgs(name, args)
+    const raw = await executeTool(name, coerced, ctx)
     this.turnToolNames.add(name)
     trace.toolCalls += 1
     trace.steps.push({
@@ -1088,6 +1249,16 @@ export class AssistantService {
       reply = first.reply
       toolCalls += first.toolCalls
 
+      // ⚠️ 2026-11-24：**守卫与兜底只在"模型真的说了这句话"时才跑**。
+      //
+      // 撞轮次上限时 `reply` 是占位文案（`outcome === 'rounds-exhausted'`），它**不是模型的
+      // 输出**。拿它去跑 `impossibleOffer` / `emptyTalkPushback` 是在"修"一句没人说过的话。
+      // 今天侥幸没炸，只是因为占位文案里恰好没有承诺词——而那句文案是可以改的。
+      //
+      // 这与 pi 的 `agent_end` ≠ `agent_before_settle` 是同一件事（ext2.md:665）：
+      // "这一轮跑完了"不等于"这一轮答完了"。**边界要显式说出来，不能让调用方去猜。**
+      const answered = first.outcome === 'answered'
+
       // 守卫（D-169）：**从答复本身取证**，不再依赖判断层。
       //
       // 老版本只在 `lastNeedsLocalData >= MIN_NEEDS_TOOL` 时触发，而这个信号由判断层给，
@@ -1103,23 +1274,29 @@ export class AssistantService {
       // 一次只顶回一种：先认"编造"（最严重），再认"答复没用上刚查到的内容"，最后才是老信号。
       // 两件事都犯的时候先修编造——那一句补问里已经要求它去查、去引用。
       let retry: { mechanism: string; reason: string; message: string } | null =
-        guardsEnabled() ? pushbackFor({ reply, toolCalls, corpus }) : null
+        answered && guardsEnabled() ? pushbackFor({ reply, toolCalls, corpus }) : null
       // 紧接着认"编造做过某件事"：用户会照着它行事（以为档位/待办改了），代价比多一次调用大。
-      if (!retry && guardsEnabled()) {
+      if (answered && !retry && guardsEnabled()) {
         retry = stateClaimPushback({ reply, toolNames: this.turnToolNames })
       }
       // 再认"提议做不到的事"（"要我帮你解密吗？"）：它没做也没改，但用户会点头等一个结果。
-      if (!retry && guardsEnabled()) {
+      if (answered && !retry && guardsEnabled()) {
         retry = impossibleOfferPushback(reply)
       }
       // 破坏性请求被拒之后，不许顺手提议导出/备份（把"毁掉"变成"搬出来一份"）。
-      if (!retry && guardsEnabled()) {
+      if (answered && !retry && guardsEnabled()) {
         retry = destructiveFollowUpPushback({ userText: t, reply })
       }
+      // 方向说反：「需要打开严格模式才能看到正文」——strict 是屏蔽模式，方向正好相反。
+      // 这类不静默改写（正确的话要重写整段），只顶回一次。
+      if (answered && !retry && guardsEnabled()) {
+        retry = reversedPrivacyPushback(reply)
+      }
       // 最后认"给了过去时间窗却一个工具都没查"：拿前面几轮对话里的旧摘要当答案，日期还对不上。
-      if (!retry && guardsEnabled()) {
+      if (answered && !retry && guardsEnabled()) {
         retry = timeWindowWithoutLookup({ userText: t, toolNames: this.turnToolNames })
-      }      if (!retry && toolCalls === 0 && this.lastNeedsLocalData >= MIN_NEEDS_TOOL) {
+      }
+      if (answered && !retry && toolCalls === 0 && this.lastNeedsLocalData >= MIN_NEEDS_TOOL) {
         retry = {
           mechanism: 'needs-local-data',
           reason: '路由说需要查本机数据，但这一轮没调任何工具',
@@ -1128,7 +1305,7 @@ export class AssistantService {
             + '若确实查不到，说明你调用了哪个工具、它返回了什么。',
         }
       }
-      if (!retry && guardsEnabled()) {
+      if (answered && !retry && guardsEnabled()) {
         // 顺序：先"答复没用上刚查到的内容"，再"已经查到了却反问用户要参数"。
         // 两条都是"查到了却没交出去"，前者是没带内容，后者是干脆推回去。
         const toolText = this.turnToolText.join('\n')
@@ -1154,7 +1331,10 @@ export class AssistantService {
       // 换了措辞（"你回复后我立即处理"），那句话**不含**"导出/收藏"这类关键词，
       // 下一次 impossibleOffer 判 null → 整个答复被当成"没有承诺"原样放行。
       // 教训：兜底逻辑挂在"前面那道有没有命中"下面，就等于把它的有效性交给了她要修的那件事。
-      if (guardsEnabled()) {
+      //
+      // 但它仍然要求 `answered`：撞轮次上限时 `reply` 是占位文案（2026-11-24），
+      // 拿它去"删掉做不到的提议"是在修一句没人说过的话。
+      if (answered && guardsEnabled()) {
         const cleaned = stripOffersAfterDestructive(t, reply)
         if (cleaned !== reply) {
           appendLog('[守卫] 删掉了破坏性请求之后的多余提议')

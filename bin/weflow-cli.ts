@@ -8842,7 +8842,7 @@ assistantCmd
   .option('--case <id>', '只跑这些用例（逗号分隔，或多次使用）', (v: string, acc: string[]) => { acc.push(...v.split(',').map(s => s.trim()).filter(Boolean)); return acc }, [] as string[])
   .option('--category <name>', '只跑这些维度（routing/answer/honesty/memory/multi/privacy/robustness）', (v: string, acc: string[]) => { acc.push(...v.split(',').map(s => s.trim()).filter(Boolean)); return acc }, [] as string[])
   .option('--repeats <n>', '每条重复跑几次（≥2 才有稳定性指标）', '1')
-  .option('--temperature <n>', '采样温度；默认 0（评测固定值，线上默认 0.4）', '0')
+  .option('--temperature <n>', '采样温度；默认沿用线上（助手自己的默认 0.4）。传了才覆盖', '')
   .option('--json', '输出机器可读报告')
   .option('--save-baseline <path>', '把这次报告存成 JSON 基线')
   .option('--baseline <path>', '与一份基线报告对比')
@@ -8887,7 +8887,7 @@ assistantCmd
     try {
       outcome = await runEvalSuite({
         only: opts.case, categories: opts.category, repeats, precheck: precheckModel,
-        temperature: Number(opts.temperature),
+        temperature: opts.temperature === '' ? undefined : Number(opts.temperature),
         onCaseDone: opts.json ? undefined : (result, i, total) => {
           const mark = result.problems.length ? chalk.red('✗') : chalk.green('✓')
           const q = result.spec.question ?? (result.spec.turns ?? []).join(' → ')
@@ -8946,7 +8946,7 @@ assistantCmd
   .option('--case <id>', '只跑这些用例（逗号分隔，或多次使用）', (v: string, acc: string[]) => { acc.push(...v.split(',').map(s => s.trim()).filter(Boolean)); return acc }, [] as string[])
   .option('--category <name>', '只跑这些维度（routing/answer/honesty/memory/multi/privacy/robustness）', (v: string, acc: string[]) => { acc.push(...v.split(',').map(s => s.trim()).filter(Boolean)); return acc }, [] as string[])
   .option('--repeats <n>', '每条重复跑几次（≥2 才看得出来"忽好忽坏"）', '1')
-  .option('--temperature <n>', '采样温度；默认 0（评测固定值，线上默认 0.4）', '0')
+  .option('--temperature <n>', '采样温度；默认沿用线上（助手自己的默认 0.4）。传了才覆盖', '')
   .option('--json', '输出机器可读结果')
   .option('--record', '把这一轮追加进账本（默认只读不写）')
   .option('--ledger <n>', '顺便列出最近几条账本记录', '0')
@@ -8962,7 +8962,7 @@ assistantCmd
     try {
       outcome = await runEvalSuite({
         only: opts.case, categories: opts.category, repeats, precheck: precheckModel,
-        temperature: Number(opts.temperature),
+        temperature: opts.temperature === '' ? undefined : Number(opts.temperature),
         onCaseDone: opts.json ? undefined : (result, i, total) => {
           const mark = result.problems.length ? chalk.red('✗') : chalk.green('✓')
           console.log(`  ${mark} [${String(i).padStart(3)}/${total}] ${result.spec.id.padEnd(28)}`
@@ -9004,7 +9004,7 @@ assistantCmd
     }
 
     if (opts.record) {
-      const path = appendLedger(toLedgerEntry(rsi, model))
+      const path = appendLedger(toLedgerEntry(rsi, model, new Date(), outcome.temperature))
       if (!opts.json) console.log(chalk.gray(`  已记账: ${path}`))
     } else if (!opts.json) {
       console.log(chalk.gray(`  未记账（要留痕加 --record）：${ledgerPath()}`))

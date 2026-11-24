@@ -55,6 +55,18 @@ export interface CaseScore {
   toolCalls: number
   /** 失败细节（只留前几条，避免报告被淹） */
   problems: string[]
+  /**
+   * 失败那几次的**原始证据**（判据原文 + 答复开头 + 工具序列）。
+   *
+   * 为什么要有它（2026-11-24）：评测跑出"某条用例 67%"时，光看
+   * `没调用 search_memory` 这种判据原文，**分不清是模型偶发手滑、还是某条用例的期望写窄了**。
+   * 而这类"换个轮次失败的就换一条"的偶发，靠反复重跑定位极慢——实测三次全跑分别挂了
+   * `long-run-20-turns`、`stops-after-refusal`、`thread-carries-the-subject`，
+   * 每一条**单独重跑都是 3/3 全过**。没有原话就没法判断。
+   *
+   * 只留失败的、只留前 3 条、每条截断 240 字：够诊断，又不会把报告淹掉。
+   */
+  failures?: Array<{ problems: string[]; answerPreview: string; tools: string[] }>
 }
 
 export interface CategoryScore {
@@ -87,6 +99,14 @@ export interface EvalReport {
   elapsedMs: number
   /** 模型往返次数之和 */
   cloudCalls: number
+  /**
+   * 这一轮实际用的采样温度。
+   *
+   * **必须进报告**：2026-11-24 之前默认钉在 0，于是同一套代码在温度 0 下连跑三次 49/49，
+   * 放回线上默认 0.4 立刻出现 2~3 条偶发失败——而报告里没有温度，两次结果看起来
+   * 只是"这次运气差"，没人能看出它们根本不可比。现在由调用方填进来。
+   */
+  temperature?: number
 }
 
 /** 软警告只看这两类：它们描述"质量不够"，不描述"做错了" */
@@ -136,6 +156,17 @@ export function scoreCase(spec: EvalCase, arg: CaseRun | Observation): CaseScore
 
   const repeats = observations.length
   const allSame = outcomes.every(o => o === outcomes[0])
+  // 失败那几次的原始证据：判据原文 + 答复开头 + 工具序列。
+  // 目的见 `CaseScore.failures` 的注释——偶发失败**必须带原话**才判断得了是手滑还是期望写窄。
+  const failures = observations
+    .map((observed) => ({ observed, issues: judge(spec, observed) }))
+    .filter((x) => x.issues.length > 0)
+    .slice(0, 3)
+    .map((x) => ({
+      problems: x.issues.slice(0, 4),
+      answerPreview: String(x.observed.answer ?? '').replace(/\s+/g, ' ').slice(0, 240),
+      tools: (x.observed.tools ?? []).slice(0, 8),
+    }))
   return {
     caseId: spec.id,
     category: spec.category,
@@ -146,6 +177,7 @@ export function scoreCase(spec: EvalCase, arg: CaseRun | Observation): CaseScore
     stability: repeats < 2 ? null : (allSame ? 1 : 1 - (outcomes.filter(o => o !== outcomes[0]).length / repeats)),
     toolCalls: observations.reduce((m, o) => Math.max(m, (o.tools ?? []).length), 0),
     problems,
+    ...(failures.length ? { failures } : {}),
   }
 }
 

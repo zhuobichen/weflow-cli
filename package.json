@@ -55,7 +55,7 @@
     "dev": "npx tsx bin/weflow-cli.ts",
     "start": "node cli.cjs",
     "prepublishOnly": "npm run build",
-    "eval:assistant": "node --import tsx scripts/assistant_eval.ts"
+    "eval:assistant": "node --import tsx bin/weflow-cli.ts assistant eval"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",

@@ -352,6 +352,12 @@ export function formatRsiReport(rsi: RsiReport,
 export interface RsiLedgerEntry {
   ts: string
   model: string
+  /**
+   * 这一轮实际用的采样温度。**必须记**：温度不同的两份账本不可比——
+   * 2026-11-24 之前默认钉 0，改成线上 0.4 后同一套代码从"稳定全过"变成
+   * "偶发 2~3 条失败"，而账本里看不出差别，历史对比就此失真。
+   */
+  temperature?: number
   score: number
   tunedScore: number
   holdoutScore: number
@@ -408,12 +414,15 @@ export function appendLedger(entry: RsiLedgerEntry): string {
   return path
 }
 
-export function toLedgerEntry(rsi: RsiReport, model: string, now = new Date()): RsiLedgerEntry {
+export function toLedgerEntry(
+  rsi: RsiReport, model: string, now = new Date(), temperature?: number,
+): RsiLedgerEntry {
   const buckets: Record<string, number> = {}
   for (const row of rsi.buckets) buckets[row.bucket] = row.cases.length
   return {
     ts: now.toISOString(),
     model,
+    ...(temperature === undefined ? {} : { temperature }),
     score: rsi.score,
     tunedScore: rsi.tuned.score,
     holdoutScore: rsi.holdout.score,

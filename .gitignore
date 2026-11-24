@@ -1,4 +1,7 @@
 node_modules/
+# npm pack 产物：部署到服务器时自己打包的，13MB，绝不能进仓库
+*.tgz
+
 models/
 dist/
 output/

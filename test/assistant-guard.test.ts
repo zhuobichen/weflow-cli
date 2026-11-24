@@ -13,7 +13,8 @@ import assert from 'node:assert/strict'
 
 const { claimsQuery, pushbackFor, unsupportedQuotes, toolFailureNudge, isEmptyToolResult,
   emptyTalkPushback, asksBackData, claimsStateChange, stateClaimPushback, WRITE_TOOLS,
-  impossibleOffer, impossibleOfferPushback, stripImpossibleOffers, destructiveFollowUpPushback } =
+  impossibleOffer, impossibleOfferPushback, stripImpossibleOffers, destructiveFollowUpPushback,
+  reversedPrivacyDirection, reversedPrivacyPushback } =
   await import('../src/services/assistantGuard.js')
 
 test('自述查过：说得出是哪一句', () => {
@@ -285,4 +286,54 @@ test('提议做不到的事：导出收藏/朋友圈/读书 这类没有导出�
   // 导出**聊天记录**是有的（export_chat），不许误伤
   assert.equal(impossibleOffer('要我帮你把聊天记录导出备份一下吗？'), null)
   assert.equal(impossibleOffer('可以导出聊天记录，你要哪一段？'), null)
+})
+
+test('先说明做不到的答复，不该被自己人误伤', () => {
+  // 2026-11-23：把"本产品做不到的事"写进提示词之后，模型开始**正确地说做不到**了。
+  // 但旧判词不看语义方向，只要句子里有"导出收藏"又带提议语气就整段替换，
+  // 于是答复从"做不到 + 还能做什么"退化成只剩"做不到"——守卫自己制造了错误。
+  const okDeny = [
+    '导出收藏功能目前不支持，无法直接生成 Excel 文件。需要我帮你查某篇收藏文章的内容吗？',
+    '我无法解密聊天正文或数据库。需要的话把图片发给我，我来帮你分析画面内容。',
+    '这个我做不到，你可以在终端执行 weflow-cli config set assistantPrivacy balanced。',
+  ]
+  for (const r of okDeny) {
+    assert.equal(impossibleOffer(r), null, '说明做不到的不算承诺：' + r.slice(0, 20))
+    assert.equal(stripImpossibleOffers(r), r, '不该被删句')
+  }
+
+  // 但"前半否定 + 后半承诺"的混合形态仍然要拦 —— 那正是最坑的一种
+  const mixed = '这个功能不支持。不过我可以帮你导出，你确认后我立即处理。'
+  assert.ok(impossibleOffer(mixed), '混合形态必须拦')
+})
+
+// ---------------------------------------------------------------- 方向说反（2026-11-24）
+
+test('方向说反：把"打开严格模式"当成看正文的手段', () => {
+  // 实测原话：「如果想了解具体内容，需要**打开严格模式**查看——当前配置下正文不显示。」
+  // strict 是**屏蔽正文**的模式，要看到正文得**离开**它。这类错误比编造隐蔽：
+  // 句子通顺、动词具体、还给了操作，用户照着做只会更看不到。
+  const bad = [
+    '如果想了解具体内容，需要打开严格模式查看。',
+    '要看到正文，得先打开严格模式。',
+    '打开严格模式就能看到正文吗',
+  ]
+  for (const r of bad) {
+    assert.ok(reversedPrivacyDirection(r), '应拦住：' + r)
+    const pushback = reversedPrivacyPushback(r)
+    assert.ok(pushback, '要顶回去')
+    assert.equal(pushback!.mechanism, 'reversed-privacy-direction')
+  }
+})
+
+test('方向说反：不许误伤"开启严格模式保护隐私"这类正确说法', () => {
+  // 2026-11-24 自己撞出来的误伤：第一版没有这道闸，把正确方向也判红了。
+  // strict 确实更保护隐私——错的是"打开它就能**看到正文**"，不是"打开它"本身。
+  const ok = [
+    '当前就是严格模式，正文被屏蔽了。',
+    '要看到正文需要改成 balanced。',
+    '你可以开启严格模式保护隐私。',
+    '开启严格模式后数据更安全。',
+  ]
+  for (const r of ok) assert.equal(reversedPrivacyDirection(r), null, '不该拦：' + r)
 })
