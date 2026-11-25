@@ -19,7 +19,7 @@
  *    那些是真实在用的技能，所以不合规只**警告**，不丢弃。
  */
 import { existsSync, readdirSync, readFileSync, statSync } from 'fs'
-import { join } from 'path'
+import { join, basename } from 'path'
 import { homedir } from 'os'
 import { configService } from './configService.js'
 import { expandHomePath } from '../utils/pathUtils.js'
@@ -191,42 +191,65 @@ export function scanSkills(roots = skillRoots()): SkillScan {
   const missingRoots: string[] = []
   const seen = new Map<string, string>()
 
-  for (const root of roots) {
+  /**
+   * 递归找一个目录下的 `SKILL.md`（2026-11-24，读 pi 的技能发现后补的）。
+   *
+   * 原来只认 `<root>/<id>/SKILL.md` **一层**。用户按主题分目录
+   * （`skills/写作/公众号/SKILL.md`）时，**全部扫不到，而且不报错**——
+   * 他只会觉得"我的技能怎么不见了"。这与本仓反复强调的"静默失败最坑"是同一类。
+   *
+   * 递归规则：
+   * - 深度上限 4 层（防止误把整个家目录扫一遍）
+   * - 遇到 `SKILL.md` 就收下，**不再往下钻**（一个技能内部不会再有技能）
+   * - 跳过 `.` 开头的目录和 `node_modules`
+   * - **有子目录却没有 SKILL.md 的，记进 `unreadable`**：不是错误，但要让用户看见
+   *   "这个目录我扫过了，里面没有技能"——否则又是静默。
+   */
+  const walk = (dir: string, depth: number, depthLimit = 4): void => {
+    if (depth > depthLimit) return
     let entries: string[] = []
     try {
-      if (!existsSync(root) || !statSync(root).isDirectory()) { missingRoots.push(root); continue }
-      entries = readdirSync(root)
-    } catch {
-      missingRoots.push(root)
-      continue
+      entries = readdirSync(dir)
+    } catch (error) {
+      // **目录读不了要说出来**（2026-11-24）。原来这里是裸 `return`——
+      // 权限不足、路径是个坏软链、目录被删，三种情况在结果里一模一样：
+      // "这个目录下没有技能"。用户只会觉得自己的技能不见了。
+      // 递归之后误踩这种目录的概率更高（多一层就多一种失败），必须报。
+      unreadable.push({ file: dir, reason: `目录读不了：${(error as Error).message}` })
+      return
     }
     for (const entry of entries) {
-      const file = join(root, entry, 'SKILL.md')
-      const dir = join(root, entry)
-      // 只认 `<root>/<id>/SKILL.md`。**符号链接是跟的**（有意）：在 git 仓库里开发技能、
-      // 再 `ln -s` 到技能根目录是常见做法，拒掉会让人觉得"我的技能怎么不见了"。
-      // 软链是用户自己放的（扩展造不出来），而 `read_skill` 只可能读到名字叫 `SKILL.md`
-      // 的文件，所以这条不是一个可被扩展利用的越界口子。
-      try {
-        if (!statSync(dir).isDirectory()) continue
-        if (!existsSync(file) || !statSync(file).isFile()) continue
-      } catch {
-        continue
+      if (entry.startsWith('.') || entry === 'node_modules') continue
+      const full = join(dir, entry)
+      let isDir = false
+      try { isDir = statSync(full).isDirectory() } catch { continue }
+      if (!isDir) continue
+      const file = join(full, 'SKILL.md')
+      let hasSkill = false
+      try { hasSkill = existsSync(file) && statSync(file).isFile() } catch { hasSkill = false }
+      if (hasSkill) {
+        collectSkill(full, file)
+        continue   // 有技能就不再往下钻
       }
+      walk(full, depth + 1, depthLimit)
+    }
+  }
+
+  const collectSkill = (dir: string, file: string): void => {
       let text = ''
       try {
         text = readFileSync(file, 'utf8')
       } catch (error) {
         unreadable.push({ file, reason: `读不了：${(error as Error).message}` })
-        continue
+        return
       }
       const fm = parseFrontmatter(text)
       if (!fm) {
         unreadable.push({ file, reason: '开头的 --- frontmatter 段缺失或不闭合' })
-        continue
+        return
       }
       const notes: string[] = []
-      const id = entry
+      const id = basename(dir)
       if (!ID_RE.test(id)) {
         // 连我们这套宽规则都不满足（大写、空格、中文…）：仍然保留，但要说出来
         notes.push('ID 含非规范字符（不是小写字母/数字/点/下划线/连字符），本机可用，但别的 Agent 可能不认')
@@ -239,7 +262,7 @@ export function scanSkills(roots = skillRoots()): SkillScan {
 
       if (seen.has(id)) {
         conflicts.push({ id, winner: seen.get(id)!, loser: file })
-        continue   // 靠前的根胜出；后一个只报冲突，不覆盖
+        return   // 靠前的根胜出；后一个只报冲突，不覆盖
       }
       seen.set(id, file)
       skills.push({
@@ -248,13 +271,21 @@ export function scanSkills(roots = skillRoots()): SkillScan {
         description,
         version: String(fm.fields.version || '').trim(),
         file,
-        root,
+        // 递归后条目可能在深层，`root` 要取"包含它的那个技能根"，否则展示路径会错
+        root: roots.find((r) => dir.startsWith(r)) ?? dir,
         selfDisabled: String(fm.fields.enabled || '').trim().toLowerCase() === 'false',
         triggers: fm.lists.triggers || [],
         notes,
       })
-    }
   }
+
+  for (const root of roots) {
+    let isDir = false
+    try { isDir = existsSync(root) && statSync(root).isDirectory() } catch { isDir = false }
+    if (!isDir) { missingRoots.push(root); continue }
+    walk(root, 1)
+  }
+
   skills.sort((a, b) => a.id.localeCompare(b.id))
   return { skills, unreadable, conflicts, missingRoots }
 }

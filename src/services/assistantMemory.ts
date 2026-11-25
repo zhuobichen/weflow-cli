@@ -49,6 +49,13 @@ export const FACTS_MAX = 30
 /** 空关键词检索（"你记得我什么"）最多列出多少条：给多了会把窗口挤满，给少了像没记住 */
 export const MEMORY_OVERVIEW_MAX = 8
 export const FACT_EXTRACT_EVERY = 6
+/**
+ * 压缩归档保留几批。
+ *
+ * 归档是**兜底**不是完整历史（完整流水在 `assistant_transcript`），
+ * 所以只留最近几批：够回答"这条摘要是从哪几轮压出来的"，又不让记忆文件无限膨胀。
+ */
+export const ARCHIVE_BATCHES = 5
 /** 每次注入事实的字符预算：30 条 × 72 字 ≈ 2.1KB 全塞进去是纯噪声，按相关度取一部分 */
 export const FACTS_INJECT_BUDGET_CHARS = 1200
 /** 相关度低于这个值就不进上下文：**预算空着也不填无关事实** */
@@ -87,6 +94,14 @@ interface UserMemory {
   summary: string
   facts: Fact[]
   turnCount: number
+  /**
+   * **被压缩掉的原话副本**（2026-11-24）。
+   *
+   * 不进上下文、不花钱，只用来回答"这条摘要是从哪几轮话压出来的"。
+   * 存在的理由：`compressIfNeeded` 原来是就地改写，**摘要一旦压错，原始对话就永久没了**。
+   * 今天"记忆混进模型编造"那个坑之所以难修，根子就在这里。
+   */
+  archive?: Array<{ at: number; kept: number; turns: Array<{ role: string; content: string }> }>
 }
 
 /** LLM 调用器抽象 (由 assistantService 注入, 避免循环依赖) */
@@ -298,6 +313,68 @@ export class AssistantMemory {
   }
 
   summary(userId: string): string { return this.state(userId).summary }
+
+  /**
+   * **从归档重建摘要**（2026-11-24，对标 pi 的"摘要是一个可重算的事件"）。
+   *
+   * 为什么需要它：`compressIfNeeded` 是就地改写 `s.summary`，而今天实测发现——
+   * **模型几轮前的编造会顺着摘要一路传下去**（脏桶答"联系人A 19:42 某条消息内容"，
+   * 干净桶答"22:47"）。我当时的补丁是"编造不进窗口"，但那只堵住新污染；
+   * **已经被压进 summary 的旧污染没有任何办法清掉**，因为原始对话当时就被删了。
+   *
+   * 现在 `archive` 留了被压掉的原话，所以摘要**可以重算**：
+   * 把归档里的轮次按时间顺序重新喂一遍，得到一份不含旧污染的新摘要。
+   *
+   * 使用场景：发现摘要有问题时手动重建一次（或将来做"按守卫结果自动标记重建"）。
+   * **不自动跑**：重算是要花 LLM 调用的，而且多数时候摘要是对的。
+   *
+   * @returns 重建成功返回新摘要（已写入），归档为空或 LLM 失败返回 null（不动现有摘要）
+   */
+  async rebuildSummary(userId: string, llm: LlmCaller): Promise<string | null> {
+    const s = this.state(userId)
+    const batches = s.archive ?? []
+    if (!batches.length) return null
+    // 归档只留了最近几批（ARCHIVE_BATCHES），所以重建出来的是"这几批的摘要"，
+    // 不是完整历史——调用方要清楚这一点，别把它当全量。
+    const turns = batches.flatMap((b) => b.turns) as ChatTurn[]
+    if (!turns.length) return null
+    try {
+      const merged = await llm([{ role: 'user', content: buildSummaryPrompt('', turns) }], 900)
+      const next = merged.trim().slice(0, SUMMARY_MAX)
+      if (!next) return null
+      s.summary = next
+      this.dirtyUsers.add(userId)
+      // 与 resetSummary 同一个理由：命令行路径不经过 service 的收尾流程，必须显式落盘
+      this.save()
+      return next
+    } catch {
+      return null
+    }
+  }
+
+  /** 归档里一共留了多少轮原话（调试与"能不能重建"的自检用） */
+  archiveTurnCount(userId: string): number {
+    return (this.state(userId).archive ?? []).reduce((n, b) => n + b.turns.length, 0)
+  }
+
+  /**
+   * **清空摘要**（2026-11-24）。最后手段，只清 summary，不动事实与工作窗口。
+   *
+   * 什么时候用：摘要里已经混进旧编造，而**归档为空**（压缩发生在加归档功能之前），
+   * 所以 `rebuildSummary` 没法用——这时唯一能做的就是清掉它。
+   *
+   * 代价要说清楚：清掉之后模型**不再知道"之前聊过什么"的概括**，短期对话体会变差。
+   * 但这比让它一遍遍复述旧编造好，而且事实（L3）与工作窗口（L1）都还在。
+   */
+  resetSummary(userId: string): void {
+    const s = this.state(userId)
+    s.summary = ''
+    this.dirtyUsers.add(userId)
+    // **必须显式落盘**（2026-11-24 实测踩到的）：`save()` 是手动调用的，
+    // 而 `dirtyUsers` 只在 service 的收尾流程里被消费——命令行这条路径不走那里。
+    // 第一版漏了这句，命令报"已清空（原 800 字）"，再读出来还是 800 字。
+    this.save()
+  }
   facts(userId: string): Fact[] { return this.state(userId).facts }
 
   /**
@@ -372,6 +449,31 @@ export class AssistantMemory {
     const keep = this.retainCount(s.working, this.compressionGate(userId) ?? 'count')
     const out = s.working.slice(0, s.working.length - keep)
     s.working = s.working.slice(s.working.length - keep)
+
+    // **被压掉的原话留一份副本**（2026-11-24，读 pi 的会话模型后加的最小形态）。
+    //
+    // pi 把「存什么」和「模型看到什么」彻底分离：摘要只是一个**事件**，原始消息一条不删，
+    // 拼上下文时才二选一——**摘要错了可以重新压**。
+    // 我们原来是就地改写：`s.working = s.working.slice(...)`，压进去的错了，
+    // 原始对话就**永久没了**。今天"记忆里混进模型编造"那个坑之所以难修，
+    // 根子就在这里：一旦污染进了 summary，没有任何原始材料可以重建。
+    //
+    // 这里不搬 pi 的完整树形结构（对我们过重），只做**最小的一步**：
+    // 被压掉的轮次按批次存进 `archive`，带时间与批次号。
+    // 它**不进上下文**（不影响提示词、不花钱），只在需要时能查：
+    // "这条摘要是从哪几轮话压出来的"。
+    //
+    // 上限 `ARCHIVE_BATCHES`：只留最近 N 批，超了丢最旧的——归档是兜底，
+    // 不是完整历史（完整流水在 assistant_transcript 里）。
+    try {
+      s.archive = s.archive ?? []
+      s.archive.push({
+        at: Date.now(),
+        kept: keep,
+        turns: out.map((t) => ({ role: t.role, content: t.content.slice(0, 400) })),
+      })
+      while (s.archive.length > ARCHIVE_BATCHES) s.archive.shift()
+    } catch { /* 归档失败不影响压缩本身 */ }
 
     try {
       const merged = await llm([{ role: 'user', content: buildSummaryPrompt(s.summary, out) }], 900)

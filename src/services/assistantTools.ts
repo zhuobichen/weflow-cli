@@ -823,7 +823,9 @@ export const TOOL_DEFS: ToolDef[] = [
       parameters: {
         type: 'object',
         properties: {
-          date: { type: 'string', description: '日期 YYYY-MM-DD；省略则最新一期（或配合关键词跨日期搜）' },
+          date: { type: 'string', description: '日期 YYYY-MM-DD。**省略 = 只给最新一期那一天**'
+            + '（不是"多天合起来"）。要跨多天用 days 参数，一次就够——'
+            + '**不要为了凑天数重复调多次，每次都只会拿到同一期**' },
           topic: { type: 'string', description: '分类过滤: AI | 学术 | 新闻 | 文学 | 投资' },
           keyword: { type: 'string', description: '标题/摘要/来源关键词。不给 date 时跨日期搜' },
           days: { type: 'number', description: '跨日期搜的时间窗(天), 默认 7, 上限 60' },
@@ -1283,9 +1285,28 @@ export const MCP_TOOL_DEFS = TOOL_DEFS.filter(tool => !(tool.function.name in MC
  *  而工具结果是要出境的。
  */
 function fail(what: string, result: { error?: string; stderr?: string }): string {
-  const detail = [result.error, result.stderr].filter(Boolean).join(' · ')
+  // **优先说清根因，不要把进度信息当原因**（2026-11-24）。
+  //
+  // 实测：`who_owes_reply` 每个会话都连不上本地判断服务（`Connection refused`），
+  // 而 `stderr` 打的是「判断完成 0/20，耗时 9.7s」——于是工具返回
+  // 「(欠账查询失败: 脚本没有给出可解析的 JSON · 扫描 38 个… | 判断完成 0/38)」。
+  // **真正的错误 `Connection refused` 一个字都没出现**，用户和模型都不知道是服务没起来。
+  //
+  // 规则：`error`/`stderr` 里若有可识别的根因（连接失败/超时/缺文件/权限），就说那一句；
+  // 否则才退回拼接，且 `stderr` 只在含有异常字样时才带进来（进度条不该冒充原因）。
+  const error = String(result.error ?? '').trim()
+  const stderr = String(result.stderr ?? '').trim()
+  const rootCause = (error + '\n' + stderr)
+    .split(/[\n·|]+/)
+    .map((s) => s.trim())
+    .find((s) => /(Connection refused|ECONNREFUSED|连不上|timed out|超时|No such file|ModuleNotFound|Permission denied|ECONNRESET)/i.test(s))
+  if (rootCause) {
+    const { safe } = privacyGate.redact(rootCause)
+    return `(${what}: ${safe.slice(0, 160)})`
+  }
+  const detail = [error, /异常|Error|Traceback|failed/i.test(stderr) ? stderr : ''].filter(Boolean).join(' · ')
   const { safe } = privacyGate.redact(detail)
-  return `(${what}${safe ? ": " + safe : ""})`
+  return `(${what}${safe ? ': ' + safe : ''})`
 }
 
 /**
@@ -1444,18 +1465,44 @@ function confirmPreview(what: string): string {
   ].join(String.fromCharCode(10))
 }
 
+/**
+ * `executeTool` 真正**分发到分支**的工具名 —— 供 `test/tool-registry.test.ts` 用。
+ *
+ * 由来（2026-11-24）：那个测试原来靠「读源码 → 正则抓 `case 'x':`」判断"声明表与实现
+ * 对得上"。脆弱依赖：拆文件、换写法、加注释都可能误判。
+ *
+ * **第一次改法失败了，值得记**：我把 `add(name)` 放在 `switch` 之前，结果正控
+ * （临时删掉一个 case）显示测试**照样绿**——因为"进过函数"不等于"匹配到了分支"。
+ * 现在改为在**每个 case 的开头**记，`default` 不记。这样"声明了却没有实现"
+ * 才会真的反映在这个集合里。
+ */
+export const HANDLED_TOOL_NAMES = new Set<string>()
+
 export async function executeTool(name: string, args: Record<string, any>, ctx: ToolContext): Promise<string> {
   try {
     switch (name) {
       case 'list_sessions': {
+        HANDLED_TOOL_NAMES.add('list_sessions')
         await ensureDb()
-        const limit = boundedToolInteger(args.limit, 15, 30)
+        // 上限从 30 放到 60（2026-11-24，第五轮实测）：真实会话常常超过 30，
+        // 而超出的那些**模型永远看不到**——它会据"列表里没有"断言"这个会话不存在"
+        // （实测：`示例会话`、`示例群` 都被这样判过死刑，而它们真实存在）。
+        // 60 条会话的文本量仍可接受（每行 ~40 字 ≈ 2.4k 字），比"看不见 14 个会话"划算。
+        const limit = boundedToolInteger(args.limit, 15, 60)
         const sessions = await chatService.listSessions(undefined, limit)
         if (!sessions.length) return '(未查到会话, 数据库可能未连接)'
-        return sessions.map(s =>
+        // **截断必须说出来**（2026-11-24）：取到 limit 条时，列表很可能被截断。
+        // 不说的话模型会说"列表里没有 X，所以 X 不存在"——而 X 可能就在没取到的那部分。
+        const shown = sessions.map(s =>
           `· ${s.displayName || s.username}: ${(s.summary || '').replace(/\n/g, ' ').slice(0, 30)}`).join('\n')
+        if (sessions.length < limit) return shown
+        return shown + '\n'
+          + `（以上是最新的 ${sessions.length} 个会话，**可能还有更早的没列出来**。`
+          + '这一行是提醒：如果用户问的会话不在这份列表里，**不能据此说它不存在**——'
+          + '要么调大 limit，要么直接用 `get_messages` 按名字查。）'
       }
       case 'get_messages': {
+        HANDLED_TOOL_NAMES.add('get_messages')
         const contact = String(args.contact || '')
         if (!contact) return '(缺少 contact 参数)'
         const limit = boundedToolInteger(args.limit, 20, 50)
@@ -1516,6 +1563,7 @@ export async function executeTool(name: string, args: Record<string, any>, ctx: 
         return windowed ? `（${windowLabel}，共 ${msgs.length} 条）\n${rendered}` : rendered
       }
       case 'look_at_image': {
+        HANDLED_TOOL_NAMES.add('look_at_image')
         const contact = String(args.contact || '')
         // 句柄在 get_messages 里长这样：`[图片 #1234]`。允许带不带 `#` 都接受——模型从
         // 上下文里抄一个编号过来，"抄得像不像"不该决定它能不能看图。
@@ -1588,6 +1636,7 @@ export async function executeTool(name: string, args: Record<string, any>, ctx: 
         return `(已附上图片 #${image}（${size}）。你能看到它了，直接据此回答。)`
       }
       case 'search_favorites': {
+        HANDLED_TOOL_NAMES.add('search_favorites')
         await ensureDb()
         // 不给关键词就是"最近收藏了什么"——这一问在聊天里很自然，没理由逼调用方编一个词
         const keyword = String(args.keyword || '')
@@ -1605,6 +1654,7 @@ export async function executeTool(name: string, args: Record<string, any>, ctx: 
           }).join('\n')
       }
       case 'read_favorite': {
+        HANDLED_TOOL_NAMES.add('read_favorite')
         await ensureDb()
         const keyword = String(args.keyword || '')
         if (!keyword) return '(缺少 keyword 参数)'
@@ -1631,6 +1681,7 @@ export async function executeTool(name: string, args: Record<string, any>, ctx: 
         return `「${art.title || '无标题'}」(${art.source_name || '未知来源'}) 正文:\n${text}`
       }
       case 'get_daily_report': {
+        HANDLED_TOOL_NAMES.add('get_daily_report')
         const dates = existsSync(bizDailyDir())
           ? readdirSync(bizDailyDir()).filter(d => /^\d{4}-\d{2}-\d{2}$/.test(d)).sort().reverse()
           : []
@@ -1707,6 +1758,7 @@ export async function executeTool(name: string, args: Record<string, any>, ctx: 
           list.slice(0, limit).map(fmt).join('\n')
       }
       case 'get_sns': {
+        HANDLED_TOOL_NAMES.add('get_sns')
         await ensureDb()
         if (String(args.mode || 'timeline') === 'users') {
           // 谁常发朋友圈：本地把最近的时间线按发帖人聚合。**不新增出境**——数据本来就在这一条工具里。
@@ -1739,6 +1791,7 @@ export async function executeTool(name: string, args: Record<string, any>, ctx: 
         }).join('\n')
       }
       case 'get_weread': {
+        HANDLED_TOOL_NAMES.add('get_weread')
         const { wereadService } = await import('./wereadService.js')
         const mode = String(args.mode || 'shelf')
         const apiKey = (await import('./configService.js')).configService.get('wereadApiKey')
@@ -1826,6 +1879,7 @@ export async function executeTool(name: string, args: Record<string, any>, ctx: 
         }
       }
       case 'get_todos': {
+        HANDLED_TOOL_NAMES.add('get_todos')
         const status = String(args.status || 'pending')
         // 走 pythonBridge（唯一的脚本调用入口）：失败原因分三类报出来，不解析人类可读文本。
         // `--meta` 是为了分清"没有待办"与"从没提取过"——两者在 `--json` 下都是空数组，
@@ -1862,6 +1916,7 @@ export async function executeTool(name: string, args: Record<string, any>, ctx: 
             `· [${t.urgency || '中'}] ${t.task || t.content || t.text || t.title}${t.deadline && t.deadline !== '未提及' ? ` (截止 ${t.deadline})` : ''}${idTag(t)}`).join('\n')
       }
       case 'search_chats': {
+        HANDLED_TOOL_NAMES.add('search_chats')
         // 跨会话检索：本机 message_fts 索引 + 判断模型挑查询词（**只发候选词与问题，不发聊天内容**）
         const question = String(args.question || '').trim()
         if (!question) return '(缺少 question 参数)'
@@ -1894,6 +1949,7 @@ export async function executeTool(name: string, args: Record<string, any>, ctx: 
         return lines.join('\n')
       }
       case 'who_owes_reply': {
+        HANDLED_TOOL_NAMES.add('who_owes_reply')
         // 谁在等我回话：逐会话问一次判断模型（较慢）。**不给正文**——真要看他写了什么，
         // 用 get_messages 单独查，那条路有完整的隐私处理。
         const days = boundedToolInteger(args.days, 14, 60, 'days')
@@ -1925,6 +1981,7 @@ export async function executeTool(name: string, args: Record<string, any>, ctx: 
         return lines.join('\n')
       }
       case 'draft_reply': {
+        HANDLED_TOOL_NAMES.add('draft_reply')
         // 起草：判断（Jev）→ 起草（DeepSeek）→ 排序（Jev）。**只产出文本，绝不发送**——
         // 仓库里"发送"本来就不可达（TOOL_DEFS 没有任何 send 类工具），这里也不新增。
         const contact = String(args.contact || '')
@@ -2026,6 +2083,7 @@ export async function executeTool(name: string, args: Record<string, any>, ctx: 
         return lines.join('\n')
       }
       case 'search_semantic': {
+        HANDLED_TOOL_NAMES.add('search_semantic')
         // 语义/同义检索（向量相似度 + 决策模型重排）。字面词搜不到时用这条。
         // **出境说明**：查询词要发阿里云百炼做嵌入，候选片段要发判断模型重排——
         // 两者都在仓库既有的云端路径上（不是新类别），但这里如实写出来。
@@ -2083,6 +2141,7 @@ export async function executeTool(name: string, args: Record<string, any>, ctx: 
         }).join(nl)
       }
       case 'export_chat': {
+        HANDLED_TOOL_NAMES.add('export_chat')
         // **写操作**，边界写死：只往 output/exports/ 下**新建**目录（名字带时间戳），绝不覆盖；
         // 路径由这里拼，模型给不了任意路径。用户是在对话里明确要求的，这就是那次确认。
         const contact = String(args.contact || '').trim()
@@ -2119,6 +2178,7 @@ export async function executeTool(name: string, args: Record<string, any>, ctx: 
         return `已导出 ${result.count ?? 0} 条消息到 ${shown}/（${format}${suffix}）`
       }
       case 'search_knowledge': {
+        HANDLED_TOOL_NAMES.add('search_knowledge')
         const kw = String(args.keyword || '')
         if (!kw) return '(缺少 keyword 参数)'
         const line = toolLine(args.line)
@@ -2163,6 +2223,17 @@ export async function executeTool(name: string, args: Record<string, any>, ctx: 
             .slice(0, 5)
           if (!contentHits.length) {
             // **说清是哪个范围里没收录**：只写"知识库未收录"会被读成整个知识库都没有
+            //
+            // **`total === 0` 是另一回事**（2026-11-24）：那时不是"查了没命中"，
+            // 而是**根本没有概念页可查**（知识库还没编译过）。原措辞两种情况都说
+            // "看了 0 个概念页"，模型和用户都分不清——这与 D-183 是同一类混淆
+            // （"搜不了"被说成"搜了没有"），后果同样严重：用户会以为"确实没有这个概念"。
+            if (total === 0) {
+              return `(${lineLabelOf(line)}**还没有概念页**（知识库还没编译过），`
+                + '所以这次不是"查了没找到"，而是**根本没东西可查**。'
+                + '要查需要先在终端跑知识库编译；在那之前别告诉用户"知识库里没有"。'
+                + (line === 'all' ? ')' : '；`line: \'all\'` 可以连另一条线一起搜)')
+            }
             return `(${lineLabelOf(line)}没收录「${kw}」, 这一趟看了 ${total} 个概念页`
               + (line === 'all' ? ')' : '；`line: \'all\'` 可以连另一条线一起搜)')
           }
@@ -2201,6 +2272,7 @@ export async function executeTool(name: string, args: Record<string, any>, ctx: 
         return out.join('\n')
       }
       case 'get_stats': {
+        HANDLED_TOOL_NAMES.add('get_stats')
         await ensureDb()
         const sessions = await chatService.listSessions(undefined, 1000)
         const fav = await chatService.getFavorites({ limit: 1 })
@@ -2240,6 +2312,7 @@ export async function executeTool(name: string, args: Record<string, any>, ctx: 
         return lines.join('\n')
       }
       case 'get_reading_stats': {
+        HANDLED_TOOL_NAMES.add('get_reading_stats')
         const days = boundedToolInteger(args.days, 7, 90, 'days')
         const r = await runPythonJson<any>('daily_stats.py',
           ['--days', String(days), '--json'], { timeoutMs: 60_000 })
@@ -2262,17 +2335,20 @@ export async function executeTool(name: string, args: Record<string, any>, ctx: 
         return lines.join('\n')
       }
       case 'search_memory': {
+        HANDLED_TOOL_NAMES.add('search_memory')
         const hits = ctx.memory.searchFacts(ctx.userId, String(args.keyword || ''))
         if (!hits.length) return '(长期记忆中无相关内容)'
         return hits.map(f => `· ${f.content}`).join('\n')
       }
       case 'save_memory': {
+        HANDLED_TOOL_NAMES.add('save_memory')
         const content = String(args.content || '').trim().slice(0, 60)
         if (!content) return '(内容为空, 未保存)'
         const added = ctx.memory.addFact(ctx.userId, content)
         return added ? '(已存入长期记忆)' : '(与已有记忆重复, 未保存)'
       }
       case 'list_skills': {
+        HANDLED_TOOL_NAMES.add('list_skills')
         const scan = scanSkills()
         const q = String(args.query || '').trim().toLowerCase()
         const hit = (s: { id: string; name: string; description: string; triggers: string[] }) =>
@@ -2297,6 +2373,7 @@ export async function executeTool(name: string, args: Record<string, any>, ctx: 
         return lines.join('\n')
       }
       case 'read_skill': {
+        HANDLED_TOOL_NAMES.add('read_skill')
         const id = String(args.id || '').trim()
         if (!id) return '(参数错误: 缺少技能 id)'
         const body = readSkillBody(id)
@@ -2305,6 +2382,7 @@ export async function executeTool(name: string, args: Record<string, any>, ctx: 
         return frameLocalData(`skill.${id}`, body.text)
       }
       case 'list_contacts': {
+        HANDLED_TOOL_NAMES.add('list_contacts')
         await ensureDb()
         const keyword = String(args.keyword || '').trim()
         const limit = boundedToolInteger(args.limit, 50, 200)
@@ -2325,6 +2403,7 @@ export async function executeTool(name: string, args: Record<string, any>, ctx: 
         return `通讯录里 ${names.length} 个名字:\n` + names.slice(0, limit).map(n => `· ${n}`).join('\n')
       }
       case 'get_review': {
+        HANDLED_TOOL_NAMES.add('get_review')
         const dir = reviewsDir()
         if (!existsSync(dir)) {
           // 说清"这个目录本来就还没生成"，而不是让模型以为"今天没有回顾"
@@ -2344,6 +2423,7 @@ export async function executeTool(name: string, args: Record<string, any>, ctx: 
         return `${date} 学习回顾:\n${body.slice(0, maxChars)}`
       }
       case 'get_concepts': {
+        HANDLED_TOOL_NAMES.add('get_concepts')
         const limit = boundedToolInteger(args.limit, 40, 120)
         const out: string[] = []
         for (const dir of vaultDirs()) {
@@ -2357,6 +2437,7 @@ export async function executeTool(name: string, args: Record<string, any>, ctx: 
         return out.join('\n\n')
       }
       case 'format_article': {
+        HANDLED_TOOL_NAMES.add('format_article')
         const content = String(args.content || '')
         if (!content.trim()) return '(参数错误: content 不能为空)'
         const { formatWeChatArticle } = await import('./wechat-formatter.js')
@@ -2366,6 +2447,7 @@ export async function executeTool(name: string, args: Record<string, any>, ctx: 
         return `主题: ${theme}\n总长度: ${html.length} 字符\n正文预览: ${preview}…\n---\n${html}`
       }
       case 'list_themes': {
+        HANDLED_TOOL_NAMES.add('list_themes')
         const { listThemes } = await import('./wechat-formatter.js')
         const themes = listThemes()
         if (!themes.length) return '(没有可用主题)'
@@ -2373,6 +2455,7 @@ export async function executeTool(name: string, args: Record<string, any>, ctx: 
           + themes.map(t => `· ${t.id} — ${t.name}: ${t.description}`).join('\n')
       }
       case 'lint_wiki': {
+        HANDLED_TOOL_NAMES.add('lint_wiki')
         // 两个知识库都要查（本仓的分线纪律：只查一个，另一半的断链永远看不见）
         const parts: string[] = []
         let totalBad = 0
@@ -2414,6 +2497,7 @@ export async function executeTool(name: string, args: Record<string, any>, ctx: 
         return (checked && !totalBad ? '两个知识库都没有断链/孤儿/空页/同名。\n' : '') + parts.join('\n')
       }
       case 'check_skills': {
+        HANDLED_TOOL_NAMES.add('check_skills')
         const scan = scanSkills()
         const disabled = disabledIds()
         const lines: string[] = [`技能目录: ${skillRoots().join('、')}`, `扫描到 ${scan.skills.length} 个技能`]
@@ -2438,6 +2522,7 @@ export async function executeTool(name: string, args: Record<string, any>, ctx: 
         return lines.join('\n')
       }
       case 'fetch_article': {
+        HANDLED_TOOL_NAMES.add('fetch_article')
         const url = String(args.url || '').trim()
         // **严格白名单，不是 denylist**：只认 https 的 mp.weixin.qq.com。
         // 这条比 read_favorite 那条严，因为那里的链接是用户自己收藏的，这里的 URL 是别人给的。
@@ -2465,6 +2550,7 @@ export async function executeTool(name: string, args: Record<string, any>, ctx: 
         return (head ? `${head}\n---\n` : '') + body + tail
       }
       case 'search_public': {
+        HANDLED_TOOL_NAMES.add('search_public')
         const keyword = String(args.keyword || '').trim()
         if (!keyword) return '(参数错误: 缺少 keyword)'
         const limit = boundedToolInteger(args.limit, 8, 20)
@@ -2516,6 +2602,7 @@ export async function executeTool(name: string, args: Record<string, any>, ctx: 
           + '\n（这是第三方搜索页的标题与摘要，不是全文；要正文用 fetch_article 抓）'
       }
       case 'set_todo_status': {
+        HANDLED_TOOL_NAMES.add('set_todo_status')
         const status = String(args.status || '')
         if (status !== 'done' && status !== 'pending') return '(参数错误: status 只能是 done（已完成）或 pending（取消完成）)'
         const id = String(args.id || '').trim()

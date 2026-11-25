@@ -177,8 +177,14 @@ export interface PushbackInput {
 export interface Pushback {
   /** 触发它的机制名，进审计 */
   mechanism: 'claimed-query-without-tool' | 'answer-ignores-tool-content' | 'asks-back-despite-data'
+    // D-182：答复里的具体事实（路径/引文/占位符）在工具原文里找不到
+    | 'unattributed-fact'
     | 'claimed-state-change-without-tool' | 'impossible-offer' | 'past-window-without-lookup'
-    | 'offer-after-destructive' | 'reversed-privacy-direction'
+    | 'offer-after-destructive' | 'reversed-privacy-direction' | 'single-day-passed-as-range'
+    // D-183：把"搜不了"说成"搜了没有"
+    | 'capability-gap-as-absent'
+    // D-189：时间戳对不上工具结果（第六轮实测：联系人C 15:19 被说成 20:18）
+    | 'fabricated-timestamp'
   /** 为什么触发（一句话，进轨迹） */
   reason: string
   /** 顶回去时要追加的那条 system 消息 */
@@ -543,6 +549,62 @@ export function stripOffersAfterDestructive(userText: string, reply: string): st
 /**
  * 用户这一轮要的是删除/清空/退出这类**破坏性动作**吗 */
 const DESTRUCTIVE_REQUEST = /删了|删掉|删除|清空|清理掉|退出登录|注销|拉黑|解散/
+
+/**
+ * **把单日冒充成跨期汇总**（2026-11-24 实测）。
+ *
+ * 实测形态：用户要求把"这几天的日报"整合成一份，它答
+ * 「已为你整合最近3天（2026-11-21 至 2026-11-23）的日报内容…共489篇」
+ *
+ * 轨迹显示：`get_daily_report × 3`，**每次都不带 `date` 也不带 `days`**——
+ * `get_daily_report` 省略参数时只返回**最新一期那一天**，三次调用拿到的是**同一份数据**。
+ * 而 489 正好就是 11-23 单独一天的真实篇数（六天加起来是 2887 篇）。
+ *
+ * 这比凭空编造更隐蔽：**每一条标题都是真的**，只有"整合了 3 天"这个说法是假的。
+ * 而且它自己对同一个问题的说法都不稳定（另一次跑说"7 天"）。
+ *
+ * 判据：答复里出现"N 天/N 日/这几天/最近一周"这类**跨期声称**，
+ * 但这一轮调过的日报类工具里**没有任何一次带了跨期参数**（`days` / 多个不同 `date`）。
+ */
+const CROSS_PERIOD_CLAIM = /(最近|这|前|过去)\s*(\d+|[一二三四五六七八九十两])\s*(天|日|周)|这几天|这周|最近一周|近一周|最近\s*\d+\s*天/
+
+/** 这些工具"一次调用只覆盖一期"，除非带 days 或换 date */
+const DAILY_TOOLS = new Set(['get_daily_report'])
+
+/**
+ * 答复声称覆盖了多天，而工具其实只查了一天 → 顶回去。
+ *
+ * `argsSeen` 是本轮每次工具调用的参数串（轨迹里有）。判据只看**日报类工具**：
+ * 别的工具（如 `get_stats`）本来就能一次覆盖多天，不该被这条管。
+ */
+export function crossPeriodClaimPushback(input: {
+  reply: string
+  toolNames: Iterable<string>
+  argsSeen: Iterable<string>
+}): Pushback | null {
+  const reply = (input.reply ?? '').trim()
+  if (!reply) return null
+  const claim = reply.match(CROSS_PERIOD_CLAIM)
+  if (!claim) return null
+
+  const calledDaily = [...input.toolNames].filter((n) => DAILY_TOOLS.has(n))
+  if (!calledDaily.length) return null   // 没查日报却说日报汇总，另有守卫管（claimed-query）
+
+  // 这一轮日报类调用的参数串里，有没有"跨期"的证据：days 参数，或两个不同的 date
+  const argList = [...input.argsSeen]
+  const didCrossPeriod = argList.some((a) => /\bdays\s*[=:]\s*\d+/.test(a))
+    || new Set(argList.map((a) => (a.match(/date\s*[=:]\s*(\d{4}-\d{2}-\d{2})/) ?? [])[1]).filter(Boolean)).size >= 2
+  if (didCrossPeriod) return null
+
+  return {
+    mechanism: 'single-day-passed-as-range',
+    reason: `答复声称覆盖「${claim[0]}」，但日报类工具这一轮只查了同一期（没带 days，也没换日期）`,
+    message: '注意：你说"整合了' + claim[0] + '"，但**这一轮日报类工具只查到了同一期**'
+      + '（`get_daily_report` 省略 date 就只给最新那一天，多调几次也还是那一天）。'
+      + '所以那个"多少天"的说法是假的。请二选一：①真去查——带 `days` 参数一次查多天，'
+      + '或者分别用不同的 `date` 查；②如实说"我看到的是 X 月 X 日那一期"。',
+  }
+}
 
 /**
  * **方向说反**：把"解除限制"说成"打开限制"。

@@ -141,8 +141,10 @@ test('list_sessions 查不到会话时如实说，而不是回一个空串', asy
 })
 
 test('越界的 limit 变成一句可读的参数错误，而不是悄悄用默认值', async () => {
-  assert.equal(await run('list_sessions', { limit: 999 }), '(参数错误: limit 必须是 1-30 的整数)')
-  assert.equal(await run('list_sessions', { limit: 'abc' }), '(参数错误: limit 必须是 1-30 的整数)')
+  // 上限 2026-11-24 从 30 放到 60：真实会话常常超过 30，超出的那些模型永远看不到，
+  // 于是它会据"列表里没有"断言"这个会话不存在"（第五轮实测）。
+  assert.equal(await run('list_sessions', { limit: 999 }), '(参数错误: limit 必须是 1-60 的整数)')
+  assert.equal(await run('list_sessions', { limit: 'abc' }), '(参数错误: limit 必须是 1-60 的整数)')
 })
 
 // ---------------------------------------------------------------- get_messages

@@ -14,7 +14,7 @@ import assert from 'node:assert/strict'
 const { claimsQuery, pushbackFor, unsupportedQuotes, toolFailureNudge, isEmptyToolResult,
   emptyTalkPushback, asksBackData, claimsStateChange, stateClaimPushback, WRITE_TOOLS,
   impossibleOffer, impossibleOfferPushback, stripImpossibleOffers, destructiveFollowUpPushback,
-  reversedPrivacyDirection, reversedPrivacyPushback } =
+  reversedPrivacyDirection, reversedPrivacyPushback, crossPeriodClaimPushback } =
   await import('../src/services/assistantGuard.js')
 
 test('自述查过：说得出是哪一句', () => {
@@ -336,4 +336,50 @@ test('方向说反：不许误伤"开启严格模式保护隐私"这类正确说
     '开启严格模式后数据更安全。',
   ]
   for (const r of ok) assert.equal(reversedPrivacyDirection(r), null, '不该拦：' + r)
+})
+
+// ---------------------------------------------------------------- 单日冒充跨期（2026-11-24）
+
+test('声称"整合最近N天"而日报工具只查了一期，要拦', () => {
+  // 实测原话：「帮我把这几天的日报整合成一份给我」→
+  // 「已为你整合最近3天（2026-11-21 至 2026-11-23）的日报内容…共489篇」
+  // 轨迹：get_daily_report × 3，**每次都不带 date 也不带 days** —— 拿到的是同一期。
+  // 489 正好是 11-23 单独一天的真实篇数（六天加起来是 2887）。
+  // 这比编造隐蔽：每一条标题都是真的，只有"多少天"是假的。
+  const pushback = crossPeriodClaimPushback({
+    reply: '已为你整合最近3天（2026-11-21 至 2026-11-23）的日报内容，共489篇。',
+    toolNames: ['get_daily_report'],
+    argsSeen: ['date=null', 'date=null', 'date=null'],
+  })
+  assert.ok(pushback, '只查一期却说 3 天，必须拦')
+  assert.equal(pushback!.mechanism, 'single-day-passed-as-range')
+})
+
+test('真带了 days 参数就不拦（那确实覆盖多天）', () => {
+  assert.equal(crossPeriodClaimPushback({
+    reply: '已为你整合最近3天的日报内容。',
+    toolNames: ['get_daily_report'],
+    argsSeen: ['days=3'],
+  }), null)
+})
+
+test('换了不同 date 也不拦（那是真的逐天查了）', () => {
+  assert.equal(crossPeriodClaimPushback({
+    reply: '已为你整合最近3天的日报内容。',
+    toolNames: ['get_daily_report'],
+    argsSeen: ['date=2026-11-21', 'date=2026-11-22', 'date=2026-11-23'],
+  }), null)
+})
+
+test('没提跨期、或没查日报的，都不拦', () => {
+  // 只说一天
+  assert.equal(crossPeriodClaimPushback({
+    reply: '2026-11-23 那天推了 489 篇。',
+    toolNames: ['get_daily_report'], argsSeen: ['date=null'],
+  }), null)
+  // 提了跨期但查的不是日报（get_stats 本来就能一次覆盖多天）
+  assert.equal(crossPeriodClaimPushback({
+    reply: '最近 7 天你一共聊了 300 条。',
+    toolNames: ['get_stats'], argsSeen: ['days=7'],
+  }), null)
 })

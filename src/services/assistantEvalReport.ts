@@ -95,6 +95,19 @@ export interface EvalReport {
   perCase: CaseScore[]
   /** 一次都没跑的用例（不算通过也不算失败） */
   skipped: string[]
+  /**
+   * 覆盖率：已跑用例 / 全部用例。
+   *
+   * 由来（2026-11-24）：`score` 是"通过数 / 已跑数"，只跑 3 条全过就是 100%——
+   * **与真实覆盖率无关，而且最容易骗自己**（今天我就因此以为没问题）。
+   */
+  coverage?: number
+  /**
+   * 样本不足时的**明确说明**（覆盖率 < 90% 时才有）。
+   *
+   * 有这一条时，读报告的人第一眼就知道"这个分数不代表整体"，不必自己算分母。
+   */
+  sampleNote?: string | null
   /** 总耗时（所有观测之和） */
   elapsedMs: number
   /** 模型往返次数之和 */
@@ -218,11 +231,26 @@ export function buildReport(runs: CaseRun[]): EvalReport {
   const passedObs = perCase.reduce((n, r) => n + r.passed, 0)
   const stabilities = perCase.map(r => r.stability).filter((s): s is number => s !== null)
 
+  // **样本不足时不许报"100%"**（2026-11-24，读 pi 的 report 后改的）。
+  //
+  // 原来 `score` 是"通过数 / 已跑数"：只跑 3 条全过 → 100%。这与真实覆盖率无关，
+  // 而且**最容易骗自己**——今天我就因为跑了 3 条全过而以为没问题。
+  //
+  // pi 的做法是"有 blocked 就扣住整个 headline"。我们轻一点但同样明确：
+  // 已跑数达不到全部用例的一定比例时，`score` 旁边必须有一个**说清楚的标记**，
+  // 让人一眼看到"这个分数不代表整体"。
+  const coverage = EVAL_CASES.length ? perCase.length / EVAL_CASES.length : 0
+  const sampleNote = coverage >= 0.9 ? null
+    : `只跑了 ${perCase.length}/${EVAL_CASES.length} 条（${Math.round(coverage * 100)}%），`
+      + '这个分数只代表跑过的那些，**不代表整体**'
+
   return {
     cases: perCase.length,
     passed: passedObs,
     total: totalObs,
     score: perCase.length ? perCase.filter(r => r.passRate === 1).length / perCase.length : 0,
+    // 评测说真话的最后一块：**"全过"也可能是"这批题测不出东西"**
+    ...(sampleNote ? { sampleNote, coverage } : { coverage }),
     softWarnRate: perCase.length ? perCase.filter(r => r.softWarned > 0).length / perCase.length : 0,
     stability: mean(stabilities),
     categories,
@@ -271,6 +299,13 @@ export function formatReport(report: EvalReport, options: { title?: string; base
   lines.push(options.title ? `# ${options.title}` : '# 助手评测报告')
   lines.push('')
   lines.push(`总分 **${pct(report.score)}**（${report.passed}/${report.total} 次通过 · 用例 ${report.cases} 条）`)
+  // **覆盖率不足时，第一屏就得说清楚**（2026-11-24）：`score` 的分母是"已跑数"，
+  // 只跑 3 条全过也是 100%。这句话放在总分下面一行，而不是报告末尾——
+  // 放在末尾等于没说，人都只看第一行。
+  if (report.sampleNote) {
+    lines.push('')
+    lines.push(`> ⚠️ ${report.sampleNote}`)
+  }
   lines.push('')
   lines.push('| 维度 | 用例 | 通过率 | 软警告 | 稳定性 |')
   lines.push('| --- | --- | --- | --- | --- |')

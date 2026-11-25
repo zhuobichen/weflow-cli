@@ -52,7 +52,10 @@ test('撞轮次上限：outcome 必须是 rounds-exhausted，reply 是占位文�
 
   const out = await svc.runReactLoop('outcome-user', [{ role: 'user', content: '测试' }], trace)
   assert.equal(out.outcome, 'rounds-exhausted', '撞上限时 outcome 必须说出来')
-  assert.match(out.reply, /这轮处理太复杂/, 'reply 是占位文案')
+  // 2026-11-24：占位文案换成了"诚实的弃权"——有工具输出就摘出来，没输出才说
+  // "没能在限定步数内完成"。这里只要求它**仍然不是模型说的答复**（有明确的自述），
+  // 不钉具体措辞（措辞会继续改，钉死了每次改文案都要动测试）。
+  assert.match(out.reply, /没能在限定步数内|这轮我查到了|换个问法/, 'reply 应是明确的"没答完"自述')
   assert.equal(trace.stop, 'rounds-exhausted')
 })
 

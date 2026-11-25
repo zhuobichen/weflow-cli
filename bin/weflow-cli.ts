@@ -8791,6 +8791,67 @@ assistantCmd
   })
 
 assistantCmd
+  .command('memory')
+  .description('查看/重建某个记忆桶（摘要、事实、压缩归档）')
+  .option('--user <id>', '记忆桶 id（微信场景一般是 wxid；镜像侧栏是 wxmirror-sidebar-*）', '')
+  .option('--rebuild-summary', '用归档里的原话重算摘要（会调一次模型）')
+  .option('--reset-summary', '清空摘要（归档为空、摘要有污染时的最后手段；不动事实与窗口）')
+  .option('--json', '输出 JSON')
+  .action(async (opts) => {
+    const { AssistantMemory } = await import('../src/services/assistantMemory.js')
+    const userId = String(opts.user || '').trim()
+    if (!userId) {
+      console.error('需要 --user <id>。用 `weflow-cli assistant status --json` 看当前 memoryBucket。')
+      process.exitCode = 2
+      return
+    }
+    const mem: any = new AssistantMemory()
+    if (opts.resetSummary) {
+      // **最后手段**：归档为空（压缩时还没有归档功能）、而摘要里已经混进旧编造时，
+      // 唯一能做的就是把摘要清掉。代价是会丢掉"之前聊过什么"的概括——
+      // 但比让模型一遍遍复述旧编造好。事实与工作窗口不动（它们另有清理路径）。
+      const before = String(mem.summary(userId) ?? '').length
+      mem.resetSummary(userId)
+      if (opts.json) console.log(JSON.stringify({ success: true, reset: true, beforeChars: before }))
+      else console.log(chalk.green(`✓ 摘要已清空（原 ${before} 字）`))
+      return
+    }
+    if (opts.rebuildSummary) {
+      // 重建要调模型。这里复用一个最小 caller：与 callLLM 同一套配置，但不带工具。
+      const { AssistantService } = await import('../src/services/assistantService.js')
+      const svc: any = new AssistantService()
+      const llm = async (msgs: any[], maxTokens?: number) => {
+        const d = await svc.callLLM(msgs, undefined, maxTokens ?? 900)
+        return String(d?.choices?.[0]?.message?.content ?? '')
+      }
+      const next = await mem.rebuildSummary(userId, llm)
+      if (!next) {
+        console.error('重建失败：归档为空或模型调用出错（现有摘要未改动）')
+        process.exitCode = 1
+        return
+      }
+      if (opts.json) console.log(JSON.stringify({ success: true, rebuilt: true, summaryChars: next.length }))
+      else console.log(chalk.green(`✓ 摘要已重建（${next.length} 字）`))
+      return
+    }
+    const summary = String(mem.summary(userId) ?? '')
+    const facts = mem.facts(userId) ?? []
+    const archiveTurns = mem.archiveTurnCount(userId)
+    if (opts.json) {
+      console.log(JSON.stringify({
+        success: true, user: userId, summaryChars: summary.length, factCount: facts.length,
+        archiveTurns, workingWindow: mem.workingWindow(userId).length,
+      }))
+      return
+    }
+    console.log(chalk.cyan(`记忆桶 ${userId}`))
+    console.log(`  工作窗口: ${mem.workingWindow(userId).length} 条`)
+    console.log(`  摘要: ${summary.length} 字`)
+    console.log(`  长期事实: ${facts.length} 条`)
+    console.log(`  压缩归档: ${archiveTurns} 轮原话${archiveTurns ? chalk.gray('（可 --rebuild-summary 重算摘要）') : chalk.gray('（还没压缩过）')}`)
+  })
+
+assistantCmd
   .command('log')
   .description('查看守护进程日志 (最近 N 行)')
   .option('-n, --lines <number>', '行数', '30')

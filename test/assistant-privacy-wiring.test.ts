@@ -24,6 +24,8 @@ process.env.USERPROFILE = HOME
 const { AssistantService } = await import('../src/services/assistantService.js')
 const { configService } = await import('../src/services/configService.js')
 const { privacyGate } = await import('../src/services/assistantPrivacy.js')
+// 2026-11-24：engineConfig 抽到 assistantEngine.ts，成为独立导出的 resolveEngineConfig
+const { resolveEngineConfig } = await import('../src/services/assistantEngine.js')
 
 const realGet = configService.get.bind(configService)
 
@@ -87,22 +89,28 @@ test('自定义端点仍然算云端：脱敏不能因为"换了个中转站"就
 // ------------------------------------------------------- 请求发去哪
 
 test('engineConfig：本地引擎指向本机端口，密钥为空', () => {
-  assert.deepEqual(service({ aiEngine: 'ollama', localModel: 'qwen2.5' }).svc.engineConfig(),
+  // 2026-11-24：engineConfig 抽到 assistantEngine.ts，成为独立导出的 resolveEngineConfig。
+  // 它读的是 `configService.get`，所以仍然要用 `setConfig` 打桩（`service()` 就干这个）。
+  setConfig({ aiEngine: 'ollama', localModel: 'qwen2.5' })
+  assert.deepEqual(resolveEngineConfig(),
     { url: 'http://localhost:11434/v1', model: 'qwen2.5', key: null, local: true })
 
-  assert.equal(service({ aiEngine: 'lmstudio' }).svc.engineConfig().url, 'http://localhost:1234/v1')
+  setConfig({ aiEngine: 'lmstudio' })
+  assert.equal(resolveEngineConfig().url, 'http://localhost:1234/v1')
 })
 
 test('engineConfig：自定义端点优先于默认 DeepSeek，且去掉结尾斜杠', () => {
   const cfg = { aiEngine: 'deepseek', aiBaseUrl: 'https://relay.example/v1/', aiModel: 'my-model', deepseekApiKey: 'sk-x' }
-  assert.deepEqual(service(cfg).svc.engineConfig(),
+  setConfig(cfg)
+  assert.deepEqual(resolveEngineConfig(),
     { url: 'https://relay.example/v1', model: 'my-model', key: 'sk-x', local: false })
 })
 
 test('engineConfig：什么都没配时回默认端点', () => {
   // 没配密钥时 `key` 是配置里的默认空串（不是 null）——只有本地引擎那条路才显式给 null。
   // 两者都判 falsy，所以请求不会带上空的 Authorization。
-  assert.deepEqual(service({ aiEngine: 'deepseek' }).svc.engineConfig(),
+  setConfig({ aiEngine: 'deepseek' })
+  assert.deepEqual(resolveEngineConfig(),
     { url: 'https://api.deepseek.com/v1', model: 'deepseek-chat', key: '', local: false })
 })
 

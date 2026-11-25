@@ -22,13 +22,19 @@ process.env.USERPROFILE = HOME
 const svcMod = await import('../src/services/assistantService.js')
 const { AssistantService } = svcMod as any
 
-/** 取私有方法：这些判据是纯函数，值得单独钉住 */
-const proto = AssistantService.prototype as any
+/**
+ * `fetchWithRetry` 现在在 `assistantEngine.ts` 里**独立导出**（2026-11-24 抽取）。
+ *
+ * 原来这里是 `proto.fetchWithRetry.call(svc, ...)` —— 取私有方法的测法。
+ * 抽成独立模块之后直接 import 就对，而且这正是抽取的好处之一：
+ * **这些判据本来就不需要 `AssistantService` 实例**，之前靠"取私有方法"才测得到。
+ */
+const { fetchWithRetry } = await import('../src/services/assistantEngine.js')
 
-function callFetchWithRetry(svc: any, fakeFetch: any, attempts = 3) {
+function callFetchWithRetry(_svc: any, fakeFetch: any, attempts = 3, signal?: AbortSignal) {
   const original = globalThis.fetch
   globalThis.fetch = fakeFetch
-  return proto.fetchWithRetry.call(svc, 'http://x/chat/completions', {}, attempts)
+  return fetchWithRetry('http://x/chat/completions', signal ? { signal } : {}, attempts)
     .finally(() => { globalThis.fetch = original })
 }
 
@@ -101,4 +107,55 @@ test('重试耗尽：把最后一次的错误抛出去，不吞掉', async () =>
     () => callFetchWithRetry(svc, async () => { throw new TypeError('fetch failed') }),
     /fetch failed/,
   )
+})
+
+// ---------------------------------------------------------------- 2026-11-24 补：退避与 Retry-After
+
+test('退避期间可以被取消——不接 signal 等于用户点停止没有落点', async () => {
+  // AGENTS.md 硬性门禁第 2 条。原来退避是裸 setTimeout，signal 只作用在 fetch 上，
+  // 那几秒里取消无效。
+  const svc = new AssistantService()
+  const ctrl = new AbortController()
+  const started = Date.now()
+  let calls = 0
+  const running = callFetchWithRetry(svc, async () => {
+    calls += 1
+    return { status: 429, ok: false, headers: new Headers(), text: async () => '', json: async () => ({}) }
+  }, 3, ctrl.signal)
+  setTimeout(() => ctrl.abort(), 120)
+  await assert.rejects(() => running, /取消|abort/i)
+  const elapsed = Date.now() - started
+  assert.ok(elapsed < 1500, `取消后该立刻返回，实际等了 ${elapsed}ms`)
+  assert.equal(calls, 1, '取消之后不该再发下一次请求')
+})
+
+test('听服务端的 Retry-After，而不是固守自己的退避', async () => {
+  const svc = new AssistantService()
+  let calls = 0
+  const started = Date.now()
+  const res = await callFetchWithRetry(svc, async () => {
+    calls += 1
+    if (calls === 1) {
+      const h = new Headers()
+      h.set('retry-after', '0')   // 服务端说立刻可重试
+      return { status: 429, ok: false, headers: h, text: async () => '', json: async () => ({}) }
+    }
+    return { status: 200, ok: true, headers: new Headers(), text: async () => '', json: async () => ({}) }
+  })
+  assert.equal((res as any).status, 200)
+  assert.ok(Date.now() - started < 400, 'Retry-After: 0 应当几乎不等待（自己的退避是 ~500ms）')
+})
+
+test('408 / 409 也算可重试', async () => {
+  for (const status of [408, 409]) {
+    let calls = 0
+    const svc = new AssistantService()
+    const res = await callFetchWithRetry(svc, async () => {
+      calls += 1
+      if (calls < 2) return { status, ok: false, headers: new Headers(), text: async () => '', json: async () => ({}) }
+      return { status: 200, ok: true, headers: new Headers(), text: async () => '', json: async () => ({}) }
+    })
+    assert.equal(calls, 2, `HTTP ${status} 应该重试一次`)
+    assert.equal((res as any).status, 200)
+  }
 })

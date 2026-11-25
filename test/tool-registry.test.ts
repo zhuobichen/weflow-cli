@@ -23,10 +23,30 @@ const mcpDoc = read('docs', 'MCP.md')
 
 const declared = TOOL_DEFS.map(tool => tool.function.name)
 
-/** `executeTool` 里出现的工具名。只取那个函数体内的 `case 'x':`，别把文件里其它 switch 算进来。 */
-const handled = [...toolsSource
-  .slice(toolsSource.indexOf('export async function executeTool'))
-  .matchAll(/^\s+case '([a-z_]+)':/gm)].map(match => match[1])
+/**
+ * `executeTool` 里出现的工具名。
+ *
+ * **2026-11-24 改法**：原来是从 `assistantTools.ts` 的源码文本里正则抓 `case 'x':`。
+ * 那个依赖很脆——拆文件、换写法、加注释都可能让它误判，而且误判的方向有两种：
+ * 正则没抓到 → 误报"缺 case"（红得莫名其妙）；正则抓到注释里的 case → 漏报。
+ *
+ * 现在用运行时自报：把所有声明的工具名逐个丢给 `executeTool`，它分发前会把名字记进
+ * `HANDLED_TOOL_NAMES`。**与代码怎么组织无关**——拆成多少个 handler、换成查表分发，
+ * 这个集合都照旧成立。
+ *
+ * 注意：跑一遍会真的执行工具分支。参数给空对象，让每个分支走"缺参数"早退路径
+ * （它们都以 `(缺少 x 参数)` 之类返回，不碰数据库、不出网）。有副作用的几个
+ * （写待办、导文件、存记忆）另有专门的测试覆盖，这里只要"它认得这个工具名"。
+ */
+const handled = await (async () => {
+  const { executeTool, HANDLED_TOOL_NAMES } = await import('../src/services/assistantTools.js')
+  for (const name of declared) {
+    try {
+      await executeTool(name, {}, { userId: '__registry_probe__', memory: null } as any)
+    } catch { /* 抛错也算"认得了这个名字"——它进了分支才会抛 */ }
+  }
+  return [...HANDLED_TOOL_NAMES]
+})()
 
 /** `mcp-server` 里手写的那批（`wechat.` 前缀） */
 const handWritten = [...mcpSource.matchAll(/name: '(wechat\.[a-z_]+)'/g)].map(match => match[1])
