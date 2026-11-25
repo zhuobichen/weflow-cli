@@ -5953,3 +5953,49 @@ Pi 式"把判断交给专用小模型"的架构直觉是对的，**但对这个�
 `assistant-jev-doublecheck.test.ts` 钉住守卫的三重条件与"诚实拒绝不拦"这条边界。
 真要用时先开 `assistantJevDoubleCheck=log` 在真实流量上统计
 "`needs` 高却零工具调用"的发生率——若系统性存在，再考虑转 on。
+
+## D-192: 并行 tool_calls 的 tool 消息必须连续——长链条下必现 400
+
+**Decision.** ReAct 循环里，一轮返回多个 `tool_calls` 时，把"失败提醒"（`toolFailureNudge`）
+与"取图 user 消息"攒进 `deferred` 队列，等这一批 **所有 tool 消息 push 完**再统一追加。
+`runToolCall` 签名加可选 `deferred: ApiMessage[] = []`，快路径（单工具）不传，行为不变。
+
+**Reason.** 为回答"长链条（一次调约 30% 工具）下双重判断有没有用"，我造了一条要调 10 个工具的
+个人周报指令。结果两种配置都撞同一个错：
+
+```
+❌ 大脑暂时离线: LLM 400: An assistant message with 'tool_calls' must be followed by tool messages
+```
+
+抓每次 `callLLM` 发出的消息序列，根因一目了然（第二轮）：
+
+```
+assistant(6tc) tool tool system tool system tool system tool tool system
+//                    ↑ 中间夹了 system——协议不允许
+```
+
+OpenAI 兼容协议要求 `assistant(tool_calls=N)` 后面**紧跟且连续** N 条 `tool` 消息。
+而 `runToolCall` 在工具失败时把 `toolFailureNudge` 作为 `system` 直接 push 进对话，
+多工具并行时就插进了 tool 消息之间。取图的 `user` 消息同理。
+
+这不挑模型、不挑配置——只要一轮多工具且其中一个失败就触发。之前没发现，是因为
+单工具场景（1tc）后面只跟 1 条 tool，nudge 落在它之后仍算"连续"。
+**长链条测试的价值在这里**：它逼出了这个短链条永远碰不到的协议 bug。
+
+**修后实测**：序列变成 `assistant(6tc) tool×6 system×4`，400 消失；长链条完整跑通，
+调用 12 次工具（去重 10 个 = 32%），答复正常生成。
+
+**Verification.** `test/assistant-parallel-tools-sequence.test.ts` 三条：deferred 存在且在 for 循环后、
+nudge/取图走 deferred 而非直接 push、`deferred` 是可选参数。
+正对照（把 nudge 改回直接 push）测试确实转红，证明判据是活的；还原后转绿。
+
+**Alternatives rejected.** ①去掉 nudge：它是给小模型看懂"工具失败"的关键提示（D-169），
+丢了会让模型继续按假设写。②把 nudge 塞进 tool 消息的 content：能保连续性，但把
+"系统提醒"伪装成"工具输出"，与 D-182"工具原文与系统提示分开"的纪律冲突。
+③只在 failed 工具后面补一条空 tool 消息：治标，取图那条 user 消息仍旧破坏连续性。
+
+**Consequences.** 这条对 D-191 的结论没有影响——修好 400 后重跑长链条 A/B：
+OFF 调用 12 次工具、ON 调用 11 次，去重都是 10 个，Jev 建议 8 个工具且模型全采纳，
+双重判断守卫仍未触发。结论不变：**Jev 判断准、支持多选，但当前模型在长链条下也自己调对了工具**。
+真正值得留的是这个协议 bug 的修复——它由"测一个没收益的方案"意外发现，
+说明压力测试的价值不只在于验证假设，也在于暴露路径上的真问题。

@@ -683,12 +683,20 @@ export class AssistantService {
 
       if (msg.tool_calls?.length) {
         messages.push({ role: 'assistant', content: msg.content || '', tool_calls: msg.tool_calls })
+        // **并行 tool_calls 的协议约束**（D-192）：OpenAI 兼容端点要求 assistant(tool_calls)
+        // 后面**紧跟且连续** N 条 tool 消息，中间不能夹 system/user。工具失败提醒与取图
+        // 这两类"附加消息"必须先攒着，等这一批 tool 消息全部 push 完再统一追加——
+        // 否则长链条里一轮 6 个工具、其中几个失败时，序列变成
+        // `assistant(6tc) tool system tool system ...`，服务端直接 400
+        // "An assistant message with 'tool_calls' must be followed by tool messages"。
+        const deferred: ApiMessage[] = []
         for (const tc of msg.tool_calls) {
           toolCalls++
           let args: Record<string, any> = {}
           try { args = JSON.parse(tc.function?.arguments || '{}') } catch { /* 参数容错 */ }
-          await this.runToolCall(userId, messages, tc.id, tc.function?.name || '', args, trace)
+          await this.runToolCall(userId, messages, tc.id, tc.function?.name || '', args, trace, deferred)
         }
+        messages.push(...deferred)
         continue
       }
       reply = (msg.content || '').trim() || '(空回复)'
@@ -746,7 +754,7 @@ export class AssistantService {
    */
   private async runToolCall(userId: string, messages: ApiMessage[], callId: string,
                             name: string, args: Record<string, any>,
-                            trace: TurnTrace): Promise<void> {
+                            trace: TurnTrace, deferred: ApiMessage[] = []): Promise<void> {
     const callKey = `${name}:${JSON.stringify(args ?? {})}`
     if (this.turnCalls.has(callKey)) {
       // 同样的参数再来一次不会得到新东西。**顶回去说清楚**，而不是默默重跑一遍——
@@ -826,7 +834,7 @@ export class AssistantService {
     // 工具结果在同一批里进对话，模型下一轮自然看得到。小模型常把括号里那句错误当没看见，
     // 继续按自己的假设往下写——这一句是把"这一步失败了"翻译成它能接住的指令。
     if (guardsEnabled() && isEmptyToolResult(raw)) {
-      messages.push({ role: 'system', content: toolFailureNudge(name, raw) })
+      deferred.push({ role: 'system', content: toolFailureNudge(name, raw) })
     }
 
     // 工具取来的图片作为**紧随其后的一条 user 消息**附上：`tool` 消息的 content 只能是
@@ -834,7 +842,7 @@ export class AssistantService {
     // 出不出境由 `toApiMessages` 按隐私模式判定——那是唯一一道门。
     if (ctx.pendingImages?.length) {
       const n = ctx.pendingImages.length
-      messages.push({
+      deferred.push({
         role: 'user',
         content: `（这是你刚取来的图片${n > 1 ? `，共 ${n} 张` : ''}）`,
         images: ctx.pendingImages,
