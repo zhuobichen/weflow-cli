@@ -44,6 +44,7 @@ scripts/regen_wsl_keys.mjs
 !docs/PROJECT_STATE.md
 !docs/NT_DATABASES.md
 !docs/DECISIONS.md
+!docs/AGENT.md
 !docs/VERSION_METHODS.md
 !docs/LINUX.md
 !docs/LINUX.en.md

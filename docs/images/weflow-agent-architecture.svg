@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 720" font-family="'Segoe UI','Microsoft YaHei',sans-serif">
-  <!-- WeFlow CLI — Agent architecture (source representation).
+  <!-- weflow-cli — Agent architecture (source representation).
        The PNG companion is generated in the cel-boil (hand-drawn line boil) style;
        this SVG is the maintainable source: edit labels/boxes here, regenerate the art. -->
   <defs>
@@ -17,7 +17,7 @@
     </style>
   </defs>
   <rect width="1200" height="720" fill="#f6ecd7"/>
-  <text x="600" y="46" class="title">WeFlow CLI · 第二大脑 Agent 架构</text>
+  <text x="600" y="46" class="title">weflow-cli Agent 架构</text>
 
   <!-- Entry points -->
   <rect x="40" y="120" width="220" height="70" class="box"/>
@@ -85,5 +85,4 @@
   <text x="760" y="515" class="small">Jev 建议了就必须调工具 · 工具说"未找到"就不许编具体事实 · 提权工具不进 MCP</text>
   <text x="760" y="538" class="small">隐私默认 open · 无预设备份防御 · 失败不静默跳过判断层以外</text>
 
-  <text x="600" y="620" class="small">本图由 SVG 源精确渲染 — 改结构先改 SVG，再渲染为 PNG</text>
 </svg>
