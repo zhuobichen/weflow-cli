@@ -183,8 +183,10 @@ export interface Pushback {
     | 'offer-after-destructive' | 'reversed-privacy-direction' | 'single-day-passed-as-range'
     // D-183：把"搜不了"说成"搜了没有"
     | 'capability-gap-as-absent'
-    // D-189：时间戳对不上工具结果（第六轮实测：联系人C 15:19 被说成 20:18）
+    // D-189：时间戳对不上工具结果（第六轮实测：三个人真实 22:47/19:25/16:40，全被说成 22:47）
     | 'fabricated-timestamp'
+    // D-191：Jev 保底判断要用某工具，模型却没调、还给了具体本机事实
+    | 'unfulfilled-jev-suggestion'
   /** 为什么触发（一句话，进轨迹） */
   reason: string
   /** 顶回去时要追加的那条 system 消息 */
@@ -212,6 +214,41 @@ export function pushbackFor(input: PushbackInput): Pushback | null {
     message: '注意：你刚才的回答写着「' + claim.slice(0, 60) + '」，但你这一轮**没有调用任何工具**，'
       + '手上并没有本机数据。' + quoteLine
       + '请现在就调用合适的工具取真实数据；如果确实查不到，就照实说查不到，并说明你想查什么。',
+  }
+}
+
+/**
+ * Jev 保底判断与大模型实际行为不一致（D-191）。
+ *
+ * 触发条件（三个同时成立才拦，尽量不误伤）：
+ * 1. Jev 明确建议了工具（selection 非空）——判断层认为要查本机数据；
+ * 2. 这一轮**一个工具都没调**（toolCalls === 0）——大模型没有做第二次确认就作答；
+ * 3. 答复里给了**具体本机事实**（有时间戳/数量/引文这类）——而不是诚实拒绝。
+ *
+ * 第 3 条是关键：`"我不知道 / 你告诉我名字我再查"` 不该被拦——那是诚实退路，
+ * D-190 的教训就是"on 模式反而不如 off"因为逼用户同意。只有"没查却给具体事实"才是幻觉。
+ *
+ * 这不是"Jev 说了算"：它只是保底信号。模型第二轮仍可自由判断——
+ * 如果它查完发现 Jev 建议错了，答复里说明即可，守卫不再拦（因为 toolCalls > 0）。
+ */
+export function unfulfilledJevSuggestionPushback(input: {
+  reply: string
+  toolCalls: number
+  suggested: string[]
+  /** 答复里是否已经给了具体本机事实（由调用方用现成的引文/时间戳检测拼好） */
+  hasConcreteClaim: boolean
+}): Pushback | null {
+  if (!input.suggested.length) return null
+  if (input.toolCalls > 0) return null
+  if (!input.hasConcreteClaim) return null
+  return {
+    mechanism: 'unfulfilled-jev-suggestion',
+    reason: `Jev 建议用 [${input.suggested.join(', ')}]，但这一轮工具调用为 0，答复却给了具体事实`,
+    message: '注意：判断层认为这条消息需要查本机数据（建议工具：'
+      + input.suggested.join('、') + '），但你这一轮**没有调用任何工具**，'
+      + '答复里却给了具体的时间/数量/原文。\n'
+      + '请现在就调用合适的工具取真实数据再作答——参数由你自己从问题里取。'
+      + '如果查不到，就明确说"查不到"并说明查了什么，不要编一个看起来像系统字段的答案。',
   }
 }
 

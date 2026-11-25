@@ -1546,7 +1546,7 @@ const configurableKeys = [
   'judgeProvider', 'openrouterApiKey', 'openrouterJudgeModel', 'judgeLocalUrl', 'judgeEndpoint',
   'wereadApiKey',
   'assistantPrivacy', 'assistantWhitelist', 'assistantGroupWhitelist',
-  'assistantGroupRequireMention', 'assistantFastRoute', 'assistantLexiconRoute', 'assistantPanelUser', 'quickReplyContacts',
+  'assistantGroupRequireMention', 'assistantFastRoute', 'assistantLexiconRoute', 'assistantJevDoubleCheck', 'assistantPanelUser', 'quickReplyContacts',
   'skillDirs', 'skillDisabled',
   'dailySources', 'dailySourceCategories',
   'dailyExcludeTopics', 'dailyAiEnabled', 'dailyKeepImages', 'dailyMaxFailureRate', 'dailyMailTo',

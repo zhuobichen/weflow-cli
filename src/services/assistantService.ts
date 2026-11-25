@@ -9,13 +9,16 @@
  */
 import { WechatMessageService } from './wechatMessageService.js'
 import { decideRoute, MIN_NEEDS_TOOL, type FastRouteMode, type RouteCapability } from './assistantRouter.js'
+import { decideMultiTools } from './assistantJevMulti.js'
 import { routeByIntent, routeWithArgs, routeParts, isFollowUp, type IntentHit }
   from './assistantIntent.js'
 import { pushbackFor, emptyTalkPushback, asksBackData, toolFailureNudge, isEmptyToolResult, guardsEnabled,
          stateClaimPushback, impossibleOfferPushback,
          timeWindowWithoutLookup, stripImpossibleOffers, destructiveFollowUpPushback,
-         stripOffersAfterDestructive, reversedPrivacyPushback, crossPeriodClaimPushback }
+         stripOffersAfterDestructive, reversedPrivacyPushback, crossPeriodClaimPushback,
+         unfulfilledJevSuggestionPushback }
   from './assistantGuard.js'
+import { hasConcreteLocalClaim } from './assistantAttribution.js'
 import { selectFactsForInjection, frameLocalData } from './assistantMemory.js'
 import { configService } from './configService.js'
 import { AssistantMemory, explicitRememberIntent, type ChatTurn } from './assistantMemory.js'
@@ -526,6 +529,8 @@ export class AssistantService {
   private firstRunHintShown = false
   /** 最近一次路由认为「这条消息需要查本机数据」的概率（0 = 没问过） */
   private lastNeedsLocalData = 0
+  /** 本轮 Jev 多工具保底判断建议的工具（D-191）。空 = 没建议或没开 */
+  private turnJevSuggested: string[] = []
   /** 本轮按「记住：…」直接落盘的那条事实（没有就 null）。用来跳过同轮的 `save_memory` */
   private turnExplicitFact: string | null = null
   /** 本轮**有产出**的工具结果（截断）。守卫判断"答复有没有用上刚查到的内容"要靠它 */
@@ -619,6 +624,36 @@ export class AssistantService {
   private fastRouteMode(): FastRouteMode {
     const raw = String(configService.get('assistantFastRoute') || '').trim().toLowerCase()
     return raw === 'on' || raw === 'log' ? raw : 'off'
+  }
+
+  /** Jev 双重判断模式（D-191）。默认 off：拿不到端到端收益就不改行为 */
+  private jevDoubleCheckMode(): 'off' | 'log' | 'on' {
+    const raw = String(configService.get('assistantJevDoubleCheck') || '').trim().toLowerCase()
+    return raw === 'on' || raw === 'log' ? raw : 'off'
+  }
+
+  /**
+   * Jev 多工具保底判断（D-191 双重判断的第一重）。
+   *
+   * 一次 decide.py 调用问"这条要用哪些工具"（N 个独立 noul，支持多选），
+   * 把建议存进 `turnJevSuggested`；**不执行任何工具、不填参数**。
+   * 第二重是大模型自己在 ReAct 里判断+填参+执行；两重不一致由守卫处理。
+   */
+  private async maybeJevDoubleCheck(userId: string, text: string, trace: TurnTrace): Promise<void> {
+    const mode = this.jevDoubleCheckMode()
+    if (mode === 'off') return
+    try {
+      const decision = await decideMultiTools({ message: text, runDecide: this.routeDecider as any })
+      trace.steps.push({ kind: 'route', detail: `Jev 多工具[${mode}]: ${decision.reason}`
+        + (decision.ok ? ` (${Object.entries(decision.scores).map(([k, v]) => `${k}=${v.toFixed(2)}`).join(' ')})` : '') })
+      appendLog(`[Jev多工具] ${decision.reason}`)
+      privacyGate.audit('JEV_MULTI', 0,
+        `${mode} ${decision.selected.join(',') || 'none'} model=${decision.model || '?'}`)
+      if (mode === 'on' && decision.ok) this.turnJevSuggested = decision.selected
+    } catch (error: any) {
+      appendLog(`[Jev多工具] 判断异常，按原样回退: ${error?.message ?? error}`)
+      trace.steps.push({ kind: 'route', detail: 'Jev 多工具异常，直接走循环' })
+    }
   }
 
   /** ReAct 主循环：一轮一轮问模型，直到它给出不带工具调用的答复。
@@ -1060,6 +1095,7 @@ export class AssistantService {
     // 每轮清零：`lastNeedsLocalData` 由这一轮的判断层/词法路径各自写。**不清零就会漏到下一轮**
     // ——词法路径把它设成 1 之后，下一句纯闲聊（"今天天气不错"）会带着上一轮的信号被守卫顶一次。
     this.lastNeedsLocalData = 0
+    this.turnJevSuggested = []
     this.turnToolText = []
     this.turnGuardMechanisms.clear()
     this.turnGuardChecks = 0
@@ -1217,6 +1253,7 @@ export class AssistantService {
     try {
       toolCalls += await this.maybeLexiconRoute(userId, t, messages, trace)
       toolCalls += await this.maybeFastRoute(userId, t, messages, trace)
+      await this.maybeJevDoubleCheck(userId, t, trace)
       const first = await this.runReactLoop(userId, messages, trace)
       reply = first.reply
       toolCalls += first.toolCalls
@@ -1254,6 +1291,15 @@ export class AssistantService {
       // 两件事都犯的时候先修编造——那一句补问里已经要求它去查、去引用。
       let retry: { mechanism: string; reason: string; message: string } | null =
         answered && guardsEnabled() ? pushbackFor({ reply, toolCalls, corpus }) : null
+      // 双重判断（D-191）：Jev 保底说要用工具，模型却没调就给了具体本机事实 → 顶回去。
+      // 顺序紧随"自述查过"那条——都是"没工具却给事实"家族。诚实拒绝不拦（见守卫函数注释）。
+      if (answered && !retry && guardsEnabled() && this.turnJevSuggested.length) {
+        this.turnGuardChecks += 1
+        retry = unfulfilledJevSuggestionPushback({
+          reply, toolCalls, suggested: this.turnJevSuggested,
+          hasConcreteClaim: hasConcreteLocalClaim(reply),
+        })
+      }
       // 紧接着认"编造做过某件事"：用户会照着它行事（以为档位/待办改了），代价比多一次调用大。
       if (answered && !retry && guardsEnabled()) {
         this.turnGuardChecks += 1

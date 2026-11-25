@@ -338,3 +338,26 @@ export function capabilityGapPushback(input: { reply: string; corpus: string }):
       + '而不是"没有"。',
   }
 }
+
+/**
+ * 答复里有没有"具体本机事实"（D-191 双重判断用）。
+ *
+ * 只认三类**看起来像从数据里读出来的**内容，且排除诚实拒绝：
+ * - 完整时间戳（`11月23日22:47` 或 `[11/23 22:47]`）；
+ * - 明确的本机数量（"一共 15 个会话""共 44 条"）；
+ * - 带引号的"原文"（「…」「…」里的具体内容）。
+ *
+ * 诚实退路（"我不知道""你告诉我名字我再查""查不到"）返回 false——
+ * D-190 的教训：逼一个诚实拒绝的模型去查，反而更差。
+ */
+export function hasConcreteLocalClaim(reply: string): boolean {
+  const text = (reply ?? '').trim()
+  if (!text) return false
+  // 已经明确说查不到/不知道且没有给出具体值：不算具体事实
+  if (/^(我不知道|查不到|没查到|我手上没有|无法确认)/.test(text)) return false
+  EXPLICIT_DATETIME.lastIndex = 0   // 全局正则，test 会推进 lastIndex——每次用前归零
+  if (EXPLICIT_DATETIME.test(text) || /\[\d{1,2}\/\d{1,2}\s+\d{1,2}:\d{2}\]/.test(text)) return true
+  if (/(一共|总共|共有|合计)\s*\d+\s*(个|条|位|人|篇)/.test(text)) return true
+  if (/[「"]{1}[^」"]{4,}[」"]{1}/.test(text)) return true
+  return false
+}
