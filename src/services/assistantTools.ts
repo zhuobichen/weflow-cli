@@ -1199,8 +1199,9 @@ export const TOOL_DEFS: ToolDef[] = [
     type: 'function',
     function: {
       name: 'read_document',
-      description: '读取本地文件的**内容**（按格式自动解析）：PDF、Word(.docx)、Excel(.xlsx)、'
-        + 'PPT(.pptx)、HTML、以及纯文本/代码文件。用户让你看某个文件的内容时用这个，'
+      description: '读取本地文件的**内容**（按格式自动解析）：PDF、Word(.doc/.docx)、'
+        + 'Excel(.xls/.xlsx)、PPT(.pptx)、HTML、以及纯文本/代码文件。'
+        + '用户让你看某个文件的内容时用这个，'
         + '比 read_file 强——它能解析二进制格式。'
         + '**给 path（完整路径）或 name（只有文件名）二选一**：用户说"这个 pdf""他发的那个文件"、'
         + '你从 get_messages 里拿到 `[文件] xxx.pdf` 的文件名后，用 name 传文件名，'

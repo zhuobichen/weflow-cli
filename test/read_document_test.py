@@ -75,6 +75,20 @@ class ReadDocumentTest(unittest.TestCase):
         self.assertIn('正文', d['text'])
         self.assertNotIn('evil()', d['text'])
 
+    def test_xls(self):
+        try:
+            import xlrd
+        except ImportError:
+            self.skipTest('xlrd 未装（服务端装了就能读老 Excel）')
+        # xlrd 2.x 建不了 .xls，只能靠夹具；没有夹具时跳过写入部分
+        self.assertIn('.xls', open(ROOT / 'scripts' / 'read_document.py', encoding='utf-8').read())
+
+    def test_doc_dispatch(self):
+        """老 .doc 走 antiword —— 至少确认分派表里有这条路径。"""
+        src = (ROOT / 'scripts' / 'read_document.py').read_text(encoding='utf-8')
+        self.assertIn("'.doc': read_doc", src)
+        self.assertIn('antiword', src)
+
     def test_missing_file(self):
         d = run(self.dir / '不存在.txt')
         self.assertFalse(d['ok'])

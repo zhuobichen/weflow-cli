@@ -6309,3 +6309,27 @@ HTML/XML（BeautifulSoup）、纯文本/代码。老格式 .doc/.xls/.ppt 如实
 ③要求用户每次给完整路径：违背"这个 pdf"的自然表达。
 
 **验证**：`test/read_document_test.py` 加 2 个 name 定位用例（命中/没找到），8 个全过。
+
+## D-204: 老格式 .doc/.xls 也读通——96 个文档全量体检 0 失败
+
+**Decision.** `read_document.py` 补上老格式：
+- `.doc`：antiword 优先，失败 fallback 到 catdoc（WPS 生成的 .doc antiword 认不出，
+  catdoc 能读）；服务端 `apt install antiword catdoc`
+- `.xls`：xlrd 2.x（只支持 .xls；.xlsx 仍走 openpyxl）；服务端 `pip install xlrd`
+- `.ppt`（老 PowerPoint）没有转换器，如实报不支持，不假装能读
+
+**Reason.** 用户要求"啥文件都能看"。全量体检服务器微信文件目录 2120 个文件：
+1990 个 `.dat`（微信加密缓存，不是文档）、34 个 `.1`，真文档 96 个。
+补格式前：.doc 35 个全失败、.xls 1 个失败；补完后 96/96 全读通。
+
+**依赖来源**：apt/pip 在服务器上装（antiword/catdoc/xlrd），不进 npm 包；
+脚本对缺依赖如实报错（"antiword 没装…"），不静默失败。本地测试环境部分依赖缺失时 skip。
+
+**Alternatives rejected.** ①LibreOffice 转格式：服务器没装、太重。②olefile 自己解 Word 二进制：
+FIB+piece table 复杂，1 个 WPS 文件不值得。③放弃老格式：用户明确要"啥都能看"。
+
+**验证**：全量体检 96/96 成功（.doc 35 / .docx 24 / .pdf 23 / .pptx 7 / .txt 4 / .md 2 / .xls 1）；
+`test/read_document_test.py` 9 通过 1 跳过（本地无 xlrd）。
+
+**注意**：依赖装在当前服务器上，换机器要重装（antiword catdoc xlrd）——与 judgeProvider=native
+一样属于"服务器配置，不入库"。

@@ -12,11 +12,13 @@
 支持（按扩展名分派，缺依赖如实报错、不假装成功）：
   .txt/.md/.json/.csv/.log/.py/.js/...  纯文本，直接读（utf-8，失败回 gbk）
   .pdf                                  pdftotext（系统命令）
+  .doc                                  antiword（老 Word，系统命令）
   .docx                                 python-docx
+  .xls                                  xlrd（老 Excel；2.x 只支持 .xls）
   .xlsx/.xlsm                           openpyxl（每个 sheet 逐行）
   .pptx                                 python-pptx
   .html/.htm/.xml                       BeautifulSoup（去脚本/样式，留正文）
-  .doc/.xls/.ppt（老格式）              无转换器，如实报"不支持"
+  .ppt（老 PowerPoint）                 无转换器，如实报"不支持"
 
 输出: {"ok": bool, "text": str, "format": str, "truncated": bool, "chars": int, "error": str?}
 """
@@ -56,6 +58,45 @@ def read_pdf(path):
     if r.returncode != 0:
         raise RuntimeError('pdftotext 失败: ' + r.stderr.decode('utf-8', 'replace')[:200])
     return r.stdout.decode('utf-8', 'replace')
+
+
+def read_doc(path):
+    """老 Word .doc：antiword 优先，失败时 fallback 到 catdoc。
+    WPS 生成的 .doc 虽是 OLE 复合文档，antiword 认不出（"is not a Word Document"），
+    catdoc 对这类兼容性更好——实测两种都要装（服务端 apt install antiword catdoc）。"""
+    errs = []
+    for cmd in (['antiword', '-m', 'UTF-8.txt', path], ['catdoc', '-d', 'utf-8', path]):
+        try:
+            r = subprocess.run(cmd, capture_output=True, timeout=60)
+        except FileNotFoundError:
+            errs.append(cmd[0] + ' 没装'); continue
+        except subprocess.TimeoutExpired:
+            errs.append(cmd[0] + ' 超时'); continue
+        if r.returncode == 0:
+            text = r.stdout.decode('utf-8', 'replace')
+            if text.strip():
+                return text
+            errs.append(cmd[0] + ' 返回空')
+        else:
+            errs.append(cmd[0] + ' 失败: ' + r.stderr.decode('utf-8', 'replace')[:80])
+    raise RuntimeError('、'.join(errs))
+
+
+def read_xls(path):
+    """老 Excel .xls：xlrd 2.x 只支持 .xls（.xlsx 仍走 openpyxl）。"""
+    try:
+        import xlrd
+    except ImportError:
+        raise RuntimeError('xlrd 没装，读不了 .xls（服务端需 pip install xlrd）')
+    wb = xlrd.open_workbook(path)
+    parts = []
+    for ws in wb.sheets():
+        parts.append(f'[工作表: {ws.name}]')
+        for ri in range(ws.nrows):
+            vals = [str(ws.cell_value(ri, ci)) for ci in range(ws.ncols)]
+            if any(v.strip() for v in vals):
+                parts.append(' | '.join(vals))
+    return '\n'.join(parts)
 
 
 def read_docx(path):
@@ -181,13 +222,16 @@ def main():
             raise RuntimeError('不是普通文件: ' + path)
         ext = os.path.splitext(path)[1].lower()
         handlers = {
-            '.pdf': read_pdf, '.docx': read_docx,
+            '.pdf': read_pdf,
+            '.doc': read_doc, '.docx': read_docx,       # 老 Word 走 antiword
+            '.xls': read_xls,                            # 老 Excel 走 xlrd
             '.xlsx': read_xlsx, '.xlsm': read_xlsx,
             '.pptx': read_pptx,
             '.html': read_html, '.htm': read_html, '.xml': read_html,
         }
-        if ext in ('.doc', '.xls', '.ppt'):
-            raise RuntimeError(f'{ext} 是老格式，需要先用 Office 转成 {ext}x 再读')
+        # .ppt（老 PowerPoint）没有可用转换器，如实报不支持——不假装能读。
+        if ext == '.ppt':
+            raise RuntimeError('.ppt 是老格式，没有可用转换器；请另存为 .pptx 再读')
         handler = handlers.get(ext, read_plain)
         out['format'] = ext or 'text'
         text = handler(path)
