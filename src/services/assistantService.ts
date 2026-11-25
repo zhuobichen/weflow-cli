@@ -16,7 +16,7 @@ import { pushbackFor, emptyTalkPushback, asksBackData, toolFailureNudge, isEmpty
          stateClaimPushback, impossibleOfferPushback,
          timeWindowWithoutLookup, stripImpossibleOffers, destructiveFollowUpPushback,
          stripOffersAfterDestructive, reversedPrivacyPushback, crossPeriodClaimPushback,
-         unfulfilledJevSuggestionPushback }
+         unfulfilledJevSuggestionPushback, fabricatedAfterNotFound }
   from './assistantGuard.js'
 import { hasConcreteLocalClaim } from './assistantAttribution.js'
 import { selectFactsForInjection, frameLocalData } from './assistantMemory.js'
@@ -1338,6 +1338,13 @@ export class AssistantService {
       // 两件事都犯的时候先修编造——那一句补问里已经要求它去查、去引用。
       let retry: { mechanism: string; reason: string; message: string } | null =
         answered && guardsEnabled() ? pushbackFor({ reply, toolCalls, corpus }) : null
+      // D-205 红线（独立于守卫总开关）：工具明确说"未找到"，答复却给出具体标题/数字/来源。
+      // 这条不挂在 guardsEnabled() 下——用户要"防御退到红线"，而这条就是红线：
+      // 实测 read_favorite 返回未找到，模型却编出整篇摘要（含具体数字），下一轮又说没有——前后冲突。
+      if (answered && !retry) {
+        this.turnGuardChecks += 1
+        retry = fabricatedAfterNotFound({ reply, toolText: this.turnToolText.join('\n') })
+      }
       // 双重判断（D-191）：Jev 保底说要用工具，模型却没调就给了具体本机事实 → 顶回去。
       // 顺序紧随"自述查过"那条——都是"没工具却给事实"家族。诚实拒绝不拦（见守卫函数注释）。
       if (answered && !retry && guardsEnabled() && this.turnJevSuggested.length) {

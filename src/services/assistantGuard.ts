@@ -168,6 +168,43 @@ export function emptyTalkPushback(input: { reply: string; toolText: string }): P
   }
 }
 
+/**
+ * 工具明确说"未找到"，答复却编出该对象的具体事实（D-205）。
+ *
+ * 真实事故：read_favorite 返回「(收藏中未找到「大模型推理成本与性能的权衡」)」，
+ * 模型却答"我已调用 read_favorite 读取了《大模型推理成本与性能的权衡》"，
+ * 并给出一整篇摘要（含 2.5~3.8 倍、90%、100B 等数字与来源）。下一轮它又说
+ * "没有这篇文章"——前后冲突。用户上下文不多，这不是上下文幻觉，是**无视工具结果**。
+ *
+ * 判据（确定性文本检查，不靠模型自觉）：
+ *   1. 本轮工具原文含明确的"未找到/未搜到/没有"否定信号；
+ *   2. 答复里出现 `《…》` 标题、或带小数点的数字、或"来源：xxx"——工具没给过的具体事实。
+ * 诚实说"没找到"、只反问不编具体值的答复不会被拦。
+ */
+export function fabricatedAfterNotFound(input: { reply: string; toolText: string }): Pushback | null {
+  const reply = (input.reply ?? '').trim()
+  const toolText = (input.toolText ?? '').trim()
+  if (!reply || !toolText) return null
+  // ① 工具明确否定
+  const notFound = /(未找到|未搜到|没找到|没有找到|不存在|未收录|没有.*(收藏|记录|文章))/.test(toolText)
+  if (!notFound) return null
+  // ② 答复却给出具体事实：书名号标题 / 小数数字 / 来源标注
+  const hasTitle = /《[^》]{2,}》/.test(reply)
+  const hasDecimal = /\d+\.\d+/.test(reply)
+  const hasSource = /(来源|公众号)[:：]/.test(reply)
+  if (!hasTitle && !hasDecimal && !hasSource) return null
+  // 诚实否认：说了"没有/未找到"且没有任何编造的标题/数字，放行
+  const firstLine = toolText.split(/[\n。]/).map(l => l.trim()).filter(Boolean)[0] ?? ''
+  return {
+    mechanism: 'fabricated-after-not-found',
+    reason: `工具说未找到（「${firstLine.slice(0, 40)}」），答复却给出具体标题/数字/来源`,
+    message: '注意：你刚用的工具**明确说了没找到**（原文见下），但你却在答复里给出了'
+      + '具体的标题、数字或来源——那是编的。刚查到的是：'
+      + `「${firstLine.slice(0, 80)}」。`
+      + '请按工具原文如实回答：没找到就说没找到，不要编造内容或示例。',
+  }
+}
+
 export interface PushbackInput {
   reply: string
   /** 这一轮实际派发了几次工具 */
@@ -189,6 +226,8 @@ export interface Pushback {
     | 'fabricated-timestamp'
     // D-191：Jev 保底判断要用某工具，模型却没调、还给了具体本机事实
     | 'unfulfilled-jev-suggestion'
+    // D-205：工具明确说"未找到/未搜到"，答复却给出该对象的具体标题/数字/来源
+    | 'fabricated-after-not-found'
   /** 为什么触发（一句话，进轨迹） */
   reason: string
   /** 顶回去时要追加的那条 system 消息 */
