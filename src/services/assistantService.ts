@@ -689,6 +689,7 @@ export class AssistantService {
                              trace: TurnTrace): Promise<{ reply: string; toolCalls: number; outcome: ReactOutcome }> {
     let reply = ''
     let toolCalls = 0
+    let jevForced = false   // Jev 建议过、但模型想零工具作答时，只强制一次（防无限重跑）
     for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
       // 只摆这台机器**跑得了**的工具：摆了跑不了的，模型会去试、拿一个错回来
       const data = await this.callLLM(messages, availableToolDefs())
@@ -720,6 +721,20 @@ export class AssistantService {
         continue
       }
       reply = (msg.content || '').trim() || '(空回复)'
+      // Jev 建议了工具，但模型一轮工具都没调就想作答 —— 强制回炉一次（D-202）。
+      // 用户的取舍：Jev 说要查就必须查，调多调少/调对调错以后再研究，但不能不查就下结论。
+      // 这与守卫总开关无关（那个默认关）：这是 Jev 建议自带的硬约束，属于红线不是防御。
+      if (!jevForced && toolCalls === 0 && this.turnJevSuggested.length && round + 1 < MAX_TOOL_ROUNDS) {
+        jevForced = true
+        reply = ''
+        trace.steps.push({ kind: 'note', detail: 'Jev 建议了工具但零调用 → 强制回炉补查一次' })
+        messages.push({ role: 'assistant', content: msg.content || '' })
+        messages.push({ role: 'user', content:
+          `你这一轮**没有调用任何工具**就作答了，但判断层认为这条消息需要查本机数据`
+          + `（建议：${this.turnJevSuggested.join('、')}）。请先调用工具取真实数据，`
+          + '再基于工具结果回答。调错工具可以再调，但不能不调就下结论。' })
+        continue
+      }
       trace.steps.push({ kind: 'note', detail: `第 ${round + 1} 轮往返后给出答复` })
       break
     }
