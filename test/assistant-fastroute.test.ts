@@ -36,6 +36,9 @@ function setConfig(mode: string | undefined): void {
   ;(configService as any).get = (key: string) => {
     if (key === 'assistantFastRoute') return mode ?? ''
     if (key === 'assistantLexiconRoute') return 'off'
+    // Jev 工具建议默认开（D-198），但这个文件测的是 fastRoute 那台开关，
+    // 它共用 routeDecider 注入点——不关掉会让"默认关闭"的断言被 Jev 的调用干扰。
+    if (key === 'assistantJevDoubleCheck') return 'off'
     return realGet(key)
   }
 }

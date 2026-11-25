@@ -107,7 +107,9 @@ export function unsupportedQuotes(reply: string, corpus: string): string[] {
  * 只会诱出"只关一半"的跑分，那种数据读不出结论。
  */
 export function guardsEnabled(): boolean {
-  return String(process.env.WEFLOW_HARNESS_GUARDS ?? '').trim().toLowerCase() !== 'off'
+  // D-195：默认关闭守卫——用户明确要求"全放开，防御过度了"。
+  // 需要时显式 WEFLOW_HARNESS_GUARDS=on 打开（保留这套机制，不默认架在用户面前）。
+  return String(process.env.WEFLOW_HARNESS_GUARDS ?? '').trim().toLowerCase() === 'on'
 }
 
 /** 一条消息里能被"引用"的最小单位：中文按二字组、西文按词、数字按两位以上 */

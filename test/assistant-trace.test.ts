@@ -23,6 +23,14 @@ mkdirSync(join(HOME, '.weflow-cli'), { recursive: true })
 
 const trace = await import('../src/services/assistantTrace.js')
 const tools = await import('../src/services/assistantTools.js')
+const { configService } = await import('../src/services/configService.js')
+const realGet = configService.get.bind(configService)
+
+/** 出厂默认已改为 open；测脱敏行为要显式设 balanced */
+function withPrivacy(mode: string, run: () => void): void {
+  ;(configService as any).get = (k: string) => (k === 'assistantPrivacy' ? mode : realGet(k))
+  try { run() } finally { ;(configService as any).get = realGet }
+}
 
 const SPEC_PATH = join(import.meta.dirname, '..', 'src', 'services', 'assistantTools.ts')
 
@@ -46,9 +54,11 @@ test('参数摘要：键值成对，值太长就截断并留记号', () => {
 })
 
 test('参数摘要过脱敏：链接会被打码（它是唯一可能带走聊天边角的地方）', () => {
-  const summary = trace.summarizeArgs({ url: 'https://secret.example/x?a=1' })
-  assert.doesNotMatch(summary, /secret\.example/, '摘要里不该出现原始链接')
-  assert.match(summary, /\[链接\]/)
+  withPrivacy('balanced', () => {
+    const summary = trace.summarizeArgs({ url: 'https://secret.example/x?a=1' })
+    assert.doesNotMatch(summary, /secret\.example/, '摘要里不该出现原始链接')
+    assert.match(summary, /\[链接\]/)
+  })
 })
 
 test('参数摘要：对象与数组只报形状，不展开', () => {

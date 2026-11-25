@@ -135,6 +135,10 @@ test('表里没有的说法：老老实实交给循环，不瞎猜', async () =>
 // --------------------------------------------------------------- 自述守卫
 
 test('守卫：一次工具没调却说"已查" → 顶回去一次，并保留补问结果', async () => {
+  // D-195：守卫默认关，测守卫行为要显式开
+  const savedGuards = process.env.WEFLOW_HARNESS_GUARDS
+  process.env.WEFLOW_HARNESS_GUARDS = 'on'
+  try {
   const script = [
     { choices: [{ message: { content: '已查：甲在3天前发来项目文档更新，提到「等你确认」。' } }] },
     { choices: [{ message: { content: '我没有查到，需要调用工具。' } }] },
@@ -149,6 +153,10 @@ test('守卫：一次工具没调却说"已查" → 顶回去一次，并保留�
   assert.equal(reply, '我没有查到，需要调用工具。', '最终答复取补问那一轮的')
   assert.match(audit, /TOOL_GUARD_PUSHBACK/, '顶回去要留审计行')
   assert.match(audit, /claimed-query-without-tool/, '审计里要能看出是哪个机制')
+  } finally {
+    if (savedGuards === undefined) delete process.env.WEFLOW_HARNESS_GUARDS
+    else process.env.WEFLOW_HARNESS_GUARDS = savedGuards
+  }
 })
 
 test('守卫不误伤：真调过工具，答复里说"已查"是正常的', async () => {
@@ -172,6 +180,10 @@ test('守卫：闲聊不触发（不会把每一轮都顶一次）', async () =>
 // --------------------------------------------------------------- 工具失败提醒
 
 test('工具没拿出内容：下一轮看得到一句能接住的提醒，且带工具名', async () => {
+  // D-195：守卫默认关，测提醒行为要显式开
+  const savedGuards = process.env.WEFLOW_HARNESS_GUARDS
+  process.env.WEFLOW_HARNESS_GUARDS = 'on'
+  try {
   const script = [
     { choices: [{ message: { content: '', tool_calls: [{ id: 'c1', type: 'function',
       function: { name: 'get_messages', arguments: '{}' } }] } }] },
@@ -187,4 +199,8 @@ test('工具没拿出内容：下一轮看得到一句能接住的提醒，且�
   // 提醒紧跟在工具结果之后：同一批消息里，不是另开一轮
   const tail = rounds[1].slice(-2).map((m: any) => m.role)
   assert.deepEqual(tail, ['tool', 'system'], '提醒要插在工具结果后面')
+  } finally {
+    if (savedGuards === undefined) delete process.env.WEFLOW_HARNESS_GUARDS
+    else process.env.WEFLOW_HARNESS_GUARDS = savedGuards
+  }
 })

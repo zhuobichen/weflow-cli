@@ -19,6 +19,7 @@ import type { Contact } from '../types.js'
 import { clipWithMarker } from '../utils/text.js'
 import { resolveSince, resolveUntil } from '../utils/dateRange.js'
 import { isAllowedWeChatArticleUrl, safeDate } from '../utils/mcpSecurity.js'
+import { checkFileAccess, readFileSafe, levelLabel, type PrivilegeLevel } from './assistantPrivilege.js'
 
 const PKG_ROOT = resolvePackageRoot(import.meta.url)
 /**
@@ -322,6 +323,10 @@ export interface ToolContext {
    * 也与 `capabilities.read.draft.confirmationRequired` 对得上。
    */
   requiresConfirm?: boolean
+  /** 本会话的文件权限级别（D-199）：0=安全范围, 1=自主解锁只读跨目录, 2=白名单写。由 service 持有并逐轮传入。 */
+  privilegeLevel?: 0 | 1 | 2
+  /** 会话工作目录（L0 允许根之一） */
+  cwd?: string
 }
 
 /** 随某条消息一起发出去的图片。只在构造请求那一刻存在，不进记忆、不进审计内容。 */
@@ -1251,6 +1256,38 @@ export const TOOL_DEFS: ToolDef[] = [
       },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'escalate',
+      description: '自主提升本会话的文件权限。level=1 解锁"只读访问工作区外任意路径"（AI 自己提权，'
+        + '用户口头要求读某处文件时用它）；level=0 收回，回到安全范围。'
+        + '**上限是 1**：L2（工作区外写入/执行命令）是白名单人工配置，不通过本工具开放，别试图提更高。',
+      parameters: {
+        type: 'object',
+        properties: {
+          level: { type: 'number', description: '1 = 解锁只读跨目录；0 = 收回。不要传 2。' },
+        },
+        required: ['level'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'read_file',
+      description: '读取本机一个文本文件的原文（只读）。L0 默认只能读安全范围内（包目录 / 数据目录 / 工作目录）；'
+        + '用户让你读工作区外的文件时，先用 escalate(level=1) 自主解锁，再调本工具。'
+        + '文件过大会截断。没有写文件的能力——那是 L2 白名单，不开放。',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: '文件路径（绝对路径，或相对工作目录）' },
+        },
+        required: ['path'],
+      },
+    },
+  },
 ]
 
 /**
@@ -1276,6 +1313,10 @@ export const MCP_EXCLUDED: Record<string, string> = {
   // 助手在微信/面板里可以替你翻转一条待办状态，但外部 MCP 客户端不行——
   // 那条路上没有"你"，只有调用方；一条机器指令顺手改掉你的待办，不该是默认能力。
   set_todo_status: '待办是本地状态，MCP 那条路上没有用户可确认；改状态请在微信/面板里说，或用 CLI 的两段式 todos done',
+  // 提权工具绝不暴露给外部 MCP 客户端（D-199）：那两条路上没有"用户口头要求"，
+  // 一个机器调用自己 escalate 去读工作区外的文件，等于把提权面开给任何能调 MCP 的进程。
+  escalate: '提权是用户口头授权的语义，MCP 那条路上没有用户，不允许机器自主提权',
+  read_file: '读任意文件是 L1 提权能力，不开放给外部 MCP 客户端',
 }
 
 export const MCP_TOOL_DEFS = TOOL_DEFS.filter(tool => !(tool.function.name in MCP_EXCLUDED))
@@ -2630,6 +2671,27 @@ export async function executeTool(name: string, args: Record<string, any>, ctx: 
         if (!r.ok) return fail(status === 'done' ? '标记完成失败' : '取消完成失败', r)
         // 括号开头 = "没有产出内容"（本仓的约定，见 producedContent）：这条只报告动作做成了
         return status === 'done' ? `(已标记完成: ${target})` : `(已取消完成标记: ${target})`
+      }
+      case 'escalate': {
+        HANDLED_TOOL_NAMES.add('escalate')
+        const level = Number(args.level)
+        if (level !== 0 && level !== 1) {
+          return '(参数错误: level 只能是 0（收回）或 1（解锁只读跨目录）；L2 白名单不通过本工具开放)'
+        }
+        // ctx.privilegeLevel 是service持有的会话状态对象引用——这里改它，下一轮就生效。
+        // 用可变容器而不是直接改数字：TS 参数是按值传的，要改必须走对象。
+        const holder = ctx as ToolContext & { _privilege?: { level: PrivilegeLevel } }
+        if (!holder._privilege) holder._privilege = { level: ctx.privilegeLevel ?? 0 }
+        holder._privilege.level = level as PrivilegeLevel
+        return `(本会话文件权限已设为 ${levelLabel(level)}。${level === 1 ? '现在可以只读访问工作区外的文件；仍不能写——那是 L2 白名单。' : '已收回工作区外访问。'})`
+      }
+      case 'read_file': {
+        HANDLED_TOOL_NAMES.add('read_file')
+        const p = String(args.path || '').trim()
+        if (!p) return '(参数错误: 要给 path)'
+        const level: PrivilegeLevel = (ctx as any)._privilege?.level ?? ctx.privilegeLevel ?? 0
+        const cwd = ctx.cwd || ''
+        return readFileSafe(p, level, cwd)
       }
       default:
         return `(未知工具: ${name})`

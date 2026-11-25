@@ -178,12 +178,17 @@ test('get_messages：只有 wxid、没有名字时退回「对方」，不把标
 })
 
 test('严格模式下第三方聊天正文不出境：正文被替换成字节数说明', async () => {
+  // 出厂默认已改为 balanced，测 strict 必须显式设
+  const realGet = configService.get.bind(configService)
+  ;(configService as any).get = (k: string) => (k === 'assistantPrivacy' ? 'strict' : realGet(k))
   svc.listSessions = async () => ([{ displayName: '甲', username: 'wxid_a' }])
   svc.getMessages = async () => ([{ createTime: 1758000000, isSend: false, senderUsername: '甲', content: '这是正文' }])
-  const out = await run('get_messages', { contact: '甲' })
+  try {
+    const out = await run('get_messages', { contact: '甲' })
 
-  assert.doesNotMatch(out, /这是正文/, '严格模式下正文不许出现在工具结果里')
-  assert.match(out, /\[内容4字已按严格模式屏蔽\]/)
+    assert.doesNotMatch(out, /这是正文/, '严格模式下正文不许出现在工具结果里')
+    assert.match(out, /\[内容4字已按严格模式屏蔽\]/)
+  } finally { (configService as any).get = realGet }
 })
 
 test('图片消息带可点开的句柄，strict 模式下不带（不摆出工具必定拒绝的东西）', async () => {
@@ -521,12 +526,17 @@ test('工具内部抛错时返回可读失败，且**带上真正的原因**，�
 })
 
 test('失败原因走的是 privacyGate 那一条路（邮箱这类 PII 会被打码）', async () => {
+  // 出厂默认已改为 open，测脱敏行为要显式设 balanced
+  const realGet = configService.get.bind(configService)
+  ;(configService as any).get = (k: string) => (k === 'assistantPrivacy' ? 'balanced' : realGet(k))
   // 注意 privacyGate 脱敏的是电话/证件/邮箱/密钥/链接，**不含文件路径**——
   // 别拿路径当例子，那会让这条用例测的是"路径该不该脱敏"（不是它的职责）。
   svc.listSessions = async () => { throw new Error('校验失败: 联系 someone@example.com') }
-  const out = await run('list_sessions', {})
-  assert.match(out, /^\(/, '仍以括号起头')
-  assert.doesNotMatch(out, /someone@example\.com/, '异常里的邮箱要被打码，不能原样透传给模型')
+  try {
+    const out = await run('list_sessions', {})
+    assert.match(out, /^\(/, '仍以括号起头')
+    assert.doesNotMatch(out, /someone@example\.com/, '异常里的邮箱要被打码，不能原样透传给模型')
+  } finally { (configService as any).get = realGet }
 })
 
 test('工具执行结果永远是字符串（主循环会把它塞进 messages）', async () => {
@@ -724,11 +734,14 @@ test('search_semantic：要聊天线时才给 --line chat', async () => {
 })
 
 test('search_semantic：严格模式下片段被遮罩', async () => {
+  // 出厂默认已改为 balanced，测 strict 行为必须显式设（不再依赖默认值）
+  const realGet = configService.get.bind(configService)
+  ;(configService as any).get = (k: string) => (k === 'assistantPrivacy' ? 'strict' : realGet(k))
   stubScript(semanticPayload([{ title: 't', score: 0.5, text: '第三方正文内容' }]))
   try {
     const out = await run('search_semantic', { query: 'x' })
     assert.doesNotMatch(out, /第三方正文内容/)
-  } finally { bridge.setScriptRunner(null) }
+  } finally { bridge.setScriptRunner(null); (configService as any).get = realGet }
 })
 
 test('search_semantic：默认不带 --with-text（正文是"用户要了才给"）', async () => {
@@ -762,13 +775,15 @@ test('search_semantic：with_text:true 时转发 --with-text 1500，并把正文
 })
 
 test('search_semantic：with_text 下正文同样过遮罩（它也是进模型的东西）', async () => {
+  const realGet = configService.get.bind(configService)
+  ;(configService as any).get = (k: string) => (k === 'assistantPrivacy' ? 'strict' : realGet(k))
   stubScript(semanticPayload([
     { title: 't', score: 0.5, text: '片段', fullText: '第三方正文内容' },
   ]))
   try {
     const out = await run('search_semantic', { query: 'x', with_text: true })
     assert.doesNotMatch(out, /第三方正文内容/)
-  } finally { bridge.setScriptRunner(null) }
+  } finally { bridge.setScriptRunner(null); (configService as any).get = realGet }
 })
 
 test('search_semantic：with_text 但脚本没给 fullText 时退回片段（不许给空的）', async () => {
@@ -1485,8 +1500,10 @@ test('draft_reply：给脚本的是按时间正序、带方向标签的对话，
 })
 
 test('draft_reply：strict 下拒绝，而且一个脚本都不调（正文压根不出境）', async () => {
-  // 这个文件默认就是 strict（configService 的默认值），所以这里不覆盖配置。
+  // 出厂默认已改为 balanced，测 strict 的拒绝行为必须显式设 strict。
   // 拒绝的理由要落在"正文不出境 vs 起草必须出境"这对矛盾上，并给出两条出路。
+  const realGet = configService.get.bind(configService)
+  ;(configService as any).get = (k: string) => (k === 'assistantPrivacy' ? 'strict' : realGet(k))
   draftWorld()
   const calls = stubScript(JSON.stringify(DRAFT_OK))
   try {
@@ -1495,7 +1512,7 @@ test('draft_reply：strict 下拒绝，而且一个脚本都不调（正文压�
     assert.match(out, /^\(当前隐私模式是 strict/)
     assert.match(out, /assistantPrivacy balanced/)
     assert.match(out, /weflow-cli draft/)
-  } finally { bridge.setScriptRunner(null) }
+  } finally { bridge.setScriptRunner(null); (configService as any).get = realGet }
 })
 
 test('draft_reply：本机推理引擎也不是起草的免死金牌（这条出境的是脚本自己的远程调用）', async () => {

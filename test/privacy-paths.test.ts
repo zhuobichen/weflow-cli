@@ -261,6 +261,17 @@ test('redacts common outbound PII in balanced mode', () => {
   assert.equal(result.safe, '电话 [电话]，邮箱 [邮箱]，链接 [链接] 密钥 [密钥]')
 })
 
+test('balanced 也挡银行卡号 / 密码 / 验证码（用户要求：正文能看，这些必须挡）', () => {
+  const result = redactText(
+    '卡号 6222021234567890123，密码: abc12345，验证码是 873421，卡号 6222-0212-3456-7890',
+    'balanced', false,
+  )
+  assert.match(result.safe, /\[卡号\]/, '16-19 位卡号要挡')
+  assert.match(result.safe, /\[凭证已隐藏\]/, '密码/验证码要挡')
+  assert.ok(!result.safe.includes('6222021234567890123'), '结果里不应残留原始卡号')
+  assert.ok(!result.safe.includes('abc12345'), '结果里不应残留原始密码')
+})
+
 test('does not redact open or local inference input', () => {
   const text = '13812345678 user@example.com'
   assert.deepEqual(redactText(text, 'open', false), { safe: text, redactions: 0 })

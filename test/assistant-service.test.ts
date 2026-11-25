@@ -45,7 +45,15 @@ interface Harness {
  *                记忆压缩/事实提取（调用时不带 tools）固定回 '[]'。
  */
 function harness(replies: any[]): Harness {
-  const svc: any = new AssistantService()
+  // Jev 工具建议默认开（D-198），它和 fastRoute 共用 routeDecider 注入点。
+  // 这个文件测的是主循环/隐私/记忆，注入一个"不判任何工具"的判断层，
+  // 免得它去走真实 pythonBridge（那会让脚本调用次数的断言被干扰）。
+  const svc: any = new AssistantService({ routeDecider: async () => ({
+    success: true, model: 'no-op',
+    answers: Object.fromEntries(
+      ['get_messages', 'search_chats', 'list_sessions', 'get_todos', 'get_daily_report',
+       'get_sns', 'get_weread', 'get_stats'].map(n => [n, { type: 'noul', noul: 0 }])),
+  }) })
   const rounds: any[][] = []
   let memoryCalls = 0
   let i = 0
@@ -124,7 +132,8 @@ test('「记忆」如实报出三层状态与今日用量', async () => {
   assert.match(report, /工作窗口: \d+ 条/)
   assert.match(report, /长期事实: 1 条/)
   assert.match(report, /· 喜欢喝茶/)
-  assert.match(report, /隐私模式: strict/)
+  // 如实报出**当前配置**（出厂默认已改为 open，见 D-194）
+  assert.match(report, /隐私模式: open/)
   assert.match(report, /今日用量: 0\/100/, '配额只在常驻循环里累加，这里如实报 0')
 })
 
@@ -175,18 +184,24 @@ test('提示词里写死了：工具失败时不许替它编一个原因', async
 })
 
 test('工具结果出境前被脱敏：链接打码，原文不再出现', async () => {
-  const h = harness([
-    toolCall('search_memory', { keyword: '文档' }),
-    answer('好'),
-  ])
-  const user = newUser()
-  h.svc.memory.addFact(user, '项目文档 https://secret.example/x')
+  // 出厂默认已改为 open，测脱敏行为要显式设 balanced（open 不打码是设计）
+  const { configService } = await import('../src/services/configService.js')
+  const savedGet = configService.get.bind(configService)
+  ;(configService as any).get = (k: string) => (k === 'assistantPrivacy' ? 'balanced' : savedGet(k))
+  try {
+    const h = harness([
+      toolCall('search_memory', { keyword: '文档' }),
+      answer('好'),
+    ])
+    const user = newUser()
+    h.svc.memory.addFact(user, '项目文档 https://secret.example/x')
 
-  await h.svc.handleMessage(user, '文档在哪', 'text')
+    await h.svc.handleMessage(user, '文档在哪', 'text')
 
-  const toolText = toolMessages(h.rounds[1])[0].content as string
-  assert.match(toolText, /\[链接\]/)
-  assert.doesNotMatch(toolText, /secret\.example/, '脱敏后的文本不许再带着原文出境')
+    const toolText = toolMessages(h.rounds[1])[0].content as string
+    assert.match(toolText, /\[链接\]/)
+    assert.doesNotMatch(toolText, /secret\.example/, '脱敏后的文本不许再带着原文出境')
+  } finally { (configService as any).get = savedGet }
 })
 
 test('未知工具不崩，把「未知工具」如实喂回去', async () => {

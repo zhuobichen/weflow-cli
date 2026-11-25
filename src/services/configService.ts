@@ -131,7 +131,7 @@ const CONFIG_DIR = join(homedir(), '.weflow-cli')
 const CONFIG_FILE = join(CONFIG_DIR, 'config.json')
 
 export class ConfigService {
-  private config: CliConfig = { dbPath: '', wxid: '', decryptKey: '', decryptKey3x: '', dataVersion: '', dbPath3x: '', ntDbPath: '', ntKey: '', ntSalt: '', dbKeyMap: '', contactDbPath: '', contactKey: '', contactSalt: '', wechatOcToken: '', wechatOcAccountId: '', wechatOcBaseUrl: '', wechatOcSyncBuf: '', wechatOcContextTokens: '', wechatMediaDownload: 'false', whitelist: [], blacklist: [], whitelistEntries: [], blacklistEntries: [], vaultRepo: '', aiEngine: 'deepseek', wereadApiKey: '', deepseekApiKey: '', typesafeApiKey: '', dashscopeApiKey: '', judgeProvider: 'native', openrouterApiKey: '', openrouterJudgeModel: '', judgeLocalUrl: '', judgeEndpoint: '', snsDbPath: '', snsKey: '', snsSalt: '', favDbPath: '', favKey: '', favPassphrase: '', emoticonSeed: '', assistantPrivacy: 'strict', localModel: '', aiBaseUrl: '', aiModel: '', aiApiKey: '', assistantWhitelist: '', assistantGroupWhitelist: '', assistantGroupRequireMention: 'true', assistantFastRoute: 'off', assistantLexiconRoute: 'on', assistantJevDoubleCheck: 'off', assistantPanelUser: '', quickReplyContacts: '', skillDirs: '', skillDisabled: '', dailySources: '', dailySourceCategories: '', dailyExcludeTopics: '', dailyAiEnabled: 'true', dailyKeepImages: 'false', dailyMaxFailureRate: '', dailyMailTo: '' }
+  private config: CliConfig = { dbPath: '', wxid: '', decryptKey: '', decryptKey3x: '', dataVersion: '', dbPath3x: '', ntDbPath: '', ntKey: '', ntSalt: '', dbKeyMap: '', contactDbPath: '', contactKey: '', contactSalt: '', wechatOcToken: '', wechatOcAccountId: '', wechatOcBaseUrl: '', wechatOcSyncBuf: '', wechatOcContextTokens: '', wechatMediaDownload: 'false', whitelist: [], blacklist: [], whitelistEntries: [], blacklistEntries: [], vaultRepo: '', aiEngine: 'deepseek', wereadApiKey: '', deepseekApiKey: '', typesafeApiKey: '', dashscopeApiKey: '', judgeProvider: 'native', openrouterApiKey: '', openrouterJudgeModel: '', judgeLocalUrl: '', judgeEndpoint: '', snsDbPath: '', snsKey: '', snsSalt: '', favDbPath: '', favKey: '', favPassphrase: '', emoticonSeed: '', assistantPrivacy: 'open', localModel: '', aiBaseUrl: '', aiModel: '', aiApiKey: '', assistantWhitelist: '', assistantGroupWhitelist: '', assistantGroupRequireMention: 'true', assistantFastRoute: 'off', assistantLexiconRoute: 'off', assistantJevDoubleCheck: 'on', assistantPanelUser: '', quickReplyContacts: '', skillDirs: '', skillDisabled: '', dailySources: '', dailySourceCategories: '', dailyExcludeTopics: '', dailyAiEnabled: 'true', dailyKeepImages: 'false', dailyMaxFailureRate: '', dailyMailTo: '' }
 
   /** 本进程修改过、待回写的字段 (多进程并发写保护) */
   private dirty = new Set<keyof CliConfig>()
@@ -198,7 +198,7 @@ export class ConfigService {
           favKey: data.favKey || '',
           favPassphrase: data.favPassphrase || '',
           emoticonSeed: data.emoticonSeed || '',
-          assistantPrivacy: data.assistantPrivacy || 'strict',
+          assistantPrivacy: data.assistantPrivacy || 'open',
           localModel: data.localModel || '',
           aiBaseUrl: data.aiBaseUrl || '',
           aiModel: data.aiModel || '',
@@ -207,8 +207,8 @@ export class ConfigService {
           assistantGroupWhitelist: data.assistantGroupWhitelist || '',
           assistantGroupRequireMention: data.assistantGroupRequireMention === 'false' ? 'false' : 'true',
           assistantFastRoute: data.assistantFastRoute || 'off',
-          assistantLexiconRoute: data.assistantLexiconRoute || 'on',
-          assistantJevDoubleCheck: data.assistantJevDoubleCheck || 'off',
+          assistantLexiconRoute: data.assistantLexiconRoute || 'off',
+          assistantJevDoubleCheck: data.assistantJevDoubleCheck || 'on',
           assistantPanelUser: data.assistantPanelUser || '',
           quickReplyContacts: data.quickReplyContacts || '',
           skillDirs: data.skillDirs || '',
@@ -435,7 +435,7 @@ export class ConfigService {
   }
 
   clear(): void {
-    this.config = { dbPath: '', wxid: '', decryptKey: '', decryptKey3x: '', dataVersion: '', dbPath3x: '', ntDbPath: '', ntKey: '', ntSalt: '', dbKeyMap: '', contactDbPath: '', contactKey: '', contactSalt: '', wechatOcToken: '', wechatOcAccountId: '', wechatOcBaseUrl: '', wechatOcSyncBuf: '', wechatOcContextTokens: '', wechatMediaDownload: 'false', whitelist: [], blacklist: [], whitelistEntries: [], blacklistEntries: [], vaultRepo: '', aiEngine: 'deepseek', wereadApiKey: '', deepseekApiKey: '', typesafeApiKey: '', dashscopeApiKey: '', judgeProvider: 'native', openrouterApiKey: '', openrouterJudgeModel: '', judgeLocalUrl: '', judgeEndpoint: '', snsDbPath: '', snsKey: '', snsSalt: '', favDbPath: '', favKey: '', favPassphrase: '', emoticonSeed: '', assistantPrivacy: 'strict', localModel: '', aiBaseUrl: '', aiModel: '', aiApiKey: '', assistantWhitelist: '', assistantGroupWhitelist: '', assistantGroupRequireMention: 'true', assistantFastRoute: 'off', assistantLexiconRoute: 'on', assistantJevDoubleCheck: 'off', assistantPanelUser: '', quickReplyContacts: '', skillDirs: '', skillDisabled: '', dailySources: '', dailySourceCategories: '', dailyExcludeTopics: '', dailyAiEnabled: 'true', dailyKeepImages: 'false', dailyMaxFailureRate: '', dailyMailTo: '' }
+    this.config = { dbPath: '', wxid: '', decryptKey: '', decryptKey3x: '', dataVersion: '', dbPath3x: '', ntDbPath: '', ntKey: '', ntSalt: '', dbKeyMap: '', contactDbPath: '', contactKey: '', contactSalt: '', wechatOcToken: '', wechatOcAccountId: '', wechatOcBaseUrl: '', wechatOcSyncBuf: '', wechatOcContextTokens: '', wechatMediaDownload: 'false', whitelist: [], blacklist: [], whitelistEntries: [], blacklistEntries: [], vaultRepo: '', aiEngine: 'deepseek', wereadApiKey: '', deepseekApiKey: '', typesafeApiKey: '', dashscopeApiKey: '', judgeProvider: 'native', openrouterApiKey: '', openrouterJudgeModel: '', judgeLocalUrl: '', judgeEndpoint: '', snsDbPath: '', snsKey: '', snsSalt: '', favDbPath: '', favKey: '', favPassphrase: '', emoticonSeed: '', assistantPrivacy: 'open', localModel: '', aiBaseUrl: '', aiModel: '', aiApiKey: '', assistantWhitelist: '', assistantGroupWhitelist: '', assistantGroupRequireMention: 'true', assistantFastRoute: 'off', assistantLexiconRoute: 'off', assistantJevDoubleCheck: 'on', assistantPanelUser: '', quickReplyContacts: '', skillDirs: '', skillDisabled: '', dailySources: '', dailySourceCategories: '', dailyExcludeTopics: '', dailyAiEnabled: 'true', dailyKeepImages: 'false', dailyMaxFailureRate: '', dailyMailTo: '' }
     // clear 意图是全量重置: 所有字段标记为脏, 覆盖磁盘上的全部旧值
     this.dirty = new Set(Object.keys(this.config) as (keyof CliConfig)[])
     this.save()

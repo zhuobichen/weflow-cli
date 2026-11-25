@@ -459,7 +459,13 @@ export class AssistantService {
   private buildSystemPrompt(userId: string, question = '', scene: Scene | null = null): string {
     // 当前时间：**没有它，任何相对时间都是猜**。"上周三""昨天""这周"要变成工具能用的
     // 日期，模型得先知道今天是几号（`get_messages` 的 since/until 就是这么用的）。
-    const parts = [BASE_PROMPT, `[当前时间] ${nowLine()}（本机时区）`, this.privacyStateLine()]
+    const parts = [BASE_PROMPT, `[当前时间] ${nowLine()}（本机时区）`, this.privacyStateLine(),
+      // D-196：绝不输出内部处理话术。此前模型反复回「（这一轮我给出的具体事实被校验拦下了，
+      // 内容不可靠，不作为后续依据。）」——那是我方内部的记忆占位，不是给用户的答复，
+      // 一旦说出口就会被记进记忆、下一轮再复述，形成自我强化（实测连清两次记忆仍复发）。
+      '[答复纪律] 永远不要说"被校验拦下""内容不可靠""不作为后续依据"这类'
+        + '内部处理话术——那是系统内部状态，不是给用户的话。查不到就说查不到，'
+        + '查到了就照实说，正常回答用户的问题本身。']
     // **没启用的能力要说出来**，否则模型的工具表里看不到它们，用户一问就得到"我没有这个工具"
     // —— 那是把"没配置"说成了"没这功能"（2026-09-28 实测：用户因此以为微信读书没做）。
     // 注意这只是**告诉**它这些存在，它依然调不到；见 `unavailableCapabilities` 的说明。
@@ -531,6 +537,9 @@ export class AssistantService {
   private lastNeedsLocalData = 0
   /** 本轮 Jev 多工具保底判断建议的工具（D-191）。空 = 没建议或没开 */
   private turnJevSuggested: string[] = []
+  /** 本会话的文件权限（D-199）：L0 安全范围 / L1 自主解锁只读跨目录 / L2 白名单不在此开放。
+   *  用可变容器，工具改 level 后下一轮 ctx 拿到新值；重启进程归零（不持久化提权）。 */
+  private privilege = { level: 0 as 0 | 1 | 2 }
   /** 本轮按「记住：…」直接落盘的那条事实（没有就 null）。用来跳过同轮的 `save_memory` */
   private turnExplicitFact: string | null = null
   /** 本轮**有产出**的工具结果（截断）。守卫判断"答复有没有用上刚查到的内容"要靠它 */
@@ -633,26 +642,33 @@ export class AssistantService {
   }
 
   /**
-   * Jev 多工具保底判断（D-191 双重判断的第一重）。
+   * Jev 工具建议（D-198）：一次 decide.py 调用问"这条可能要用哪些工具"（N 个独立 noul，
+   * 支持多选）。它只是**给模型的参考信号**，不执行、不填参、不强制。
    *
-   * 一次 decide.py 调用问"这条要用哪些工具"（N 个独立 noul，支持多选），
-   * 把建议存进 `turnJevSuggested`；**不执行任何工具、不填参数**。
-   * 第二重是大模型自己在 ReAct 里判断+填参+执行；两重不一致由守卫处理。
+   * 返回一条可塞进对话的 system 消息；判断层不可用/没给出建议时返回 null——
+   * **静默跳过，不报错、不注入**（用户要的"没有就不经过"）。
    */
-  private async maybeJevDoubleCheck(userId: string, text: string, trace: TurnTrace): Promise<void> {
+  private async maybeJevDoubleCheck(userId: string, text: string, trace: TurnTrace): Promise<string | null> {
     const mode = this.jevDoubleCheckMode()
-    if (mode === 'off') return
+    if (mode === 'off') return null
     try {
       const decision = await decideMultiTools({ message: text, runDecide: this.routeDecider as any })
-      trace.steps.push({ kind: 'route', detail: `Jev 多工具[${mode}]: ${decision.reason}`
+      trace.steps.push({ kind: 'route', detail: `Jev 工具建议[${mode}]: ${decision.reason}`
         + (decision.ok ? ` (${Object.entries(decision.scores).map(([k, v]) => `${k}=${v.toFixed(2)}`).join(' ')})` : '') })
-      appendLog(`[Jev多工具] ${decision.reason}`)
+      appendLog(`[Jev工具建议] ${decision.reason}`)
       privacyGate.audit('JEV_MULTI', 0,
         `${mode} ${decision.selected.join(',') || 'none'} model=${decision.model || '?'}`)
       if (mode === 'on' && decision.ok) this.turnJevSuggested = decision.selected
+      // 只有真的建议了工具才注入；没有/失败 → null，主流程照常，用户看不到任何变化
+      if (mode !== 'on' || !decision.ok || !decision.selected.length) return null
+      return '【工具选择参考】判断层认为这条消息可能需要：'
+        + decision.selected.join('、')
+        + '。这只是参考，你自己判断该不该用、参数怎么填；用不上就忽略。'
     } catch (error: any) {
-      appendLog(`[Jev多工具] 判断异常，按原样回退: ${error?.message ?? error}`)
-      trace.steps.push({ kind: 'route', detail: 'Jev 多工具异常，直接走循环' })
+      // 判断层坏了是"不经过"，不是"报错"——绝不让它影响正常对话
+      appendLog(`[Jev工具建议] 判断异常，静默跳过: ${error?.message ?? error}`)
+      trace.steps.push({ kind: 'route', detail: 'Jev 工具建议异常，静默跳过' })
+      return null
     }
   }
 
@@ -790,7 +806,10 @@ export class AssistantService {
           + '日报只覆盖最近几天，这次调用帮不上忙，还会让答复跑题。直接用上面查到的内容回答。）' })
       return
     }
-    const ctx: ToolContext = { userId, memory: this.memory }
+    const ctx: ToolContext = { userId, memory: this.memory,
+      privilegeLevel: this.privilege.level, cwd: process.cwd() } as ToolContext & { _privilege?: any }
+    // 同一个可变容器传给工具：escalate 改它 → 下一轮 handleMessage 的 ctx 拿到新 level
+    ;(ctx as any)._privilege = this.privilege
     if (this.turnInboundImages.length) ctx.inboundImages = this.turnInboundImages
     // **按 schema 抹平参数类型**（2026-11-24，借 pi 的宽松强转，D-178）。
     //
@@ -1261,7 +1280,8 @@ export class AssistantService {
     try {
       toolCalls += await this.maybeLexiconRoute(userId, t, messages, trace)
       toolCalls += await this.maybeFastRoute(userId, t, messages, trace)
-      await this.maybeJevDoubleCheck(userId, t, trace)
+      const jevHint = await this.maybeJevDoubleCheck(userId, t, trace)
+      if (jevHint) messages.push({ role: 'system', content: jevHint })
       const first = await this.runReactLoop(userId, messages, trace)
       reply = first.reply
       toolCalls += first.toolCalls
