@@ -1201,14 +1201,17 @@ export const TOOL_DEFS: ToolDef[] = [
       name: 'read_document',
       description: '读取本地文件的**内容**（按格式自动解析）：PDF、Word(.docx)、Excel(.xlsx)、'
         + 'PPT(.pptx)、HTML、以及纯文本/代码文件。用户让你看某个文件的内容时用这个，'
-        + '比 read_file 强——它能解析二进制格式。走与 read_file 相同的权限：L0 只能读安全范围内，'
-        + '工作区外的文件要先 escalate(level=1) 解锁（只读）。长文档会截断。',
+        + '比 read_file 强——它能解析二进制格式。'
+        + '**给 path（完整路径）或 name（只有文件名）二选一**：用户说"这个 pdf""他发的那个文件"、'
+        + '你从 get_messages 里拿到 `[文件] xxx.pdf` 的文件名后，用 name 传文件名，'
+        + '工具会自动去微信文件目录定位真实路径——不要自己猜路径。'
+        + '走与 read_file 相同的权限：工作区外的文件要先 escalate(level=1) 解锁（只读）。长文档会截断。',
       parameters: {
         type: 'object',
         properties: {
           path: { type: 'string', description: '文件路径（绝对路径，或相对工作目录）' },
+          name: { type: 'string', description: '只有文件名时传这个（如 figure (2).pdf），自动在微信文件目录定位' },
         },
-        required: ['path'],
       },
     },
   },
@@ -2775,18 +2778,36 @@ export async function executeTool(name: string, args: Record<string, any>, ctx: 
       case 'read_document': {
         HANDLED_TOOL_NAMES.add('read_document')
         const p = String(args.path || '').trim()
-        if (!p) return '(参数错误: 要给 path)'
+        const name = String(args.name || '').trim()
+        if (!p && !name) return '(参数错误: 要给 path 或 name)'
         const level: PrivilegeLevel = (ctx as any)._privilege?.level ?? ctx.privilegeLevel ?? 0
         const cwd = ctx.cwd || ''
+        // name 模式：先让脚本在微信文件目录按文件名定位真实路径，再过权限门。
+        // 微信文件目录 = <dbPath>/<wxid>/msg/file — 由配置拼，不在代码里硬编码真实路径。
+        let display = p || name
+        let scriptPath = p
+        if (name && !p) {
+          const dbPath = String(configService.get('dbPath') || '')
+          const wxid = String(configService.get('wxid') || '')
+          const wechatDir = dbPath && wxid ? join(dbPath, wxid, 'msg') : ''
+          const located = await runPythonJson<any>('read_document.py',
+            ['--name', name, '--wechat-dir', wechatDir, '--locate-only', '--json'])
+          if (!located.ok || !located.data?.found_path) {
+            return `(按文件名定位失败: ${String(located.data?.error ?? located.error ?? '未知').slice(0, 200)})`
+          }
+          scriptPath = String(located.data.found_path)
+          display = name
+        }
         // 与 read_file 同一道权限门：L0 安全范围 / L1 只读跨目录
-        const chk = checkFileAccess(p, level, cwd, false)
+        const chk = checkFileAccess(scriptPath, level, cwd, false)
         if (!chk.allowed) return `(读取被拒: ${chk.reason})`
         const r = await runPythonJson<any>('read_document.py',
-          ['--path', chk.realPath || p, '--json'])
+          ['--path', chk.realPath || scriptPath, '--json'])
         if (!r.ok) return fail('文档解析失败', r)
         const d: any = r.data
         if (!d?.ok) return `(读取失败: ${String(d?.error ?? '未知').slice(0, 200)})`
-        return `已解析 ${p}（${d.format}，${d.chars} 字符${d.truncated ? '，已截断' : ''}）:\n${d.text}`
+        const where = name && d.found_path ? `\n（按文件名定位到: ${d.found_path}）` : ''
+        return `已解析 ${display}（${d.format}，${d.chars} 字符${d.truncated ? '，已截断' : ''}）${where}:\n${d.text}`
       }
       default:
         return `(未知工具: ${name})`

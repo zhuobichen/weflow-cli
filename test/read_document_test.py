@@ -87,6 +87,32 @@ class ReadDocumentTest(unittest.TestCase):
         self.assertTrue(d['truncated'])
         self.assertEqual(d['chars'], 100)
 
+    def test_locate_by_name(self):
+        """按文件名在微信文件目录定位（"这个 pdf"那条路）"""
+        sub = self.dir / 'msg' / 'file' / '2026-11'
+        sub.mkdir(parents=True)
+        target = sub / 'figure (2).pdf'
+        target.write_text('dummy', encoding='utf-8')
+        r = subprocess.run(
+            [sys.executable, str(SCRIPT), '--name', 'figure (2).pdf',
+             '--wechat-dir', str(self.dir / 'msg'), '--locate-only', '--json'],
+            capture_output=True, timeout=60,
+        )
+        d = json.loads(r.stdout.decode('utf-8', 'replace'))
+        self.assertTrue(d['ok'], d.get('error'))
+        self.assertEqual(d['found_path'], str(target))
+        self.assertEqual(d['text'], '')  # locate-only 不读内容
+
+    def test_locate_by_name_not_found(self):
+        r = subprocess.run(
+            [sys.executable, str(SCRIPT), '--name', '不存在的文件.pdf',
+             '--wechat-dir', str(self.dir), '--locate-only', '--json'],
+            capture_output=True, timeout=60,
+        )
+        d = json.loads(r.stdout.decode('utf-8', 'replace'))
+        self.assertFalse(d['ok'])
+        self.assertIn('没找到', d['error'])
+
 
 if __name__ == '__main__':
     unittest.main()

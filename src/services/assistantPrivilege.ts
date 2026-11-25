@@ -21,15 +21,22 @@ import { resolve, isAbsolute, normalize } from 'node:path'
 import { homedir } from 'node:os'
 import { existsSync, realpathSync, readFileSync, statSync } from 'node:fs'
 import { resolvePackageRoot } from '../utils/packageRoot.js'
+import { configService } from './configService.js'
 
 export type PrivilegeLevel = 0 | 1 | 2
 
 const PKG_ROOT = resolvePackageRoot(import.meta.url)
 const DATA_DIR = resolve(homedir(), '.weflow-cli')
 
-/** L0 允许的根目录（ resolvable 的真实路径会在检查时再算一次） */
+/** L0 允许的根目录（ resolvable 的真实路径会在检查时再算一次）。
+ *  dbPath（微信文件根）也算 L0：用户读自己收到的文件是天经地义的，
+ *  不该为了读一张他刚收到的 pdf 还要先 escalate（D-203）。 */
 function allowedRoots(cwd: string): string[] {
   const roots = [PKG_ROOT, DATA_DIR]
+  try {
+    const dbPath = String(configService.get('dbPath') || '').trim()
+    if (dbPath) roots.push(dbPath)
+  } catch { /* 配置读不到就不加，不该因此崩 */ }
   if (cwd && isAbsolute(cwd)) roots.push(cwd)
   return roots.map(r => resolve(r))
 }

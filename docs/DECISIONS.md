@@ -6285,3 +6285,27 @@ HTML/XML（BeautifulSoup）、纯文本/代码。老格式 .doc/.xls/.ppt 如实
 
 **验证**：`test/assistant-jev-force.test.ts` 2 个用例（Jev建议+零工具→回炉、没建议→不干预）通过；
 全量 1283 测试通过。
+
+## D-203: read_document 支持按文件名定位微信文件——"这个 pdf"能读到实体
+
+**Decision.** `read_document` 加 `name` 参数：只给文件名（如 `figure (2).pdf`）时，
+脚本在微信文件目录 `<dbPath>/<wxid>/msg/` 下递归定位真实路径，再解析。
+微信文件根（dbPath）加入 L0 允许范围——读自己收到的文件是天经地义，不该先提权。
+
+**Reason.** 实测"你能看这个 pdf 吗"（省略句）：模型从聊天记录知道文件名 `figure (2).pdf`，
+却猜了 `output/exports/白马非马/figure (2).pdf`（错路径）→ 读失败。真实文件在
+`<dbPath>/<wxid>/msg/file/2026-11/figure (2).pdf`——模型猜不到这个目录结构。
+用户要求"对应的文件最好都能看"。
+
+**实现要点**：
+- `read_document.py` 加 `--name` / `--wechat-dir` / `--locate-only`：精确匹配优先、
+  再包含匹配；多个命中按修改时间取最新，候选列进结果；locate-only 只定位不读。
+- TS 侧从 configService 读 dbPath+wxid 拼目录（真实路径不硬编码进代码，遵守 AGENTS.md）。
+- 两步：先 locate-only 拿真实路径 → 过权限门 → 再 --path 解析。
+- 工具描述明确告诉模型："拿到 `[文件] xxx.pdf` 的文件名后用 name 传，别自己猜路径"。
+
+**Alternatives rejected.** ①让模型自己拼微信文件路径：它不知道 `<wxid>/msg/file/<年月>` 结构，
+实测就猜错了。②把微信文件目录整个开放给 read_file 通配：不如按文件名精确定位安全。
+③要求用户每次给完整路径：违背"这个 pdf"的自然表达。
+
+**验证**：`test/read_document_test.py` 加 2 个 name 定位用例（命中/没找到），8 个全过。

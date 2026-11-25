@@ -2,7 +2,12 @@
 # -*- coding: utf-8 -*-
 """通用文档读取 — 把本地文件转成纯文本，给助手的 read_document 工具用。
 
-用法: python scripts/read_document.py --path <文件路径> [--json] [--max-chars N]
+用法: python scripts/read_document.py --path <文件路径> [--name <文件名> --wechat-dir <微信文件根>] [--json] [--max-chars N]
+
+--name 模式：只给文件名（如 "figure (2).pdf"），在 --wechat-dir 下递归找真实路径。
+  这是"这个 pdf"那条路：模型从聊天记录拿到 `[文件] figure (2).pdf` 的文件名，
+  但文件体实际落在 <dbPath>/<wxid>/msg/file/<年月>/ 下，模型猜不到完整路径。
+  按文件名搜到唯一命中就直接用；多个命中按修改时间取最新的，并把候选列出来。
 
 支持（按扩展名分派，缺依赖如实报错、不假装成功）：
   .txt/.md/.json/.csv/.log/.py/.js/...  纯文本，直接读（utf-8，失败回 gbk）
@@ -115,16 +120,61 @@ def read_html(path):
         return re.sub(r'<[^>]+>', ' ', text)
 
 
+def find_by_name(name, wechat_dir):
+    """在微信文件目录下按文件名找真实路径。精确匹配优先，再退到包含匹配。
+    多个命中按修改时间取最新，并把候选列进结果（调用方能看到有几个）。"""
+    if not wechat_dir or not os.path.isdir(wechat_dir):
+        raise RuntimeError('微信文件目录不可用，无法按文件名定位')
+    name = os.path.basename(str(name).strip())
+    if not name or name in ('.', '..'):
+        raise RuntimeError('文件名不合法')
+    exact, partial = [], []
+    for root, dirs, files in os.walk(wechat_dir):
+        # 跳过隐藏目录与缓存，避免扫到无关副本
+        dirs[:] = [d for d in dirs if not d.startswith('.')]
+        for f in files:
+            if f == name:
+                exact.append(os.path.join(root, f))
+            elif name.lower() in f.lower():
+                partial.append(os.path.join(root, f))
+    hits = exact or partial
+    if not hits:
+        raise RuntimeError(f'在微信文件目录里没找到名为「{name}」的文件')
+    hits.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+    return hits[0], hits
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('--path', required=True)
+    ap.add_argument('--path')
+    ap.add_argument('--name', help='只给文件名，在 --wechat-dir 下递归定位真实路径')
+    ap.add_argument('--wechat-dir', help='微信文件根目录（按文件名搜索时用）')
     ap.add_argument('--json', action='store_true')
     ap.add_argument('--max-chars', type=int, default=20000)
+    ap.add_argument('--locate-only', action='store_true',
+                    help='只按 --name 定位真实路径，不解析内容（给调用方过权限门用）')
     args = ap.parse_args()
 
-    path = os.path.abspath(os.path.expanduser(args.path))
-    out = {'ok': False, 'text': '', 'format': '', 'truncated': False, 'chars': 0}
+    if not args.path and not args.name:
+        ap.error('要给 --path 或 --name 之一')
+    out = {'ok': False, 'text': '', 'format': '', 'truncated': False,
+           'chars': 0, 'found_path': '', 'candidates': []}
     try:
+        candidates = []
+        if args.name and not (args.path and os.path.isfile(os.path.expanduser(args.path))):
+            found, candidates = find_by_name(args.name, args.wechat_dir)
+            path = found
+            out['found_path'] = found
+            out['candidates'] = candidates[:10]
+        else:
+            path = os.path.abspath(os.path.expanduser(args.path))
+        # 只定位：拿到真实路径就返回，不读内容
+        if args.locate_only:
+            out['ok'] = True
+            out['found_path'] = out['found_path'] or path
+            if args.json:
+                print(json.dumps(out, ensure_ascii=False))
+            return
         if not os.path.exists(path):
             raise RuntimeError('文件不存在: ' + path)
         if not os.path.isfile(path):
