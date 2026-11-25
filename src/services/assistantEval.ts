@@ -1039,6 +1039,8 @@ export const EVAL_CASES: EvalCase[] = [
  */
 export const EVAL_UNCOVERED: Record<string, string> = {
   fetch_article: '出网工具，评测器的 fetch 包装会让它抛错（"评测里出现第二个出口就说明有地方漏了"）。',
+  web_search: '同为出网工具（Bing 公开搜索页），评测器的 fetch 包装只放行模型那一次调用，'
+    + '第二个出口会抛错——结构性原因，与 key 配没配无关；真实链路由 web_search 工具自己的 HTTP 调用覆盖。',
   search_public: '同上：搜狗搜索也是出网，评测里跑不了。',
   search_semantic: '要 dashscopeApiKey **且**要建过语义索引。2026-10-15 这台机器上两样都有了（索引 16,027 条、'
     + '真机跑过 CLI），所以原因已经不是"没有"，而是它是**第二个出网出口**（查询向量要发给百炼）——'

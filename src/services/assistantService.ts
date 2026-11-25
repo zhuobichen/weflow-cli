@@ -663,7 +663,8 @@ export class AssistantService {
       if (mode !== 'on' || !decision.ok || !decision.selected.length) return null
       return '【工具选择参考】判断层认为这条消息可能需要：'
         + decision.selected.join('、')
-        + '。这只是参考，你自己判断该不该用、参数怎么填；用不上就忽略。'
+        + '。回答本机数据的问题前，先调一个工具取真实数据再作答——'
+        + '调错工具可以再调，但不能一个工具都不调就下结论。参数自己从问题里取。'
     } catch (error: any) {
       // 判断层坏了是"不经过"，不是"报错"——绝不让它影响正常对话
       appendLog(`[Jev工具建议] 判断异常，静默跳过: ${error?.message ?? error}`)

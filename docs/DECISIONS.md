@@ -6205,3 +6205,38 @@ Jev 判断现在默认会多一次 decide.py 调用（成本 ~$0.000018，实测
 
 **Consequences.** 工具数 31 → 33，PROJECT_STATE 的计数同步更新（tool-registry 测试盯着的）。
 `docs/MCP.md` 工具表不变（`escalate`/`read_file` 被 excluded）。新增 8 个测试钉住三级边界。
+
+## D-200: 助手加通用网页搜索 web_search；Jev 建议措辞去掉"可忽略"
+
+**Decision.** 给助手加通用网页搜索工具；Jev 建议消息去掉"可忽略"的措辞。
+
+**Reason.** 用户要求："把一些常用的工具比如 web_search 也给他加进去。"
+
+### web_search
+
+- 新增 `web_search` 工具（工具数 33→34）：通用网页搜索，查实时/外部公开信息。
+- **后端选 Bing 公开搜索页**（免 key，复用 search_public 爬搜索页的口径），端点可用
+  `WEFLOW_WEB_SEARCH_BASE_URL` 覆盖。
+- 为什么不用 DeepSeek 原生 web_search：实测服务器 `deepseekApiKey` 已失效
+  （普通 chat 也 401），助手实际走 dashscope/qwen-flash，那条路没有 web_search 工具。
+  Bing 在服务器上 HTTP 200 可用。
+- 解析 Bing `<li class="b_algo">` 结果块（标题+链接+摘要），返回前 8 条。
+- 不进 MCP 表（`MCP_EXCLUDED`）：联网搜索会花用户 key 的钱/额度，外部客户端不该替用户花。
+
+**实测**：问"2026 世界杯在哪举办" → 轨迹显示模型调了 `web_search`（3210 字节真实结果），
+答"美国、加拿大、墨西哥"（正确）；同时 Jev 正确判"不需查本机数据"（各项 <0.2），
+模型自己选了 web_search——判断层与工具选择分工正确。
+
+### Jev 建议措辞
+
+原措辞"这只是参考…用不上就忽略"等于给模型忽略的许可。改成
+"回答本机数据的问题前先调一个工具取真实数据——调错可以再调，但不能一个工具都不调就下结论"。
+
+**实测（诚实）**：对点名对象的完整问句本来就正常（会调 get_messages）；
+对省略问句（"他""不是有个pdf吗"）在干净会话里模型仍反问对像是谁——措辞改动
+**没带来可测的行为变化**，但语义上更明确（不再主动给忽略许可），保留。
+
+### 备注
+
+本轮还修复了窗口标题分工（wx-mirror vs wx-mirror-harness 两个 profile 各管各的），
+那部分在 `_tools/wx-mirror/_d203.md`（工具目录本地草稿，不在本文档编号空间）。

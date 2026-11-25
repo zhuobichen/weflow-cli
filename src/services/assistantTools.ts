@@ -1198,6 +1198,23 @@ export const TOOL_DEFS: ToolDef[] = [
   {
     type: 'function',
     function: {
+      name: 'web_search',
+      description: '通用网页搜索（Bing 公开搜索页，不是公众号搜索）。'
+        + '查实时/外部的公开信息——新闻、资料、某个事实的出处——用这个；'
+        + '搜自己的聊天/收藏/知识库用 search_chats / search_favorites / search_knowledge。'
+        + '返回搜索结果的标题、链接与摘要。',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: '搜索词' },
+        },
+        required: ['query'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'format_article',
       description: '把 Markdown 转成能直接粘进公众号编辑器的 HTML 片段（纯本地转换，不联网、不写文件）。'
         + '主题名用 list_themes 查。',
@@ -1317,6 +1334,8 @@ export const MCP_EXCLUDED: Record<string, string> = {
   // 一个机器调用自己 escalate 去读工作区外的文件，等于把提权面开给任何能调 MCP 的进程。
   escalate: '提权是用户口头授权的语义，MCP 那条路上没有用户，不允许机器自主提权',
   read_file: '读任意文件是 L1 提权能力，不开放给外部 MCP 客户端',
+  web_search: '联网搜索会消耗 deepseekApiKey 的额度并出网；MCP 那条路不该替调用方花用户的钱，'
+    + '助手在微信/面板里可用，外部客户端要搜自己接搜索工具',
 }
 
 export const MCP_TOOL_DEFS = TOOL_DEFS.filter(tool => !(tool.function.name in MCP_EXCLUDED))
@@ -2641,6 +2660,48 @@ export async function executeTool(name: string, args: Record<string, any>, ctx: 
         return `公开文章里搜「${keyword}」，命中 ${Math.min(count, limit)} 条:\n`
           + rows.join('\n')
           + '\n（这是第三方搜索页的标题与摘要，不是全文；要正文用 fetch_article 抓）'
+      }
+      case 'web_search': {
+        HANDLED_TOOL_NAMES.add('web_search')
+        const query = String(args.query || '').trim()
+        if (!query) return '(参数错误: 缺少 query)'
+        // 通用网页搜索：走 Bing 公开搜索页（免 key，复用 search_public 的"爬搜索页"口径）。
+        // 不用 DeepSeek 原生 web_search —— 实测服务器上的 deepseekApiKey 已失效（chat 也 401），
+        // 而助手实际走的是 dashscope/qwen-flash，那条路没有 web_search 工具。
+        // 端点可用 WEFLOW_WEB_SEARCH_BASE_URL 覆盖（默认 Bing）。
+        const base = (process.env.WEFLOW_WEB_SEARCH_BASE_URL || 'https://www.bing.com').replace(/\/$/, '')
+        let html = ''
+        try {
+          const resp = await fetch(`${base}/search?q=${encodeURIComponent(query)}`, {
+            headers: {
+              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+              'Accept-Language': 'zh-CN,zh;q=0.9',
+            },
+            signal: AbortSignal.timeout(25_000),
+          })
+          if (!resp.ok) return `(网页搜索失败: HTTP ${resp.status}——搜索页限流或端点不可达)`
+          html = await readTextLimited(resp, 2 * 1024 * 1024)
+        } catch (e: any) {
+          return `(网页搜索失败: ${String(e?.message ?? e).slice(0, 120)})`
+        }
+        const strip = (s: string) => s.replace(/<[^>]+>/g, '')
+          .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+          .replace(/&quot;/g, '"').replace(/&#\d+;/g, '').replace(/\s+/g, ' ').trim()
+        // Bing 每条结果在 <li class="b_algo"> 里：标题 <h2><a href=...>，摘要 <p>。
+        const rows: string[] = []
+        for (const m of html.matchAll(/<li class="b_algo"[\s\S]*?<\/li>/g)) {
+          const block = m[0]
+          const a = block.match(/<h2[^>]*>\s*<a[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/i)
+          if (!a) continue
+          const title = strip(a[2])
+          const url = a[1].startsWith('http') ? a[1] : ''
+          const p = block.match(/<p[^>]*>([\s\S]*?)<\/p>/i)
+          const snippet = p ? strip(p[1]).slice(0, 200) : ''
+          if (title) rows.push(`${rows.length + 1}. ${title}${url ? '\n   ' + url : ''}${snippet ? '\n   ' + snippet : ''}`)
+          if (rows.length >= 8) break
+        }
+        if (!rows.length) return `(没搜到与「${query}」相关的网页。换个说法试试)`
+        return `网页搜索「${query}」命中 ${rows.length} 条:\n${rows.join('\n')}`
       }
       case 'set_todo_status': {
         HANDLED_TOOL_NAMES.add('set_todo_status')
