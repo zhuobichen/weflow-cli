@@ -1,0 +1,89 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 720" font-family="'Segoe UI','Microsoft YaHei',sans-serif">
+  <!-- WeFlow CLI — Agent architecture (source representation).
+       The PNG companion is generated in the cel-boil (hand-drawn line boil) style;
+       this SVG is the maintainable source: edit labels/boxes here, regenerate the art. -->
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto">
+      <path d="M0,0 L10,4 L0,8 Z" fill="#1b1b1b"/>
+    </marker>
+    <style>
+      .box { fill:#fff8e8; stroke:#1b1b1b; stroke-width:2.5; rx:10; }
+      .accent { fill:#e8603c; stroke:#1b1b1b; stroke-width:2; rx:8; }
+      .warm { fill:#f2c14e; stroke:#1b1b1b; stroke-width:2; rx:8; }
+      .lbl { font-size:15px; fill:#1b1b1b; text-anchor:middle; }
+      .small { font-size:12px; fill:#5a4b3c; text-anchor:middle; }
+      .title { font-size:28px; font-weight:700; fill:#1b1b1b; text-anchor:middle; }
+      .edge { stroke:#1b1b1b; stroke-width:2; marker-end:url(#arrow); fill:none; }
+    </style>
+  </defs>
+  <rect width="1200" height="720" fill="#f6ecd7"/>
+  <text x="600" y="46" class="title">WeFlow CLI · 第二大脑 Agent 架构</text>
+
+  <!-- Entry points -->
+  <rect x="40" y="120" width="220" height="70" class="box"/>
+  <text x="150" y="150" class="lbl">微信 Bot 通道 (iLink)</text>
+  <text x="150" y="172" class="small">长轮询收发 · 白名单准入</text>
+  <rect x="40" y="220" width="220" height="70" class="box"/>
+  <text x="150" y="250" class="lbl">本机面板 / harness</text>
+  <text x="150" y="272" class="small">单窗口 · 思考链可视</text>
+  <rect x="40" y="320" width="220" height="70" class="box"/>
+  <text x="150" y="350" class="lbl">MCP 客户端</text>
+  <text x="150" y="372" class="small">受控子集 · confirm 门禁</text>
+
+  <!-- Core -->
+  <rect x="350" y="120" width="300" height="270" class="warm"/>
+  <text x="500" y="152" class="lbl" font-weight="700">守护进程 · ReAct 循环</text>
+  <text x="500" y="180" class="small">三层记忆：工作窗口 / 滚动摘要 / 长期事实</text>
+  <rect x="375" y="200" width="250" height="50" class="box"/>
+  <text x="500" y="223" class="lbl">Jev 判断层 (noul 多选)</text>
+  <text x="500" y="242" class="small">建议工具 → 强制调用红线</text>
+  <rect x="375" y="265" width="250" height="50" class="box"/>
+  <text x="500" y="288" class="lbl">工具分派 + 串行队列</text>
+  <text x="500" y="307" class="small">并行 tool_calls 消息连续性</text>
+  <rect x="375" y="330" width="250" height="45" class="box"/>
+  <text x="500" y="358" class="lbl">守卫红线（默认最小化）</text>
+
+  <!-- Tool groups -->
+  <rect x="740" y="100" width="220" height="80" class="box"/>
+  <text x="850" y="128" class="lbl">微信数据查询</text>
+  <text x="850" y="150" class="small">会话 / 聊天 / 收藏 / 朋友圈</text>
+  <text x="850" y="168" class="small">读书 / 日报 / 待办 / 知识库</text>
+  <rect x="740" y="200" width="220" height="80" class="accent"/>
+  <text x="850" y="228" class="lbl">联网 + 文件读取</text>
+  <text x="850" y="250" class="small">web_search (Bing)</text>
+  <text x="850" y="268" class="small">read_document / read_file</text>
+  <rect x="740" y="300" width="220" height="80" class="box"/>
+  <text x="850" y="328" class="lbl">三级文件权限</text>
+  <text x="850" y="350" class="small">L0 安全范围 / L1 只读跨目录</text>
+  <text x="850" y="368" class="small">L2 白名单写 (不开放)</text>
+
+  <!-- Data layer -->
+  <rect x="1000" y="120" width="170" height="70" class="box"/>
+  <text x="1085" y="150" class="lbl">微信数据库</text>
+  <text x="1085" y="172" class="small">只读 · immutable</text>
+  <rect x="1000" y="220" width="170" height="70" class="box"/>
+  <text x="1085" y="250" class="lbl">微信文件目录</text>
+  <text x="1085" y="272" class="small">按文件名定位实体</text>
+  <rect x="1000" y="320" width="170" height="70" class="box"/>
+  <text x="1085" y="350" class="lbl">云端 LLM</text>
+  <text x="1085" y="372" class="small">仅提问与答复出境</text>
+
+  <!-- Edges -->
+  <path class="edge" d="M260,155 L350,180"/>
+  <path class="edge" d="M260,255 L350,240"/>
+  <path class="edge" d="M260,355 L350,300"/>
+  <path class="edge" d="M650,200 L740,150"/>
+  <path class="edge" d="M650,240 L740,240"/>
+  <path class="edge" d="M650,330 L740,340"/>
+  <path class="edge" d="M960,140 L1000,155"/>
+  <path class="edge" d="M960,240 L1000,255"/>
+  <path class="edge" d="M960,340 L1000,355"/>
+
+  <!-- Red lines footer -->
+  <rect x="350" y="460" width="820" height="90" class="accent"/>
+  <text x="760" y="490" class="lbl" font-weight="700">红线（不随守卫开关关闭）</text>
+  <text x="760" y="515" class="small">Jev 建议了就必须调工具 · 工具说"未找到"就不许编具体事实 · 提权工具不进 MCP</text>
+  <text x="760" y="538" class="small">隐私默认 open · 无预设备份防御 · 失败不静默跳过判断层以外</text>
+
+  <text x="600" y="620" class="small">本图由 SVG 源精确渲染 — 改结构先改 SVG，再渲染为 PNG</text>
+</svg>
