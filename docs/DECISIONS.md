@@ -6240,3 +6240,26 @@ Jev 判断现在默认会多一次 decide.py 调用（成本 ~$0.000018，实测
 
 本轮还修复了窗口标题分工（wx-mirror vs wx-mirror-harness 两个 profile 各管各的），
 那部分在 `_tools/wx-mirror/_d203.md`（工具目录本地草稿，不在本文档编号空间）。
+
+## D-201: 助手加通用文档读取 read_document——"力求什么都能看"
+
+**Decision.** 新增 `read_document` 工具（工具数 34→35），按扩展名分派解析本地文件：
+PDF（pdftotext）、Word（python-docx）、Excel（openpyxl）、PPT（python-pptx）、
+HTML/XML（BeautifulSoup）、纯文本/代码。老格式 .doc/.xls/.ppt 如实报"不支持"。
+
+**Reason.** 用户要求："不仅加 read_pdf 工具，read_word 也加上去，力求什么都能看。"
+做成**一个工具按格式分派**而不是 read_pdf/read_word/read_excel 分散——模型只要认一个工具，
+扩展格式只改分派表。
+
+**权限**：走与 read_file 相同的三级边界（D-199）——L0 安全范围、L1 只读跨目录，
+工作区外要先 escalate。不进 MCP 表（与 read_file 同类，L1 能力不外露）。
+
+**为什么用 pythonBridge 脚本**：解析逻辑放 `scripts/read_document.py`（94 个 py 工作流之一），
+与项目其它脚本一致——不在 TS 里塞 Python 库调用。脚本按 UTF-8 输出（Windows 控制台
+默认 GBK 会让 emoji 抛 UnicodeEncodeError，已 reconfigure 修掉）。
+
+**Alternatives rejected.** ①DeepSeek 原生 web_search 那套做文档：它不是文档解析。
+②每个格式一个工具：工具表会膨胀到 40+，模型选择变差——一个 read_document 足够。
+
+**验证**：`test/read_document_test.py` 6 个用例（文本/docx/xlsx/html去脚本/不存在/截断）全过；
+全量 1281 测试 / 1270 通过 / 0 失败；tsc 无错。

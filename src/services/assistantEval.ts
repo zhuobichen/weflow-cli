@@ -1055,6 +1055,9 @@ export const EVAL_UNCOVERED: Record<string, string> = {
     + '而那几条判的是结果（对话到底拿到没有）；强行 `mustCall` 会把"用别的方式解析出来"判成失败。',
   escalate: '权限提权工具（D-199），不是评测场景——它改会话级状态、要真读工作区外文件；'
     + '三级边界由 `assistant-privilege.test.ts`（8 个用例）钉住，不进合成评测集。',
+  read_document: '结构性（按结果判，不是按工具判）：它走 pythonBridge 解析本地真实文件，'
+    + '评测的合成数据没有 PDF/Word/Excel 夹具，而应该是"答出文件内容"这个结果被判——'
+    + 'read_document.py 的解析由自身测试覆盖，不进合成评测集。',
   read_file: '结构性（按结果判，不是按工具判）：读任意文件是 L1 提权能力，评测框架按用例隔离，'
     + '表达不了"先 escalate 再 read_file"的跨轮提权链，所以 mustCall 在这里会误杀——'
     + '它的语义（路径安全 / 截断 / 三级边界）由 `assistant-privilege.test.ts` 直接测纯函数覆盖。',

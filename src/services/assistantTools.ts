@@ -1198,6 +1198,23 @@ export const TOOL_DEFS: ToolDef[] = [
   {
     type: 'function',
     function: {
+      name: 'read_document',
+      description: '读取本地文件的**内容**（按格式自动解析）：PDF、Word(.docx)、Excel(.xlsx)、'
+        + 'PPT(.pptx)、HTML、以及纯文本/代码文件。用户让你看某个文件的内容时用这个，'
+        + '比 read_file 强——它能解析二进制格式。走与 read_file 相同的权限：L0 只能读安全范围内，'
+        + '工作区外的文件要先 escalate(level=1) 解锁（只读）。长文档会截断。',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: '文件路径（绝对路径，或相对工作目录）' },
+        },
+        required: ['path'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'web_search',
       description: '通用网页搜索（Bing 公开搜索页，不是公众号搜索）。'
         + '查实时/外部的公开信息——新闻、资料、某个事实的出处——用这个；'
@@ -1336,6 +1353,7 @@ export const MCP_EXCLUDED: Record<string, string> = {
   read_file: '读任意文件是 L1 提权能力，不开放给外部 MCP 客户端',
   web_search: '联网搜索会消耗 deepseekApiKey 的额度并出网；MCP 那条路不该替调用方花用户的钱，'
     + '助手在微信/面板里可用，外部客户端要搜自己接搜索工具',
+  read_document: '解析本地任意格式文件是 L1 提权能力，与 read_file 同类，不开放给外部 MCP 客户端',
 }
 
 export const MCP_TOOL_DEFS = TOOL_DEFS.filter(tool => !(tool.function.name in MCP_EXCLUDED))
@@ -2753,6 +2771,22 @@ export async function executeTool(name: string, args: Record<string, any>, ctx: 
         const level: PrivilegeLevel = (ctx as any)._privilege?.level ?? ctx.privilegeLevel ?? 0
         const cwd = ctx.cwd || ''
         return readFileSafe(p, level, cwd)
+      }
+      case 'read_document': {
+        HANDLED_TOOL_NAMES.add('read_document')
+        const p = String(args.path || '').trim()
+        if (!p) return '(参数错误: 要给 path)'
+        const level: PrivilegeLevel = (ctx as any)._privilege?.level ?? ctx.privilegeLevel ?? 0
+        const cwd = ctx.cwd || ''
+        // 与 read_file 同一道权限门：L0 安全范围 / L1 只读跨目录
+        const chk = checkFileAccess(p, level, cwd, false)
+        if (!chk.allowed) return `(读取被拒: ${chk.reason})`
+        const r = await runPythonJson<any>('read_document.py',
+          ['--path', chk.realPath || p, '--json'])
+        if (!r.ok) return fail('文档解析失败', r)
+        const d: any = r.data
+        if (!d?.ok) return `(读取失败: ${String(d?.error ?? '未知').slice(0, 200)})`
+        return `已解析 ${p}（${d.format}，${d.chars} 字符${d.truncated ? '，已截断' : ''}）:\n${d.text}`
       }
       default:
         return `(未知工具: ${name})`
