@@ -6115,6 +6115,9 @@ transcript 里这句出现过 4 次、记忆里 8 次，是上下文学来的。
 
 ## D-197: 词法快路径默认关闭——硬规则只做红线，路由交回模型
 
+> **后续覆盖**：D-217 把词法路由默认改回 `on`（无 Jev 用户的零依赖兜底）。本条保留当时的
+> 判断与理由，但**当前默认已不是 off**。
+
 **Decision.** `assistantLexiconRoute` 出厂默认从 `on` 改为 `off`。
 用户可显式 `on` 打开。词法引擎代码与测试全部保留。
 
@@ -6145,6 +6148,9 @@ transcript 里这句出现过 4 次、记忆里 8 次，是上下文学来的。
 隐私默认 open（D-194）、词法路由默认关（D-197）。硬规则只剩真正的安全红线。
 
 ## D-198: Jev 工具建议默认开——只给参考信号，不报错、不强制
+
+> **后续覆盖**：Jev 默认已改回 `off`（词法路由 D-217 成了零依赖兜底，Jev 变为可选增强）。
+> 本条保留当时的判断与理由，但**当前默认已不是 on**。
 
 **Decision.** `assistantJevDoubleCheck` 默认从 `off` 改为 `on`。Jev 一次调用问
 "这条可能要用哪些工具"（N 个独立 noul），把结果作为**一条 system 参考消息**注入对话，
@@ -6517,3 +6523,111 @@ reply 非空但循环其实已耗尽，原来的判断会把它当正常答复�
 
 **验证**：`test/assistant-jev-force.test.ts` 断言回炉轮次 toolChoice 是指定工具的 function 对象；
 全量测试通过；真机第1题复测 10 次应全部走稳定工具。
+
+## D-213: 当前时间移出第一条 system 消息，保住隐式缓存前缀
+
+**Decision.** `nowLine()`（精确到分钟）从 `buildSystemPrompt()` 的第一条 system 消息里移出，
+改为 messages 构造时追加的一条独立 system 消息（放在工作窗口之后）。
+
+**Reason.** 成本实测：123 次调用平均输入 8031 tokens、107 次 >8k，但缓存命中率仅 **7%**。
+根因是 DashScope 对 qwen-flash 的**隐式缓存按公共前缀命中**（[阿里云文档](https://www.alibabacloud.com/help/doc-detail/2862577.html)：
+qwen-flash 自动开启、命中按 20% 计费），而 `[当前时间] HH:MM` 每分钟变化 →
+第一条 system 消息就不是逐字相同的 → 整个前缀从第 2 个 token 块起全部失效。
+
+**业界依据**：提升隐式缓存命中的办法就是"重复内容放提示词开头、差异内容放末尾"
+（[阿里云上下文缓存](https://www.oceanbase.com/docs/common-oceanbase-cloud-1000000005772708)）。
+第一条 system 是最大固定块（BASE_PROMPT + 能力清单 + 技能目录），保住它就保住了缓存大头。
+
+**Alternatives rejected.** ①把时间精度降到"天"：相对时间（"上周三"）仍需要日期，但分钟粒度对
+"16:53 那个文件"这类问题有用，不降。②关掉时间：模型会把相对时间当猜，D-174 已踩过。
+
+**验证**：`test/assistant-service.test.ts` 断言时间仍在发送内容里、但不在第一条 system；
+全量测试通过。生产缓存命中率待部署后审计观察（预期显著高于 7%）。
+
+## D-214: tool_choice 精确指定工具前，先确认它在工具表里
+
+**Decision.** 回炉轮次指定 `turnJevTop` 工具前，先检查它是否在 `availableToolDefs()`；
+不在则退回 `'required'`（模型任选），绝不把一个不在工具表里的名字传给 `tool_choice`。
+
+**Reason.** 对抗压测"读一下《不存在的一本书》的收藏正文"撞到 `LLM 400: The tool specified
+in tool_choice does not match`——Jev 建议的工具这台机器没启用（被 MCP_EXCLUDED 或没配置），
+但 D-212 仍精确指定了它，API 直接拒请求。这是 D-212 引入的回归，必须兜住。
+
+**教训**：任何"精确指定"都要先验证被指定的对象存在——Jev 的建议是概率输出，
+它不在意这台机器实际有什么工具；harness 必须做这层校验。
+
+**验证**：全量测试通过；对抗压测该项不再 400。
+
+## D-215: 不依赖 Jev——默认 tool_choice=required + answer_directly 逃生舱
+
+**Decision.** ReAct 循环第一轮默认 `tool_choice='required'`（不再依赖 Jev 判断"要不要查"），
+新增 `answer_directly` 工具作为"我判断这条不用查"的出口：模型必须调一个工具，
+不用查就调 `answer_directly` 并给理由，然后基于已有上下文直接答。Jev 建议时仍精确指定那个工具（D-212）。
+
+**Reason.** 用户质疑"如果用户没有 Jev 呢？很多用户连 Jev 都不知道"——实测关掉 Jev 后真实案例
+从 10/10 掉到 **6/10**：4 题答"没能核实到真实数据，我不能给出具体结论"（模型零工具作答）。
+前面所有可靠性修复（D-202/209/211/212）都依赖 Jev 建议才触发，没有 Jev 就是盲区。
+
+**业界依据**：tool_choice 三档（[aifirst-training](https://aifirst-training.com/online-courses/claude-certified-architect-agentic-systems/prompt-engineering-structured-output/the-tool_choice-dial-auto-any-forced)）：
+auto 的问题是模型可以选择"不调工具"——正是无 Jev 的 bug；any/required 让文本出口失效，
+但要有逃生舱。`answer_directly` 就是这个舱：模型用工具调用明确表态"这条不用查"，
+既不空谈，也不会"为了调而调"去调无关工具（业界警告全局 required 的副作用）。
+
+**不进 MCP**：answer_directly 是 harness 内部控制工具，外部客户端用 auto，不需要它。
+
+**验证**：全量测试通过；待无 Jev 真机复测——预期恢复 10/10。
+
+## D-215 复盘：默认 tool_choice=required + answer_directly 逃生舱——试过，回退
+
+**试过**：无 Jev 时真实案例 6/10（模型不主动调工具）。业界（tool_choice dial）说 `auto`
+的问题是模型可以选"不调工具"，`required` 能强制调用；加 `answer_directly` 工具当"不用查"的出口。
+于是把 ReAct 第一轮默认改成 `required`，新增 answer_directly。
+
+**结果**：**更糟**。无 Jev 真机仍 6/10，且几乎全变成"这轮我查到了这些，但没能在限定步数内
+整理完"——模型在 required 下疯狂调工具（每轮都查），但**不会用 answer_directly 收尾**，
+6 轮全耗在"查了但没答"，最后撞上限弃权。正是业界警告的"为调而调"副作用——
+`required` 保证"调工具"，但不保证"会停"。
+
+**结论**：回退默认 `auto`。answer_directly 工具保留（有 Jev 建议但模型该直接答时可用），
+但不再默认强制。
+
+**真正的教训**：**"该不该查"和"查完会不会收尾"是两件事**。Jev 解决的是前者（判断层），
+required 也只能解决前者；而 qwen-flash 的短板在后者——它拿到工具结果后不会及时收尾成答案。
+所以没有 Jev 的替代方案不该是"更强的强制"，而该是帮模型**收尾**——
+见 D-216（工具结果后注入收尾指令）。
+
+## D-216: 工具拿到内容后注入收尾提醒，帮无 Jev 的小模型"查完就答"
+
+**Decision.** 工具返回有产出（>60 字）时，紧跟一条 system 消息：
+"如果信息够答就现在直接答，不要再查，只有确实缺关键数据才继续调工具"。
+不挂 guardsEnabled——它是无 Jev 时帮小模型收尾的基础能力，不是防御红线。
+
+**Reason.** D-215 复盘发现：`required` 强制能解决"该不该查"，但解决不了"查完会不会收尾"——
+qwen-flash 在 required 下疯狂调工具，6 轮全耗在"查了但没答"，最后撞上限弃权。
+无 Jev 真实案例里大量"这轮我查到了这些，但没能在限定步数内整理完"就是这个症状。
+前后对比：工具失败有 `toolFailureNudge`（D-169）提醒，成功却没有任何收尾引导——不对称。
+
+**业界依据**：context editing 的关键是在正确时机给模型正确的信息；工具结果刚回来时
+正是"要不要继续查"的决策点。
+
+**验证**：全量测试通过；无 Jev 真机复测（预期"查到了但没答"减少）。
+
+## D-217: 词法路由默认开——无 Jev 用户的零依赖兜底
+
+**Decision.** `assistantLexiconRoute` 默认值从 `off` 改成 `on`。普通用户开箱即用就有
+零模型、零依赖的词汇路由：高频确定问法（"X 跟我说了什么""你记得吗""知识库概念"）
+直接派发工具，结果进 messages 后模型自然答得好。有 Jev 的用户不受影响（叠加而非替代）。
+
+**Reason.** 用户问"如果用户没有 Jev 呢？很多用户连 Jev 都不知道"。实测关 Jev 后
+真实案例 10/10→6/10（模型不主动调工具）。先后试了两条路都失败：
+- D-215 默认 `tool_choice=required`：更糟，qwen-flash 疯狂调工具不收尾，撞上限弃权
+- D-216 工具成功后收尾提醒：无效，模型根本没调工具时提醒注入不到
+
+真正的正解是词法路由（`assistantIntent.ts`，D-168 就有）：它不判断"要不要查"这种模糊问题，
+而是把**高频确定说法**用规则直接派发——零模型调用、零抖动、不依赖 Jev 或任何 key。
+实测：关 Jev + 开词法路由，真实案例 **10/10 PASS**，且答复质量明显更好（直接给内容）。
+
+**为什么现在才改默认**：D-168 时默认 off 是"稳妥灰度"；现在证明它是无 Jev 场景的唯一可靠兜底，
+且规则只命中确定问法、不限制模型自由（命不中就交回循环），符合用户"硬规则只做红线"的原则。
+
+**验证**：全量测试通过；无 Jev 真机 battery-onebyone 10/10 PASS。

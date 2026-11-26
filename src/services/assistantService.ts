@@ -12,7 +12,7 @@ import { decideRoute, MIN_NEEDS_TOOL, type FastRouteMode, type RouteCapability }
 import { decideMultiTools } from './assistantJevMulti.js'
 import { routeByIntent, routeWithArgs, routeParts, isFollowUp, type IntentHit }
   from './assistantIntent.js'
-import { pushbackFor, emptyTalkPushback, asksBackData, toolFailureNudge, isEmptyToolResult, guardsEnabled,
+import { pushbackFor, emptyTalkPushback, asksBackData, toolFailureNudge, toolSuccessNudge, isEmptyToolResult, guardsEnabled,
          stateClaimPushback, impossibleOfferPushback,
          timeWindowWithoutLookup, stripImpossibleOffers, destructiveFollowUpPushback,
          stripOffersAfterDestructive, reversedPrivacyPushback, crossPeriodClaimPushback,
@@ -468,7 +468,10 @@ export class AssistantService {
   private buildSystemPrompt(userId: string, question = '', scene: Scene | null = null): string {
     // 当前时间：**没有它，任何相对时间都是猜**。"上周三""昨天""这周"要变成工具能用的
     // 日期，模型得先知道今天是几号（`get_messages` 的 since/until 就是这么用的）。
-    const parts = [BASE_PROMPT, `[当前时间] ${nowLine()}（本机时区）`, this.privacyStateLine(),
+    // 【当前时间】不放在这里！nowLine 精确到分钟，每轮都变，会让整个 system 前缀失效，
+    // DashScope 隐式缓存（按公共前缀命中）几乎全废——实测命中率仅 7%（D-213）。
+    // 时间改在 messages 末尾单独加一条 system 消息（见 runReactLoop 入口），前缀稳定。
+    const parts = [BASE_PROMPT, this.privacyStateLine(),
       // D-196：绝不输出内部处理话术。此前模型反复回「（这一轮我给出的具体事实被校验拦下了，
       // 内容不可靠，不作为后续依据。）」——那是我方内部的记忆占位，不是给用户的答复，
       // 一旦说出口就会被记进记忆、下一轮再复述，形成自我强化（实测连清两次记忆仍复发）。
@@ -709,9 +712,17 @@ export class AssistantService {
     let forceToolNext = ''     // 上轮被 Jev 回炉 → 本轮精确指定这个工具（D-212）；空=不强制
     for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
       // 只摆这台机器**跑得了**的工具：摆了跑不了的，模型会去试、拿一个错回来
-      const choice: 'auto' | { type: 'function'; function: { name: string } } = forceToolNext
-        ? { type: 'function', function: { name: forceToolNext } } : 'auto'
-      const data = await this.callLLM(messages, availableToolDefs(), 800, choice)
+      const toolDefs = availableToolDefs()
+      // D-214：Jev 建议的工具可能不在这台机器的工具表里（没配置/被排除），
+      // 直接 tool_choice 指定它会让 API 400（实测对抗压测撞到）。不在就退回 'required'。
+      const canName = forceToolNext && toolDefs.some((d: any) => d.function?.name === forceToolNext)
+      // 默认 auto：实测默认 required 会让 qwen-flash 疯狂调工具却不会收尾，
+      // 6 轮全耗在"查了但没答"→ 撞上限弃权，真实案例反而 10/10→6/10（D-215 回退）。
+      // answer_directly 工具保留，供"有 Jev 建议但模型该直接答"的场景用。
+      const choice: 'auto' | 'required' | { type: 'function'; function: { name: string } } = forceToolNext
+        ? (canName ? { type: 'function', function: { name: forceToolNext } } : 'required')
+        : 'auto'
+      const data = await this.callLLM(messages, toolDefs, 800, choice)
       forceToolNext = ''
       const msg = data.choices?.[0]?.message
       if (!msg) throw new Error('LLM 返回为空')
@@ -911,6 +922,11 @@ export class AssistantService {
     // 继续按自己的假设往下写——这一句是把"这一步失败了"翻译成它能接住的指令。
     if (guardsEnabled() && isEmptyToolResult(raw)) {
       deferred.push({ role: 'system', content: toolFailureNudge(name, raw) })
+    }
+    // D-216：工具拿到内容后提醒"够了就答"。不挂守卫开关——这是无 Jev 时帮小模型收尾的
+    // 基础能力，不是防御；实测没有它时模型会一直查到撞上限（"查到了这些但没整理完"）。
+    if (!isEmptyToolResult(raw) && safe.length > 60) {
+      deferred.push({ role: 'system', content: toolSuccessNudge(name, safe.length) })
     }
 
     // 工具取来的图片作为**紧随其后的一条 user 消息**附上：`tool` 消息的 content 只能是
@@ -1314,6 +1330,8 @@ export class AssistantService {
     const messages: ApiMessage[] = [
       { role: 'system', content: this.buildSystemPrompt(userId, t, scene) },
       ...this.memory.workingWindow(userId).map(turn => ({ role: turn.role, content: turn.content })),
+      // 时间放在这里（动态、每轮变），使第一条 system 消息逐字稳定 → DashScope 隐式缓存可命中（D-213）。
+      { role: 'system', content: `[当前时间] ${nowLine()}（本机时区）` },
     ]
 
     // 显式「记住：X」**直接落盘**，不等模型抽取（与 D-169 同族的确定性兜底）。

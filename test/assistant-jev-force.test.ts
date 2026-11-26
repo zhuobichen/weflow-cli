@@ -25,7 +25,7 @@ function decider(allHigh: boolean) {
     success: true, model: 'probe',
     answers: Object.fromEntries(
       ['get_messages', 'search_chats', 'list_sessions', 'get_todos', 'get_daily_report',
-       'get_sns', 'get_weread', 'get_stats', 'search_knowledge', 'read_document', 'web_search'].map(n => [n, { type: 'noul', noul: allHigh ? 0.9 : 0.05 }])),
+       'get_sns', 'get_weread', 'get_stats', 'search_knowledge', 'search_memory', 'read_document', 'web_search'].map(n => [n, { type: 'noul', noul: allHigh ? 0.9 : 0.05 }])),
   })
 }
 
@@ -68,7 +68,7 @@ test('Jev 建议 + 零工具作答 → 强制回炉（第二轮才给出答复�
     assert.ok(roundCount() >= 2, '零工具作答后必须回炉再问一轮')
     const forced = rounds[1].some((m: any) => (m.role === 'user' || m.role === 'system') && /没有调用任何工具/.test(m.content || ''))
     assert.ok(forced, '回炉时应该注入"你没调工具"的强约束')
-    assert.equal(choices[0], 'auto', '第一轮是模型自主判断')
+    assert.equal(choices[0], 'auto', '默认 auto——required 会让小模型疯狂调工具不收尾（D-215 回退）')
     // 回炉轮次用 API 层精确指定 Jev 概率最高的工具（D-212），实测比 'required' 更稳——
     // 'required' 下模型会在多个建议里挑中不稳定的（如 search_chats），指定工具名避免它挑错。
     assert.ok(typeof choices[1] === 'object' && choices[1].type === 'function'

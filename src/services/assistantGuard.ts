@@ -313,6 +313,12 @@ export function unfulfilledJevSuggestionPushback(input: {
  * ② 概括等于替工具推测原因，而这个仓库明令禁止推测；
  * ③ 把原话摆在它眼前，比要求它"去上面那条消息里找原因"可靠得多。
  */
+/** 工具拿到内容后的收尾提醒（D-216）：小模型会一直查下去不收尾，这句把它拉回"该答了"。 */
+export function toolSuccessNudge(toolName: string, chars: number): string {
+  return `（提醒：\`${toolName}\` 已经拿到 ${chars} 字真实数据。**如果这些信息够答用户的问题，就现在直接给出最终答复**，`
+    + '不要再查别的；只有在确实还缺关键数据时才继续调工具。）'
+}
+
 export function toolFailureNudge(toolName: string, reason?: string): string {
   const said = (reason ?? '').trim().replace(/^\(/, '').replace(/\)$/, '').slice(0, 160)
   const quote = said ? `工具的原话是：${said}。` : ''

@@ -560,14 +560,17 @@ test('「轨迹」不把发送者 ID 带进聊天里', async () => {
   assert.doesNotMatch(report, new RegExp(user), '账号标识没必要出现在聊天里')
 })
 
-test('系统提示里有当前时间：没有它，任何相对时间都是猜', async () => {
+test('发送里有当前时间：没有它，任何相对时间都是猜（且它不在第一条 system 里，以保缓存前缀稳定 D-213）', async () => {
   const h = harness([answer('好')])
   const user = newUser()
   await h.svc.handleMessage(user, '在吗', 'text')
 
-  const prompt: string = h.rounds[0][0].content
-  // 年-月-日（星期X）HH:MM
-  assert.match(prompt, /\[当前时间\] \d{4}-\d{2}-\d{2}（星期[日一二三四五六]）\d{2}:\d{2}/)
+  // D-213：时间从第一条 system 移到独立的动态 system 消息——整个第一轮 messages 里要有它，
+  // 但第一条（缓存前缀）里不能有时钟，否则每分钟变化会让隐式缓存全废。
+  const allText = h.rounds[0].map((m: any) => String(m.content || '')).join('\n')
+  assert.match(allText, /\[当前时间\] \d{4}-\d{2}-\d{2}（星期[日一二三四五六]）\d{2}:\d{2}/)
+  const firstSystem: string = h.rounds[0][0].content
+  assert.doesNotMatch(firstSystem, /\[当前时间\]/, '时间不能进第一条 system——会让缓存前缀每分钟失效')
 })
 
 test('同一轮里重复调同一个工具（参数相同）被跳过，并把话说明白', async () => {

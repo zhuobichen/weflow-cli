@@ -1035,6 +1035,21 @@ export const TOOL_DEFS: ToolDef[] = [
   {
     type: 'function',
     function: {
+      name: 'answer_directly',
+      description: '**当你判断这条消息不需要查任何本机数据、可以直接回答时，调用这个工具**。'
+        + '它不执行查询，只是明确记录"我判断这条不用查"并给出一句理由。'
+        + '在 tool_choice=required 的模式下，它是你的"直接回答"出口——用它代替空谈，'
+        + '不要为了凑工具调用去调无关的查询工具。调用后请直接基于已有上下文给出最终答复。',
+      parameters: {
+        type: 'object',
+        properties: { reason: { type: 'string', description: '为什么不需要查（一句话）' } },
+        required: ['reason'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'get_stats',
       description: '本地数据总览：会话数、收藏总数、日报文章数与覆盖天数、主题分布、概念页数。'
         + '适合「我一共有多少数据」这类总览问题；单看公众号推送用 get_reading_stats。',
@@ -1358,6 +1373,8 @@ export const MCP_EXCLUDED: Record<string, string> = {
   web_search: '联网搜索会消耗 deepseekApiKey 的额度并出网；MCP 那条路不该替调用方花用户的钱，'
     + '助手在微信/面板里可用，外部客户端要搜自己接搜索工具',
   read_document: '解析本地任意格式文件是 L1 提权能力，与 read_file 同类，不开放给外部 MCP 客户端',
+  answer_directly: '这是 harness 内部控制工具（tool_choice=required 时的"不用查"逃生舱），'
+    + '不是给用户的能力；外部 MCP 客户端本来就用 auto，不需要它',
 }
 
 export const MCP_TOOL_DEFS = TOOL_DEFS.filter(tool => !(tool.function.name in MCP_EXCLUDED))
@@ -2370,6 +2387,13 @@ export async function executeTool(name: string, args: Record<string, any>, ctx: 
         }
         if (missing) out.push(`（另有 ${missing} 个相关概念尚未建页，查不到）`)
         return out.join('\n')
+      }
+      case 'answer_directly': {
+        HANDLED_TOOL_NAMES.add('answer_directly')
+        // 逃生舱：不查数据，只记录模型"判断不用查"的理由。它让 tool_choice=required
+        // 模式下模型有明确出口，不必为了凑调用去调无关工具（D-215）。
+        const reason = String(args.reason || '').trim().slice(0, 120)
+        return `(已记录判断：这条不需要查本机数据${reason ? `——${reason}` : ''}；请直接基于已有上下文作答)`
       }
       case 'get_stats': {
         HANDLED_TOOL_NAMES.add('get_stats')

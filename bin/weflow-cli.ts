@@ -723,7 +723,7 @@ program
           // `set_todo_status` 时又漏了 —— 每次都是"表变了、这句话没变"，而且没有任何东西会红。
           // 现在名字**逐个与 `MCP_EXCLUDED` 对齐**，并由 `test/assistant-tools.test.ts` 从源码里核：
           // 那张表再加一项而这里没跟，测试就红（同下面 requiresConfirm 的处理方式）。
-          derivedFrom: 'assistant tools minus save_memory, look_at_image, set_todo_status, escalate, read_file, read_document and web_search',
+          derivedFrom: 'assistant tools minus save_memory, look_at_image, set_todo_status, escalate, read_file, read_document, web_search and answer_directly',
           writesFiles: ['export_chat'],
           // 逐个核实过（脚本里确实调云端模型的那些）：
           // who_owes_reply/search_chats → Jev；search_semantic → 阿里云百炼嵌入 + Jev 重排；draft_reply → Jev + DeepSeek。

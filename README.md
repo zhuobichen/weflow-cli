@@ -392,7 +392,7 @@ weflow-cli panel --yes
   （隐私模式 strict 下不出境，见下段与 D-128）
 - 「记住：我的项目叫 weflow-cli」— 写入长期记忆
 
-运行机制：守护进程通过微信官方 Bot 通道（iLink）长轮询收发消息，Agent 循环、三层记忆、数据库查询都在本机执行，仅提问与回复文本发给所配置的 LLM。隐私档位默认 `open`（正文原样可读）；会话 24 小时未活跃需重新扫码，单窗口内主动回复有官方条数限制。工具、权限与判断层的细节见 [AGENT.md](./docs/AGENT.md)。
+运行机制：守护进程通过微信官方 Bot 通道（iLink）长轮询收发消息，Agent 循环、三层记忆、数据库查询都在本机执行，仅提问与回复文本发给所配置的 LLM。隐私档位默认 `open`（正文原样可读）；会话 24 小时未活跃需重新扫码，单窗口内主动回复有官方条数限制。工具、权限、词法路由与判断层的细节见 [AGENT.md](./docs/AGENT.md)。
 
 成本护栏：内置每日 100 条处理上限（防异常流量烧钱，微信内发「记忆」可查用量）；助手默认拒绝所有来信，必须明确配置白名单后才会触发 AI 调用：
 
@@ -499,7 +499,7 @@ python scripts/fav_server.py --date YYYY-MM-DD
 
 ![WeFlow Agent architecture](./docs/images/weflow-agent-architecture.png)
 
-Agent 通过 ReAct 循环决定调什么工具，微信 Bot、本机面板与云手机 harness 共用同一个大脑和同一份记忆。它能查询你的微信数据、联网搜索、读取本机文档（PDF / Word / Excel / PPT 等）。自建 harness 专为持久化独立部署，目前处于初步阶段。
+Agent 用零依赖的词法路由（高频问法直接派发）加 ReAct 循环决定调什么工具，微信 Bot、本机面板与云手机 harness 共用同一个大脑和同一份记忆。它能查询你的微信数据、联网搜索、读取本机文档（PDF / Word / Excel / PPT 等），并从本地 wiki 概念页与 RAG 语义索引两层知识库里检索。自建 harness 专为持久化独立部署，目前处于初步阶段。
 
 完整能力、工具清单、权限与红线见 [AGENT.md](./docs/AGENT.md)；设计取舍见 [DECISIONS.md](./docs/DECISIONS.md)。
 

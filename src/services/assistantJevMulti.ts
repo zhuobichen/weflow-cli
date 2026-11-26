@@ -35,6 +35,7 @@ export const MULTI_TOOLS: MultiTool[] = [
   { name: 'get_weread', when: '看书架、读书笔记' },
   { name: 'get_stats', when: '看本机数据统计概览（会话数、收藏数等）' },
   { name: 'search_knowledge', when: '查本地知识库/概念页里的知识：问某个概念是什么、之前整理过什么、知识库里怎么讲X' },
+  { name: 'search_memory', when: '查长期记忆：问"你记得我说的X吗""之前记住的Y是什么""我的偏好/项目背景"' },
   { name: 'read_document', when: '读本地文件内容：PDF/Word/Excel/PPT，或"看下这个文件""这个pdf讲了什么"' },
   { name: 'web_search', when: '查实时/外部公开信息：今天的新闻、某个外部事实、联网搜索' },
 ]

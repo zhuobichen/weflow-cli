@@ -1038,6 +1038,8 @@ export const EVAL_CASES: EvalCase[] = [
  * 现在它是一张被测试盯着表：新增工具时要么给用例，要么登记原因 —— 两条路都得走一条。
  */
 export const EVAL_UNCOVERED: Record<string, string> = {
+  answer_directly: 'harness 内部控制工具（required 模式的"不用查"出口），不是用户可触发的能力；'
+    + '它由 D-215 的工具调用率测试与真机案例覆盖，不进用户侧评测集。',
   fetch_article: '出网工具，评测器的 fetch 包装会让它抛错（"评测里出现第二个出口就说明有地方漏了"）。',
   web_search: '同为出网工具（Bing 公开搜索页），评测器的 fetch 包装只放行模型那一次调用，'
     + '第二个出口会抛错——结构性原因，与 key 配没配无关；真实链路由 web_search 工具自己的 HTTP 调用覆盖。',
