@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body {
+    font-family: "Segoe UI", "Microsoft YaHei", -apple-system, sans-serif;
+    background: linear-gradient(135deg, #fdfbf6 0%, #f3ecdc 100%);
+    padding: 42px 48px;
+    width: 1600px;
+    min-height: auto;
+    color: #1f2933;
+  }
+  h1 {
+    text-align: center; font-size: 34px; font-weight: 800; letter-spacing: 1px;
+    color: #16202b; margin-bottom: 6px;
+  }
+  .subtitle { text-align:center; font-size:14px; color:#7a6a55; margin-bottom: 34px; }
+  .flow { display:grid; grid-template-columns: 250px 340px 300px 300px; gap: 26px; align-items:start; }
+  .col-title {
+    font-size:13px; font-weight:700; color:#a08a6c; text-transform:uppercase;
+    letter-spacing:2px; margin-bottom:14px; padding-left:4px;
+  }
+  .col { display:flex; flex-direction:column; gap:16px; }
+  .card {
+    background:#fffdf8; border:1.5px solid #e0d5c0; border-radius:14px;
+    padding:18px 20px; box-shadow: 0 3px 0 #e8dcc6, 0 8px 22px rgba(80,60,30,.08);
+    position:relative;
+  }
+  .card h3 { font-size:16px; font-weight:700; margin-bottom:7px; }
+  .card p { font-size:12.5px; line-height:1.7; color:#6b6256; }
+  .card.core {
+    background: linear-gradient(160deg,#fff4d6,#f9e6b0);
+    border:2px solid #e0a93c; box-shadow: 0 4px 0 #d99b2e, 0 12px 28px rgba(180,130,30,.15);
+  }
+  .card.core h3 { color:#8a5d10; font-size:18px; }
+  .card.accent {
+    background: linear-gradient(160deg,#fff0e8,#ffe0cc); border-color:#e8835c;
+    box-shadow: 0 3px 0 #e07a55, 0 8px 22px rgba(200,90,50,.12);
+  }
+  .card.kb {
+    background: linear-gradient(160deg,#eaf6ef,#d5ecdd); border-color:#6fb894;
+    box-shadow: 0 3px 0 #5aa885, 0 8px 22px rgba(60,140,100,.12);
+  }
+  .card.kb h3 { color:#256b4d; }
+  .card .tag {
+    display:inline-block; font-size:11px; font-weight:700; padding:3px 9px;
+    border-radius:20px; background:#f0e8d8; color:#7a6a55; margin-top:9px; margin-right:5px;
+  }
+  .card.kb .tag { background:#c9e6d6; color:#256b4d; }
+  .card.accent .tag { background:#ffd9c6; color:#a04b2c; }
+  .inner {
+    background:#fffdf8; border:1.5px solid #d8cbb4; border-radius:10px;
+    padding:12px 14px; margin-top:12px;
+  }
+  .inner h4 { font-size:14px; font-weight:700; margin-bottom:4px; }
+  .inner p { font-size:12px; line-height:1.6; color:#6b6256; }
+  .arrow {
+    position:absolute; right:-26px; top:50%; transform:translateY(-50%);
+    font-size:22px; color:#b9a98c;
+  }
+  .core-stack { display:flex; flex-direction:column; gap:12px; }
+  .mini {
+    background:#fffdf8; border:1.5px solid #d8cbb4; border-radius:10px; padding:12px 14px;
+  }
+  .mini h4 { font-size:13.5px; font-weight:700; margin-bottom:3px; }
+  .mini p { font-size:11.5px; line-height:1.5; color:#6b6256; }
+  .footer {
+    margin-top:36px; background:linear-gradient(100deg,#ef6840,#d94e2b);
+    border-radius:16px; padding:24px 30px; color:#fff;
+    box-shadow: 0 5px 0 #b93d1f, 0 14px 30px rgba(200,70,30,.2);
+  }
+  .footer h2 { font-size:19px; font-weight:800; margin-bottom:12px; }
+  .footer ul { list-style:none; display:flex; flex-wrap:wrap; gap:10px 28px; }
+  .footer li { font-size:13px; opacity:.96; line-height:1.8; }
+  .footer li::before { content:"◆ "; color:#ffd9a8; }
+  .legend { margin-top:18px; text-align:center; font-size:12px; color:#9a8b74; }
+  .legend span { display:inline-block; width:12px; height:12px; border-radius:3px; margin:0 5px -1px 14px; }
+</style>
+</head>
+<body>
+<h1>weflow-cli Agent 架构</h1>
+<div class="subtitle">同一大脑 · 多入口 · 工具自主判断 · RAG 与 wiki 双层知识库</div>
+
+<div class="flow">
+  <!-- 入口 -->
+  <div>
+    <div class="col-title">入口</div>
+    <div class="col">
+      <div class="card"><h3>微信 Bot 通道</h3><p>iLink 长轮询收发<br>白名单准入，默认拒绝所有人</p><span class="arrow">→</span></div>
+      <div class="card"><h3>本机面板 / harness</h3><p>单窗口 · 思考链可视<br>不登录微信也能用</p><span class="arrow">→</span></div>
+      <div class="card"><h3>MCP 客户端</h3><p>受控工具子集<br>出境调用需 confirm</p><span class="arrow">→</span></div>
+    </div>
+  </div>
+
+  <!-- ReAct -->
+  <div>
+    <div class="col-title">守护进程 · ReAct 循环</div>
+    <div class="card core">
+      <h3>ReAct 循环（≤6 轮）</h3>
+      <p>三层记忆：工作窗口 / 滚动摘要 / 长期事实<br>每轮末整理：原话压摘要留归档，每 6 轮抽事实</p>
+      <div class="core-stack">
+        <div class="mini"><h4>Jev 判断层 · 11 项 noul 多选</h4><p>建议工具 → tool_choice 精确指定强制调用</p></div>
+        <div class="mini"><h4>工具分派 + 串行队列</h4><p>并行 tool_calls 的消息连续性</p></div>
+        <div class="mini"><h4>红线守卫</h4><p>独立于总开关，永不关闭</p></div>
+      </div>
+      <span class="arrow">→</span>
+    </div>
+  </div>
+
+  <!-- 工具 -->
+  <div>
+    <div class="col-title">工具</div>
+    <div class="col">
+      <div class="card"><h3>微信数据查询</h3><p>会话、聊天、收藏、朋友圈<br>读书、日报、待办</p><span class="tag">精确取数</span></div>
+      <div class="card accent"><h3>联网 + 文件读取</h3><p>web_search（Bing）<br>read_document / read_file<br>微信文件按文件名定位实体</p><span class="tag">三级权限</span></div>
+      <div class="card kb"><h3>知识库检索</h3><p>wiki 精确匹配 → RAG 语义兜底<br>search_knowledge / get_concepts</p><span class="tag">两层互补</span></div>
+    </div>
+  </div>
+
+  <!-- 数据/知识 -->
+  <div>
+    <div class="col-title">数据 / 知识</div>
+    <div class="col">
+      <div class="card"><h3>微信数据库</h3><p>只读 · immutable，不碰客户端状态</p></div>
+      <div class="card kb"><h3>知识库（本地，两层）</h3>
+        <p><b>wiki 精确匹配</b>：概念页 ~48k、卡片 ~18k、每句带出处<br><b>RAG 语义召回</b>：向量+BM25 混合索引<br>Sources 原文 · 文章/聊天两条线</p>
+        <span class="tag">增量编译</span><span class="tag">article-notes→wiki</span>
+      </div>
+      <div class="card"><h3>云端 LLM</h3><p>提问与答复出境 · 嵌入走中转</p></div>
+    </div>
+  </div>
+</div>
+
+<div class="footer">
+  <h2>红线（不随守卫开关关闭）</h2>
+  <ul>
+    <li>Jev 建议了必调工具</li>
+    <li>工具说"未找到"不许编具体事实</li>
+    <li>声称"已调用工具"零调用算编造</li>
+    <li>补问后仍编造给诚实弃权</li>
+    <li>提权工具不进 MCP</li>
+    <li>隐私默认 open</li>
+  </ul>
+</div>
+<div class="legend">
+  <span style="background:#f9e6b0"></span>核心循环
+  <span style="background:#ffe0cc"></span>联网/文件
+  <span style="background:#d5ecdd"></span>知识库
+  <span style="background:#fffdf8"></span>入口/数据
+</div>
+</body>
+</html>

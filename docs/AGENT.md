@@ -48,6 +48,19 @@ Agent 是守护进程（`weflow-cli assistant start`）里的一个循环。同�
 
 **MCP 子集**：MCP 的工具面从这张表派生，去掉 `save_memory`、`look_at_image`、`set_todo_status`，以及提权与文件/联网类的 `escalate`、`read_file`、`read_document`、`web_search`。它**不是纯只读**（`export_chat` 会写文件），但发送消息、发布文章、改配置、写助手记忆都没有工具可达。以 `weflow-cli capabilities --json` 的输出为准。
 
+## 知识库：两套检索，相辅相成
+
+知识库有**两层索引，职责不同、互为补充**：
+
+| | wiki 概念页（精确匹配） | RAG 语义索引（语义检索） |
+|---|---|---|
+| 存什么 | 从文章/对话提炼的**概念页** ~48k，每页有定义、要点、来源链接；卡片 ~18k、Sources 原文两条线 | 聊天 + 文章的**向量 + BM25 混合索引**，按块存原文片段 |
+| 怎么查 | `search_knowledge` 先按概念名/正文**精确匹配**；`get_concepts` 看概念邻居 | `search_knowledge` 在概念页没命中时**兜底**到语义索引，按意思找原文 |
+| 擅长 | 概念定义、已整理的知识、"这个术语怎么讲"——**精确、可核对**（每句带出处） | "哪篇文章说过 X"、"按意思找相似内容"——**模糊、召回广** |
+| 更新 | 增量编译 `article-notes → wiki`（新概念才生成，不重复烧模型） | 增量嵌入新条目（`search-index`，只嵌新 id） |
+
+**调用顺序**：`search_knowledge` 先走 wiki 精确匹配；没命中再 fallback 到 RAG 语义索引（D-206）。这样"Claude Code 是什么概念"给精确定义，"端侧超节点"这种只在文章标题里出现的也能通过语义兜底找到。两者不是替代关系，是**精确 + 召回**的组合。
+
 ## 三级文件权限
 
 对齐"默认安全、一级只读、二级人工白名单"的三级定义；这里的"权限"= 开放哪些文件路径：
@@ -85,4 +98,4 @@ Agent 是守护进程（`weflow-cli assistant start`）里的一个循环。同�
 
 ![WeFlow Agent architecture](./images/weflow-agent-architecture.png)
 
-模块与连线以可维护源 [weflow-agent-architecture.svg](./images/weflow-agent-architecture.svg) 为准。
+模块与文字以可维护源 [weflow-agent-architecture.html](./images/weflow-agent-architecture.html) 为准（改它后截图生成 PNG，文字 100% 准确）。
