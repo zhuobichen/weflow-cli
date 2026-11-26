@@ -53,8 +53,8 @@ test('Jev 建议 + 零工具作答 → 强制回炉（第二轮才给出答复�
     ], true)
     // 让第二轮真的调工具：覆盖 callLLM 在第二次返回 tool_calls
     let n = 0
-    const choices: string[] = []
-    svc.callLLM = async (messages: any[], tools?: any, _max?: number, toolChoice?: string) => {
+    const choices: any[] = []
+    svc.callLLM = async (messages: any[], tools?: any, _max?: number, toolChoice?: any) => {
       if (!tools) return { choices: [{ message: { content: '[]' } }] }
       rounds.push(messages)
       choices.push(toolChoice || 'auto')
@@ -69,7 +69,11 @@ test('Jev 建议 + 零工具作答 → 强制回炉（第二轮才给出答复�
     const forced = rounds[1].some((m: any) => (m.role === 'user' || m.role === 'system') && /没有调用任何工具/.test(m.content || ''))
     assert.ok(forced, '回炉时应该注入"你没调工具"的强约束')
     assert.equal(choices[0], 'auto', '第一轮是模型自主判断')
-    assert.equal(choices[1], 'required', '回炉轮次必须用 API 层 tool_choice=required 结构性强制（D-211）')
+    // 回炉轮次用 API 层精确指定 Jev 概率最高的工具（D-212），实测比 'required' 更稳——
+    // 'required' 下模型会在多个建议里挑中不稳定的（如 search_chats），指定工具名避免它挑错。
+    assert.ok(typeof choices[1] === 'object' && choices[1].type === 'function'
+      && typeof choices[1].function?.name === 'string' && choices[1].function.name.length > 0,
+      `回炉轮次必须精确指定工具，实际 ${JSON.stringify(choices[1])}`)
   } finally { ;(configService as any).get = realGet }
 })
 

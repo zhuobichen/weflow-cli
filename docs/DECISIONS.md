@@ -6496,3 +6496,24 @@ reply 非空但循环其实已耗尽，原来的判断会把它当正常答复�
 （直接调 get_messages 工具本身正常返回完整记录）——这是强制的已知代价，可接受。
 
 **注意**：`required` 只在回炉轮次用，首轮仍是 'auto'（模型自主判断）——绝不设默认。
+
+## D-212: 回炉时精确指定 Jev 概率最高的工具，不让模型在多工具里挑
+
+**Decision.** 回炉轮次的 `tool_choice` 从 `'required'`（模型任选一个）改成
+`{type:'function', function:{name: Jev概率最高工具}}`（精确指定）。Jev 判断结果里
+`turnJevTop` 存概率最高的工具名。
+
+**Reason.** 复杂案例第1题"我和白马非马最近聊了什么"10 次里 1 次失败——
+模型在回炉轮选了 `search_chats(question="和白马非马聊过的大模型本地部署成本相关的内容")`，
+它**自己加戏**把问题改写成成本主题，而 `search_chats` 要走判断层挑词、那条路不稳定 → 返回检索失败。
+其余 9 次选 `get_messages(contact=白马非马)`（纯本地、稳定）都成功。
+根因：`required` 只保证"调工具"，不保证"调对工具"。
+
+**业界依据**：tool_choice 可命名单个 function 确保模型调那个确切的工具
+（[vLLM 工具文档](https://www.thinkfacility.com/errors/vllm-auto-tool-choice-requires-enable-auto-tool-choice)）。
+
+**Alternatives rejected.** ①硬编码"点名联系人→get_messages"正则：用户明确反对硬规则。
+②加强提示词让模型选对：已试多轮无效。③放弃 required 回到 auto：会退回"零工具说查不到"。
+
+**验证**：`test/assistant-jev-force.test.ts` 断言回炉轮次 toolChoice 是指定工具的 function 对象；
+全量测试通过；真机第1题复测 10 次应全部走稳定工具。

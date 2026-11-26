@@ -312,7 +312,7 @@ export class AssistantService {
 
   /** 底层 LLM 调用 (含出境审计) */
   private async callLLM(messages: ApiMessage[], tools?: any[], maxTokens = 800,
-                        toolChoice: 'auto' | 'required' = 'auto'): Promise<any> {
+                        toolChoice: 'auto' | 'required' | { type: 'function'; function: { name: string } } = 'auto'): Promise<any> {
     const { url, model, key, local } = resolveEngineConfig()
     if (!key && !local) {
       throw new Error('未配置 LLM (config set deepseekApiKey 或切换 ollama)')
@@ -331,9 +331,11 @@ export class AssistantService {
     const temperature = Number.isFinite(rawTemperature) && String(process.env.WEFLOW_AI_TEMPERATURE ?? '').trim() !== ''
       ? rawTemperature : 0.4
     const body: Record<string, unknown> = { model, messages: payload, max_tokens: maxTokens, temperature }
-    // tool_choice: 'required' 只在 Jev 建议了工具、模型却偷懒不调的回炉轮次用（D-211）——
+    // tool_choice 只在 Jev 建议了工具、模型却偷懒不调的回炉轮次用（D-211/212）——
     // 结构性强制比提示词可靠：实测 27%→89% 行动率（outlier.host）。
-    // 绝不当默认：全局 required 会让模型"为了调而调"，反而完不成任务。
+    // 'required' 让模型任选一个工具；{type:'function',...} 精确指定 Jev 概率最高的那个，
+    // 避免它在多个建议里挑中不稳定的（实测选了 search_chats 而非稳定的 get_messages）。
+    // 绝不当默认：全局强制会让模型"为了调而调"，反而完不成任务。
     if (tools?.length) { body.tools = tools; body.tool_choice = toolChoice }
 
     // **可重试的失败要重试，坏的立即失败**（2026-11-24）。
@@ -544,6 +546,8 @@ export class AssistantService {
   private lastNeedsLocalData = 0
   /** 本轮 Jev 多工具保底判断建议的工具（D-191）。空 = 没建议或没开 */
   private turnJevSuggested: string[] = []
+  /** Jev 概率最高的那个工具——回炉时用 tool_choice 精确指定它，避免模型在多工具里挑错（D-212） */
+  private turnJevTop: string = ''
   /** 本会话的文件权限（D-199）：L0 安全范围 / L1 自主解锁只读跨目录 / L2 白名单不在此开放。
    *  用可变容器，工具改 level 后下一轮 ctx 拿到新值；重启进程归零（不持久化提权）。 */
   private privilege = { level: 0 as 0 | 1 | 2 }
@@ -665,7 +669,13 @@ export class AssistantService {
       appendLog(`[Jev工具建议] ${decision.reason}`)
       privacyGate.audit('JEV_MULTI', 0,
         `${mode} ${decision.selected.join(',') || 'none'} model=${decision.model || '?'}`)
-      if (mode === 'on' && decision.ok) this.turnJevSuggested = decision.selected
+      if (mode === 'on' && decision.ok) {
+        this.turnJevSuggested = decision.selected
+        // 概率最高的工具：回炉时精确指定，避免模型在多个建议里挑中不稳定的那个
+        // （实测"我和某人聊了什么"原本该 get_messages，模型却选了 search_chats 并失败）
+        const ranked = Object.entries(decision.scores).sort((a, b) => b[1] - a[1])
+        this.turnJevTop = ranked[0]?.[0] || ''
+      }
       // 只有真的建议了工具才注入；没有/失败 → null，主流程照常，用户看不到任何变化
       if (mode !== 'on' || !decision.ok || !decision.selected.length) return null
       return '【工具选择参考】判断层认为这条消息可能需要：'
@@ -696,12 +706,13 @@ export class AssistantService {
     let jevForced = false   // 本轮是否发生过 Jev 强制回炉（进轨迹用）
     let jevRetries = 0      // 已经回炉几次（诊断用：连续零工具时能看到它在反复顶）
     let answered = false    // 模型是否真的给出了不带工具调用的答复（break 才置 true）
-    let forceToolNext = false  // 上一轮被 Jev 回炉了 → 本轮用 tool_choice=required 结构性强制调工具（D-211）
+    let forceToolNext = ''     // 上轮被 Jev 回炉 → 本轮精确指定这个工具（D-212）；空=不强制
     for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
       // 只摆这台机器**跑得了**的工具：摆了跑不了的，模型会去试、拿一个错回来
-      const data = await this.callLLM(messages, availableToolDefs(), 800,
-        forceToolNext ? 'required' : 'auto')
-      forceToolNext = false
+      const choice: 'auto' | { type: 'function'; function: { name: string } } = forceToolNext
+        ? { type: 'function', function: { name: forceToolNext } } : 'auto'
+      const data = await this.callLLM(messages, availableToolDefs(), 800, choice)
+      forceToolNext = ''
       const msg = data.choices?.[0]?.message
       if (!msg) throw new Error('LLM 返回为空')
       trace.rounds += 1
@@ -744,7 +755,8 @@ export class AssistantService {
       // 诚实说"不知道"的答复直接放行。这样既防编造，又不误伤正常查询。
       if (toolCalls === 0 && this.turnJevSuggested.length && jevRetries < 1) {
         jevForced = true
-        forceToolNext = true   // 下一轮用 API 层 required 强制调工具，不再靠提示词求它
+        // 下一轮用 API 层精确指定 Jev 概率最高的工具，不再让模型在多工具里挑
+        forceToolNext = this.turnJevTop || this.turnJevSuggested[0]
         reply = ''
         trace.steps.push({ kind: 'note', detail: `Jev 建议了工具但零调用 → 第 ${++jevRetries} 次强制回炉` })
         messages.push({ role: 'assistant', content: msg.content || '' })
@@ -1168,6 +1180,7 @@ export class AssistantService {
     // ——词法路径把它设成 1 之后，下一句纯闲聊（"今天天气不错"）会带着上一轮的信号被守卫顶一次。
     this.lastNeedsLocalData = 0
     this.turnJevSuggested = []
+    this.turnJevTop = ''
     this.turnToolText = []
     this.turnGuardMechanisms.clear()
     this.turnGuardChecks = 0
