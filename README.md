@@ -499,7 +499,7 @@ python scripts/fav_server.py --date YYYY-MM-DD
 
 ![WeFlow Agent architecture](./docs/images/weflow-agent-architecture.png)
 
-Agent 通过 ReAct 循环决定调什么工具，微信 Bot、本机面板与云手机 harness 共用同一个大脑和同一份记忆。它能查询你的微信数据、联网搜索、读取本机文档（PDF / Word / Excel / PPT 等）。
+Agent 通过 ReAct 循环决定调什么工具，微信 Bot、本机面板与云手机 harness 共用同一个大脑和同一份记忆。它能查询你的微信数据、联网搜索、读取本机文档（PDF / Word / Excel / PPT 等）。自建 harness 专为持久化独立部署，目前处于初步阶段。
 
 完整能力、工具清单、权限与红线见 [AGENT.md](./docs/AGENT.md)；设计取舍见 [DECISIONS.md](./docs/DECISIONS.md)。
 

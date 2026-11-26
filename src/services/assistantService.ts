@@ -311,7 +311,8 @@ export class AssistantService {
   }
 
   /** 底层 LLM 调用 (含出境审计) */
-  private async callLLM(messages: ApiMessage[], tools?: any[], maxTokens = 800): Promise<any> {
+  private async callLLM(messages: ApiMessage[], tools?: any[], maxTokens = 800,
+                        toolChoice: 'auto' | 'required' = 'auto'): Promise<any> {
     const { url, model, key, local } = resolveEngineConfig()
     if (!key && !local) {
       throw new Error('未配置 LLM (config set deepseekApiKey 或切换 ollama)')
@@ -330,7 +331,10 @@ export class AssistantService {
     const temperature = Number.isFinite(rawTemperature) && String(process.env.WEFLOW_AI_TEMPERATURE ?? '').trim() !== ''
       ? rawTemperature : 0.4
     const body: Record<string, unknown> = { model, messages: payload, max_tokens: maxTokens, temperature }
-    if (tools?.length) { body.tools = tools; body.tool_choice = 'auto' }
+    // tool_choice: 'required' 只在 Jev 建议了工具、模型却偷懒不调的回炉轮次用（D-211）——
+    // 结构性强制比提示词可靠：实测 27%→89% 行动率（outlier.host）。
+    // 绝不当默认：全局 required 会让模型"为了调而调"，反而完不成任务。
+    if (tools?.length) { body.tools = tools; body.tool_choice = toolChoice }
 
     // **可重试的失败要重试，坏的立即失败**（2026-11-24）。
     //
@@ -689,10 +693,15 @@ export class AssistantService {
                              trace: TurnTrace): Promise<{ reply: string; toolCalls: number; outcome: ReactOutcome }> {
     let reply = ''
     let toolCalls = 0
-    let jevForced = false   // Jev 建议过、但模型想零工具作答时，只强制一次（防无限重跑）
+    let jevForced = false   // 本轮是否发生过 Jev 强制回炉（进轨迹用）
+    let jevRetries = 0      // 已经回炉几次（诊断用：连续零工具时能看到它在反复顶）
+    let answered = false    // 模型是否真的给出了不带工具调用的答复（break 才置 true）
+    let forceToolNext = false  // 上一轮被 Jev 回炉了 → 本轮用 tool_choice=required 结构性强制调工具（D-211）
     for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
       // 只摆这台机器**跑得了**的工具：摆了跑不了的，模型会去试、拿一个错回来
-      const data = await this.callLLM(messages, availableToolDefs())
+      const data = await this.callLLM(messages, availableToolDefs(), 800,
+        forceToolNext ? 'required' : 'auto')
+      forceToolNext = false
       const msg = data.choices?.[0]?.message
       if (!msg) throw new Error('LLM 返回为空')
       trace.rounds += 1
@@ -721,24 +730,41 @@ export class AssistantService {
         continue
       }
       reply = (msg.content || '').trim() || '(空回复)'
-      // Jev 建议了工具，但模型一轮工具都没调就想作答 —— 强制回炉一次（D-202）。
+      // Jev 建议了工具，但模型一轮工具都没调就想作答 —— 强制回炉（D-202）。
       // 用户的取舍：Jev 说要查就必须查，调多调少/调对调错以后再研究，但不能不查就下结论。
       // 这与守卫总开关无关（那个默认关）：这是 Jev 建议自带的硬约束，属于红线不是防御。
-      if (!jevForced && toolCalls === 0 && this.turnJevSuggested.length && round + 1 < MAX_TOOL_ROUNDS) {
+      //
+      // **每轮都强制，不设"只回炉一次"**（D-209）：实测模型第一次被顶回去后，第二轮仍零工具，
+      // 却答"已调用工具获取真实数据："+ 编造内容——原来的 jevForced 只挡一次就放过它了。
+      // MAX_TOOL_ROUNDS 本身就是防无限循环的上限；6 轮都没调，撞上限返回"诚实弃权"而非编造。
+      // 最后一轮也要回炉：continue 后循环耗尽 → answered=false → 走诚实弃权。
+      // 原来 `round + 1 < MAX_TOOL_ROUNDS` 让第6轮直接 break，把编造答复当正常答复放出来（D-210）。
+      // 只回炉 1 次：再多的强制会耗尽 MAX_TOOL_ROUNDS，把本来能答对的问题卡死（实测）。
+      // 回炉后若模型仍零工具作答，交给 D-210 守卫判——它只在"声称查过"时顶回，
+      // 诚实说"不知道"的答复直接放行。这样既防编造，又不误伤正常查询。
+      if (toolCalls === 0 && this.turnJevSuggested.length && jevRetries < 1) {
         jevForced = true
+        forceToolNext = true   // 下一轮用 API 层 required 强制调工具，不再靠提示词求它
         reply = ''
-        trace.steps.push({ kind: 'note', detail: 'Jev 建议了工具但零调用 → 强制回炉补查一次' })
+        trace.steps.push({ kind: 'note', detail: `Jev 建议了工具但零调用 → 第 ${++jevRetries} 次强制回炉` })
         messages.push({ role: 'assistant', content: msg.content || '' })
-        messages.push({ role: 'user', content:
-          `你这一轮**没有调用任何工具**就作答了，但判断层认为这条消息需要查本机数据`
-          + `（建议：${this.turnJevSuggested.join('、')}）。请先调用工具取真实数据，`
-          + '再基于工具结果回答。调错工具可以再调，但不能不调就下结论。' })
+        // 用 system 角色（不是 user）——这是运行时约束，不是用户在说话。
+        // 给出**具体可执行指令**：模型偷懒往往不是不想查，是不知道该调哪个工具。
+        messages.push({ role: 'system', content:
+          `【强制要求】你刚才没有调用任何工具就作答了（往返 ${round + 1}）。`
+          + `判断层认为这条消息需要查本机数据，建议工具：${this.turnJevSuggested.join('、')}。`
+          + '现在**必须**在本次回复里调用其中至少一个工具（用 function_call），'
+          + '然后基于工具返回的真实内容回答。**不要说"已调用工具"，除非你真的调用了**；'
+          + '调错可以再调，但不调就下结论会被判为编造。' })
         continue
       }
       trace.steps.push({ kind: 'note', detail: `第 ${round + 1} 轮往返后给出答复` })
+      answered = true
       break
     }
-    if (!reply) {
+    // D-210：撞上限的判断不能用 `!reply`——Jev 回炉时 reply 被清空后，
+    // 模型下一轮又答了具体文字（哪怕是编造），reply 非空但循环其实已经耗尽。
+    if (!answered) {
       // **撞上限时给一句"诚实的弃权"，而不是干巴巴的错误提示**（2026-11-24）。
       //
       // 原来这里是一句固定文案「(这轮处理太复杂了, 换个问法试试?)」——它的问题不是
@@ -1338,6 +1364,16 @@ export class AssistantService {
       // 两件事都犯的时候先修编造——那一句补问里已经要求它去查、去引用。
       let retry: { mechanism: string; reason: string; message: string } | null =
         answered && guardsEnabled() ? pushbackFor({ reply, toolCalls, corpus }) : null
+      // D-210 红线（独立于守卫总开关）：答复声称"已调用工具/已查到"却零工具调用。
+      // 这是最硬的编造信号——跟判断层怎么说无关，也不挂在守卫总开关下。
+      // 只取 claimed-query-without-tool 这一条，不打开 pushbackFor 的其它机制（用户要红线不要泛化防御）。
+      if (answered && !retry && toolCalls === 0) {
+        const pb = pushbackFor({ reply, toolCalls, corpus })
+        if (pb?.mechanism === 'claimed-query-without-tool') {
+          this.turnGuardChecks += 1
+          retry = pb
+        }
+      }
       // D-205 红线（独立于守卫总开关）：工具明确说"未找到"，答复却给出具体标题/数字/来源。
       // 这条不挂在 guardsEnabled() 下——用户要"防御退到红线"，而这条就是红线：
       // 实测 read_favorite 返回未找到，模型却编出整篇摘要（含具体数字），下一轮又说没有——前后冲突。
@@ -1484,10 +1520,31 @@ export class AssistantService {
           // 守卫的原则一直是"纠错，不是否决"（见上面那句注释）。补问没跑完整，
           // 就说明这次纠错没成功——**保留原答复**才是符合这条原则的做法。
           if (second.outcome === 'answered') {
-            reply = second.reply
+            // D-210：补问答复若仍是同一种编造（零工具却声称查过 / 工具说未找到却编事实），
+            // 不能采纳——否则守卫顶回一次后还是把编造落地了（实测就卡在这里）。
+            const again = pushbackFor({ reply: second.reply, toolCalls: second.toolCalls, corpus })
+            const stillFabricated = (again?.mechanism === 'claimed-query-without-tool'
+              || again?.mechanism === 'fabricated-after-not-found')
+              || (second.toolCalls === 0 && fabricatedAfterNotFound({ reply: second.reply,
+                toolText: this.turnToolText.join('\n') }) !== null)
+            if (stillFabricated) {
+              reply = '这一轮没能在限定步数内核实到真实数据，我不能给出具体结论。请缩小问题或稍后再试。'
+              trace.steps.push({ kind: 'note', detail: '守卫补问后仍是编造：改给诚实弃权' })
+            } else {
+              reply = second.reply
+            }
           } else {
-            appendLog(`[守卫] 补问撞上了轮次上限，保留原答复（${reply.slice(0, 30)}…）`)
-            trace.steps.push({ kind: 'note', detail: '守卫补问撞上限：保留原答复' })
+            // D-210：原答复若是"声称查过却没查"或"工具说未找到却编具体事实"，
+            // 它本身就是编造——补问撞上限时**不能保留**，否则编造落地。换成诚实弃权。
+            const fabricated = retry.mechanism === 'claimed-query-without-tool'
+              || retry.mechanism === 'fabricated-after-not-found'
+            if (fabricated) {
+              reply = '这一轮没能在限定步数内核实到真实数据，我不能给出具体结论。请缩小问题或稍后再试。'
+              trace.steps.push({ kind: 'note', detail: '守卫补问撞上限：原答复是编造，改给诚实弃权' })
+            } else {
+              appendLog(`[守卫] 补问撞上了轮次上限，保留原答复（${reply.slice(0, 30)}…）`)
+              trace.steps.push({ kind: 'note', detail: '守卫补问撞上限：保留原答复' })
+            }
           }
           toolCalls += second.toolCalls
         } catch (e: any) {

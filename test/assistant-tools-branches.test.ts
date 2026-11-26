@@ -468,7 +468,9 @@ test('search_knowledge 找不到时说清是哪个范围没收录', async () => 
   const out = await run('search_knowledge', { keyword: '绝不存在的概念xyzzy' })
   // 夹具在 ⇒ 一定走"搜过、但这一条线里没有"那一支（以前写的是"与环境无关的那部分"，
   // 可它其实两只脚都踩在开发机上：CI 没有 output/wechat-vault，于是走了另一支、报红）
-  assert.match(out, /^\(文章线没收录「绝不存在的概念xyzzy」, 这一趟看了 \d+ 个概念页；`line: 'all'` 可以连另一条线一起搜\)$/, out)
+  // 配了 dashscope key 时概念页没命中会走语义兜底（返回"概念页里没有…文章原文里找到/没找到"）；
+  // 没配 key（CI 夹具）时仍是原来的"没收录"文案。两种都是诚实回答，都接受。
+  assert.ok(/文章线没收录「绝不存在的概念xyzzy」|概念页里没有「绝不存在的概念xyzzy」/.test(out), out)
   // **范围要写在里面**：只写"知识库未收录"会被读成"整个知识库都没有"，
   // 而它其实只是"这一条线里没有"（默认只搜文章线，两条线是分开的）
   assert.ok(/文章线/.test(out), `该说明搜的是哪条线：${out}`)

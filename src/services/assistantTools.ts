@@ -2316,7 +2316,25 @@ export async function executeTool(name: string, args: Record<string, any>, ctx: 
                 + '要查需要先在终端跑知识库编译；在那之前别告诉用户"知识库里没有"。'
                 + (line === 'all' ? ')' : '；`line: \'all\'` 可以连另一条线一起搜)')
             }
-            return `(${lineLabelOf(line)}没收录「${kw}」, 这一趟看了 ${total} 个概念页`
+            // 概念页里没有 ≠ 知识库里没有：文章标题/原文可能提到了但没提炼成概念页。
+            // 实测"端侧超节点"在语义索引里有整篇文章，概念页却搜不到——模型答"知识库没收录"是错的。
+            // 这里调语义搜索兜底（同一工具内，模型不用知道有两套系统，D-206）。
+            const semKey = String(configService.get('dashscopeApiKey') || '')
+            if (semKey) {
+              const sem = await runPythonJson<any>('semantic_search.py',
+                ['search', kw, '--line', line, '--top-k', '5', '--no-rerank', '--api-key', semKey])
+              if (sem.ok && sem.data?.success && (sem.data.results || []).length) {
+                const rows = sem.data.results.slice(0, 5).map((it: any, i: number) => {
+                  const title = String(it.title || '').replace(/\s+/g, ' ').slice(0, 80)
+                  const date = it.date || ''
+                  return `${i + 1}. ${title}${date ? `（${date}）` : ''}`
+                })
+                // 肯定结论放最前：之前以"概念页里没有"开头，模型只读半句就答"知识库没有"——
+                // 与"被校验拦下"那句同类：否定词开头会盖过后面的肯定结果（D-207）。
+                return `语义搜索在**文章原文**里找到 ${sem.data.results.length} 篇关于「${kw}」的文章:\n${rows.join('\n')}\n（这些是文章原文，不是概念页——照着标题与日期如实回答，别说"知识库里没有"。）`
+              }
+            }
+            return `(${lineLabelOf(line)}没收录「${kw}」, 这一趟看了 ${total} 个概念页，语义索引里也没找到`
               + (line === 'all' ? ')' : '；`line: \'all\'` 可以连另一条线一起搜)')
           }
           return `正文提及「${kw}」的概念页（${lineLabelOf(line)}）:` + '\n'

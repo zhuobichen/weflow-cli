@@ -5379,7 +5379,9 @@ program
             cliOptions: opts,
             preview: { limit, minRefs, readsLocalArticles: true, usesAi: true, writesConceptPages: true },
             confirmationMessage: `确认调用 AI 并生成最多 ${limit} 个概念页？`,
-            apiKey: opts.apiKey,
+            // 走已配置的 AI 通道：显式 --api-key > DEEPSEEK_API_KEY > (aiBaseUrl 时)aiApiKey > deepseekApiKey。
+            // 服务器上配的是 dashscope/qwen-flash 中转，不传这个就报"需要 DeepSeek key"。
+            apiKey: resolveAiKey(opts.apiKey),
             timeout: 300_000,
           })
         })

@@ -25,7 +25,7 @@ function decider(allHigh: boolean) {
     success: true, model: 'probe',
     answers: Object.fromEntries(
       ['get_messages', 'search_chats', 'list_sessions', 'get_todos', 'get_daily_report',
-       'get_sns', 'get_weread', 'get_stats'].map(n => [n, { type: 'noul', noul: allHigh ? 0.9 : 0.05 }])),
+       'get_sns', 'get_weread', 'get_stats', 'search_knowledge', 'read_document', 'web_search'].map(n => [n, { type: 'noul', noul: allHigh ? 0.9 : 0.05 }])),
   })
 }
 
@@ -53,9 +53,11 @@ test('Jev 建议 + 零工具作答 → 强制回炉（第二轮才给出答复�
     ], true)
     // 让第二轮真的调工具：覆盖 callLLM 在第二次返回 tool_calls
     let n = 0
-    svc.callLLM = async (messages: any[], tools?: any) => {
+    const choices: string[] = []
+    svc.callLLM = async (messages: any[], tools?: any, _max?: number, toolChoice?: string) => {
       if (!tools) return { choices: [{ message: { content: '[]' } }] }
       rounds.push(messages)
+      choices.push(toolChoice || 'auto')
       n++
       if (n === 1) return { choices: [{ message: { content: '我觉得没有文件' } }] }
       return { choices: [{ message: { content: '', tool_calls: [
@@ -64,8 +66,38 @@ test('Jev 建议 + 零工具作答 → 强制回炉（第二轮才给出答复�
     }
     await svc.handleMessage('u-force-1', '查一下文件', 'text')
     assert.ok(roundCount() >= 2, '零工具作答后必须回炉再问一轮')
-    const forced = rounds[1].some((m: any) => m.role === 'user' && /没有调用任何工具/.test(m.content || ''))
+    const forced = rounds[1].some((m: any) => (m.role === 'user' || m.role === 'system') && /没有调用任何工具/.test(m.content || ''))
     assert.ok(forced, '回炉时应该注入"你没调工具"的强约束')
+    assert.equal(choices[0], 'auto', '第一轮是模型自主判断')
+    assert.equal(choices[1], 'required', '回炉轮次必须用 API 层 tool_choice=required 结构性强制（D-211）')
+  } finally { ;(configService as any).get = realGet }
+})
+
+test('连续零工具作答 → 回炉1次 + D-210守卫兜底，最终不落地编造（D-209/210）', async () => {
+  try {
+    const { svc, rounds, roundCount } = svcWithScript([], true)
+    let n = 0
+    svc.callLLM = async (messages: any[], tools?: any) => {
+      if (!tools) return { choices: [{ message: { content: '[]' } }] }
+      rounds.push(messages)
+      n++
+      // 每一轮都说"已调用工具"但 zero tool_calls —— 模型原样复现的幻觉形态
+      return { choices: [{ message: { content: '已调用工具获取真实数据：结论是XYZ' } }] }
+    }
+    const finalAnswer = await svc.handleMessage('u-force-3', '查一下文件', 'text')
+    // Jev 回炉 1 次 + D-210 守卫补问 1 次（还可能撞上限），轮数 2~12 之间都算合理。
+    // 关键不是精确次数，而是**最终答复没有把编造落地**。
+    assert.ok(roundCount() >= 2, `至少要有一次回炉，实际 ${roundCount()} 轮`)
+    assert.ok(roundCount() <= 12, `顶回次数不应无限膨胀，实际 ${roundCount()} 轮`)
+    // 中间几轮应带有"没调用任何工具"的强约束，且明确禁止说"已调用工具"
+    const pushed = rounds.slice(1).some((m: any[]) =>
+      m.some((x: any) => (x.role === 'user' || x.role === 'system') && /没有调用任何工具/.test(x.content || '')))
+    assert.ok(pushed, '每轮回炉都要注入强约束')
+    const antiClaim = rounds.slice(1).some((m: any[]) =>
+      m.some((x: any) => (x.role === 'user' || x.role === 'system') && /不要说"已调用工具"/.test(x.content || '')))
+    assert.ok(antiClaim, '强约束要点明"别说已调用工具"——实测模型会这么说')
+    assert.ok(!String(finalAnswer).includes('结论是XYZ'),
+      '最终答复不能是编造的"结论是XYZ"——撞上限要给诚实弃权，不能把编造说法落地')
   } finally { ;(configService as any).get = realGet }
 })
 
