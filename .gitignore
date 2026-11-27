@@ -42,6 +42,7 @@ scripts/regen_wsl_keys.mjs
 !AGENTS.md
 !OPERATIONS.md
 !docs/PROJECT_STATE.md
+!docs/PROJECT_LAYOUT.md
 !docs/NT_DATABASES.md
 !docs/DECISIONS.md
 !docs/AGENT.md
