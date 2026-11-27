@@ -47,6 +47,7 @@ scripts/regen_wsl_keys.mjs
 !docs/DECISIONS.md
 !docs/AGENT.md
 !docs/AGENT_ITERATIONS.md
+!docs/AGENT_EXPERIMENTS.md
 !docs/VERSION_METHODS.md
 !docs/LINUX.md
 !docs/LINUX.en.md

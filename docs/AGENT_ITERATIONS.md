@@ -8,6 +8,56 @@
 
 每条迭代的结构固定为：**触发 → 排查 → 试过但没用 → 结论 → 教训**。按时间倒序（最新在上）。
 
+## Agent 版本索引
+
+Agent 有独立版本号（与 npm 包版本解耦，因为 Agent 迭代比发版快得多）。当前版本见
+`src/services/agentVersion.ts`（单一真相源），程序可查：`weflow-cli capabilities --json` 的 `agentVersion` 字段。
+
+| 版本 | 日期 | 摘要 | 对应决策/迭代 |
+|---|---|---|---|
+| **agent-v1.0.0**（当前） | 2026-11-27 | 建立版本序列；词法路由零依赖兜底、Jev 可选、wiki+RAG 双层检索、可靠性红线 | D-202~217；下方"防御过度→红线"等条目 |
+
+**版本规则**：每次改 Agent 行为（提示词/守卫/工具/记忆/检索/配置默认值）就 bump——
+新增能力或行为语义变化 bump minor，修复/措辞/小调整 bump patch；同时在本表加一行、
+在 `agentVersion.ts` 更新 `version`/`released`/`note`、提交信息带 `agent-vX.Y.Z`。
+详细规则见 `AGENTS.md` Documentation Protocol。
+
+---
+
+## 2026-11-27 · Windows 公众号提取：从"证伪数据库路"到落地 M-05 内存提取
+
+**触发**：用户登录 Windows 微信后要"继续 Windows 公众号内容解析"，说之前解决很久没行。
+
+**我一开始错了**：只看了 D-140~144（那些是"数据库路走不通"的记录），得出"Windows 4.2 拿不全、
+Linux 4.1 才行"的结论——但这跟"日报每天全量"的事实矛盾（用户当场纠正）。
+
+**真正的最新进展在 `docs/VERSION_METHODS.md` 的 M-05**：2026-10-30 就实测过
+`ReadProcessMemory` 读 WMPF 小程序信息流 JSON 可用（标题/公众号/时间/链接全有），
+但**一直没落地成脚本**——这才是"解决很久没行"的真相：方法找到了，代码没写。
+
+**排查与落地**：
+- 确认 Windows 微信 4.2.0.53 的 `biz_message_0.db` 仍只有 5 篇服务号通知（D-144 结论仍成立）
+- 扫所有微信进程内存：PID 41420（WeChatAppEx）有 96 篇转义 JSON 文章对象
+- 数据形状：`{"AppMsgId":N,"DateTime":<unix>,"uniqueId":"gh_xxx@N","Title":"标题"}`，
+  出现在 `firstGroupAfterResortList | N | [{...}]` 缓存里——这就是"下滑加载"的内容
+- 写 `scripts/extract_feed_memory.py`（只读 ReadProcessMemory），实测 2026-11-27 提取 **55 篇**
+  （Windows 本地库只有 5 篇）——标题/公众号/时间全部干净
+
+**教训**：**"方法验证过"和"方法已落地"是两回事**。文档里标"实测可用"的方法如果没对应脚本，
+下次遇到同一问题的人（包括我自己）会以为路走不通，重新走一遍证伪的路。
+M-05 这类"已验证可用"的方法，要么立刻落地，要么在文档里写清"待落地脚本"状态——不能只留一行结论。
+
+**续（同日）——URL 也拿到了**：继续找带 URL 的对象，发现另一批数据在 `SavePermanentData /
+__disorderPage_cacheMsgKey` 的 value 里，形状是
+`{\"AppMsgId\":N,\"DateTime\":T,\"detailInfo\":{\"ContentUrl\":\"http://mp.weixin.qq.com/s?...\",\"Digest\":\"...\"},\"showName\":\"公众号名\"}`。
+写 `scripts/extract_feed_with_url.py`，实测今天提取 **102 篇带完整 URL 的文章**（标题/公众号/时间/URL 全有）。
+两个坑：① 内存里是双重转义 `\"`（正则写 `rb'\\"'` 不是 `rb'\\\\"'`）；② 标题字段在不同对象里叫
+`Title` 或 `showName`，需都抓。
+
+**仍未完成**：正文仍需联网抓（D-144，本地库只有标题+摘要+URL，正文 0 中文字）；未接 CLI/日报。
+下一步：把这两个脚本接进 `biz_daily.py --feed-memory`（opt-in，和 `--browser-history` 并列），
+让 Windows 日报也能全量。
+
 ---
 
 ## 2026-11-05 · 悬空概念补页选"抽取式"而非模型生成（从 commit-msg-fill.txt 提炼）

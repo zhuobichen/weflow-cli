@@ -308,6 +308,67 @@ def browser_history_articles(date_str, tz, limit=300):
         return []
 
 
+def feed_memory_articles(date_str, tz, limit=500):
+    """从微信 4.2 的 WMPF 进程内存补读**信息流里的公众号文章**（M-05，见 VERSION_METHODS.md）。
+
+    为什么需要：4.2 把订阅号从"会话"改成信息流，推送不再写 `biz_message_0.db`（D-140/D-144），
+    下滑加载的文章只在小程序内存里。实测 2026-11-27：本地库只有 5 篇服务号通知，
+    而内存里有 102 篇带完整 URL 的文章（标题/公众号/时间/链接全有）。
+
+    边界（务必读）：
+      - **只读**（ReadProcessMemory），不注入、不改微信、不联网；
+      - 这是"信息流里加载过的"，不等于"当天全部推送"——取决于用户打开/滚动过多少；
+      - 只取 mp.weixin.qq.com 的 URL 与目标日期，失败一律返回空（补读不该让日报挂掉）；
+      - **不抓正文**：返回的 digest 可能为空，正文仍要联网抓（D-144，本地库没有正文）。
+    """
+    try:
+        from extract_feed_with_url import wx_pids, scan, parse
+        target = datetime.strptime(date_str, '%Y-%m-%d').date()
+        found = {}
+        for pid, name in wx_pids():
+            for data in scan(pid):
+                for a in parse([data]):
+                    ts = a.get('date_ts') or 0
+                    if not ts:
+                        continue
+                    when = datetime.fromtimestamp(ts, tz=tz)
+                    if when.date() != target:
+                        continue
+                    url = a.get('url', '')
+                    if url and url not in found:
+                        # 内存读出的标题可能混进 NUL/控制字符或跨对象碎片，清洗后再用
+                        a = dict(a)
+                        title = a.get('title', '') or ''
+                        # NUL 之后是内存里的下一个字段（二进制垃圾），先截断再过滤控制字符
+                        title = title.split('\x00')[0]
+                        title = ''.join(ch for ch in title if ord(ch) >= 32 and ch not in '\x7f')
+                        for marker in ('"},{"', '"VideoDuration"', '","VideoDuration', '","ori_content'):
+                            p = title.find(marker)
+                            if p > 0:
+                                title = title[:p]
+                        a['title'] = title.strip()
+                        found[url] = a
+        out = []
+        for url, a in list(found.items())[:limit]:
+            ts = a['date_ts']
+            when = datetime.fromtimestamp(ts, tz=tz)
+            out.append({
+                'account': a.get('account') or '(feed-memory)',
+                'account_name': a.get('account') or '信息流',
+                'source_category': '',
+                'title': a.get('title') or url,
+                'digest': a.get('digest', ''),
+                'url': url,
+                'cover': '',
+                'local_text': '',
+                'time': when.strftime('%H:%M'),
+                'timestamp': ts,
+            })
+        return out
+    except Exception:
+        return []
+
+
 def _article_key(entry):
     """同一篇文章的合并键：url 优先（微信文章 url 唯一），没有 url 时退回标题+时间。"""
     url = str(entry.get('url') or '').strip()
@@ -1192,6 +1253,9 @@ def main():
     parser.add_argument('--browser-history', action='store_true',
                         help='把客户端内嵌浏览器里当天打开过的公众号文章也纳入（4.x 订阅号是网页渲染的，'
                              '这些文章不写消息库）')
+    parser.add_argument('--feed-memory', action='store_true',
+                        help='从微信 4.2 WMPF 进程内存补读**信息流里的公众号文章**（M-05）：这些"下滑加载"的文章'
+                             '不写消息库；只读内存、不抓正文。默认关——补读范围取决于用户滚动过多少')
     parser.add_argument('--rss-feed', action='append', default=None, metavar='URL',
                         help='外部 RSS/Atom 订阅源（可重复）。微信 4.2.0.11 起绝大多数公众号推送不再落库，'
                              '这一项用标准订阅源补回缺口；只取 mp.weixin.qq.com 且按当天过滤')
@@ -1385,6 +1449,19 @@ def main():
             added = [item for item in extra if _article_key(item) not in seen]
             articles.extend(added)
             print(f'  浏览记录补入 {len(added)} 篇（客户端里打开过、但推送没落库的）')
+
+    # 信息流内存补读（M-05）：4.2 的下滑文章只在小程序内存里，本地库没有（D-144）。
+    # 默认关——它补的范围取决于用户滚动/打开过多少，不该默认纳入日报。
+    if getattr(args, 'feed_memory', False):
+        try:
+            extra = feed_memory_articles(date_str, tz)
+        except Exception:
+            extra = []
+        if extra:
+            seen = {_article_key(item) for item in articles}
+            added = [item for item in extra if _article_key(item) not in seen]
+            articles.extend(added)
+            print(f'  信息流内存补入 {len(added)} 篇（WMPF 内存里的文章，未抓正文）')
 
     # 外部 RSS 订阅源：微信 4.2.0.11 起，绝大多数公众号推送不再写入消息库
     # （实测同一账号 10-26/27 每天 480+ 行，升级后掉到 11 行），界面里的列表改为联网现拉。

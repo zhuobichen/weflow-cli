@@ -54,6 +54,7 @@ src/            TypeScript 源码
 scripts/        Python 工作流（NT 数据库、日报、知识处理、报告、搜索/RAG、评测）
 mcp-server/     stdio MCP server
 test/           Node 内置回归测试（143 个 .test.ts 平铺；另有 Python *_test.py）
+                ※ 2026-11-27 加 agent-version.test.ts 后为 144（此快照保留当时数值）
 docs/           文档（AGENT.md / DECISIONS.md / PROJECT_STATE.md / LINUX.md / ...）
 deploy/         CI/部署
 examples/       示例

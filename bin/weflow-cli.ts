@@ -67,6 +67,7 @@ import {
 } from '../src/services/pluginService.js'
 import { detectWechatClient, reportedDataDirs, samePath } from '../src/services/wechatClient.js'
 import { WECHAT_VERIFIED, compareWechatVersions, describeCompatVerdict, describeUnknownVersionReason } from '../src/services/wechatCompat.js'
+import { AGENT_VERSION } from '../src/services/agentVersion.js'
 
 const program = new Command()
 
@@ -339,6 +340,8 @@ program
     const data = {
       schema: 'weflow-capabilities/v1',
       version: CLI_VERSION,
+      // Agent 自身版本（与 npm 包版本解耦，单一事实源 agentVersion.ts）。
+      agentVersion: AGENT_VERSION,
       // D-130：本包最后用真实数据验证过的微信版本（单一事实源 wechatCompat.ts）。
       // check 的判定也从同一处读；发布清单要求 CHANGELOG 每版记录（来源就是这里）。
       compatibility: {
