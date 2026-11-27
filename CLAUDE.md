@@ -1,4 +1,4 @@
-# WeFlow CLI 快速维护入口
+# weflow-cli 快速维护入口
 
 先阅读：
 

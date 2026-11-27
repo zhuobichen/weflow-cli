@@ -18,6 +18,25 @@ purpose** - a hand-written "latest is X" is exactly the claim that goes stale he
 
 All notable user-facing changes are recorded here. This project follows [Semantic Versioning](https://semver.org/).
 
+## 1.23.0
+
+> 验证过的微信：沿用上一版（本版不涉及微信数据读取机制的变更）
+
+- **助手有了独立版本号**：`weflow-cli capabilities --json` 的 `agentVersion` 字段可查当前 Agent 版本
+  （本版为 agent-v1.0.0），与 npm 包版本解耦——Agent 迭代快于发版。以后每次 Agent 行为变更
+  （提示词/守卫/工具/记忆/检索/配置默认值）都会 bump 并在迭代记录里留一行。
+- **Agent 对照实验有了专门文档**：`docs/AGENT_EXPERIMENTS.md` 记录假设/变量/对照/指标/结论。
+  首条 EXP-001 对比 Jev 建议 vs 无 Jev：实测 jev on 反而更慢（63.9s vs 5.3s p50）、成功率未更高，
+  阳性对照坐实是 Jev 端点 502 故障而非架构问题——结论是当前默认（Jev 关 + 词法路由兜底）更优。
+- **新增 `--feed-memory`（opt-in，默认关）**：从微信 4.2 WMPF 进程内存补读信息流里加载过的公众号文章
+  （本地库只留服务号通知），只读、不抓正文；实测本地库 5 篇 → 补入约 94 篇。注意这是**尽力补读**：
+  内存易失（重取会归零），覆盖取决于用户滚动过多少，不能替代 Linux 4.1 的稳定全量落库。
+- **架构图重画**：按设计工作台「Agent 系统全景循环图」风格——LLM 居中、六环节闭环、知识库独立成块
+  （wiki 精确 + RAG 语义并列）。仍是 HTML+CSS 源 + 截图，文字准确。
+- **目录结构版本记录**：`docs/PROJECT_LAYOUT.md` 记录 `layout-vN` 快照，每次目录大变更先记旧结构。
+- 文档排查：中英 README 同步、SVG 旧引用加"后续更新"标注、全部 "WeFlow CLI" 自称改为 `weflow-cli`
+  （避免误认为 WeFlow 官方 CLI；致谢里指向鼻祖项目的 WeFlow 链接保留）。
+
 ## 1.22.0
 
 - **助手不再编「看起来像系统字段」的东西**。此前问「某人最后一条消息是几点发的」，它会把前一个人的

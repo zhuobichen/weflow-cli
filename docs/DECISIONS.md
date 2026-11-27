@@ -4337,11 +4337,11 @@ Markdown；**只有 OCR 后的文字**（截断到 3000 字，与文章线同量
 
 **Status:** Active
 
-**Decision.** A plugin is a directory with `weflow-plugin.json` and a command that starts a **standard MCP server over stdio**. WeFlow spawns it, lists its tools, and re-exports them as `plugin.<id>.<tool>` alongside the existing `wechat.*` tools. The registry lives at `~/.weflow-cli/plugins.json` (`WEFLOW_PLUGIN_REGISTRY` overrides it for tests). Management is `weflow-cli plugin add|list|remove|enable|disable|trust|untrust|doctor`.
+**Decision.** A plugin is a directory with `weflow-plugin.json` and a command that starts a **standard MCP server over stdio**. weflow-cli spawns it, lists its tools, and re-exports them as `plugin.<id>.<tool>` alongside the existing `wechat.*` tools. The registry lives at `~/.weflow-cli/plugins.json` (`WEFLOW_PLUGIN_REGISTRY` overrides it for tests). Management is `weflow-cli plugin add|list|remove|enable|disable|trust|untrust|doctor`.
 
 Three boundaries are enforced by the host, not by trusting the manifest:
 
-1. **Out of process.** The plugin receives no WeFlow object, database path, or configuration value; the only channel is MCP over stdio.
+1. **Out of process.** The plugin receives no weflow-cli object, database path, or configuration value; the only channel is MCP over stdio.
 2. **No inherited environment.** Child processes get a rebuilt whitelist (`childEnv()`), not `process.env` — which would otherwise hand over every API key.
 3. **Confirmation by default.** An untrusted plugin's tools return a preview unless the caller passes `confirm: true`; `confirm` is stripped before forwarding. Disabled plugins do not run even with `confirm`.
 
@@ -4395,7 +4395,7 @@ Three independent local records agree that the content never arrived, so this is
 
 **Status:** Active — opt-in, `biz_daily.py --browser-history`
 
-**Finding.** 微信 4.x renders 订阅号 in an embedded Chromium (`%APPDATA%\Tencent\xwechat\radium\web\profiles\multitab_*\History`, a plain SQLite `urls(url, title, last_visit_time)` table). An article the user opened is recorded **there** and nowhere in WeChat's `.db` files: the article quoted on 2026-10-29 was found in `History` as `10-29 23:57 | 新西兰大选在即，"谁上台都绕不开中国" | https://mp.weixin.qq.com/s/slTht3jANnQkNuqYYLUoLQ` while being absent from every `.db` under the account directory (zstd-decompressed search with a positive control). This also answers the "do I have to click for the database to update?" question: clicking does leave a record — just not in the database WeFlow was reading.
+**Finding.** 微信 4.x renders 订阅号 in an embedded Chromium (`%APPDATA%\Tencent\xwechat\radium\web\profiles\multitab_*\History`, a plain SQLite `urls(url, title, last_visit_time)` table). An article the user opened is recorded **there** and nowhere in WeChat's `.db` files: the article quoted on 2026-10-29 was found in `History` as `10-29 23:57 | 新西兰大选在即，"谁上台都绕不开中国" | https://mp.weixin.qq.com/s/slTht3jANnQkNuqYYLUoLQ` while being absent from every `.db` under the account directory (zstd-decompressed search with a positive control). This also answers the "do I have to click for the database to update?" question: clicking does leave a record — just not in the database weflow-cli was reading.
 
 **Decision.** `browser_history_articles(date_str, tz)` reads those profiles **read-only**, keeps only `mp.weixin.qq.com` URLs whose last visit falls inside the requested day, and returns them in the same shape as push articles. It is wired to an **opt-in** flag, `--browser-history`, rather than on by default: it is a different kind of data (what *you opened*, not what was *pushed*), and pulling someone's browsing history into a daily report without asking is not a default anyone should have to discover.
 
@@ -4421,7 +4421,7 @@ Three independent local records agree that the content never arrived, so this is
 
 **What blocked reading it (kept for the record).** `applet.db` is encrypted with a scheme that is not the WeChat database one. Exhausted at the time, all against the file header as salt and against a zero salt: PBKDF2-HMAC-SHA1 / SHA256 / SHA512 at 1000 / 4000 / 64000 / 256000 iterations; `cipher_compatibility` 2 / 3 / 4 with both a passphrase-form and a raw-key-form key; and a raw zero key. Every attempt returns `file is not a database`. The header is not `SQLite format 3`, the file is a clean multiple of 4096 bytes, and opening the live file returns `database is locked` unless it is copied together with its WAL. (2026-10-30 复核：格式确为 SQLCipher 4；上述排除项成立，只是它们指向的那个目标不是推送。)
 
-**Consequences (rewritten 2026-10-30).** WeFlow 的诚实位置：**4.2 上"当天推送了哪些文章"没有本地数据源**，这不是读法或密钥问题，而是客户端不再把列表写下来。保留的行为不变（D-139 的低量告警、D-141 的 `--browser-history` 补读打开过的文章）。本条目现在的用途是拦住"再去破 `applet.db`"这条回头路：它是小程序注册表，`-wal` 在滚动时增长只是因为它被顺带写入了启动/包元数据。想要真正的推送列表，只能走网络接口（需要登录态、属非官方协议），按 `AGENTS.md` 不做。
+**Consequences (rewritten 2026-10-30).** weflow-cli 的诚实位置：**4.2 上"当天推送了哪些文章"没有本地数据源**，这不是读法或密钥问题，而是客户端不再把列表写下来。保留的行为不变（D-139 的低量告警、D-141 的 `--browser-history` 补读打开过的文章）。本条目现在的用途是拦住"再去破 `applet.db`"这条回头路：它是小程序注册表，`-wal` 在滚动时增长只是因为它被顺带写入了启动/包元数据。想要真正的推送列表，只能走网络接口（需要登录态、属非官方协议），按 `AGENTS.md` 不做。
 
 ## D-143: 4.2.0.11 之后用**外部 RSS 订阅源**补推送缺口（标准协议，不碰非官方接口）
 
@@ -4447,7 +4447,7 @@ Three independent local records agree that the content never arrived, so this is
 - 微信没有"停止支持公众号"，只是不再把列表镜像到本地，因此上游的公众号转 RSS 服务仍然可用；
 - 失败必须是**软失败**：单个源解析不了就跳过并记一行 stderr，其余源照常，日报绝不因订阅源挂掉。
 
-**Boundaries (写明，避免下一个误解).** ① 这是**补充源**，不是替代品：没有配置 `--rss-feed` 时行为与 D-139/D-141 完全一致；② RSS 的覆盖取决于用户订阅了哪些源，WeFlow 不去猜、不去抓公众号主页；③ 只取当天，去重走既有的 `_article_key`（url 优先），所以和落库文章重复时以先到者为准，不会双份。
+**Boundaries (写明，避免下一个误解).** ① 这是**补充源**，不是替代品：没有配置 `--rss-feed` 时行为与 D-139/D-141 完全一致；② RSS 的覆盖取决于用户订阅了哪些源，weflow-cli 不去猜、不去抓公众号主页；③ 只取当天，去重走既有的 `_article_key`（url 优先），所以和落库文章重复时以先到者为准，不会双份。
 
 **Measured caveat (2026-10-30, on a real public bridge).** 拿 `wechat2rss.xlab.app` 的「量子位」源实测，发现两件影响准确性的事，写下来免得后来人以为是 bug：
 

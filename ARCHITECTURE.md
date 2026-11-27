@@ -1,10 +1,10 @@
-# WeFlow CLI 技术架构
+# weflow-cli 技术架构
 
 > 本文描述当前代码的边界和数据流。维护时先以 `bin/weflow-cli.ts`、`src/` 和 `scripts/` 为准，再更新本文。
 
 ## 定位
 
-WeFlow CLI 是一个本地优先的命令行工具、MCP Server（**stdio 与回环 HTTP 两种传输**）和一个常驻的**本机助手面板**，面向用户本人有权访问的微信本地数据，提供查询、导出、公众号阅读、知识整理、概念图谱和可选 AI 助手能力。
+weflow-cli 是一个本地优先的命令行工具、MCP Server（**stdio 与回环 HTTP 两种传输**）和一个常驻的**本机助手面板**，面向用户本人有权访问的微信本地数据，提供查询、导出、公众号阅读、知识整理、概念图谱和可选 AI 助手能力。
 
 ## 分层结构
 
@@ -47,7 +47,7 @@ Node 原生层 src/core/                    Python 工作流 scripts/
 | `src/core/` | 数据目录发现、数据库连接、密钥配置适配和客户端底层集成。 |
 | `src/services/` | 聊天、导出、证据包、日报、助手、白名单和隐私策略。`assistantTools.ts` 是助手与 MCP **共用**的工具表（36 个工具）。 |
 | `src/panel/` | 本机面板的入口：回环 HTTP 服务（`127.0.0.1:8766`，每进程一个随机 token，写 `~/.weflow-cli/assistant_endpoint.json`）、Electron/Edge 启动决策、CLI 侧客户端。 |
-| `scripts/` | 95 个 Python 工作流（约 2.8 万行）：NT 数据读取与解密、知识卡（文章 / 聊天 / 收藏 / 自写笔记）、概念页编译与体检、日报与报告、搜索与 RAG、图谱页面、判断层与评测。 |
+| `scripts/` | 97 个 Python 工作流（约 2.8 万行）：NT 数据读取与解密、知识卡（文章 / 聊天 / 收藏 / 自写笔记）、概念页编译与体检、日报与报告、搜索与 RAG、图谱页面、判断层与评测。 |
 | `mcp-server/` | 用**两种传输**暴露受控工具：stdio（默认）与 Streamable HTTP（`--http`，回环 `127.0.0.1:8790`，强制 Bearer token，含 DNS-rebinding 防护）。两种传输的工具表相同。 |
 | `test/` | Node 和 Python 回归测试（252 个文件：144 TS / 108 Python），优先使用合成数据。 |
 | `resources/` | 随包发布的只读资源：Electron 面板应用与吉祥物素材、`wcdb` / `wx_key` 原生 DLL、`js/graph3d`（2D/3D 图谱页面用的库，版本与许可记在同目录 `NOTICE.txt`）。 |

@@ -130,9 +130,13 @@ __disorderPage_cacheMsgKey` 的 value 里，形状是
 - 换中性简约风格重生成 → 图更淡、文字依旧乱码（"JEOMNES""MEMUM"）。
 - 结论：**文生图做技术架构图，文字必然不可靠**，换风格解决不了。
 
-**结论**：写 `weflow-agent-architecture.svg` 作为**可维护源**，用 sharp 精确渲染成 PNG——文字 100% 准确，改结构只改 SVG。README 收敛为门户（Agent 段落 5 行 + 指路），细节拆到 [AGENT.md](./AGENT.md)。
+**结论（当时的）**：写 `weflow-agent-architecture.svg` 作为**可维护源**，用 sharp 精确渲染成 PNG——文字 100% 准确，改结构只改 SVG。README 收敛为门户（Agent 段落 5 行 + 指路），细节拆到 [AGENT.md](./AGENT.md)。
 
-**教训**：**需要精确文字的图（架构图、流程图）不要依赖文生图**；AI 生图适合氛围/装饰，不适合信息承载。有 SVG 源 + 精确渲染这条路时，别绕道生图。
+> **后续更新（2026-11-27）**：SVG 方案后来因**视觉质量**被否（文字准确但观感不佳），可维护源已改为
+> `docs/images/weflow-agent-architecture.html`（HTML+CSS），用 playwright 截图生成 PNG。
+> 现图按设计工作台 `ap-illustration` 风格重画：LLM 居中、六环节闭环、知识库独立成块（wiki+RAG）。
+
+**教训（仍成立）**：**需要精确文字的图（架构图、流程图）不要依赖文生图**；AI 生图适合氛围/装饰，不适合信息承载。可维护源（SVG 或 HTML）+ 精确渲染这条路，比绕道生图可靠。
 
 ---
 

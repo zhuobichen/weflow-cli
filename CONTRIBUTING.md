@@ -1,6 +1,6 @@
-# Contributing to WeFlow CLI
+# Contributing to weflow-cli
 
-Thanks for improving WeFlow CLI. This project handles local personal data, so correctness, privacy and reproducibility matter more than broad refactors.
+Thanks for improving weflow-cli. This project handles local personal data, so correctness, privacy and reproducibility matter more than broad refactors.
 
 ## Before opening an issue
 

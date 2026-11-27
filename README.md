@@ -1,6 +1,6 @@
 <div align="center">
 
-<h1>𝗪𝗲𝗙𝗹𝗼𝘄 𝗖𝗟𝗜 <img src="./logo.png" width="280" valign="middle" alt="WeFlow CLI logo" /></h1>
+<h1>𝗪𝗲𝗙𝗹𝗼𝘄 𝗖𝗟𝗜 <img src="./logo.png" width="280" valign="middle" alt="weflow-cli logo" /></h1>
 
 **简体中文** · [English](./README.en.md)
 
@@ -19,7 +19,7 @@
 
 </div>
 
-**WeFlow CLI 把微信变成你的本地第二大脑。** 四件事，全部在本机完成——不登录你的账号，也不上传聊天内容：
+**weflow-cli 把微信变成你的本地第二大脑。** 四件事，全部在本机完成——不登录你的账号，也不上传聊天内容：
 
 | | 你能得到什么 | 从哪开始 |
 | --- | --- | --- |
@@ -481,7 +481,7 @@ python scripts/fav_server.py --date YYYY-MM-DD
 
 ## 架构
 
-![WeFlow CLI architecture](./docs/images/weflow-architecture.png)
+![weflow-cli architecture](./docs/images/weflow-architecture.png)
 
 项目分为五个边界清晰的部分：
 
@@ -497,7 +497,7 @@ python scripts/fav_server.py --date YYYY-MM-DD
 
 ### weflow-cli Agent
 
-![WeFlow Agent architecture](./docs/images/weflow-agent-architecture.png)
+![weflow-cli Agent architecture](./docs/images/weflow-agent-architecture.png)
 
 Agent 用零依赖的词法路由（高频问法直接派发）加 ReAct 循环决定调什么工具，微信 Bot、本机面板与云手机 harness 共用同一个大脑和同一份记忆。它能查询你的微信数据、联网搜索、读取本机文档（PDF / Word / Excel / PPT 等），并从本地 wiki 概念页与 RAG 语义索引两层知识库里检索。自建 harness 专为持久化独立部署，目前处于初步阶段。
 

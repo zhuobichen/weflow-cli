@@ -1,13 +1,13 @@
 # 插件（MCP 工具）
 
-WeFlow 可以把**外部进程里的插件**并进来，目前有两种：
+weflow-cli 可以把**外部进程里的插件**并进来，目前有两种：
 
 | `kind` | 插件做什么 | 怎么用 |
 | --- | --- | --- |
 | `mcp-server` | 提供一组 AI 工具 | 工具以 `plugin.<id>.<tool>` 出现在 MCP 工具表里 |
 | `knowledge-source` | 采集材料，写成知识库卡片 | `weflow-cli plugin run <id>`，产出落在 `output/<id>-notes/` |
 
-> 这一页讲的是**进程外**插件。加载 JavaScript 到 WeFlow 进程里这件事**没有**、也不打算做：
+> 这一页讲的是**进程外**插件。加载 JavaScript 到 weflow-cli 进程里这件事**没有**、也不打算做：
 > 见 [DECISIONS.md](DECISIONS.md) 的 D-048。原因是进程内的插件拿得到解密的数据库路径、
 > 含全部密钥的配置和文件系统，而"清单里声明了能力"并不能修好这一点——插件没有被沙箱。
 
@@ -39,7 +39,7 @@ weflow-cli plugin trust <id>           # 可选：之后调用不再逐次确认
 ```text
 my-plugin/
 ├── weflow-plugin.json
-└── index.mjs        # 普通的 MCP server，不依赖 WeFlow 的任何代码
+└── index.mjs        # 普通的 MCP server，不依赖 weflow-cli 的任何代码
 ```
 
 `weflow-plugin.json`：
@@ -67,7 +67,7 @@ my-plugin/
 | `permissions` | **声明**，见下 |
 
 插件本身就是一个**普通的 MCP server**（stdio 传输）。用官方 SDK、用别的语言、甚至手写
-JSON-RPC 都行——WeFlow 只按协议说话。注意：从 stdin 读、往 stdout 写协议流，
+JSON-RPC 都行——weflow-cli 只按协议说话。注意：从 stdin 读、往 stdout 写协议流，
 **调试输出请走 stderr**，打印到 stdout 会污染协议。
 
 ## 知识源插件怎么产出卡片
@@ -80,7 +80,7 @@ JSON-RPC 都行——WeFlow 只按协议说话。注意：从 stdin 读、往 st
 ```
 
 你只需要往 `out_dir` 写 `.md` 卡片，然后退出（退出码 0 = 成功）。**`out_dir` 是你唯一被允许写的
-地方**——插件不需要知道知识库在哪，也不需要 WeFlow 的任何配置。
+地方**——插件不需要知道知识库在哪，也不需要 weflow-cli 的任何配置。
 
 卡片必须能被知识库的消费端读出来。最小形状：
 
@@ -131,7 +131,7 @@ tags: [AI]
 
 真正成立的（宿主强制）：
 
-- **进程外**。插件只能通过 stdio 的 MCP 协议说话，拿不到 WeFlow 的任何对象、数据库路径或配置。
+- **进程外**。插件只能通过 stdio 的 MCP 协议说话，拿不到 weflow-cli 的任何对象、数据库路径或配置。
 - **不喂密钥**。子进程的环境是白名单重建的，不是继承 `process.env`——你的 API key 不会顺路漏给插件。
 - **默认每次确认**。没 `plugin trust` 过的插件，工具调用必须带 `confirm: true`，否则只返回一段预览，
   **参数不会转发出去**。禁用（`plugin disable`）的插件即使带 `confirm` 也不执行。
@@ -164,7 +164,7 @@ tags: [AI]
   和 `plugin doctor --json`。
 - **没有中心化插件市场**。目前靠 GitHub topic `weflow-plugin` 和文档里的清单发现。中心化注册表意味着
   为别人的代码背书，维护成本和安全责任都不划算，等有足够多的插件再说。
-- **没有版本兼容矩阵**。只有 `schema` 的版本号，没有"插件声明兼容哪些 WeFlow 版本"的机制。
+- **没有版本兼容矩阵**。只有 `schema` 的版本号，没有"插件声明兼容哪些 weflow-cli 版本"的机制。
 - **没有知识源类插件的"自动进知识库"**。`plugin run` 只产出卡片并体检；把它们并进概念页仍然要跑
   既有的 `compile_wiki`（`--cards output/<id>-notes`）。没有替你把这一步串起来，是因为一条线一条线地建
   是刻意的（两条知识线分开），自动串会把这个边界弄糊。

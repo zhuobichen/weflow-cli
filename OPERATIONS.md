@@ -1,4 +1,4 @@
-# WeFlow CLI 操作与排障手册
+# weflow-cli 操作与排障手册
 
 本文面向用户和维护 Agent。所有命令都应在项目目录或已安装 CLI 的终端中执行；示例中的路径、联系人和密钥均为占位符。
 
@@ -1314,9 +1314,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File <仓库>\scripts\install_tas
 
 | 任务 | 时间 | 跑什么 | 为什么是这个点 |
 | --- | --- | --- | --- |
-| `WeFlow Daily Noon` | **13:00** | **今天已到达的部分**（午间） | 当天先看一眼重点；不完整是有意的 |
-| `WeFlow Daily` | **23:30** | **今天截至夜间的内容** | 当天收尾；23:30 后到达的文章由登录补跑收进前一天 |
-| `WeFlow Daily Catchup` | 每次登录 | **昨天** | 补上 23:30 后的新文章，并恢复电脑休眠期间错过的夜间任务 |
+| `weflow-cli Daily Noon` | **13:00** | **今天已到达的部分**（午间） | 当天先看一眼重点；不完整是有意的 |
+| `weflow-cli Daily` | **23:30** | **今天截至夜间的内容** | 当天收尾；23:30 后到达的文章由登录补跑收进前一天 |
+| `weflow-cli Daily Catchup` | 每次登录 | **昨天** | 补上 23:30 后的新文章，并恢复电脑休眠期间错过的夜间任务 |
 
 > **为什么这步得由你点一下**：计划任务的**写入**在受限 shell / agent 沙箱里是整族被拒的。
 > 2026-10-19 用管理员 token 实测三条路全红、而读取一直正常：
@@ -1428,9 +1428,9 @@ crontab 示例（北京时间 13:00 与 23:30）：
 > 加 `--json` 给脚本用（字段 `mode` / `total` / `matched` / `verdict`）。
 > 并且会写进当天那份日志 —— 证明链路是通的）。
 
-- 查看：`Get-ScheduledTask -TaskName 'WeFlow Daily'`
-- 手动跑一次：`Start-ScheduledTask -TaskName 'WeFlow Daily'`
-- 上次结果：`(Get-ScheduledTaskInfo -TaskName 'WeFlow Daily').LastTaskResult`
+- 查看：`Get-ScheduledTask -TaskName 'weflow-cli Daily'`
+- 手动跑一次：`Start-ScheduledTask -TaskName 'weflow-cli Daily'`
+- 上次结果：`(Get-ScheduledTaskInfo -TaskName 'weflow-cli Daily').LastTaskResult`
   （**`267009` 不是错误**，它是"任务正在运行"`0x41301`；`0` 才是成功。）
 
 几点要事先知道（每一条都是踩过的）：
@@ -1600,7 +1600,7 @@ python scripts\rss_match.py --refresh     # 输出三档：确认 / 疑似 / 迁
    13 天：首次 68 篇失败 → 重试后 43 篇，**再重试仍是 43 篇且逐日数字完全相同** ⇒ 触底了，那些
    正文在源站已经取不到（同仓库更早的实测：84 次失败里 28 次重试可得、44 篇是被删除或违规下架）。
    重试很便宜（命中缓存的那些不发请求），所以"再跑一次"是安全的确认动作，而不是赌运气。
-3. **计划任务的上次结果**：`schtasks /query /tn "WeFlow Daily" /fo LIST /v`（或换成你给任务起的名字）。
+3. **计划任务的上次结果**：`schtasks /query /tn "weflow-cli Daily" /fo LIST /v`（或换成你给任务起的名字）。
    任务不存在 / 从没运行 / 上次失败，是三种不同的情况，别混成"日报坏了"。
 
 ## 6. AI 和助手

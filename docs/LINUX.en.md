@@ -1,4 +1,4 @@
-# WeFlow on Linux
+# weflow-cli on Linux
 
 > Last checked: 2026-11-05 · Ubuntu 24.04 / Python 3.12 / Node 22 · WeChat Linux **4.1.13.26**
 > (real login, real data directory).
@@ -18,7 +18,7 @@ Two preconditions: WeChat Linux 4.x (verified on 4.1.13.26) and **one login auth
 to obtain the shared passphrase (see below). Output goes to `~/.weflow-cli/output/`;
 nothing is written back into the WeChat directory.
 
-## How does WeFlow read the WeChat Linux 4.x database?
+## How does weflow-cli read the WeChat Linux 4.x database?
 
 Since WeChat Linux 4.1.12.26 the client uses a **shared passphrase + per-database salt
 derivation**; per-database key/salt pairs no longer exist in memory. The flow is:
@@ -30,13 +30,13 @@ weflow-cli sessions              # sanity check: sessions must list real chats
 ```
 
 **The database is opened read-only.** Without a `-wal` file it is read with `immutable`;
-with one, WeFlow reads a temporary copy. Neither path writes `-wal` / `-shm` next to the
+with one, weflow-cli reads a temporary copy. Neither path writes `-wal` / `-shm` next to the
 WeChat databases, and neither changes client state.
 
 ## Does it need root?
 
 Reading, querying, exporting and daily reports **do not**. Only *capturing the passphrase*
-attaches to the running client, which Yama restricts for ordinary users — WeFlow then
+attaches to the running client, which Yama restricts for ordinary users — weflow-cli then
 retries once with `sudo` and says so. To forbid that:
 
 ```bash

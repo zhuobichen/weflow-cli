@@ -99,6 +99,6 @@ Agent 是守护进程（`weflow-cli assistant start`）里的一个循环。同�
 
 ## 架构图
 
-![WeFlow Agent architecture](./images/weflow-agent-architecture.png)
+![weflow-cli Agent architecture](./images/weflow-agent-architecture.png)
 
 模块与文字以可维护源 [weflow-agent-architecture.html](./images/weflow-agent-architecture.html) 为准（改它后截图生成 PNG，文字 100% 准确）。

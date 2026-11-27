@@ -1,6 +1,6 @@
 <div align="center">
 
-<h1>𝗪𝗲𝗙𝗹𝗼𝘄 𝗖𝗟𝗜 <img src="./logo.png" width="280" valign="middle" alt="WeFlow CLI logo" /></h1>
+<h1>𝗪𝗲𝗙𝗹𝗼𝘄 𝗖𝗟𝗜 <img src="./logo.png" width="280" valign="middle" alt="weflow-cli logo" /></h1>
 
 [简体中文](./README.md) · **English**
 
@@ -19,7 +19,7 @@
 
 </div>
 
-**WeFlow CLI turns WeChat into your local second brain.** Four things, all on your own machine — no account login, no chat content uploaded:
+**weflow-cli turns WeChat into your local second brain.** Four things, all on your own machine — no account login, no chat content uploaded:
 
 | | What you get | Start with |
 | --- | --- | --- |
@@ -82,6 +82,16 @@ weflow-cli network --with "contact"    # shared groups; --intro finds who could 
 weflow-cli timeline --source "account" # one account's articles laid out in time
 ```
 
+**Ask one question, every conclusion backed by the original line** (`ask` is the Q&A shell over the commands above):
+
+```text
+weflow-cli ask "What did I promise someone last month"   # route -> gather evidence -> judge -> compose -> verify
+weflow-cli ask "And then?" --thread demo                 # follow-up resolves against the same thread
+weflow-cli ask "..." --profile offline                   # all three stages stay local; the question does not leave either
+```
+
+It does one thing: **turn what is already retrievable into a paragraph you can check**. If it cannot judge, it says "not clear"; if a route is not implemented, it says so instead of inventing an answer. The default profile `balanced` sends only **your question** out (to pick the route) — judging and composing stay local; `--profile offline` keeps the question local too.
+
 ## Direct Answers
 
 **How do I export WeChat chats to HTML or Excel?**
@@ -93,7 +103,7 @@ weflow-cli export "Contact A" html      # also markdown / json / txt / excel
 Output goes to `~/.weflow-cli/output/`; nothing is written back into the WeChat
 directory. The HTML export embeds cached images and stickers.
 
-**Can WeFlow read WeChat 4.x databases?**
+**Can weflow-cli read WeChat 4.x databases?**
 
 Yes. WeChat 4.x uses SQLCipher and derives its keys at login:
 
@@ -332,7 +342,7 @@ Then just talk to ClawBot on your phone. The assistant queries local chats and f
 - "Draft a reply to Lao Wang" — first judges what the other side wants, the risk, and whether substance should be given, then offers a few candidates. **Text only, never sent for you**; when money or high risk is involved it withholds drafts and only says what to confirm first
 - "Remember: my project is called weflow-cli" — writes to long-term memory
 
-How it works: the daemon long-polls WeChat's official bot channel (iLink); the agent loop, three-tier memory (working window / rolling summary / long-term facts), and all database queries run on your machine. Only the final question and reply texts go to the configured LLM; the shipped default is `assistantPrivacy=strict`: phone numbers, emails, and links in tool output are redacted, and third-party chat bodies never leave the machine (`balanced` lets bodies out but still masks PII, `open` masks nothing; a local `ollama` engine keeps everything offline). Sessions expire after 24h of inactivity, and proactive replies per window are capped by official limits.
+How it works: the daemon long-polls WeChat's official bot channel (iLink); the agent loop, three-tier memory, and all database queries run on your machine. Only the question and reply texts go to the configured LLM. The privacy tier defaults to `open` (message bodies are readable as-is); sessions expire after 24h of inactivity, and proactive replies per window are capped by official limits. For the lexicon router, judgment layer, permissions, and red lines, see [AGENT.md](./docs/AGENT.md).
 
 Cost guardrails: a built-in daily cap of 100 processed messages (send "记忆" in WeChat to check usage). The assistant denies all incoming users by default; configure an explicit whitelist before AI calls are enabled:
 
@@ -415,7 +425,7 @@ python scripts/fav_server.py --date YYYY-MM-DD
 
 ## Architecture
 
-![WeFlow CLI architecture](./docs/images/weflow-architecture.png)
+![weflow-cli architecture](./docs/images/weflow-architecture.png)
 
 The project is split into five clearly bounded parts:
 
@@ -428,6 +438,39 @@ The project is split into five clearly bounded parts:
 | `mcp-server/` | stdio server for MCP clients. |
 
 For a more complete view of modules and data flow, read [ARCHITECTURE.md](./ARCHITECTURE.md).
+
+### weflow-cli Agent
+
+![weflow-cli Agent architecture](./docs/images/weflow-agent-architecture.png)
+
+The Agent uses a zero-dependency lexicon router (deterministic phrasings dispatch tools directly) plus a ReAct loop to decide which tools to call. The WeChat Bot, the local panel, and the cloud-phone harness share the same brain and the same memory. It can query your WeChat data, search the web, read local documents (PDF / Word / Excel / PPT, etc.), and retrieve from a two-layer local knowledge base — exact wiki concept pages and a RAG semantic index. The self-hosted harness for persistent standalone deployment is at an early stage.
+
+For the full capability list, tool inventory, permissions, and red lines, see [AGENT.md](./docs/AGENT.md); design rationale is in [DECISIONS.md](./docs/DECISIONS.md).
+
+## AI Capabilities & Cost
+
+AI is **optional**: without any API key, queries, exports, favorites, Moments, and digest fetching (`--no-ai`) still work.
+
+| Purpose | Service | Swap | Without a key |
+| --- | --- | --- | --- |
+| Article summaries / tags | DeepSeek (`deepseek-chat`) | `aiEngine` can switch to any OpenAI-compatible endpoint | Fetch bodies only, no summaries |
+| Topic & relevance classification | Decision model Jev (`jev-latest`) | Official or third-party relay (`judgeEndpoint`) | Falls back to LLM parsing; `--classifier llm` forces it |
+| Semantic reranking | Same decision model | Same | `--no-rerank` returns by similarity directly |
+| Local knowledge-base embeddings | Alibaba Cloud Bailian `text-embedding-v4` (1024-dim) | Requires a code change | Semantic search unavailable; keyword search still works |
+
+**Measured cost (2026-11-03, a 506-article day)**
+
+```
+Generation: 512 calls, 935,271 input / 185,862 output tokens
+Classification: 511 calls, $0.0626 (metered by the decision model, its own reported figure)
+Embeddings: billed separately by index size (a full initial index is on the order of 24M tokens)
+```
+
+One day's digest costs on the order of **$0.05–0.10**. Prices follow each provider's current rate card; this project neither collects payment nor marks up or guarantees availability.
+
+**On failure**: if the decision model is unreachable, classification falls back to LLM parsing; if the LLM is also unavailable, only fetching and local indexing remain, and the output says "no AI section this time". It never silently emits a half-finished result.
+
+**Know what you spent**: every digest ends with a usage line (generation tokens + decision-model cost) and writes a `.usage.json` into that day's directory.
 
 ## Privacy & Security
 

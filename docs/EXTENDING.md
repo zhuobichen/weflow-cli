@@ -1,4 +1,4 @@
-# Extending WeFlow CLI
+# Extending weflow-cli
 
 **Status: this is a checklist, not a plugin system.** There is no plugin loader, no third-party import surface,
 and no `exports` field in `package.json` (`bin` is the only entry point). So "extending" this project today means
@@ -24,7 +24,7 @@ not read configuration, databases or arbitrary files directly, and must be disab
 
 **What does exist (2026-10-29, D-137/D-138): out-of-process plugins of two kinds.** A third party can add *tools*
 without touching this repository, because the tool is not loaded into this process — it lives in its own MCP server
-that WeFlow spawns and re-exports as `plugin.<id>.<tool>`. A third party can also add a *knowledge source*: a
+that weflow-cli spawns and re-exports as `plugin.<id>.<tool>`. A third party can also add a *knowledge source*: a
 command that receives a job on stdin, writes cards into one directory the host creates, and exits; `plugin run`
 validates those cards with the real consumer (`scripts/plugin_card_lint.py` calls `compile_wiki`'s own parsers) so
 the "card without a wikilink is skipped silently" trap is reported instead of discovered later. All of this

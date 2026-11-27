@@ -1,4 +1,4 @@
-# WeFlow CLI 当前路线
+# weflow-cli 当前路线
 
 > 本文件是维护路线，不是历史实现计划。当前事实以 `docs/PROJECT_STATE.md` 和代码为准。
 

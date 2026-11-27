@@ -13,7 +13,7 @@ If you suspect this tool was installed on a device without consent, stop using t
 
 ## Local-first data handling
 
-- **Local-first**: WeFlow CLI reads local data directly and has no built-in tracking or telemetry. Explicit article, WeRead, Bot-channel and cloud-AI workflows can make network requests.
+- **Local-first**: weflow-cli reads local data directly and has no built-in tracking or telemetry. Explicit article, WeRead, Bot-channel and cloud-AI workflows can make network requests.
 - **Configuration secret storage**: secret fields in `~/.weflow-cli/config.json` use AES-256-GCM with a key derived from a salt and the current machine name plus account name. AES-GCM provides authenticated encryption at rest, but the machine/account-derived key is not protected by an OS secret store; this does not defend against malware or a local reader who can reproduce those inputs. Moving the file to a different machine/account generally makes those values undecryptable.
 - **Separate key cache**: `~/.weflow-cli/keys/keys.enc` is a distinct cache, not covered by the configuration encryption claim. Windows uses DPAPI when available; the fallback and non-Windows path use reversible XOR with the XOR key stored alongside the data, relying on local file permissions rather than cryptographic secrecy.
 - **Optional plaintext database cache**: when explicitly enabled with `WEFLOW_CACHE_ENABLED=1`, the database cache stores exported SQLite data in plaintext. Protect its directory, avoid synced/shared locations, and disable or remove the cache when it is not needed.

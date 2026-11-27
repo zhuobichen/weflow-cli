@@ -1,4 +1,4 @@
-# macOS 上怎么用 WeFlow
+# macOS 上怎么用 weflow-cli
 
 > 最后更新：2026-11-19。
 > **状态说明**：已在真机跑通完整流程（macOS 27.2 / Apple M4 / 微信 4.1.15，

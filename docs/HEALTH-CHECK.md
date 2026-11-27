@@ -19,7 +19,7 @@ py scripts/health_check.py --json   # 机器读
 当次运行的真实值，仅作示例）：
 
 ```
-WeFlow 健康检查 · 2026-09-19 10:04
+weflow-cli 健康检查 · 2026-09-19 10:04
 
 [OK  ] 版本一致                      CLI X.Y.Z / package X.Y.Z
 [OK  ] 环境自检                      已初始化=True 消息库=True
@@ -69,18 +69,18 @@ WeFlow 健康检查 · 2026-09-19 10:04
 
 ## 怎么让它定期跑
 
-和 `WeFlow Issue Watch`、`WeFlow Mail Watch` 一样交给计划任务，不依赖任何编辑器或
+和 `weflow-cli Issue Watch`、`weflow-cli Mail Watch` 一样交给计划任务，不依赖任何编辑器或
 Claude 会话开着：
 
 ```powershell
-schtasks /create /tn "WeFlow Health Check" ^
+schtasks /create /tn "weflow-cli Health Check" ^
   /tr "py \"<仓库路径>\scripts\health_check.py\"" ^
   /sc daily /st 09:07
 ```
 
-- 查看：`Get-ScheduledTask -TaskName 'WeFlow Health Check'`
-- 手动跑：`Start-ScheduledTask -TaskName 'WeFlow Health Check'`
-- 上次结果：`schtasks /query /tn "WeFlow Health Check" /fo LIST /v`
+- 查看：`Get-ScheduledTask -TaskName 'weflow-cli Health Check'`
+- 手动跑：`Start-ScheduledTask -TaskName 'weflow-cli Health Check'`
+- 上次结果：`schtasks /query /tn "weflow-cli Health Check" /fo LIST /v`
 
 > 体检脚本自身也在检查计划任务，所以它挂了会在下一次运行时报出来（前提是它还能被
 > 触发——所以别把它的触发条件设成「上次成功才跑」）。

@@ -19,7 +19,7 @@ The tool returns a JSON string with `schema: "weflow-message/v1"` and `coverage`
 
 This tool is read-only. It does not expose database paths, keys, configuration, or unrestricted filesystem access, and it does not invoke AI. Unknown WeChat message codes remain in the output with their original `localType` and `messageType: "other"`.
 
-WeFlow CLI exposes article, knowledge-base, and selected local-data functions through an MCP server over stdio. The server reads the project's local `output/` directory and only contacts external services when a requested tool requires it. The available inventory follows `mcp-server/index.ts`; do not hard-code a tool count in client documentation.
+weflow-cli exposes article, knowledge-base, and selected local-data functions through an MCP server over stdio. The server reads the project's local `output/` directory and only contacts external services when a requested tool requires it. The available inventory follows `mcp-server/index.ts`; do not hard-code a tool count in client documentation.
 
 External article fetching accepts only credential-free HTTPS URLs on the exact `mp.weixin.qq.com` host. Redirects must remain on that host and all network reads have finite timeout, redirect, result-count, and response-size limits.
 
@@ -48,7 +48,7 @@ The generated server starts with Node.js and `tsx`:
 }
 ```
 
-Copy this entry into your MCP client's configuration and ensure `cwd` points to the cloned WeFlow CLI directory. Restart the client after saving the configuration.
+Copy this entry into your MCP client's configuration and ensure `cwd` points to the cloned weflow-cli directory. Restart the client after saving the configuration.
 
 ## HTTP transport (opt-in)
 
@@ -59,7 +59,7 @@ The server speaks **stdio by default** and stays that way unless you ask for the
 ```
 node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"   # make a token
 npx tsx mcp-server/index.ts --http --token=<that token>
-# WeFlow MCP 已监听 http://127.0.0.1:8790/mcp
+# weflow-cli MCP 已监听 http://127.0.0.1:8790/mcp
 ```
 
 Point an HTTP-capable client at `http://127.0.0.1:8790/mcp` with `Authorization: Bearer <token>`.
@@ -161,7 +161,7 @@ is still an ordinary process running as you — review the code before trusting 
 ## Safety boundary
 
 - The server inherits the permissions of the MCP client. Only add it to a client you trust.
-- Article and knowledge-base tools read files under the current project directory. Keep `cwd` scoped to your intended WeFlow CLI checkout.
+- Article and knowledge-base tools read files under the current project directory. Keep `cwd` scoped to your intended weflow-cli checkout.
 - Chat-data tools (`list_sessions`, `get_messages`, `search_favorites`, `get_sns`, `get_todos`, `list_contacts`) read your locally decrypted WeChat database. Only run this MCP server on machines where that is acceptable, and never expose the stdio server over a network.
 - `read_favorite`, `fetch_article`, and `search_public` make network requests; `read_favorite` rejects private/loopback URLs.
 - The MCP surface is **derived from the assistant's tool table minus the excluded tools** (`save_memory`, `look_at_image`, `set_todo_status`), not a hand-written read-only list - so it is *not* read-only, and this line used to claim it was. What it actually contains, declared in `capabilities --json` under `safety.mcpSurface`: one tool that writes (`export_chat`, new directories under `output/exports/` only) and four that send user data to cloud models (`who_owes_reply` and `search_chats` send chat text to the decision model, `search_semantic` sends the query for embedding and the hits for reranking, `draft_reply` sends a conversation to two models - and **all four** require `confirm: true`, not just `draft_reply`; that is what `safety.mcpSurface.requiresConfirm` lists, and it is now checked against the source rather than restated). Publishing, sending messages, mutating todos, changing configuration and writing assistant memory stay out.

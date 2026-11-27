@@ -1,6 +1,6 @@
 # AI 接口
 
-WeFlow CLI 的 AI 接入分为三层：
+weflow-cli 的 AI 接入分为三层：
 
 1. **能力探测**：先运行 `weflow-cli capabilities --json`，确认当前版本支持的读取、导出和分析入口。
 2. **结构化 CLI**：读取型命令优先使用 `--json`，避免解析表格、颜色和自然语言日志。
